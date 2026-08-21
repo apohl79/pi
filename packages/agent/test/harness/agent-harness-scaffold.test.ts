@@ -465,17 +465,42 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(await harness.getFollowUpMode()).toBe("all");
 	});
 
+	it("provides durable lane and session watch snapshots with buffered run events", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "watch-faux",
+			models: [{ id: "watch-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("watched")]);
+		const { harness } = await AgentHarness.create({
+			session: createSession("watch"),
+			models,
+			model: faux.getModel(),
+		});
+		const laneWatch = await harness.watch();
+		const sessionWatch = await harness.watchSession();
+		expect(laneWatch.snapshot).toMatchObject({ lane: "main", leafId: null, operation: null, faulted: false });
+		expect(sessionWatch.snapshot).toMatchObject({ faulted: false, lanes: [{ lane: "main", leafId: null }] });
+		const events: string[] = [];
+		laneWatch.start((event) => events.push(String((event as { type: string }).type)));
+		sessionWatch.start((event) => events.push(`session:${String((event as { type: string }).type)}`));
+		await harness.prompt("watch me");
+		expect(events).toEqual(["run_start", "session:run_start", "run_end", "session:run_end"]);
+		laneWatch.unsubscribe();
+		sessionWatch.unsubscribe();
+		await harness.close();
+	});
+
 	it("rejects every unfinished public operation explicitly", async () => {
 		const harness = await createHarness();
 		const unfinished: [string, () => unknown | Promise<unknown>][] = [
 			["peekAction", () => harness.peekAction()],
 			["executeAction", () => harness.executeAction()],
 			["runToCompletion", () => harness.runToCompletion()],
-			["watch", () => harness.watch()],
 			["lane", () => harness.lane("main")],
 			["createLane", () => harness.createLane("thread", null)],
 			["lanes", () => harness.lanes()],
-			["watchSession", () => harness.watchSession()],
 		];
 
 		for (const [operation, invoke] of unfinished) {
