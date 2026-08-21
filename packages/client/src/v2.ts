@@ -144,24 +144,18 @@ export class PiClientV2 {
 
 	async listSessions(): Promise<readonly SessionMetadataV2[]> {
 		const result = this.result(await this.request({ command: "session/list" }));
-		if (!Array.isArray(result.sessions) || !result.sessions.every(isSessionMetadataV2))
-			throw new Error("Invalid session/list result");
-		return result.sessions;
+		if (!Array.isArray(result.sessions)) throw new Error("Invalid session/list result");
+		return result.sessions as SessionMetadataV2[];
 	}
 
 	async attachSession(sessionId: string, mode: "control" | "observer" = "control"): Promise<void> {
 		this.result(await this.request({ command: "session/attach", sessionId, payload: { mode } }));
 	}
 
-	async openSession(sessionId: string, mode: V2SessionLeaseMode = "control"): Promise<PiSessionV2Handle> {
-		await this.attachSession(sessionId, mode);
-		return new SessionHandle(this, sessionId, mode);
-	}
-
 	async readSession(sessionId: string): Promise<SessionSnapshotV2> {
 		const result = this.result(await this.request({ command: "session/read", sessionId }));
-		if (!isSessionSnapshotV2(result.session)) throw new Error("Invalid session/read result");
-		return result.session;
+		if (typeof result.session !== "object" || result.session === null) throw new Error("Invalid session/read result");
+		return result.session as SessionSnapshotV2;
 	}
 
 	private async send(message: ClientMessageV2): Promise<void> {
@@ -171,12 +165,13 @@ export class PiClientV2 {
 
 	private result(response: ResponseEnvelopeV2): Record<string, unknown> {
 		if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
-		if (!("result" in response) || typeof response.result !== "object" || response.result === null) throw new Error("Expected a command result");
+		if (!("result" in response) || typeof response.result !== "object" || response.result === null) {
+			throw new Error("Expected a command result");
+		}
 		return response.result as Record<string, unknown>;
 	}
 
-	private receive(chunk: Uint8Array, generation: number): void {
-		if (generation !== this.transportGeneration) return;
+	private receive(chunk: Uint8Array): void {
 		try {
 			for (const frame of this.decoder.push(chunk)) this.handle(parseServerMessageV2(decodeCbor(frame)));
 		} catch (error) {
