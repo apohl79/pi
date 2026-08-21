@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
-import { AdapterV2WebService, InMemoryV2PluginRegistry } from "@earendil-works/pi-server";
+import { AdapterV2WebService, InMemoryV2AppRegistry, InMemoryV2PluginRegistry } from "@earendil-works/pi-server";
 import { afterEach, describe, expect, test } from "vitest";
 import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemon-runtime.ts";
 
@@ -439,6 +439,45 @@ describe("coding-agent daemon runtime", () => {
 			await client.connect();
 			const response = await client.request({ command: "marketplace/list" });
 			expect(response).toMatchObject({ ok: true, result: { marketplaces: [{ name: "local" }] } });
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("shares configured app state with the production daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-apps-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-apps-faux",
+			models: [{ id: "coding-agent-daemon-apps-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const apps = new InMemoryV2AppRegistry({
+			apps: [{ id: "local-calendar", name: "Local Calendar", auth: "authenticated", enabled: true }],
+		});
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			apps,
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const response = await client.request({ command: "app/list" });
+			expect(response).toMatchObject({
+				ok: true,
+				result: { apps: [{ id: "local-calendar", auth: "authenticated" }] },
+			});
 		} finally {
 			client.dispose();
 			await runtime.close();

@@ -13,6 +13,7 @@ import {
 	NodeV2ProcessRegistry,
 	ServerDaemon,
 	type ServerDaemonOptions,
+	type V2AppRegistry,
 	type V2FileReferenceService,
 	type V2ImageService,
 	type V2InputRegistry,
@@ -44,6 +45,7 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	images?: V2ImageService;
 	files?: V2FileReferenceService;
 	pluginRegistry?: V2PluginRegistry;
+	apps?: V2AppRegistry;
 	diagnostics?: ServerDaemonOptions["diagnostics"];
 	createServer?: ServerDaemonOptions["createServer"];
 	write(value: unknown): void;
@@ -109,6 +111,7 @@ export async function createCodingAgentDaemonRuntime(
 		...(options.images === undefined ? {} : { images: options.images }),
 		...(options.files === undefined ? {} : { files: options.files }),
 		...(options.pluginRegistry === undefined ? {} : { plugins: options.pluginRegistry }),
+		...(options.apps === undefined ? {} : { apps: options.apps }),
 		plans,
 		diagnostics,
 		...(diagnosticContent === undefined ? {} : { diagnosticContent }),

@@ -1,4 +1,5 @@
 import type { V2AgentRegistry } from "./agents.ts";
+import type { V2AppRegistry } from "./apps.ts";
 import type { DiagnosticContentStore, ForensicRecorder } from "./diagnostics.ts";
 import type { V2FileReferenceService } from "./files.ts";
 import type { V2ImageService } from "./images.ts";
@@ -38,6 +39,7 @@ export interface ServerDaemonOptions {
 	readonly images?: V2ImageService;
 	readonly files?: V2FileReferenceService;
 	readonly plugins?: V2PluginRegistry;
+	readonly apps?: V2AppRegistry;
 	readonly diagnostics?: ForensicRecorder;
 	readonly diagnosticContent?: DiagnosticContentStore;
 	readonly createServer?: (service: PiServerServiceV2, options: UnixServerOptions) => ServerDaemonServer;
@@ -113,6 +115,7 @@ export class ServerDaemon {
 				...(this.options.images === undefined ? {} : { images: this.options.images }),
 				...(this.options.files === undefined ? {} : { files: this.options.files }),
 				...(this.options.plugins === undefined ? {} : { plugins: this.options.plugins }),
+				...(this.options.apps === undefined ? {} : { apps: this.options.apps }),
 				...(this.options.diagnostics === undefined ? {} : { diagnostics: this.options.diagnostics }),
 				...(this.options.diagnosticContent === undefined
 					? {}
