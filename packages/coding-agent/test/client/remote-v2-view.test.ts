@@ -56,4 +56,26 @@ describe("formatRemoteV2Session", () => {
 	test("renders detached state without fabricating a snapshot", () => {
 		expect(formatRemoteV2Session({ lifecycle: { status: "detached" } }, options)).toBe("Session detached");
 	});
+
+	test("renders bounded active-agent summaries", () => {
+		const output = formatRemoteV2Session(
+			{
+				lifecycle: { status: "ready" },
+				snapshot: {
+					...snapshot,
+					agents: [
+						{
+							id: "agent-1",
+							path: "/root/worker",
+							taskName: "worker",
+							state: "running",
+							model: { provider: "anthropic", id: "sonnet" },
+						},
+					],
+				},
+			},
+			{ maxAgentItems: 1 },
+		);
+		expect(output).toContain("Agent /root/worker · running · anthropic/sonnet");
+	});
 });

@@ -5,6 +5,7 @@ import type { RemoteV2Session, RemoteV2SessionState } from "./remote-v2-session.
 export interface RemoteV2SessionViewOptions {
 	readonly maxTranscriptItems?: number;
 	readonly maxTranscriptCharacters?: number;
+	readonly maxAgentItems?: number;
 }
 
 /** Renderable TUI projection of one server-authoritative v2 session. */
@@ -17,6 +18,7 @@ export class RemoteV2SessionView implements Component {
 		this.#options = {
 			maxTranscriptItems: options.maxTranscriptItems ?? 48,
 			maxTranscriptCharacters: options.maxTranscriptCharacters ?? 6_000,
+			maxAgentItems: options.maxAgentItems ?? 12,
 		};
 		this.#state = session.state;
 		this.#unsubscribe = session.subscribe((state) => {
@@ -43,6 +45,8 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	const model = `${snapshot.model.provider}/${snapshot.model.id}`;
 	const operation = state.lifecycle.status === "busy" ? ` operation=${state.lifecycle.operationId}` : "";
 	const lines = [`Session ${snapshot.id} · phase=${snapshot.phase} · model=${model}${operation}`];
+	for (const agent of snapshot.agents.slice(0, options.maxAgentItems ?? 12))
+		lines.push(`Agent ${agent.path} · ${agent.state} · ${agent.model.provider}/${agent.model.id}`);
 	let characters = 0;
 	for (const item of snapshot.transcript.slice(-maxItems)) {
 		const text = transcriptText(item);
