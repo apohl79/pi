@@ -350,7 +350,7 @@ export class PiServerV2 {
 				let replayBytes = 0;
 				for (const event of history) {
 					if (event.seq <= message.lastEvent.eventSeq) continue;
-					if (events.length >= MAX_REPLAY_EVENTS)
+					if (events.length >= MAX_REPLAY_EVENTS || replayBytes >= MAX_REPLAY_BYTES)
 						return void (await this.failProtocol(state, "invalid_request", "Replay exceeds configured limit"));
 					const encoded = encodeServerMessageV2(event, { maxFrameLength: this.maxFrameLength });
 					replayBytes += encoded.byteLength;
