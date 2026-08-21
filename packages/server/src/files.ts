@@ -1,4 +1,4 @@
-import { lstat, readdir, readFile, realpath } from "node:fs/promises";
+import { lstat, realpath, readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -61,11 +61,7 @@ function isWithin(root: string, candidate: string): boolean {
 }
 
 function referenceFor(scope: FileScope, root: string, path: string): string {
-	return scope === "project"
-		? `project:${relative(root, path) || "."}`
-		: scope === "home"
-			? `~/${relative(root, path)}`
-			: path;
+	return scope === "project" ? `project:${relative(root, path) || "."}` : scope === "home" ? `~/${relative(root, path)}` : path;
 }
 
 function mimeTypeFor(path: string): string | undefined {
@@ -78,15 +74,7 @@ function mimeTypeFor(path: string): string | undefined {
 				? "application/json"
 				: extension === "md"
 					? "text/markdown"
-					: extension === "png"
-						? "image/png"
-						: extension === "jpg" || extension === "jpeg"
-							? "image/jpeg"
-							: extension === "webp"
-								? "image/webp"
-								: extension === "gif"
-									? "image/gif"
-									: undefined;
+					: undefined;
 }
 
 export class LocalV2FileReferenceService implements V2FileReferenceService {
@@ -140,38 +128,27 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 		};
 	}
 
-	async read(
-		sessionId: string,
-		reference: string,
-	): Promise<{ readonly file: V2FileReference; readonly data: Uint8Array }> {
+	async read(sessionId: string, reference: string): Promise<{ readonly file: V2FileReference; readonly data: Uint8Array }> {
 		const file = await this.resolve(sessionId, reference);
 		if (file.kind !== "file") throw new Error("File reference must resolve to a file");
-		if ((file.size ?? 0) > this.maxReadBytes)
-			throw new Error(`File exceeds maximum size of ${this.maxReadBytes} bytes`);
+		if ((file.size ?? 0) > this.maxReadBytes) throw new Error(`File exceeds maximum size of ${this.maxReadBytes} bytes`);
 		return { file, data: new Uint8Array(await readFile(file.path)) };
 	}
 
 	private async authorize(reference: string): Promise<string> {
 		const scope = scopeOf(reference);
-		const logical =
-			scope === "project" ? projectReference(reference) : scope === "home" ? reference.slice(2) : reference;
+		const logical = scope === "project" ? projectReference(reference) : scope === "home" ? reference.slice(2) : reference;
 		const base = scope === "project" ? this.projectRoot : scope === "home" ? this.homeDirectory : this.cwd;
 		if (scope === "absolute" && !this.allowAbsolute) throw new Error("Absolute file references are disabled");
 		const candidate = scope === "absolute" ? resolve(reference) : resolve(base, logical);
-		if (!this.allowedLexically(candidate))
-			throw new Error(`File reference escapes the accessible filesystem: ${reference}`);
+		if (!this.allowedLexically(candidate)) throw new Error(`File reference escapes the accessible filesystem: ${reference}`);
 		const resolved = await realpath(candidate);
-		if (!(await this.allowed(resolved)))
-			throw new Error(`File reference escapes the accessible filesystem: ${reference}`);
+		if (!(await this.allowed(resolved))) throw new Error(`File reference escapes the accessible filesystem: ${reference}`);
 		return resolved;
 	}
 
 	private allowedLexically(path: string): boolean {
-		return (
-			isWithin(this.projectRoot, path) ||
-			isWithin(this.cwd, path) ||
-			(this.allowAbsolute && isWithin(this.homeDirectory, path))
-		);
+		return isWithin(this.projectRoot, path) || isWithin(this.cwd, path) || (this.allowAbsolute && isWithin(this.homeDirectory, path));
 	}
 
 	private async allowed(path: string): Promise<boolean> {
