@@ -26,6 +26,14 @@ describe("InMemoryV2ProcessRegistry", () => {
 		expect(settled).toBe(true);
 	});
 
+	test("does not split retained UTF-8 output when reading from an interior cursor", async () => {
+		const registry = new InMemoryV2ProcessRegistry({ maxOutputBytes: 8 });
+		const started = await registry.start({ sessionId: "session-1", command: "demo" });
+		await registry.write(started.processId, "🙂a");
+
+		expect(await registry.read(started.processId, 1)).toMatchObject({ output: "a", cursor: 5, truncated: false });
+	});
+
 	test("rejects unsupported PTY and shell command requests", async () => {
 		const registry = new NodeV2ProcessRegistry();
 		const invalidCommand = registry.start({ sessionId: "session-1", command: "echo ok; touch /tmp/unsafe" });
@@ -43,6 +51,17 @@ describe("InMemoryV2ProcessRegistry", () => {
 		const completed = await registry.wait(started.processId);
 
 		expect(completed).toMatchObject({ state: "exited", output: "🙂", cursor: 4, truncated: false });
+	});
+
+	test("flushes an incomplete UTF-8 sequence when the child closes", async () => {
+		const registry = new NodeV2ProcessRegistry();
+		const started = await registry.start({
+			sessionId: "session-1",
+			command: `${JSON.stringify(process.execPath)} -e 'process.stdout.write(Buffer.from([240,159]))'`,
+		});
+		const completed = await registry.wait(started.processId);
+
+		expect(completed).toMatchObject({ state: "exited", output: "�", cursor: 3, truncated: false });
 	});
 
 	test("runs a node-backed process without tying it to a client connection", async () => {
