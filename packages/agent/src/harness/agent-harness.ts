@@ -18,6 +18,7 @@ import {
 	prepareCompaction,
 	validateCompactionSettings,
 } from "./compaction/compaction.ts";
+import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
 import { Result as ResultValue, TaggedError } from "./result.ts";
 import { buildSessionContext } from "./session/context.ts";
 import { MAX_DURABLE_COMPACTION_TEXT_LENGTH } from "./session/types.ts";
@@ -37,6 +38,7 @@ import type {
 	SessionTree,
 	UsageRecord,
 } from "./session/index.ts";
+import { formatSkillInvocation } from "./skills.ts";
 import type { TelemetryContext } from "./telemetry.ts";
 import type { AgentHarnessResources, PromptTemplate, Skill } from "./types.ts";
 
@@ -895,11 +897,17 @@ export class AgentHarness implements AgentLane {
 		if (typeof input !== "string") return [structuredClone(input)];
 		return [{ role: "user", content: [{ type: "text", text: input }, ...(images ?? [])], timestamp: Date.now() }];
 	}
-	async skill(_name: string, _additionalInstructions?: string): Promise<RunResult> {
-		return this.unavailable("skill");
+	async skill(name: string, additionalInstructions?: string): Promise<RunResult> {
+		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		const skill = this.resources.skills?.find((candidate) => candidate.name === name);
+		if (!skill) return ResultValue.err(new UnknownSkill({ name, message: `Unknown skill: ${name}` }));
+		return this.prompt(formatSkillInvocation(skill, additionalInstructions));
 	}
-	async promptFromTemplate(_name: string, _args?: string[]): Promise<RunResult> {
-		return this.unavailable("promptFromTemplate");
+	async promptFromTemplate(name: string, args: string[] = []): Promise<RunResult> {
+		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		const template = this.resources.promptTemplates?.find((candidate) => candidate.name === name);
+		if (!template) return ResultValue.err(new UnknownTemplate({ name, message: `Unknown prompt template: ${name}` }));
+		return this.prompt(formatPromptTemplateInvocation(template, args));
 	}
 	async compact(_options?: { customInstructions?: string }): Promise<CompactionResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
