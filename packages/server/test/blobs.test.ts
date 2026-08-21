@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileV2BlobStore, InMemoryV2BlobStore } from "../src/blobs.ts";
@@ -67,5 +67,25 @@ describe("FileV2BlobStore", () => {
 		const stats = await Promise.all(Array.from({ length: 8 }, () => store.put(data, "text/plain")));
 		expect(new Set(stats.map((stat) => stat.digest)).size).toBe(1);
 		expect(JSON.parse(await readFile(join(root, `${stats[0].digest}.json`), "utf8"))).toEqual(stats[0]);
+	});
+
+	test("rejects symlinked metadata and blob files", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-blobs-"));
+		const outside = await mkdtemp(join(tmpdir(), "pi-blobs-outside-"));
+		const store = new FileV2BlobStore(root);
+		const metadata = await store.put(new TextEncoder().encode("hello"), "text/plain");
+		const metadataPath = join(root, `${metadata.digest}.json`);
+		const blobPath = join(root, `${metadata.digest}.blob`);
+		await writeFile(join(outside, "metadata.json"), JSON.stringify(metadata));
+		await writeFile(join(outside, "blob"), "hello");
+		await unlink(metadataPath);
+		await symlink(join(outside, "metadata.json"), metadataPath);
+		await expect(store.stat(metadata.digest)).rejects.toThrow("not a regular file");
+
+		await unlink(metadataPath);
+		await writeFile(metadataPath, JSON.stringify(metadata));
+		await unlink(blobPath);
+		await symlink(join(outside, "blob"), blobPath);
+		await expect(store.read(metadata.digest)).rejects.toThrow("not a regular file");
 	});
 });
