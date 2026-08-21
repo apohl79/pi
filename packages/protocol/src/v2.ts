@@ -1,6 +1,6 @@
 import Type, { type Static, type TSchema } from "typebox";
 import { Check } from "typebox/value";
-import { ThinkingLevelSchema } from "./schemas.ts";
+import { type JsonValue, JsonValueSchema, ThinkingLevelSchema } from "./schemas.ts";
 
 export const PROTOCOL_V2_VERSION = 2 as const;
 
@@ -423,3 +423,187 @@ export const isOperationRecordV2 = (value: unknown): value is OperationRecordV2 
 		hasValidTerminalSequence(record.accepted?.eventSeq, record.terminalSeq)
 	);
 };
+export const CommandNameV2Schema = Type.Union([
+	Type.Literal("session/list"),
+	Type.Literal("session/create"),
+	Type.Literal("session/attach"),
+	Type.Literal("session/detach"),
+	Type.Literal("session/read"),
+	Type.Literal("session/delete"),
+	Type.Literal("session/name/set"),
+	Type.Literal("session/name/generate"),
+	Type.Literal("session/name/auto/set"),
+	Type.Literal("turn/start"),
+	Type.Literal("turn/steer"),
+	Type.Literal("turn/followUp"),
+	Type.Literal("turn/abort"),
+	Type.Literal("turn/resume"),
+	Type.Literal("turn/rollback"),
+	Type.Literal("operation/read"),
+	Type.Literal("model/list"),
+	Type.Literal("session/model/set"),
+	Type.Literal("session/thinking/set"),
+	Type.Literal("agent/spawn"),
+	Type.Literal("agent/list"),
+	Type.Literal("agent/wait"),
+	Type.Literal("agent/message"),
+	Type.Literal("agent/followUp"),
+	Type.Literal("agent/interrupt"),
+	Type.Literal("process/start"),
+	Type.Literal("process/write"),
+	Type.Literal("process/wait"),
+	Type.Literal("process/terminate"),
+	Type.Literal("process/read"),
+	Type.Literal("input/request/read"),
+	Type.Literal("input/request/respond"),
+	Type.Literal("input/request/cancel"),
+	Type.Literal("plan/read"),
+	Type.Literal("plan/update"),
+	Type.Literal("goal/read"),
+	Type.Literal("goal/create"),
+	Type.Literal("goal/update"),
+	Type.Literal("goal/pause"),
+	Type.Literal("goal/resume"),
+	Type.Literal("plugin/list"),
+	Type.Literal("plugin/read"),
+	Type.Literal("plugin/install"),
+	Type.Literal("plugin/uninstall"),
+	Type.Literal("plugin/enable"),
+	Type.Literal("plugin/disable"),
+	Type.Literal("marketplace/add"),
+	Type.Literal("marketplace/list"),
+	Type.Literal("marketplace/upgrade"),
+	Type.Literal("marketplace/remove"),
+	Type.Literal("app/list"),
+	Type.Literal("app/read"),
+	Type.Literal("app/auth/start"),
+	Type.Literal("blob/put"),
+	Type.Literal("blob/read"),
+	Type.Literal("blob/stat"),
+	Type.Literal("filesystem/complete"),
+	Type.Literal("filesystem/reference/resolve"),
+	Type.Literal("filesystem/reference/read"),
+	Type.Literal("diagnostics/status"),
+	Type.Literal("diagnostics/timeline"),
+	Type.Literal("diagnostics/export"),
+	Type.Literal("diagnostics/verify"),
+	Type.Literal("diagnostics/doctor"),
+]);
+export type CommandNameV2 = Static<typeof CommandNameV2Schema>;
+
+export const CommandV2Schema = StrictObject({
+	command: CommandNameV2Schema,
+	sessionId: Type.Optional(IdSchema),
+	operationId: Type.Optional(IdSchema),
+	requestId: Type.Optional(IdSchema),
+	payload: Type.Optional(JsonValueSchema),
+});
+export type CommandV2 = Static<typeof CommandV2Schema>;
+
+export const EventNameV2Schema = Type.Union([
+	Type.Literal("server_snapshot"),
+	Type.Literal("session_snapshot"),
+	Type.Literal("session_delta"),
+	Type.Literal("operation_accepted"),
+	Type.Literal("operation_updated"),
+	Type.Literal("operation_terminal"),
+	Type.Literal("session_phase_changed"),
+	Type.Literal("session_name_updated"),
+	Type.Literal("turn_started"),
+	Type.Literal("item_completed"),
+	Type.Literal("tool_started"),
+	Type.Literal("tool_completed"),
+	Type.Literal("compaction_started"),
+	Type.Literal("compaction_completed"),
+	Type.Literal("recovery_report"),
+	Type.Literal("process_output"),
+	Type.Literal("process_terminal"),
+	Type.Literal("agent_updated"),
+	Type.Literal("agent_message"),
+	Type.Literal("plan_updated"),
+	Type.Literal("goal_updated"),
+	Type.Literal("model_instruction_profile_changed"),
+	Type.Literal("model_compaction_policy_changed"),
+	Type.Literal("input_request_updated"),
+	Type.Literal("usage_updated"),
+	Type.Literal("plugin_diagnostic"),
+	Type.Literal("connector_auth_changed"),
+	Type.Literal("diagnostics_degraded"),
+	Type.Literal("store_integrity_changed"),
+	Type.Literal("bundle_progress"),
+]);
+export type EventNameV2 = Static<typeof EventNameV2Schema>;
+
+export const EventEnvelopeV2Schema = StrictObject({
+	type: Type.Literal("event"),
+	sessionId: IdSchema,
+	seq: NonNegativeIntegerSchema,
+	revision: NonNegativeIntegerSchema,
+	operationId: Type.Optional(IdSchema),
+	event: EventNameV2Schema,
+	payload: Type.Unsafe<JsonValue>(JsonValueSchema),
+});
+export type EventEnvelopeV2 = Static<typeof EventEnvelopeV2Schema>;
+
+export const ClientHelloV2Schema = StrictObject({
+	type: Type.Literal("hello"),
+	version: Type.Literal(PROTOCOL_V2_VERSION),
+	lastEvent: Type.Optional(EventCursorSchema),
+});
+export type ClientHelloV2 = Static<typeof ClientHelloV2Schema>;
+
+export const ServerHelloV2Schema = StrictObject({
+	type: Type.Literal("hello"),
+	version: Type.Literal(PROTOCOL_V2_VERSION),
+	connectionId: IdSchema,
+	snapshot: ServerSnapshotV2Schema,
+});
+export type ServerHelloV2 = Static<typeof ServerHelloV2Schema>;
+
+export const ServerHelloErrorV2Schema = StrictObject({
+	type: Type.Literal("hello_error"),
+	error: StrictObject({ code: IdSchema, message: Type.String(), details: Type.Optional(JsonValueSchema) }),
+});
+export type ServerHelloErrorV2 = Static<typeof ServerHelloErrorV2Schema>;
+
+export const RequestEnvelopeV2Schema = StrictObject({
+	type: Type.Literal("request"),
+	id: IdSchema,
+	request: CommandV2Schema,
+});
+export type RequestEnvelopeV2 = Static<typeof RequestEnvelopeV2Schema>;
+
+export const ResponseEnvelopeV2Schema = Type.Union([
+	StrictObject({
+		type: Type.Literal("response"),
+		id: IdSchema,
+		ok: Type.Literal(true),
+		accepted: OperationAcceptedSchema,
+	}),
+	StrictObject({
+		type: Type.Literal("response"),
+		id: IdSchema,
+		ok: Type.Literal(true),
+		result: JsonValueSchema,
+	}),
+	StrictObject({
+		type: Type.Literal("response"),
+		id: IdSchema,
+		ok: Type.Literal(false),
+		error: StrictObject({ code: IdSchema, message: Type.String(), details: Type.Optional(JsonValueSchema) }),
+	}),
+]);
+export type ResponseEnvelopeV2 = Static<typeof ResponseEnvelopeV2Schema>;
+
+export const ClientMessageV2Schema = Type.Union([ClientHelloV2Schema, RequestEnvelopeV2Schema]);
+export const ServerMessageV2Schema = Type.Union([
+	ServerHelloV2Schema,
+	ServerHelloErrorV2Schema,
+	ResponseEnvelopeV2Schema,
+	EventEnvelopeV2Schema,
+]);
+export type ClientMessageV2 = Static<typeof ClientMessageV2Schema>;
+export type ServerMessageV2 = Static<typeof ServerMessageV2Schema>;
+
+export const isClientMessageV2 = (value: unknown): value is ClientMessageV2 => Check(ClientMessageV2Schema, value);
+export const isServerMessageV2 = (value: unknown): value is ServerMessageV2 => Check(ServerMessageV2Schema, value);
