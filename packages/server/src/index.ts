@@ -9,7 +9,6 @@ export * from "./apps.ts";
 export * from "./daemon.ts";
 export * from "./errors.ts";
 export * from "./files.ts";
-export * from "./images.ts";
 export * from "./inputs.ts";
 export * from "./images.ts";
 export * from "./listener.ts";
