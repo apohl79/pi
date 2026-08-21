@@ -880,6 +880,7 @@ export class PiServerV2 {
 
 	private async generateImage(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("image/generate requires sessionId");
+		this.requireControl(state, command.sessionId);
 		const payload = objectPayload(command);
 		if (typeof payload.prompt !== "string") throw new Error("image/generate requires prompt");
 		await this.sendResponse(state, id, {
