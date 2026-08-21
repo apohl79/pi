@@ -1,8 +1,10 @@
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import {
+	type DiagnosticIntegrityCheck,
 	FileV2BlobStore,
 	InMemoryForensicRecorder,
 	InMemoryV2InputRegistry,
@@ -46,6 +48,7 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	planStorePath?: string;
 	diagnosticStorePath?: string;
 	diagnosticKeyPath?: string;
+	integrity?: ServerDaemonOptions["integrity"];
 	serverId?: string;
 	runtimeManifest?: ServerDaemonOptions["runtimeManifest"];
 	agents?: ServerDaemonOptions["agents"];
@@ -198,6 +201,86 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 		databasePath: options.databasePath ?? join(options.agentDir, "server.sqlite"),
 	});
 	try {
+		const usage =
+			options.usage ?? new JsonlV2UsageLedger(options.usageStorePath ?? join(options.agentDir, "usage.jsonl"));
+		const pluginRegistry = options.pluginRegistry ?? new JsonV2PluginRegistry(join(options.agentDir, "plugins.json"));
+		const operationStore =
+			options.operationStore ??
+			new JsonlV2OperationStore(options.operationStorePath ?? join(options.agentDir, "operations.jsonl"));
+		const blobs = options.blobs ?? new FileV2BlobStore(options.blobStorePath ?? join(options.agentDir, "blobs"));
+		const integrity =
+			options.integrity ??
+			(async () => {
+				const checks: DiagnosticIntegrityCheck[] = [];
+				try {
+					checks.push({ name: "sessions", ok: true, details: { count: (await repository.list()).length } });
+				} catch (error) {
+					checks.push({
+						name: "sessions",
+						ok: false,
+						details: { error: error instanceof Error ? error.name : "unknown" },
+					});
+				}
+				try {
+					const loaded = await operationStore.load();
+					checks.push({
+						name: "operations",
+						ok: true,
+						details: { operations: loaded.operations.length, events: loaded.events.length },
+					});
+				} catch (error) {
+					checks.push({
+						name: "operations",
+						ok: false,
+						details: { error: error instanceof Error ? error.name : "unknown" },
+					});
+				}
+				try {
+					checks.push({
+						name: "plugins",
+						ok: true,
+						details: { count: (await pluginRegistry.listPlugins(true)).length },
+					});
+				} catch (error) {
+					checks.push({
+						name: "plugins",
+						ok: false,
+						details: { error: error instanceof Error ? error.name : "unknown" },
+					});
+				}
+				try {
+					const files = await readdir(options.blobStorePath ?? join(options.agentDir, "blobs"));
+					checks.push({
+						name: "blobs",
+						ok: true,
+						details: { metadataFiles: files.filter((file) => file.endsWith(".json")).length },
+					});
+				} catch (error) {
+					const missing = error instanceof Error && "code" in error && error.code === "ENOENT";
+					checks.push({ name: "blobs", ok: missing, details: { metadataFiles: 0, missing } });
+				}
+				try {
+					const aggregate = await usage.aggregate();
+					checks.push({
+						name: "usage",
+						ok: true,
+						details: {
+							responses: aggregate.responses,
+							input: aggregate.input,
+							output: aggregate.output,
+							costUsd: aggregate.costUsd ?? null,
+							pricingState: aggregate.pricingState,
+						},
+					});
+				} catch (error) {
+					checks.push({
+						name: "usage",
+						ok: false,
+						details: { error: error instanceof Error ? error.name : "unknown" },
+					});
+				}
+				return checks;
+			});
 		const runtime = await createCodingAgentDaemonRuntime({
 			...options,
 			repository,
@@ -210,16 +293,14 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			inputs:
 				options.inputs ??
 				new JsonlV2InputRegistry(options.inputStorePath ?? join(options.agentDir, "inputs.jsonl")),
-			usage:
-				options.usage ?? new JsonlV2UsageLedger(options.usageStorePath ?? join(options.agentDir, "usage.jsonl")),
+			usage,
 			files:
 				options.files ??
 				new LocalV2FileReferenceService({ projectRoot: options.cwd, cwd: options.cwd, allowAbsolute: true }),
-			pluginRegistry: options.pluginRegistry ?? new JsonV2PluginRegistry(join(options.agentDir, "plugins.json")),
-			operationStore:
-				options.operationStore ??
-				new JsonlV2OperationStore(options.operationStorePath ?? join(options.agentDir, "operations.jsonl")),
-			blobs: options.blobs ?? new FileV2BlobStore(options.blobStorePath ?? join(options.agentDir, "blobs")),
+			pluginRegistry,
+			operationStore,
+			blobs,
+			integrity,
 			planStorePath: options.planStorePath ?? join(options.agentDir, "plans.jsonl"),
 			diagnosticStorePath: options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"),
 			diagnosticKeyPath: options.diagnosticKeyPath ?? join(options.agentDir, "diagnostic-keys.json"),
