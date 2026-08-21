@@ -1,6 +1,8 @@
 import {
+	decodeCbor,
 	encodeServerMessageV2,
 	PROTOCOL_V2_VERSION,
+	parseClientMessageV2,
 	type ServerMessageV2,
 	type ServerSnapshotV2,
 } from "@earendil-works/pi-protocol";
@@ -177,5 +179,23 @@ describe("PiClientV2", () => {
 		expect(events).toEqual(["plan_updated"]);
 		unsubscribe();
 		expect(() => handle.read()).toThrow("detached");
+	});
+
+	test("reconnects with the last acknowledged event cursor", async () => {
+		const pair = transportPair();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		const first = client.connect();
+		await Promise.resolve();
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
+		await first;
+		client.disconnect();
+		const second = client.connect({ sessionId: "session-1", eventSeq: 7 });
+		await Promise.resolve();
+		await Promise.resolve();
+		const hello = parseClientMessageV2(decodeCbor(pair.sent[1]!.subarray(4)));
+		expect(hello).toMatchObject({ type: "hello", lastEvent: { sessionId: "session-1", eventSeq: 7 } });
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-2", snapshot });
+		expect(await second).toEqual(snapshot);
+		client.dispose();
 	});
 });
