@@ -126,4 +126,20 @@ describe("formatRemoteV2Session", () => {
 		expect(output).toContain("Persistence needsResolution");
 		expect(output).toContain("Diagnostics degraded");
 	});
+
+	test("uses the snapshot operation after reattach", () => {
+		const output = formatRemoteV2Session({
+			lifecycle: { status: "ready" },
+			snapshot: {
+				...snapshot,
+				activeOperation: {
+					operationId: "op-reconnected",
+					kind: "turn/start",
+					state: "running",
+					acceptedSeq: 4,
+				},
+			},
+		});
+		expect(output).toContain("operation=op-reconnected (running)");
+	});
 });
