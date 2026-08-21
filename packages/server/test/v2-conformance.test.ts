@@ -1079,12 +1079,14 @@ describe("PiServer v2 operation acceptance", () => {
 			payload: { taskName: "lease-test", taskMessage: "inspect ownership" },
 		});
 		const agentId = (spawned as unknown as { result: { agent: { id: string } } }).result.agent.id;
-		const responses = await Promise.all([
-			observer.request({ command: "agent/message", payload: { agentId, message: "blocked" } }),
-			observer.request({ command: "agent/followUp", payload: { agentId, message: "blocked" } }),
-			observer.request({ command: "agent/interrupt", payload: { agentId } }),
-		]);
-		for (const response of responses) expect(response).toMatchObject({ ok: false, error: { code: "request_failed" } });
+		const message = await observer.request({ command: "agent/message", payload: { agentId, message: "blocked" } });
+		const followUp = await observer.request({ command: "agent/followUp", payload: { agentId, message: "blocked" } });
+		const interrupt = await observer.request({ command: "agent/interrupt", payload: { agentId } });
+		for (const response of [message, followUp, interrupt])
+			expect(response).toMatchObject({
+				ok: false,
+				error: { message: "Session session-1 requires a control lease" },
+			});
 		await controller.close();
 		await observer.close();
 	});
