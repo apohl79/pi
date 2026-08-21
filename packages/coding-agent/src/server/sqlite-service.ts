@@ -7,7 +7,7 @@ import {
 } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { SessionMetadataV2 } from "@earendil-works/pi-protocol";
-import type { V2PluginRegistry } from "@earendil-works/pi-server";
+import type { V2InputRegistry, V2PluginRegistry } from "@earendil-works/pi-server";
 import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import { type CreateCodingAgentHarnessOptions, createCodingAgentHarness } from "./create-harness.ts";
 import { createPluginSamplingInput } from "./plugin-sampling.ts";
@@ -24,6 +24,7 @@ export interface CodingAgentV2SqliteServiceOptions {
 	env: ExecutionEnv | ((metadata: SqliteSessionMetadata) => ExecutionEnv | Promise<ExecutionEnv>);
 	model: Model<Api> | ((metadata: SqliteSessionMetadata) => Model<Api> | Promise<Model<Api>>);
 	pluginRegistry?: V2PluginRegistry;
+	inputs?: V2InputRegistry;
 	harness?: Omit<CreateCodingAgentHarnessOptions, "session" | "models" | "model" | "env" | "sessionFile">;
 }
 
@@ -50,6 +51,7 @@ export async function createCodingAgentV2SqliteService(
 			modelOverride ?? (typeof options.model === "function" ? await options.model(metadata) : options.model);
 		const env = typeof options.env === "function" ? await options.env(metadata) : options.env;
 		const goals = new GoalManager(session);
+		const inputRegistry = options.inputs;
 		const samplingInputFactory = async (): Promise<SamplingInput> => {
 			const configuredSamplingInput = options.harness?.samplingInputFactory
 				? await options.harness.samplingInputFactory()
@@ -79,6 +81,35 @@ export async function createCodingAgentV2SqliteService(
 			goals,
 			samplingInputFactory,
 			sessionFile: metadata.path,
+			...(inputRegistry === undefined
+				? {}
+				: {
+						requestUserInput: async (request, signal) => {
+							const pending = await inputRegistry.create(
+								metadata.id,
+								request.questions,
+								request.autoResolutionMs,
+							);
+							if (signal?.aborted) {
+								await inputRegistry.cancel(pending.id).catch(() => {});
+								throw new Error("Input request aborted");
+							}
+							const abort = signal
+								? new Promise<never>((_, reject) => {
+										const onAbort = () => {
+											reject(new Error("Input request aborted"));
+											void inputRegistry.cancel(pending.id).catch(() => {});
+										};
+										signal.addEventListener("abort", onAbort, { once: true });
+									})
+								: undefined;
+							const resolved = await (abort === undefined
+								? inputRegistry.wait(pending.id)
+								: Promise.race([inputRegistry.wait(pending.id), abort]));
+							if (resolved.status !== "responded") throw new Error(`Input request ${resolved.status}`);
+							return resolved.answers ?? {};
+						},
+					}),
 		});
 		return { metadata: sessionMetadata(metadata), harness: created.harness, goals };
 	};
