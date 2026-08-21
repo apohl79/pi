@@ -165,6 +165,7 @@ type NodeProcessState = ProcessState & Readonly<{ child: ChildProcess }> & {
 	decoder: StringDecoder;
 	decoderFlushed: boolean;
 	capacityReleased: boolean;
+	queuedWriteBytes: number;
 	terminationTimer?: ReturnType<typeof setTimeout>;
 	killTimer?: ReturnType<typeof setTimeout>;
 };
@@ -174,6 +175,7 @@ type NodeV2ProcessRegistryOptions = Readonly<{
 	maxCompletedProcesses?: number;
 	maxActiveProcesses?: number;
 	maxWriteBytes?: number;
+	maxQueuedWriteBytes?: number;
 	terminateGraceMs?: number;
 	terminateTimeoutMs?: number;
 }>;
@@ -189,6 +191,7 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 	private readonly maxCompletedProcesses: number;
 	private readonly maxActiveProcesses: number;
 	private readonly maxWriteBytes: number;
+	private readonly maxQueuedWriteBytes: number;
 	private readonly terminateGraceMs: number;
 	private readonly terminateTimeoutMs: number;
 	private readonly processes = new Map<string, NodeProcessState>();
@@ -199,6 +202,7 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		this.maxCompletedProcesses = options.maxCompletedProcesses ?? 256;
 		this.maxActiveProcesses = validatePositiveInteger("maxActiveProcesses", options.maxActiveProcesses, 64);
 		this.maxWriteBytes = validatePositiveInteger("maxWriteBytes", options.maxWriteBytes, 1024 * 1024);
+		this.maxQueuedWriteBytes = validatePositiveInteger("maxQueuedWriteBytes", options.maxQueuedWriteBytes, this.maxWriteBytes * 4);
 		this.terminateGraceMs = options.terminateGraceMs ?? 1_000;
 		this.terminateTimeoutMs = options.terminateTimeoutMs ?? 1_000;
 	}
@@ -215,7 +219,7 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 			this.activeProcesses -= 1;
 			throw error;
 		}
-		const state: NodeProcessState = { processId: randomUUID(), sessionId: request.sessionId, command: request.command, state: "running", output: Buffer.alloc(0), totalBytes: 0, child, waiters: [], decoder: new StringDecoder("utf8"), decoderFlushed: false, capacityReleased: false };
+		const state: NodeProcessState = { processId: randomUUID(), sessionId: request.sessionId, command: request.command, state: "running", output: Buffer.alloc(0), totalBytes: 0, child, waiters: [], decoder: new StringDecoder("utf8"), decoderFlushed: false, capacityReleased: false, queuedWriteBytes: 0 };
 		this.processes.set(state.processId, state);
 		const append = (chunk: Buffer): void => {
 			const decoded = Buffer.from(state.decoder.write(chunk));
@@ -232,9 +236,18 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 	async write(processId: string, input: string): Promise<V2ProcessOutput> {
 		const process = this.get(processId);
 		if (process.state !== "running" || !process.child.stdin) throw new Error(`Process ${processId} is not running`);
-		if (Buffer.byteLength(input, "utf8") > this.maxWriteBytes) throw new Error(`Process write exceeds maxWriteBytes (${this.maxWriteBytes})`);
+		const inputBytes = Buffer.byteLength(input, "utf8");
+		if (inputBytes > this.maxWriteBytes) throw new Error(`Process write exceeds maxWriteBytes (${this.maxWriteBytes})`);
+		if (process.queuedWriteBytes + inputBytes > this.maxQueuedWriteBytes) throw new Error(`Process queued writes exceed maxQueuedWriteBytes (${this.maxQueuedWriteBytes})`);
 		const cursor = process.totalBytes;
-		process.child.stdin.write(input);
+		process.queuedWriteBytes += inputBytes;
+		await new Promise<void>((resolve, reject) => {
+			process.child.stdin.write(input, (error?: Error) => {
+				process.queuedWriteBytes -= inputBytes;
+				if (error) reject(error);
+				else resolve();
+			});
+		});
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		return outputView(process, cursor);
 	}
@@ -251,7 +264,6 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		if (state.state === "running") {
 			state.state = "terminated";
 			state.exitCode = 143;
-			this.releaseCapacity(state);
 			if (state.child.pid != null && process.platform !== "win32") {
 				try { process.kill(-state.child.pid, "SIGTERM"); } catch { state.child.kill("SIGTERM"); }
 			} else state.child.kill("SIGTERM");
