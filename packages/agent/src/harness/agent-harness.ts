@@ -23,6 +23,7 @@ import {
 	prepareCompaction,
 	resolveCompactionSettings,
 } from "./compaction/compaction.ts";
+import { HarnessEventBus } from "./events.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
 import { Result as ResultValue, TaggedError } from "./result.ts";
 import { buildSessionContext } from "./session/context.ts";
@@ -498,6 +499,7 @@ export class AgentHarness implements AgentLane {
 	private followUpMode: QueueMode;
 	private suspendedOperations: SuspendedOperation[] = [];
 	private readonly lifecycle: LifecycleRegistry;
+	private readonly watchBus = new HarnessEventBus();
 	private closed = false;
 	private activeOperation:
 		| {
@@ -655,6 +657,7 @@ export class AgentHarness implements AgentLane {
 		};
 		await this.durableSession.appendRecord(started);
 		this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
+		this.watchBus.emit({ type: "run_start", lane: "main", runId });
 		try {
 			await this.lifecycle.runHook("before_run", { operationId: runId, prompts: durableClone(prompts) });
 			const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
@@ -723,6 +726,13 @@ export class AgentHarness implements AgentLane {
 			});
 			await this.lifecycle.runHook("before_run_end", { operationId: runId, outcome: "completed" });
 			this.lifecycle.emit("operation_finished", { operationId: runId, outcome: "completed" });
+			this.watchBus.emit({
+				type: "run_end",
+				lane: "main",
+				runId,
+				outcome: "completed",
+				leafId: (await this.durableSession.getLeafId()) ?? "",
+			});
 			return ResultValue.ok({
 				runId,
 				kind: "completed",
@@ -731,13 +741,22 @@ export class AgentHarness implements AgentLane {
 				finalMessage,
 			});
 		} catch (error) {
-			if (this.closed || controller.signal.aborted) {
-				await this.finishOperation(runId, "aborted", { code: "aborted", message: "Run aborted" });
-				throw error instanceof HarnessClosed ? error : new HarnessClosed();
-			}
-			const message = sanitizeErrorMessage(error, "Run failed");
-			await this.finishOperation(runId, "failed", { code: "run_failed", message });
-			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
+			const message = error instanceof Error ? error.message : String(error);
+			await this.durableSession.appendRecord({
+				type: "operation_finished",
+				id: this.durableSession.idGenerator.next(),
+				lane: "main",
+				runId,
+				outcome: "failed",
+				error: { code: "run_failed", message },
+			});
+			this.watchBus.emit({
+				type: "run_end",
+				lane: "main",
+				runId,
+				outcome: "failed",
+				leafId: (await this.durableSession.getLeafId()) ?? "",
+			});
 			return ResultValue.ok({
 				kind: "failed",
 				runId,
@@ -1411,6 +1430,13 @@ export class AgentHarness implements AgentLane {
 			outcome: "aborted",
 		};
 		await this.durableSession.appendRecord(finished);
+		this.watchBus.emit({
+			type: "run_end",
+			lane: "main",
+			runId: openRun.id,
+			outcome: "aborted",
+			leafId: (await this.durableSession.getLeafId()) ?? "",
+		});
 		return ResultValue.ok({ runId: openRun.id, ...recalled });
 	}
 	async steer(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
@@ -1583,7 +1609,8 @@ export class AgentHarness implements AgentLane {
 		);
 	}
 	async watch(): Promise<WatchHandle<LaneSnapshot>> {
-		return this.watchBus.watchAsync(() => this.laneSnapshot("main"));
+		const snapshot = await this.laneSnapshot("main");
+		return this.watchBus.watch(() => snapshot);
 	}
 
 	async lane(_name: string): Promise<AgentLane | undefined> {
@@ -1654,36 +1681,8 @@ export class AgentHarness implements AgentLane {
 		this.followUpMode = mode;
 	}
 	async watchSession(): Promise<WatchHandle<SessionSnapshot>> {
-		return this.watchBus.watchAsync(() => this.sessionSnapshot());
-	}
-
-	private async laneSnapshot(lane: string): Promise<LaneSnapshot> {
-		const [leafId, transcript, open] = await Promise.all([
-			this.durableSession.getLeafId(),
-			this.durableSession.findEntriesOnBranch({ order: "oldestFirst" }),
-			this.durableSession.findOpenOperations(lane, { limit: 1 }),
-		]);
-		const operation = open[0];
-		const runId = operation?.intent.kind === "run" ? operation.id : undefined;
-		const [steer, followUp, nextRun] = await Promise.all([
-			this.pendingQueueItems("steer", runId),
-			this.pendingQueueItems("followUp", runId),
-			this.pendingQueueItems("nextRun"),
-		]);
-		const toQueuedItem = (entry: ProvisionedEntry): QueuedItem => ({ id: entry.id, message: structuredClone(entry.message) });
-		return {
-			lane,
-			transcript,
-			leafId,
-			operation: operation ? { id: operation.id, kind: operation.intent.kind, status: "running" } : null,
-			queues: { steer: steer.map(toQueuedItem), followUp: followUp.map(toQueuedItem), nextRun: nextRun.map(toQueuedItem) },
-			faulted: false,
-		};
-	}
-
-	private async sessionSnapshot(): Promise<SessionSnapshot> {
-		const snapshot = await this.laneSnapshot("main");
-		return { lanes: [{ name: "main", leafId: snapshot.leafId, operation: snapshot.operation }], faulted: false };
+		const snapshot = await this.sessionSnapshot();
+		return this.watchBus.watch(() => snapshot);
 	}
 	async close(): Promise<void> {
 		this.closed = true;
@@ -1697,5 +1696,55 @@ export class AgentHarness implements AgentLane {
 				}),
 			]);
 		}
+	}
+
+	private async laneSnapshot(lane: string): Promise<LaneSnapshot> {
+		const [leafId, transcript, open, queued, cancelled] = await Promise.all([
+			this.durableSession.getLeafId(),
+			this.durableSession.findEntriesOnBranch({ order: "oldestFirst" }),
+			this.durableSession.findOpenOperations(lane, { limit: 1 }),
+			this.durableSession.findRecords({ type: "queue_enqueued", lane, order: "oldestFirst" }),
+			this.durableSession.findRecords({ type: "queue_cancelled", lane, order: "oldestFirst" }),
+		]);
+		const cancelledIds = new Set(cancelled.map((record) => record.entryId));
+		const queues = { steer: [], followUp: [], nextRun: [] } as LaneSnapshot["queues"];
+		for (const record of queued) {
+			if (cancelledIds.has(record.target.id) || record.target.type !== "message") continue;
+			queues[record.queue].push({ entryId: record.target.id, message: durableClone(record.target.message) });
+		}
+		const operation = open[0];
+		return {
+			lane,
+			transcript,
+			leafId,
+			operation: operation
+				? {
+						id: operation.id,
+						kind: operation.intent.kind,
+						status: this.suspendedOperations.some((item) => item.id === operation.id) ? "suspended" : "running",
+					}
+				: null,
+			queues,
+			pendingWrites: [],
+			faulted: false,
+		};
+	}
+
+	private async sessionSnapshot(): Promise<SessionSnapshot> {
+		const lanes = await this.durableSession.getLanes();
+		return {
+			lanes: await Promise.all(
+				lanes.map(async (lane) => {
+					const snapshot = await this.laneSnapshot(lane.lane);
+					return {
+						name: lane.lane,
+						leafId: snapshot.leafId,
+						operation: snapshot.operation,
+						suspended: this.suspendedOperations.find((item) => item.lane === lane.lane),
+					};
+				}),
+			),
+			faulted: false,
+		};
 	}
 }
