@@ -399,66 +399,58 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
-		const extensionHost = this.definition.extensionHost;
-		this.phase = "turn";
-		this.activeOperation = {
-			operationId: _operationId,
-			kind: runCommand,
-			state: "running",
-			acceptedSeq: this.activeOperation?.acceptedSeq ?? this.eventSeq,
-		};
-		await extensionHost?.onOperationAccepted({ id: _operationId, type: runCommand });
-		try {
-			if (runCommand === "turn/start") {
-				await harness.prompt(input);
-				if (this.autoName) await this.generateName();
-			} else if (runCommand === "turn/resume") {
-				const result = await harness.resume();
-				if (!result.ok) throw new Error(result.error.message);
-				if (result.value.kind === "failed") throw new Error(result.value.error.message);
-			} else if (runCommand === "turn/steer") await harness.steer(input);
-			else if (runCommand === "turn/followUp") await harness.followUp(input);
-			else if (runCommand === "turn/abort") await harness.abort();
-			else if (runCommand === "turn/rollback") {
-				const turns = typeof payload.turns === "number" ? payload.turns : 1;
-				const result = await harness.rollback(turns);
-				if (!result.ok) throw new Error(result.error.message);
-			} else if (runCommand === "goal/create") {
-				if (!this.definition.goals || typeof payload.objective !== "string")
-					throw new Error("goal/create requires an objective");
-				await this.definition.goals.create(
-					payload.objective,
-					typeof payload.tokenBudget === "number" ? payload.tokenBudget : undefined,
-				);
-			} else if (runCommand === "goal/update") {
-				if (!this.definition.goals) throw new Error("Goals are not configured");
-				await this.definition.goals.update({
-					status:
-						typeof payload.status === "string"
-							? (payload.status as Parameters<GoalManager["update"]>[0]["status"])
-							: undefined,
-					tokensUsed: typeof payload.tokensUsed === "number" ? payload.tokensUsed : undefined,
-					activeTimeSeconds: typeof payload.activeTimeSeconds === "number" ? payload.activeTimeSeconds : undefined,
-					tokenBudget: typeof payload.tokenBudget === "number" ? payload.tokenBudget : undefined,
-				});
-			} else if (runCommand === "goal/pause") await this.definition.goals?.pause();
-			else if (runCommand === "goal/resume") await this.definition.goals?.resume();
-			else if (runCommand === "session/model/set") {
-				if (typeof payload.provider !== "string" || typeof payload.id !== "string")
-					throw new Error("session/model/set requires provider and id");
-				const model = this.models.getModel(payload.provider, payload.id);
-				if (!model) throw new Error(`Unknown model ${payload.provider}/${payload.id}`);
-				await harness.setModel(model);
-				this.model = model;
-			} else if (runCommand === "session/thinking/set") {
-				if (typeof payload.level !== "string") throw new Error("session/thinking/set requires level");
-				await harness.setThinkingLevel(payload.level as ThinkingLevel);
-			} else if (runCommand === "session/name/set") {
-				if (payload.name !== null && typeof payload.name !== "string")
-					throw new Error("session/name/set requires name or null");
-				this.sessionName = payload.name === null ? undefined : payload.name;
-				this.nameSource = payload.name === null ? undefined : "explicit";
-				await harness.session.setName(this.sessionName);
+		if (runCommand === "turn/start" || runCommand === "turn/resume") await harness.prompt(text);
+		else if (runCommand === "turn/steer") await harness.steer(text);
+		else if (runCommand === "turn/followUp") await harness.followUp(text);
+		else if (runCommand === "turn/abort") await harness.abort();
+		else if (runCommand === "turn/rollback") {
+			const turns = typeof payload.turns === "number" ? payload.turns : 1;
+			const result = await harness.rollback(turns);
+			if (!result.ok) throw new Error(result.error.message);
+		} else if (runCommand === "goal/create") {
+			if (!this.definition.goals || typeof payload.objective !== "string")
+				throw new Error("goal/create requires an objective");
+			await this.definition.goals.create(
+				payload.objective,
+				typeof payload.tokenBudget === "number" ? payload.tokenBudget : undefined,
+			);
+		} else if (runCommand === "goal/update") {
+			if (!this.definition.goals) throw new Error("Goals are not configured");
+			await this.definition.goals.update({
+				status:
+					typeof payload.status === "string"
+						? (payload.status as Parameters<GoalManager["update"]>[0]["status"])
+						: undefined,
+				tokensUsed: typeof payload.tokensUsed === "number" ? payload.tokensUsed : undefined,
+				activeTimeSeconds: typeof payload.activeTimeSeconds === "number" ? payload.activeTimeSeconds : undefined,
+				tokenBudget: typeof payload.tokenBudget === "number" ? payload.tokenBudget : undefined,
+			});
+		} else if (runCommand === "goal/pause") await this.definition.goals?.pause();
+		else if (runCommand === "goal/resume") await this.definition.goals?.resume();
+		else if (runCommand === "session/model/set") {
+			if (typeof payload.provider !== "string" || typeof payload.id !== "string")
+				throw new Error("session/model/set requires provider and id");
+			const model = this.models.getModel(payload.provider, payload.id);
+			if (!model) throw new Error(`Unknown model ${payload.provider}/${payload.id}`);
+			await harness.setModel(model);
+			this.model = model;
+		} else if (runCommand === "session/thinking/set") {
+			if (typeof payload.level !== "string") throw new Error("session/thinking/set requires level");
+			await harness.setThinkingLevel(payload.level as ThinkingLevel);
+		} else if (runCommand === "session/name/set") {
+			if (payload.name !== null && typeof payload.name !== "string")
+				throw new Error("session/name/set requires name or null");
+			this.sessionName = payload.name === null ? undefined : payload.name;
+			this.nameSource = payload.name === null ? undefined : "explicit";
+			this.nameRevision += 1;
+		} else if (runCommand === "session/name/generate") {
+			const generated =
+				typeof payload.name === "string" && payload.name.trim().length > 0
+					? payload.name.trim()
+					: "Untitled session";
+			if (this.nameSource !== "explicit") {
+				this.sessionName = generated;
+				this.nameSource = "generated";
 				this.nameRevision += 1;
 			} else if (runCommand === "session/name/generate") {
 				const generated =

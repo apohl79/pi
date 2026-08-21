@@ -1436,6 +1436,45 @@ export class AgentHarness implements AgentLane {
 		await this.durableSession.appendCustomEntry("conversation_rollback", { removedTurns: turns, targetId: target });
 		return ResultValue.ok({ targetId: target, removedTurns: turns });
 	}
+	async rollback(turns: number): Promise<RollbackResult> {
+		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		if (!Number.isInteger(turns) || turns < 1) {
+			return ResultValue.err(
+				new InvalidRollback({ lane: "main", message: "Rollback requires a positive turn count" }),
+			);
+		}
+		const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+		if (open.length > 0) {
+			return ResultValue.err(
+				new LaneBusy({
+					lane: "main",
+					operationId: open[0]!.id,
+					operationKind: open[0]!.intent.kind,
+					message: "Lane is busy",
+				}),
+			);
+		}
+		const lanes = await this.durableSession.getLanes();
+		if (lanes.some((lane) => lane.lane !== "main" && lane.leafId !== null)) {
+			return ResultValue.err(
+				new InvalidRollback({ lane: "main", message: "Rollback requires no active descendant lanes" }),
+			);
+		}
+		const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
+		const userEntries = entries.filter(
+			(entry): entry is Extract<Entry, { type: "message" }> =>
+				entry.type === "message" && entry.message.role === "user",
+		);
+		if (turns > userEntries.length) {
+			return ResultValue.err(
+				new InvalidRollback({ lane: "main", message: "Rollback exceeds surviving user turns" }),
+			);
+		}
+		const target = turns === userEntries.length ? null : userEntries[userEntries.length - turns]!.parentId;
+		await this.durableSession.moveLane("main", target);
+		await this.durableSession.appendCustomEntry("conversation_rollback", { removedTurns: turns, targetId: target });
+		return ResultValue.ok({ targetId: target, removedTurns: turns });
+	}
 	async resume(): Promise<ResumeResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
 		const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
