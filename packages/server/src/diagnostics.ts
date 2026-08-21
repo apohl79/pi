@@ -61,6 +61,12 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 	const manifest = candidate.manifest;
 	if (!Array.isArray(events) || typeof manifest !== "object" || manifest === null || Array.isArray(manifest))
 		return { valid: false, reason: "diagnostics/verify bundle requires events and manifest" };
+	const capsules = candidate.capsules;
+	if (
+		capsules !== undefined &&
+		(!Array.isArray(capsules) || capsules.some((capsule) => !isDiagnosticCapsule(capsule)))
+	)
+		return { valid: false, reason: "Diagnostic bundle contains an invalid capsule" };
 	const fields = manifest as Record<string, unknown>;
 	const serializedEvents = JSON.stringify(events);
 	const digest = createHash("sha256").update(serializedEvents).digest("hex");
@@ -78,6 +84,35 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 		fields.eventsSha256 === digest &&
 		contiguous;
 	return valid ? { valid: true } : { valid: false, reason: "Diagnostic bundle manifest does not match its events" };
+}
+
+function isDiagnosticCapsule(value: unknown): value is DiagnosticCapsule {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const capsule = value as Record<string, unknown>;
+	return (
+		capsule.schemaVersion === 1 &&
+		typeNonEmpty(capsule.eventId) &&
+		typeNonEmpty(capsule.kind) &&
+		typeNonEmpty(capsule.keyId) &&
+		typeNonEmpty(capsule.nonce) &&
+		typeNonEmpty(capsule.ciphertext) &&
+		typeNonEmpty(capsule.authTag) &&
+		typeNonEmpty(capsule.plaintextSha256) &&
+		/^[a-f0-9]{64}$/u.test(capsule.plaintextSha256) &&
+		Number.isSafeInteger(capsule.byteLength) &&
+		Number.isSafeInteger(capsule.originalByteLength) &&
+		(capsule.byteLength as number) >= 0 &&
+		(capsule.originalByteLength as number) >= (capsule.byteLength as number) &&
+		typeBoolean(capsule.truncated)
+	);
+}
+
+function typeNonEmpty(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0;
+}
+
+function typeBoolean(value: unknown): value is boolean {
+	return typeof value === "boolean";
 }
 
 function eventSequence(value: unknown): number | undefined {

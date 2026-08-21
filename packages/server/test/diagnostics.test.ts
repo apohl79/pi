@@ -132,4 +132,18 @@ describe("verifyDiagnosticBundle", () => {
 		expect(verifyDiagnosticBundle({ manifest: { ...manifest, lastSeq: 3 }, events })).toMatchObject({ valid: false });
 		expect(verifyDiagnosticBundle({ events })).toMatchObject({ valid: false });
 	});
+
+	test("rejects malformed encrypted capsule records during offline verification", () => {
+		const events = [{ seq: 1, kind: "boot" }];
+		const manifest = {
+			schemaVersion: 1,
+			eventCount: 1,
+			firstSeq: 1,
+			lastSeq: 1,
+			eventsSha256: createHash("sha256").update(JSON.stringify(events)).digest("hex"),
+		};
+		expect(
+			verifyDiagnosticBundle({ manifest, events, capsules: [{ schemaVersion: 1, eventId: "event-1" }] }),
+		).toEqual({ valid: false, reason: "Diagnostic bundle contains an invalid capsule" });
+	});
 });
