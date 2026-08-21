@@ -11,6 +11,7 @@ import type {
 	SessionPhaseV2,
 } from "@earendil-works/pi-protocol";
 import { MAX_V2_ARRAY_ITEMS, MAX_V2_JSON_DEPTH, MAX_V2_STRING_LENGTH } from "@earendil-works/pi-protocol";
+import type { ServerRuntimeExtensionHost } from "./extension-host.ts";
 
 const OPERATION_ENTRY = "v2_operation";
 type PersistedOperation = {
@@ -225,6 +226,7 @@ export interface CodingAgentV2SessionDefinition {
 	metadata: SessionMetadataV2;
 	harness: AgentHarness;
 	goals?: GoalManager;
+	extensionHost?: ServerRuntimeExtensionHost;
 }
 
 export interface CodingAgentV2Service {
@@ -546,19 +548,51 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
+		const extensionHost = this.definition.extensionHost;
+		let terminalNotified = false;
+		let terminalOutcome = "completed";
+		const notifyTerminal = async (outcome: string): Promise<void> => {
+			if (terminalNotified) return;
+			try {
+				await extensionHost?.onOperationTerminal({ id: operationId, type: runCommand }, outcome);
+				terminalNotified = true;
+			} catch (error) {
+				if (outcome !== "completed") terminalNotified = true;
+				throw error;
+			}
+		};
+		try {
+			await extensionHost?.onOperationAccepted({ id: operationId, type: runCommand });
+		} catch (error) {
+			terminalOutcome = "failed";
+			await notifyTerminal("failed");
+			throw error;
+		}
+		try {
 		const unwrap = <T>(result: { ok: boolean; value?: T; error?: unknown }): T => {
 			if (!result.ok) throw result.error instanceof Error ? result.error : new Error(String(result.error));
 			return result.value as T;
 		};
 		if (runCommand === "turn/start") {
 			const outcome = unwrap(await harness.prompt(requireText(command, requirePayload(command))));
-			if ("kind" in outcome && outcome.kind === "failed") throw new Error(outcome.error.message);
+			if ("kind" in outcome) {
+				if (outcome.kind === "failed") { terminalOutcome = "failed"; throw new Error(outcome.error.message); }
+				if (outcome.kind === "aborted") terminalOutcome = "aborted";
+				if (outcome.kind === "suspended") terminalOutcome = "suspended";
+			}
 		} else if (runCommand === "turn/resume") {
 			const outcome = unwrap(await harness.resume());
-			if ("kind" in outcome && outcome.kind === "failed") throw new Error(outcome.error.message);
+			if ("kind" in outcome) {
+				if (outcome.kind === "failed") { terminalOutcome = "failed"; throw new Error(outcome.error.message); }
+				if (outcome.kind === "aborted") terminalOutcome = "aborted";
+				if (outcome.kind === "suspended") terminalOutcome = "suspended";
+			}
 		} else if (runCommand === "turn/steer") unwrap(await harness.steer(requireText(command, requirePayload(command))));
 		else if (runCommand === "turn/followUp") unwrap(await harness.followUp(requireText(command, requirePayload(command))));
-		else if (runCommand === "turn/abort") unwrap(await harness.abort());
+		else if (runCommand === "turn/abort") {
+			unwrap(await harness.abort());
+			terminalOutcome = "aborted";
+		}
 		else if (runCommand === "turn/rollback") {
 			const turns = typeof payload.turns === "number" ? payload.turns : 1;
 			unwrap(await harness.rollback(turns));
@@ -622,23 +656,34 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			if (typeof payload.enabled !== "boolean") throw new Error("session/name/auto/set requires enabled");
 			this.autoName = payload.enabled;
 		}
+		} catch (error) {
+			terminalOutcome = "failed";
+			await notifyTerminal("failed");
+			throw error;
+		}
 		void this.autoName;
 		await this.withMutation(async () => {
 			const operation = this.operations.get(operationId);
 			if (!operation) return;
-			const state = runCommand === "turn/abort" ? "aborted" : "complete";
+			const state = runCommand === "turn/abort" ? "aborted" : terminalOutcome === "suspended" ? "suspended" : terminalOutcome === "aborted" ? "aborted" : "complete";
 			await this.persistOperation({ ...operation, state, revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
 			this.operationId = undefined;
 			this.freshOperationId = undefined;
 		});
+		await notifyTerminal(terminalOutcome);
 		} catch (error) {
-			await this.withMutation(async () => {
+			try {
+				await this.withMutation(async () => {
 				const operation = this.operations.get(operationId);
 				if (operation && (operation.state === "accepted" || operation.state === "running"))
 					await this.persistOperation({ ...operation, state: "failed", revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
 				this.operationId = undefined;
 				this.freshOperationId = undefined;
-			});
+				});
+			} finally {
+				terminalOutcome = "failed";
+				await notifyTerminal("failed").catch(() => undefined);
+			}
 			throw error;
 		}
 	}
