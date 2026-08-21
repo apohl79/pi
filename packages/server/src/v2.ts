@@ -17,6 +17,7 @@ import {
 	type SessionSnapshotV2,
 } from "@earendil-works/pi-protocol";
 import { InMemoryV2AgentRegistry, type V2AgentRegistry } from "./agents.ts";
+import { InMemoryV2AppRegistry, type V2AppRegistry } from "./apps.ts";
 import { InMemoryV2BlobStore, type V2BlobStore } from "./blobs.ts";
 import type { ByteConnection, ByteConnectionHandler } from "./connection.ts";
 import { type ForensicRecorder, InMemoryForensicRecorder } from "./diagnostics.ts";
@@ -59,6 +60,7 @@ export interface PiServerV2Options {
 	processes?: V2ProcessRegistry;
 	blobs?: V2BlobStore;
 	agents?: V2AgentRegistry;
+	apps?: V2AppRegistry;
 	plans?: V2PlanRegistry;
 	inputs?: V2InputRegistry;
 	files?: V2FileReferenceService;
@@ -122,6 +124,7 @@ export class PiServerV2 {
 	private readonly processes: V2ProcessRegistry;
 	private readonly blobs: V2BlobStore;
 	private readonly agents: V2AgentRegistry;
+	private readonly apps: V2AppRegistry;
 	private readonly plans: V2PlanRegistry;
 	private readonly inputs: V2InputRegistry;
 	private readonly files: V2FileReferenceService;
@@ -149,6 +152,7 @@ export class PiServerV2 {
 		this.processes = options.processes ?? new InMemoryV2ProcessRegistry();
 		this.blobs = options.blobs ?? new InMemoryV2BlobStore();
 		this.agents = options.agents ?? new InMemoryV2AgentRegistry();
+		this.apps = options.apps ?? new InMemoryV2AppRegistry();
 		this.plans = options.plans ?? new InMemoryV2PlanRegistry();
 		this.inputs = options.inputs ?? new InMemoryV2InputRegistry();
 		this.files =
@@ -314,6 +318,9 @@ export class PiServerV2 {
 			if (command.command === "agent/message") return void (await this.messageAgent(state, id, command));
 			if (command.command === "agent/followUp") return void (await this.followUpAgent(state, id, command));
 			if (command.command === "agent/interrupt") return void (await this.interruptAgent(state, id, command));
+			if (command.command === "app/list") return void (await this.listApps(state, id, command));
+			if (command.command === "app/read") return void (await this.readApp(state, id, command));
+			if (command.command === "app/auth/start") return void (await this.startAppAuth(state, id, command));
 			if (command.command === "plan/read") return void (await this.readPlan(state, id, command));
 			if (command.command === "plan/update") return void (await this.updatePlan(state, id, command));
 			if (command.command === "input/request/read") return void (await this.readInputRequest(state, id, command));
@@ -875,6 +882,27 @@ export class PiServerV2 {
 				enabled,
 				payload.scope === "user" || payload.scope === "project" ? payload.scope : undefined,
 			),
+		});
+	}
+
+	private async listApps(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		await this.sendResponse(state, id, { command: command.command, apps: await this.apps.list() });
+	}
+
+	private async readApp(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.id !== "string") throw new Error("app/read requires id");
+		const app = await this.apps.read(payload.id);
+		if (!app) throw new Error(`Unknown app: ${payload.id}`);
+		await this.sendResponse(state, id, { command: command.command, app });
+	}
+
+	private async startAppAuth(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.id !== "string") throw new Error("app/auth/start requires id");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			auth: await this.apps.startAuth(payload.id, payload),
 		});
 	}
 
