@@ -40,6 +40,7 @@ import {
 import type { TransportAddress } from "../cli/experimental/transport-address.ts";
 import { runMigrations } from "../migrations.ts";
 import { createCodingAgentV2AgentRegistry } from "./agent-registry.ts";
+import { createRuntimeManifest } from "./runtime-manifest.ts";
 import { type CodingAgentV2SqliteServiceOptions, createCodingAgentV2SqliteService } from "./sqlite-service.ts";
 
 export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOptions, "repository"> & {
@@ -195,6 +196,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 		throw error;
 	}
 	const env = new NodeExecutionEnv({ cwd: options.cwd });
+	const runtimeManifest = options.runtimeManifest ?? createRuntimeManifest();
 	const repository = new SqliteSessionRepository({
 		env,
 		sqlite: createNodeSqliteFactory(),
@@ -301,6 +303,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			operationStore,
 			blobs,
 			integrity,
+			runtimeManifest,
 			planStorePath: options.planStorePath ?? join(options.agentDir, "plans.jsonl"),
 			diagnosticStorePath: options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"),
 			diagnosticKeyPath: options.diagnosticKeyPath ?? join(options.agentDir, "diagnostic-keys.json"),
