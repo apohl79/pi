@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
-import { ServerDaemon, type ServerDaemonOptions } from "@earendil-works/pi-server";
+import { ServerDaemon, type ServerDaemonOptions, type V2InputRegistry } from "@earendil-works/pi-server";
 import { createNodeSqliteFactory, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import {
 	createExperimentalCliRuntime,
@@ -18,6 +18,7 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	socketPath: string;
 	serverId?: string;
 	agents?: ServerDaemonOptions["agents"];
+	inputs?: V2InputRegistry;
 	createServer?: ServerDaemonOptions["createServer"];
 	write(value: unknown): void;
 	onAttach?: ExperimentalCliRuntimeOptions["onAttach"];
@@ -51,6 +52,7 @@ export async function createCodingAgentDaemonRuntime(
 		socketPath: options.socketPath,
 		...(options.serverId === undefined ? {} : { serverId: options.serverId }),
 		...(agents === undefined ? {} : { agents }),
+		...(options.inputs === undefined ? {} : { inputs: options.inputs }),
 		...(options.createServer === undefined ? {} : { createServer: options.createServer }),
 	});
 	const defaultConnect: TransportAddress = { transport: "unix", path: options.socketPath };
