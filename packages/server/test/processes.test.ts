@@ -45,10 +45,22 @@ describe("InMemoryV2ProcessRegistry", () => {
 	test("validates active-process and write limits", async () => {
 		expect(() => new NodeV2ProcessRegistry({ maxActiveProcesses: 0 })).toThrow("maxActiveProcesses");
 		expect(() => new NodeV2ProcessRegistry({ maxWriteBytes: 0 })).toThrow("maxWriteBytes");
+		expect(() => new NodeV2ProcessRegistry({ maxQueuedWriteBytes: 0 })).toThrow("maxQueuedWriteBytes");
 		const registry = new NodeV2ProcessRegistry({ maxWriteBytes: 3 });
 		const started = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "setTimeout(function(){},1000000)"` });
 		await expect(registry.write(started.processId, "🙂")).rejects.toThrow("maxWriteBytes");
 		await registry.terminate(started.processId);
+	});
+
+	test("rejects writes that would exceed the queued byte budget", async () => {
+		const registry = new NodeV2ProcessRegistry({ maxWriteBytes: 1024, maxQueuedWriteBytes: 2048 });
+		const started = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "process.stdin.pause(); setTimeout(function(){},1000000)"` });
+		const input = "x".repeat(1024);
+		const first = registry.write(started.processId, input);
+		const second = registry.write(started.processId, input);
+		await expect(registry.write(started.processId, input)).rejects.toThrow("maxQueuedWriteBytes");
+		await registry.terminate(started.processId);
+		await Promise.allSettled([first, second]);
 	});
 
 	test("enforces active-process limit and releases capacity after completion", async () => {
@@ -108,6 +120,16 @@ describe("InMemoryV2ProcessRegistry", () => {
 		const pending = registry.wait(started.processId);
 		await registry.terminate(started.processId);
 		await expect(pending).resolves.toMatchObject({ state: "terminated", exitCode: 143 });
+	});
+
+	test("holds active capacity until a terminated child closes", async () => {
+		const registry = new NodeV2ProcessRegistry({ maxActiveProcesses: 1, terminateGraceMs: 10, terminateTimeoutMs: 10 });
+		const started = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "process.on('SIGTERM', function(){}),setTimeout(function(){},1000000)"` });
+		await registry.terminate(started.processId);
+		await expect(registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "setTimeout(function(){},1000000)"` })).rejects.toThrow("Maximum active process limit");
+		await registry.wait(started.processId);
+		const replacement = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('ok')"` });
+		await expect(registry.wait(replacement.processId)).resolves.toMatchObject({ state: "exited", output: "ok" });
 	});
 
 	test("retains only the configured number of completed process entries", async () => {
