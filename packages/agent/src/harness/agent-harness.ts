@@ -731,6 +731,18 @@ export class AgentHarness implements AgentLane {
 				finalEntryId = target
 					? (await this.durableSession.appendEntry({ ...target, message: durableClone(message) }, "main")).id
 					: await this.durableSession.appendMessage(durableClone(message));
+				if (message.role === "assistant" && message.stopReason !== "pending" && message.usage !== undefined)
+					await this.durableSession.appendRecord({
+						type: "usage",
+						id: this.durableSession.idGenerator.next(),
+						lane: "main",
+						usage: durableClone(message.usage),
+						cause: "assistant",
+						runId,
+						entryId: finalEntryId,
+						attempt: 1,
+						stopReason: message.stopReason,
+					});
 			}
 			const finalMessage = transcriptMessages.at(-1);
 			if (!finalEntryId || !finalMessage || finalMessage.role !== "assistant")
