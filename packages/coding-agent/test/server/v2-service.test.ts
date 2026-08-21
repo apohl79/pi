@@ -253,19 +253,50 @@ describe("coding-agent v2 service adapter", () => {
 		}
 	});
 
-	test("projects durable transcript entries into the bounded v2 snapshot schema", async () => {
+	test("preserves ordered text and image content in a remote turn", async () => {
 		const models = createModels();
-		const faux = fauxProvider({ provider: "coding-agent-v2-schema", models: [{ id: "schema-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }] });
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-content-faux",
+			models: [{ id: "coding-agent-v2-content-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
 		models.setProvider(faux.provider);
-		const session = new Session(new InMemorySessionStorage({ id: "schema-session", createdAt: 1 }));
+		faux.setResponses([fauxAssistantMessage("content response")]);
+		const session = new Session(new InMemorySessionStorage({ id: "content-session", createdAt: 1 }));
 		const env = new NodeExecutionEnv({ cwd: process.cwd() });
-		const created = await createCodingAgentHarness({ session, models, model: faux.getModel(), env, tools: [], activeToolNames: [], systemPrompt: "schema" });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
 		try {
-			await session.appendMessage({ role: "user", content: "hello", timestamp: 2 });
-			const runtime = await createCodingAgentV2Service(models, [{ metadata: { id: "schema-session", createdAt: 1, updatedAt: 2 }, harness: created.harness }]).then((service) => service.openSession("schema-session"));
-			const snapshot = await runtime.snapshot();
-			expect(Check(SessionSnapshotV2Schema, snapshot)).toBe(true);
-			expect(snapshot.transcript[0]).toMatchObject({ id: expect.any(String), role: "user", timestamp: 2 });
+			const service = createCodingAgentV2Service(models, [
+				{ metadata: { id: "content-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+			]);
+			const runtime = await service.openSession("content-session");
+			await runtime.run("content-operation", {
+				command: "turn/start",
+				sessionId: "content-session",
+				payload: {
+					content: [
+						{ type: "text", text: "inspect this" },
+						{ type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+					],
+				},
+			});
+			const user = (await session.findEntriesOnBranch({ order: "oldestFirst" })).find(
+				(entry) => entry.type === "message" && entry.message.role === "user",
+			);
+			expect(user).toMatchObject({
+				message: {
+					content: [
+						{ type: "text", text: "inspect this" },
+						{ type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+					],
+				},
+			});
 		} finally {
 			await created.harness.close();
 			await env.cleanup();

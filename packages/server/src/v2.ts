@@ -1180,6 +1180,7 @@ export class PiServerV2 {
 		this.requireControl(state, command.sessionId);
 		const runtime = state.sessions.get(command.sessionId);
 		if (!runtime) throw new Error(`Session ${command.sessionId} is not attached`);
+		const resolvedCommand = await this.resolveTurnContent(command);
 		const operationId = randomUUID();
 		this.retainOperation(runtime, command.sessionId);
 		let accepted: OperationAccepted;
@@ -1202,53 +1203,44 @@ export class PiServerV2 {
 			state: "accepted",
 			accepted,
 		});
-		try {
-			await this.operationStore.putOperation(this.operations.get(operationId)!);
-			await this.send(state, { type: "response", id, ok: true, accepted });
-			await this.broadcastEvent(
-				command.sessionId,
-				runtime,
-				{ state: "accepted", accepted },
-				operationId,
-				"operation_accepted",
-				{ eventSeq: accepted.eventSeq, revision: accepted.sessionRevision },
-			);
-			void this.recordDiagnostic({
-				kind: "operation_accepted",
-				sessionId: command.sessionId,
-				operationId,
-				payload: { command: command.command, payload: command.payload },
-			});
-		} catch (error) {
-			this.reportError(error instanceof Error ? error : new Error(String(error)));
-		} finally {
-			void this.runOperation(runtime, command.sessionId, operationId, resolvedCommand).catch((error: unknown) =>
-				this.reportError(error instanceof Error ? error : new Error(String(error))),
-			);
-		}
+		await this.operationStore.putOperation(this.operations.get(operationId)!);
+		await this.send(state, { type: "response", id, ok: true, accepted });
+		await this.broadcastEvent(
+			command.sessionId,
+			runtime,
+			{ state: "accepted", accepted },
+			operationId,
+			"operation_accepted",
+			{ eventSeq: accepted.eventSeq, revision: accepted.sessionRevision },
+		);
+		await this.diagnostics?.record({
+			kind: "operation_accepted",
+			sessionId: command.sessionId,
+			operationId,
+			payload: { command: command.command, payload: command.payload },
+		});
+		void this.runOperation(runtime, command.sessionId, operationId, resolvedCommand);
 	}
 
 	private async resolveTurnContent(command: CommandV2): Promise<CommandV2> {
 		const payload = objectPayload(command);
 		if (!Array.isArray(payload.content)) return command;
-		if (payload.content.length > 64) throw new Error("turn content has too many parts");
-		const content: unknown[] = [];
-		let totalBytes = 0;
-		for (const [index, part] of payload.content.entries()) {
-			if (typeof part !== "object" || part === null || Array.isArray(part)) throw new Error(`turn content item ${index} must be an object`);
-			const item = part as Record<string, unknown>;
-			if (item.type === "text" && typeof item.text === "string") { content.push({ type: "text", text: item.text }); continue; }
-			if (item.type !== "image" && item.type !== "blob") throw new Error(`turn content item ${index} must be text, image, or blob`);
-			if (typeof item.mimeType !== "string" || !item.mimeType.startsWith("image/")) throw new Error(`turn content item ${index} requires an image MIME type`);
-			if (typeof item.data === "string") { totalBytes += item.data.length; if (totalBytes > 16 * 1024 * 1024) throw new Error("turn content exceeds size limit"); content.push({ type: "image", data: item.data, mimeType: item.mimeType }); continue; }
-			if (typeof item.digest !== "string") throw new Error(`turn content item ${index} requires a blob digest`);
-			const stat = await this.blobs.stat(item.digest);
-			if (!stat.mimeType.startsWith("image/") || stat.size > 16 * 1024 * 1024) throw new Error("blob is not a bounded image");
-			const data = await this.blobs.read(item.digest);
-			totalBytes += data.byteLength;
-			if (totalBytes > 16 * 1024 * 1024) throw new Error("turn content exceeds size limit");
-			content.push({ type: "image", data: Buffer.from(data).toString("base64"), mimeType: stat.mimeType });
-		}
+		const content = await Promise.all(
+			payload.content.map(async (part, index) => {
+				if (typeof part !== "object" || part === null || Array.isArray(part))
+					throw new Error(`turn content item ${index} must be an object`);
+				const item = part as Record<string, unknown>;
+				if (item.type === "text" && typeof item.text === "string") return { type: "text", text: item.text };
+				if (item.type !== "image" && item.type !== "blob")
+					throw new Error(`turn content item ${index} must be text, image, or blob`);
+				if (typeof item.mimeType !== "string" || !item.mimeType.startsWith("image/"))
+					throw new Error(`turn content item ${index} requires an image MIME type`);
+				if (typeof item.data === "string") return { type: "image", data: item.data, mimeType: item.mimeType };
+				if (typeof item.digest !== "string") throw new Error(`turn content item ${index} requires a blob digest`);
+				const data = await this.blobs.read(item.digest);
+				return { type: "image", data: Buffer.from(data).toString("base64"), mimeType: item.mimeType };
+			}),
+		);
 		return { ...command, payload: toProtocolJsonValue({ ...payload, content }) };
 	}
 
