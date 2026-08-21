@@ -1248,11 +1248,16 @@ export class AgentHarness implements AgentLane {
 		try {
 			let summary: BranchSummaryResult | undefined;
 			if (summarize && oldLeafId) {
-				const collected = await collectEntriesForBranchSummary(
-					this.durableSession,
-					oldLeafId,
-					targetId ?? oldLeafId,
-				);
+				const collected =
+					targetId === null
+						? {
+								entries: await this.durableSession.findEntriesOnBranch({
+									start: oldLeafId,
+									order: "oldestFirst",
+								}),
+								commonAncestorId: null,
+							}
+						: await collectEntriesForBranchSummary(this.durableSession, oldLeafId, targetId);
 				const generated = await generateBranchSummary(collected.entries, {
 					models: this.models,
 					model: this.model,
