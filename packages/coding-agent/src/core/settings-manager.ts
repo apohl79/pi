@@ -49,6 +49,8 @@ export interface ImageSettings {
 	blockImages?: boolean; // default: false - when true, prevents all images from being sent to LLM providers
 }
 
+export type StatusLineCommand = string | readonly string[];
+
 export interface ThinkingBudgetsSettings {
 	minimal?: number;
 	low?: number;
@@ -121,6 +123,9 @@ export interface Settings {
 	enableSkillCommands?: boolean; // default: true - register skills as /skill:name commands
 	terminal?: TerminalSettings;
 	images?: ImageSettings;
+	statusLine?: string[];
+	statusLineUseColors?: boolean;
+	statusLineCommand?: StatusLineCommand;
 	enabledModels?: string[]; // Model patterns for cycling (same format as --models CLI flag)
 	defaultTools?: string[]; // Initial built-in tool selection
 	doubleEscapeAction?: "fork" | "tree" | "none"; // Action for double-escape with empty editor (default: "tree")
@@ -1231,6 +1236,39 @@ export class SettingsManager {
 
 	getBlockImages(): boolean {
 		return this.settings.images?.blockImages ?? false;
+	}
+
+	getStatusLine(): readonly string[] | undefined {
+		return this.settings.statusLine === undefined ? undefined : [...this.settings.statusLine];
+	}
+
+	getStatusLineUseColors(): boolean {
+		return this.settings.statusLineUseColors ?? true;
+	}
+
+	getStatusLineCommand(): StatusLineCommand | undefined {
+		const command = this.settings.statusLineCommand;
+		return Array.isArray(command) ? [...command] : command;
+	}
+
+	setStatusLine(value: string[] | undefined): void {
+		this.updateProjectSettings("statusLine", (settings) => {
+			if (value === undefined) delete settings.statusLine;
+			else settings.statusLine = [...value];
+		});
+	}
+
+	setStatusLineUseColors(value: boolean): void {
+		this.updateProjectSettings("statusLineUseColors", (settings) => {
+			settings.statusLineUseColors = value;
+		});
+	}
+
+	setStatusLineCommand(value: StatusLineCommand | undefined): void {
+		this.updateProjectSettings("statusLineCommand", (settings) => {
+			if (value === undefined) delete settings.statusLineCommand;
+			else settings.statusLineCommand = Array.isArray(value) ? [...value] : value;
+		});
 	}
 
 	setBlockImages(blocked: boolean): void {
