@@ -548,6 +548,38 @@ describe("PiServer v2 operation acceptance", () => {
 		await second.close();
 	});
 
+	test("marks non-terminal operations suspended during daemon recovery", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-recovery-"));
+		directories.push(directory);
+		const store = new InMemoryV2OperationStore();
+		await store.putOperation({
+			operationId: "crashed-operation",
+			sessionId: "session-1",
+			state: "running",
+			accepted: { operationId: "crashed-operation", sessionRevision: 2, eventSeq: 2 },
+		});
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			operationStore: store,
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const operation = await client.request({ command: "operation/read", operationId: "crashed-operation" });
+		expect(operation).toMatchObject({
+			ok: true,
+			result: {
+				operation: {
+					operationId: "crashed-operation",
+					state: "suspended",
+					error: "Operation was suspended by daemon restart",
+				},
+			},
+		});
+		await client.close();
+	});
+
 	test("exposes server-owned process cursors over v2", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
