@@ -1,11 +1,10 @@
-import { type ExecutionEnv, GoalContinuationScheduler, GoalManager, type Session } from "@earendil-works/pi-agent-core";
+import type { ExecutionEnv, Session } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { SessionMetadataV2 } from "@earendil-works/pi-protocol";
 import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import { type CreateCodingAgentHarnessOptions, createCodingAgentHarness } from "./create-harness.ts";
 import {
 	type CodingAgentV2Service,
-	type CodingAgentV2Runtime,
 	type CodingAgentV2SessionDefinition,
 	type CodingAgentV2SessionStore,
 	createCodingAgentV2ServiceFromStore,
@@ -36,14 +35,9 @@ export async function createCodingAgentV2SqliteService(
 	const definition = async (
 		metadata: SqliteSessionMetadata,
 		session: Session<SqliteSessionMetadata>,
-		modelOverride?: Model<Api>,
 	): Promise<CodingAgentV2SessionDefinition> => {
-		const model =
-			modelOverride ?? (typeof options.model === "function" ? await options.model(metadata) : options.model);
+		const model = typeof options.model === "function" ? await options.model(metadata) : options.model;
 		const env = typeof options.env === "function" ? await options.env(metadata) : options.env;
-		const goals = new GoalManager(session);
-		let runtime: CodingAgentV2Runtime | undefined;
-		let continuationSequence = 0;
 		const created = await createCodingAgentHarness({
 			...options.harness,
 			session,
@@ -52,32 +46,7 @@ export async function createCodingAgentV2SqliteService(
 			env,
 			sessionFile: metadata.path,
 		});
-		const goalContinuation = new GoalContinuationScheduler({
-			goals,
-			waitForIdle: async (callback) => {
-				await created.harness.waitForIdle();
-				await callback();
-			},
-			continueGoal: async (goal) => {
-				if (!runtime) throw new Error("Goal continuation runtime is not ready");
-				const operationId = `goal-continuation-${goal.id}-${++continuationSequence}`;
-				await runtime.accept(operationId);
-				await runtime.run(operationId, {
-					command: "turn/followUp",
-					sessionId: metadata.id,
-					payload: { text: `Continue working toward the goal: ${goal.objective}` },
-				});
-			},
-		});
-		return {
-			metadata: sessionMetadata(metadata),
-			harness: created.harness,
-			goals,
-			goalContinuation,
-			onRuntimeReady: (value) => {
-				runtime = value;
-			},
-		};
+		return { metadata: sessionMetadata(metadata), harness: created.harness };
 	};
 	const store: CodingAgentV2SessionStore = {
 		list: async () => {
@@ -105,21 +74,7 @@ export async function createCodingAgentV2SqliteService(
 				await session.setName(name);
 				metadata.name = name;
 			}
-			const requestedModel =
-				typeof payload.model === "object" && payload.model !== null && !Array.isArray(payload.model)
-					? (payload.model as Record<string, unknown>)
-					: undefined;
-			const modelOverride =
-				requestedModel &&
-				typeof requestedModel.provider === "string" &&
-				typeof requestedModel.id === "string" &&
-				requestedModel.provider !== "inherit" &&
-				requestedModel.id !== "inherit"
-					? options.models.getModel(requestedModel.provider, requestedModel.id)
-					: undefined;
-			if (requestedModel && modelOverride === undefined)
-				throw new Error("Requested child model is not available in the configured model catalog");
-			return definition(metadata, session, modelOverride);
+			return definition(metadata, session);
 		},
 		delete: async (sessionId) => {
 			const metadata =
