@@ -113,6 +113,20 @@ function safeOperationError(error: unknown): string {
 	return message || "Operation failed";
 }
 
+function safeDiagnosticMessage(error: unknown): string {
+	const raw = error instanceof Error ? error.message : String(error);
+	const message = raw.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+	if (
+		message.length === 0 ||
+		message.length > 500 ||
+		/\bbearer\s+\S+|(?:api[_-]?key|token|secret|password)\s*[:=]\s*\S+|\b(?:sk|pk|rk)-[a-z0-9_-]{8,}/i.test(
+			message,
+		)
+	)
+		return "Server error";
+	return message;
+}
+
 export class PiServerV2 {
 	readonly id: string;
 	private readonly listeners: readonly PiServerListener[];
@@ -896,6 +910,12 @@ export class PiServerV2 {
 	}
 
 	private reportError(error: Error): void {
+		const diagnosticMessage = safeDiagnosticMessage(error);
+		void this.diagnostics?.record({ kind: "server_error", payload: { message: diagnosticMessage } }).catch(() => {});
+		this.notifyError(error);
+	}
+
+	private notifyError(error: Error): void {
 		try {
 			this.onError?.(error);
 		} catch {
@@ -907,7 +927,7 @@ export class PiServerV2 {
 		try {
 			await this.diagnostics?.record(event);
 		} catch (error) {
-			this.reportError(error instanceof Error ? error : new Error(String(error)));
+			this.notifyError(error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 }

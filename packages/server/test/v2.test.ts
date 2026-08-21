@@ -1,12 +1,15 @@
 import {
 	type EventEnvelopeV2,
 	encodeClientMessageV2,
+	encodeServerMessageV2,
 	PROTOCOL_V2_VERSION,
 	ServerMessageV2Decoder,
 } from "@earendil-works/pi-protocol";
 import { expect, test, vi } from "vitest";
 import type { ByteConnection } from "../src/connection.ts";
+import { InMemoryForensicRecorder } from "../src/diagnostics.ts";
 import { InMemoryV2OperationStore } from "../src/operation-store.ts";
+import { ProtocolTestClientV2 } from "../src/testing/client.ts";
 import { type PiServerServiceV2, type PiSessionRuntimeV2, PiServerV2 } from "../src/v2.ts";
 
 class RecordingConnection implements ByteConnection {
@@ -204,6 +207,35 @@ test("connection errors still disconnect when close rejects", async () => {
 	handler.onError(error);
 	await vi.waitFor(() => expect((server as unknown as { connections: Set<unknown> }).connections.size).toBe(0));
 	await server.close();
+});
+
+test("connection errors are recorded as bounded redacted diagnostics", async () => {
+	const recorder = new InMemoryForensicRecorder();
+	const errors: Error[] = [];
+	const server = new PiServerV2(service, { listeners: [], diagnostics: recorder, onError: (error) => errors.push(error) });
+	const connection = new RecordingConnection();
+	const handler = server.accept(connection);
+	const error = new Error(`token=secret\n${"x".repeat(600)}`);
+	handler.onError(error);
+	await vi.waitFor(async () => expect(await recorder.read()).toHaveLength(1));
+	expect(errors).toEqual([error]);
+	expect((await recorder.read())[0]).toMatchObject({ kind: "server_error", payload: { message: "Server error" } });
+	await server.close();
+});
+
+test("v2 test client rejects hello_error", async () => {
+	const client = new ProtocolTestClientV2({
+		send: async () => {},
+		sendFragmented: async () => {},
+		close: async () => {},
+	});
+	client.receive(
+		encodeServerMessageV2({
+			type: "hello_error",
+			error: { code: "unsupported_version", message: "Unsupported protocol version" },
+		}),
+	);
+	await expect(client.hello()).rejects.toThrow("Unsupported protocol version");
 });
 
 test("close reports listener failures after closing connections and runtimes", async () => {
