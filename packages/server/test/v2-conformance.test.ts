@@ -555,10 +555,28 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: false,
 			error: { code: "request_failed" },
 		});
-		await controller.close();
-		await observer.request({ command: "session/detach", sessionId: "session-1" });
-		const acquired = await observer.request({ command: "session/attach", sessionId: "session-1" });
+		const released = await controller.request({
+			command: "session/attach",
+			sessionId: "session-1",
+			payload: { mode: "observer" },
+		});
+		expect(released).toMatchObject({ ok: true, result: { lease: "observer" } });
+		const acquired = await observer.request({
+			command: "session/attach",
+			sessionId: "session-1",
+			payload: { mode: "control" },
+		});
 		expect(acquired).toMatchObject({ ok: true, result: { lease: "control" } });
+		const controllerMutation = await controller.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { text: "still blocked" },
+		});
+		expect(controllerMutation).toMatchObject({
+			ok: false,
+			error: { code: "request_failed", message: "Session session-1 requires a control lease" },
+		});
+		await controller.close();
 		await observer.close();
 	});
 
