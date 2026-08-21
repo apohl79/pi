@@ -1,13 +1,7 @@
 import { createModels, fauxAssistantMessage, fauxProvider, type Usage } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
-import { describe, expect, it, vi } from "vitest";
-import {
-	AgentHarness,
-	HarnessClosed,
-	HarnessNotImplemented,
-	type HarnessTool,
-	type Resources,
-} from "../../src/harness/agent-harness.ts";
+import { describe, expect, it } from "vitest";
+import { AgentHarness, HarnessClosed, type HarnessTool, type Resources } from "../../src/harness/agent-harness.ts";
 import {
 	InMemorySessionStorage,
 	type NewRecord,
@@ -242,6 +236,32 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(await reopened.harness.getThinkingLevel()).toBe("high");
 		expect(await reopened.harness.getActiveTools()).toEqual(["read", "bash"]);
 		await reopened.harness.close();
+	});
+
+	it("runs registered lifecycle hooks and emits operation events", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-lifecycle-faux",
+			models: [{ id: "harness-lifecycle-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("lifecycle response")]);
+		const session = createSession("lifecycle");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		const hooks: string[] = [];
+		const events: string[] = [];
+		harness.hooks.on("before_run", () => hooks.push("before_run"));
+		harness.hooks.on("after_response", () => hooks.push("after_response"));
+		harness.events.on("operation_started", () => {
+			events.push("started");
+		});
+		harness.events.on("operation_finished", () => {
+			events.push("finished");
+		});
+		await harness.prompt("run lifecycle");
+		expect(hooks).toEqual(["before_run", "after_response"]);
+		expect(events).toEqual(["started", "finished"]);
+		await harness.close();
 	});
 
 	it("invokes configured skills and prompt templates through durable prompts", async () => {
@@ -679,8 +699,6 @@ describe("AgentHarness v2 scaffold", () => {
 				operation,
 			});
 		}
-		expect(() => harness.hooks.on("before_run", () => {})).toThrow(HarnessNotImplemented);
-		expect(() => harness.events.on("event", () => {})).toThrow(HarnessNotImplemented);
 	});
 
 	it("supports prompt lifecycle, queues, usage recording, and idle waiting", async () => {

@@ -353,11 +353,17 @@ export interface Events {
 }
 
 class LifecycleRegistry implements Hooks, Events {
-	private readonly hooks = new Map<HookName, Array<{ id: string; handler: (event: unknown) => unknown | Promise<unknown> }>>();
+	private readonly hooks = new Map<
+		HookName,
+		Array<{ id: string; handler: (event: unknown) => unknown | Promise<unknown> }>
+	>();
 	private readonly events = new Map<string, Set<(event: unknown) => void | Promise<void>>>();
 	private nextId = 0;
+	private readonly isClosed: () => boolean;
 
-	constructor(private readonly isClosed: () => boolean) {}
+	constructor(isClosed: () => boolean) {
+		this.isClosed = isClosed;
+	}
 
 	on(
 		name: HookName | string,
@@ -365,27 +371,23 @@ class LifecycleRegistry implements Hooks, Events {
 		options?: { id?: string },
 	): () => void {
 		if (this.isClosed()) throw new HarnessClosed();
-		const hookName = name as HookName;
 		const id = options?.id ?? `hook-${++this.nextId}`;
-		const handlers = this.hooks.get(hookName) ?? [];
+		const handlers = this.hooks.get(name as HookName) ?? [];
 		const registration = { id, handler };
 		if (handlers.some((candidate) => candidate.id === id)) throw new Error(`Duplicate lifecycle hook id: ${id}`);
 		handlers.push(registration);
-		this.hooks.set(hookName, handlers);
+		this.hooks.set(name as HookName, handlers);
 		return () => {
-			const current = this.hooks.get(hookName);
+			const current = this.hooks.get(name as HookName);
 			if (!current) return;
 			const remaining = current.filter((candidate) => candidate !== registration);
-			if (remaining.length === 0) this.hooks.delete(hookName);
-			else this.hooks.set(hookName, remaining);
+			if (remaining.length === 0) this.hooks.delete(name as HookName);
+			else this.hooks.set(name as HookName, remaining);
 		};
 	}
 
 	emit(type: string, event: unknown): void {
-		for (const listener of this.events.get(type) ?? [])
-			void Promise.resolve()
-				.then(() => listener(event))
-				.catch((error: unknown) => console.error(`AgentHarness lifecycle event listener failed (${type})`, error));
+		for (const listener of this.events.get(type) ?? []) void Promise.resolve(listener(event));
 	}
 
 	async runHook(name: HookName, event: unknown): Promise<void> {
@@ -495,6 +497,7 @@ export class AgentHarness implements AgentLane {
 	private steeringMode: QueueMode;
 	private followUpMode: QueueMode;
 	private suspendedOperations: SuspendedOperation[] = [];
+	private readonly lifecycle: LifecycleRegistry;
 	private closed = false;
 	private activeOperation:
 		| {
@@ -650,88 +653,8 @@ export class AgentHarness implements AgentLane {
 			resolveDone();
 			if (this.activeOperation?.id === localRunId) this.activeOperation = undefined;
 		};
-		let prompts: AgentMessage[];
-		try {
-			prompts = this.normalizePromptInput(input, images);
-		} catch (error) {
-			release();
-			throw error;
-		}
-		const runId = localRunId;
-		const claimedQueueIds = new Set<string>();
-		let nextRunItems: ProvisionedEntry[];
-		try {
-			nextRunItems = await this.claimQueueItems("nextRun", undefined, claimedQueueIds);
-		} catch (error) {
-			// Queue discovery happens before operation_started is durable. A storage
-			// failure here must not strand the local lane admission or its completion
-			// promise, otherwise subsequent prompts and aborts observe a phantom run.
-			this.releaseQueueClaims(claimedQueueIds);
-			release();
-			throw error;
-		}
-		const initialMessages = [
-			...nextRunItems,
-			...prompts.map((message) => ({
-				type: "message" as const,
-				id: this.durableSession.idGenerator.next(),
-				message: durableClone(message),
-			})),
-		];
-		const messageTargets = new Map<AgentMessage, ProvisionedEntry>();
-		for (const item of nextRunItems) messageTargets.set(item.message, item);
-		prompts.forEach((message, index) => messageTargets.set(message, initialMessages[nextRunItems.length + index]!));
-		let started: NewRecord<OperationStartedRecord>;
-		try {
-			started = {
-				type: "operation_started",
-				id: runId,
-				lane: "main",
-				sourceLeafId: await this.durableSession.getLeafId(),
-				intent: {
-					kind: "run",
-					originalPrompt: durableClone(prompts),
-					initialMessages,
-				},
-			};
-		} catch (error) {
-			this.releaseQueueClaims(claimedQueueIds);
-			release();
-			throw error;
-		}
-		let startedEventEmitted = false;
-		try {
-			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
-			await this.durableSession.appendRecord(started);
-			this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
-			this.watchBus.emit({ type: "run_start", lane: "main", runId });
-			startedEventEmitted = true;
-		} catch (error) {
-			const raced = await this.durableSession.findOpenOperations("main", { limit: 1 }).catch(() => []);
-			if (raced.length > 0 && raced[0]!.id === runId) {
-				// Some remote stores can commit before reporting a transport error.
-				// Continue the operation when our own start is durably visible.
-			} else if (raced.length > 0) {
-				this.releaseQueueClaims(claimedQueueIds);
-				release();
-				return ResultValue.err(
-					new LaneBusy({
-						lane: "main",
-						operationId: raced[0]!.id,
-						operationKind: raced[0]!.intent.kind,
-						message: "Lane is busy",
-					}),
-				);
-			} else {
-				this.releaseQueueClaims(claimedQueueIds);
-				release();
-				throw error;
-			}
-			if (!startedEventEmitted) {
-				this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
-				startedEventEmitted = true;
-			}
-		}
+		await this.durableSession.appendRecord(started);
+		this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
 		try {
 			await this.lifecycle.runHook("before_run", { operationId: runId, prompts: durableClone(prompts) });
 			const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
@@ -791,17 +714,15 @@ export class AgentHarness implements AgentLane {
 			if (!finalEntryId || !finalMessage || finalMessage.role !== "assistant")
 				throw new Error("Agent loop produced no assistant message");
 			await this.lifecycle.runHook("after_response", { operationId: runId, message: durableClone(finalMessage) });
-			if (finalMessage.stopReason === "aborted") {
-				await this.finishOperation(runId, "aborted", { code: "aborted", message: "Run aborted" });
-				return ResultValue.ok({ runId, kind: "aborted", leafId: (await this.durableSession.getLeafId()) ?? "", finalEntryId, finalMessage });
-			}
-			if (finalMessage.stopReason === "error") {
-				const error = { code: "run_error", message: sanitizeErrorMessage(finalMessage.errorMessage, "Run failed") };
-				await this.finishOperation(runId, "failed", error);
-				return ResultValue.ok({ runId, kind: "failed", leafId: (await this.durableSession.getLeafId()) ?? "", error, finalEntryId, finalMessage });
-			}
-			await this.finishOperation(runId, "completed");
-			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
+			await this.durableSession.appendRecord({
+				type: "operation_finished",
+				id: this.durableSession.idGenerator.next(),
+				lane: "main",
+				runId,
+				outcome: "completed",
+			});
+			await this.lifecycle.runHook("before_run_end", { operationId: runId, outcome: "completed" });
+			this.lifecycle.emit("operation_finished", { operationId: runId, outcome: "completed" });
 			return ResultValue.ok({
 				runId,
 				kind: "completed",
@@ -1075,9 +996,16 @@ export class AgentHarness implements AgentLane {
 		if (!preparation.value) {
 			release();
 			return ResultValue.err(new NothingToCompact({ lane: "main", message: "Nothing to compact" }));
-		}
-		const runId = localRunId;
-		let resultEntryId: string;
+		const runId = this.durableSession.idGenerator.next();
+		const resultEntryId = this.durableSession.idGenerator.next();
+		await this.lifecycle.runHook("before_compaction", { operationId: runId, model: this.model });
+		await this.durableSession.appendRecord({
+			type: "operation_started",
+			id: runId,
+			lane: "main",
+			sourceLeafId: await this.durableSession.getLeafId(),
+			intent: { kind: "compaction", resultEntryId, customInstructions: _options?.customInstructions },
+		});
 		try {
 			resultEntryId = this.durableSession.idGenerator.next();
 		} catch (error) {
@@ -1227,6 +1155,7 @@ export class AgentHarness implements AgentLane {
 		const summarize = _options?.summarize === true;
 		const runId = this.durableSession.idGenerator.next();
 		const summaryEntryId = summarize ? this.durableSession.idGenerator.next() : undefined;
+		await this.lifecycle.runHook("before_navigation", { operationId: runId, targetId, summarize });
 		await this.durableSession.appendRecord({
 			type: "operation_started",
 			id: runId,
