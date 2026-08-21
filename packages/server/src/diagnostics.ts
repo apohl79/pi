@@ -1,3 +1,6 @@
+import { mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+
 export type DiagnosticValue = null | boolean | number | string | DiagnosticValue[] | { [key: string]: DiagnosticValue };
 
 export interface ForensicEventInput {
@@ -79,6 +82,83 @@ export class InMemoryForensicRecorder implements ForensicRecorder {
 	}
 
 	async read(afterSeq = 0): Promise<ForensicEvent[]> {
+		return structuredClone(this.events.filter((event) => event.seq > afterSeq));
+	}
+}
+
+/** Append-only forensic recorder that recovers sequence state after daemon restart. */
+export class JsonlForensicRecorder implements ForensicRecorder {
+	private readonly path: string;
+	private readonly maxEvents: number;
+	private readonly events: ForensicEvent[] = [];
+	private pendingWrite: Promise<void> = Promise.resolve();
+	private loaded = false;
+	private nextSeq = 1;
+
+	constructor(path: string, options: { maxEvents?: number } = {}) {
+		this.path = path;
+		this.maxEvents = options.maxEvents ?? 2_048;
+	}
+
+	private async ensureLoaded(): Promise<void> {
+		if (this.loaded) return;
+		this.loaded = true;
+		let contents: string;
+		try {
+			contents = await readFile(this.path, "utf8");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+			throw error;
+		}
+		for (const line of contents.split("\n").filter(Boolean)) {
+			const event = JSON.parse(line) as ForensicEvent;
+			if (!Number.isInteger(event.seq) || event.seq < 1) throw new Error("Invalid forensic sequence");
+			this.events.push(event);
+			this.nextSeq = Math.max(this.nextSeq, event.seq + 1);
+		}
+		if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
+	}
+
+	async record(input: ForensicEventInput): Promise<ForensicEvent> {
+		const write = this.pendingWrite.then(async () => {
+			await this.ensureLoaded();
+			const event: ForensicEvent = {
+				...input,
+				seq: this.nextSeq++,
+				timestamp: Date.now(),
+				payload: redact(input.payload ?? {}) as Record<string, DiagnosticValue>,
+			};
+			const wasFull = this.events.length >= this.maxEvents;
+			this.events.push(event);
+			if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
+			await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+			if (!wasFull) {
+				const handle = await open(this.path, "a", 0o600);
+				try {
+					await handle.write(`${JSON.stringify(event)}\n`, undefined, "utf8");
+					await handle.sync();
+				} finally {
+					await handle.close();
+				}
+			} else {
+				const temporary = `${this.path}.${process.pid}.tmp`;
+				await writeFile(temporary, `${this.events.map((item) => JSON.stringify(item)).join("\n")}\n`, {
+					mode: 0o600,
+				});
+				await rename(temporary, this.path);
+			}
+			return event;
+		});
+		this.pendingWrite = write.then(
+			() => undefined,
+			() => undefined,
+		);
+		return structuredClone(await write);
+	}
+
+	async read(afterSeq = 0): Promise<ForensicEvent[]> {
+		await this.pendingWrite;
+		await this.ensureLoaded();
 		return structuredClone(this.events.filter((event) => event.seq > afterSeq));
 	}
 }
