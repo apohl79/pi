@@ -26,6 +26,8 @@ import {
 	validateAuthCommandArgs,
 } from "./cli/auth-command.ts";
 import { resolveCredentialForPrint } from "./cli/credential-print.ts";
+import type { ExperimentalCliContext } from "./cli/experimental/cli.ts";
+import { dispatchExperimentalCommand } from "./cli/experimental/dispatch.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
@@ -555,10 +557,13 @@ async function promptForMissingSessionCwd(
 
 export interface MainOptions {
 	extensionFactories?: InlineExtension[];
+	experimentalCliContext?: ExperimentalCliContext;
 }
 
 export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
+	if (options?.experimentalCliContext && (await dispatchExperimentalCommand(args, options.experimentalCliContext)))
+		return;
 	const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
 	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
 	if (offlineMode) {
