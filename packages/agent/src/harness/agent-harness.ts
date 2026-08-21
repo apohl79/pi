@@ -1042,8 +1042,8 @@ export class AgentHarness implements AgentLane {
 				lane: "main",
 				usage: structuredClone(usage),
 				cause: "adjustment",
-				entryId: options?.entryId,
-				details: options?.details,
+				...(options?.entryId === undefined ? {} : { entryId: options.entryId }),
+				...(options?.details === undefined ? {} : { details: options.details }),
 			};
 			await this.durableSession.appendRecord(record);
 			return ResultValue.ok(undefined);

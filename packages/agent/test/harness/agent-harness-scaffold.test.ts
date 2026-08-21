@@ -208,6 +208,16 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("allows usage adjustments without an entry identity", async () => {
+		const session = createSession("usage-without-entry");
+		const harness = await createHarness(session);
+		await harness.recordUsage(usage);
+		expect(await session.findRecords({ type: "usage" })).toMatchObject([
+			{ type: "usage", cause: "adjustment", usage },
+		]);
+		await harness.close();
+	});
+
 	it("persists model, thinking, and active-tool projection changes", async () => {
 		const session = createSession("projection");
 		const harness = await createHarness(session);
