@@ -6,9 +6,23 @@ import { describe, expect, test } from "vitest";
 import { SessionSnapshotV2Schema } from "@earendil-works/pi-protocol";
 import { createCodingAgentHarness } from "../../src/server/create-harness.ts";
 import { ServerRuntimeExtensionHost } from "../../src/server/extension-host.ts";
-import { createCodingAgentV2Service, createCodingAgentV2ServiceFromStore } from "../../src/server/v2-service.ts";
+import {
+	createCodingAgentV2Service,
+	createCodingAgentV2ServiceFromStore,
+	normalizeGeneratedName,
+} from "../../src/server/v2-service.ts";
 
 describe("coding-agent v2 service adapter", () => {
+	test("normalizes generated names to safe bounded titles", () => {
+		expect(normalizeGeneratedName("Title: Fix durable session resume now")).toBe("Fix durable session resume now");
+		expect(normalizeGeneratedName("one word")).toBe("one word");
+		expect(normalizeGeneratedName("answer.")).toBeUndefined();
+		expect(normalizeGeneratedName("api_key=secret-value hidden title")).toBeUndefined();
+		expect(normalizeGeneratedName("A very long session title that exceeds the display limit")).toBe(
+			"A very long session title that",
+		);
+	});
+
 	test("backs v2 session lifecycle with injected durable factories", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
