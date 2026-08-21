@@ -7,42 +7,6 @@ export interface RemoteV2SessionViewOptions {
 	readonly maxTranscriptItems?: number;
 	readonly maxTranscriptCharacters?: number;
 	readonly maxAgentItems?: number;
-	readonly maxPlanItems?: number;
-	readonly maxPlanCharacters?: number;
-	readonly maxGoalCharacters?: number;
-}
-
-const DEFAULT_MAX_TRANSCRIPT_ITEMS = 48;
-const DEFAULT_MAX_TRANSCRIPT_CHARACTERS = 6_000;
-const DEFAULT_MAX_AGENT_ITEMS = 12;
-const DEFAULT_MAX_PLAN_ITEMS = 12;
-const DEFAULT_MAX_PLAN_CHARACTERS = 6_000;
-const DEFAULT_MAX_GOAL_CHARACTERS = 240;
-const MAX_TRANSCRIPT_ITEMS = 10_000;
-const MAX_TRANSCRIPT_CHARACTERS = 1_000_000;
-const MAX_AGENT_ITEMS = 1_000;
-const MAX_PLAN_ITEMS = 1_000;
-const MAX_PLAN_CHARACTERS = 1_000_000;
-const MAX_GOAL_CHARACTERS = 10_000;
-
-function normalizeLimit(value: number | undefined, fallback: number, maximum: number): number {
-	if (value === undefined || !Number.isFinite(value)) return fallback;
-	return Math.min(maximum, Math.max(0, Math.floor(value)));
-}
-
-function normalizeOptions(options: RemoteV2SessionViewOptions): Required<RemoteV2SessionViewOptions> {
-	return {
-		maxTranscriptItems: normalizeLimit(options.maxTranscriptItems, DEFAULT_MAX_TRANSCRIPT_ITEMS, MAX_TRANSCRIPT_ITEMS),
-		maxTranscriptCharacters: normalizeLimit(
-			options.maxTranscriptCharacters,
-			DEFAULT_MAX_TRANSCRIPT_CHARACTERS,
-			MAX_TRANSCRIPT_CHARACTERS,
-		),
-		maxAgentItems: normalizeLimit(options.maxAgentItems, DEFAULT_MAX_AGENT_ITEMS, MAX_AGENT_ITEMS),
-		maxPlanItems: normalizeLimit(options.maxPlanItems, DEFAULT_MAX_PLAN_ITEMS, MAX_PLAN_ITEMS),
-		maxPlanCharacters: normalizeLimit(options.maxPlanCharacters, DEFAULT_MAX_PLAN_CHARACTERS, MAX_PLAN_CHARACTERS),
-		maxGoalCharacters: normalizeLimit(options.maxGoalCharacters, DEFAULT_MAX_GOAL_CHARACTERS, MAX_GOAL_CHARACTERS),
-	};
 }
 
 /** Renderable TUI projection of one server-authoritative v2 session. */
@@ -52,7 +16,11 @@ export class RemoteV2SessionView implements Component {
 	readonly #unsubscribe: () => void;
 
 	constructor(session: RemoteV2Session, options: RemoteV2SessionViewOptions = {}) {
-		this.#options = normalizeOptions(options);
+		this.#options = {
+			maxTranscriptItems: options.maxTranscriptItems ?? 48,
+			maxTranscriptCharacters: options.maxTranscriptCharacters ?? 6_000,
+			maxAgentItems: options.maxAgentItems ?? 12,
+		};
 		this.#state = session.state;
 		this.#unsubscribe = session.subscribe((state) => {
 			this.#state = state;
@@ -74,55 +42,13 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	const normalizedOptions = normalizeOptions(options);
 	const snapshot = state.snapshot;
 	if (!snapshot) return `Session ${state.lifecycle.status}`;
-	const maxItems = normalizedOptions.maxTranscriptItems;
-	const maxCharacters = normalizedOptions.maxTranscriptCharacters;
-	const model = `${sanitizeTranscriptText(snapshot.model.provider)}/${sanitizeTranscriptText(snapshot.model.id)}`;
-	const operation =
-		state.lifecycle.status === "busy"
-			? ` operation=${sanitizeTranscriptText(state.lifecycle.operationId)}`
-			: snapshot.activeOperation === undefined
-				? ""
-				: ` operation=${sanitizeTranscriptText(snapshot.activeOperation.operationId)} (${sanitizeTranscriptText(snapshot.activeOperation.state)})`;
-	const lines = [
-		`Session ${sanitizeTranscriptText(snapshot.id)} · phase=${sanitizeTranscriptText(snapshot.phase)} · model=${model}${operation}`,
-	];
-	for (const agent of snapshot.agents.slice(0, normalizedOptions.maxAgentItems))
-		lines.push(
-			`Agent ${sanitizeTranscriptText(agent.path)} · ${sanitizeTranscriptText(agent.state)} · ${sanitizeTranscriptText(agent.model.provider)}/${sanitizeTranscriptText(agent.model.id)}`,
-		);
-	const cost =
-		snapshot.usage.pricingState === "known" && snapshot.usage.costUsd !== undefined
-			? `$${snapshot.usage.costUsd.toFixed(6)}`
-			: snapshot.usage.pricingState === "subscription"
-				? "subscription"
-				: "unknown";
-	lines.push(
-		`Usage input=${snapshot.usage.input} output=${snapshot.usage.output} cacheRead=${snapshot.usage.cacheRead} cost=${cost}`,
-	);
-	if (snapshot.persistence.recoveryState !== "clean")
-		lines.push(`Persistence ${sanitizeTranscriptText(snapshot.persistence.recoveryState)}`);
-	if (snapshot.diagnostics.degraded) lines.push("Diagnostics degraded");
-	if (snapshot.goal) {
-		lines.push(
-			`Goal ${sanitizeTranscriptText(snapshot.goal.status)} · ${sanitizeTranscriptText(snapshot.goal.objective).slice(0, normalizedOptions.maxGoalCharacters)}`,
-		);
-	}
-	if (snapshot.plan) {
-		lines.push(`Plan v${snapshot.plan.version}`);
-		let planCharacters = 0;
-		for (const item of snapshot.plan.items.slice(0, normalizedOptions.maxPlanItems)) {
-			const line = `Plan ${sanitizeTranscriptText(item.status)} · ${sanitizeTranscriptText(item.step)}`;
-			if (planCharacters + line.length > normalizedOptions.maxPlanCharacters) {
-				const remaining = Math.max(0, normalizedOptions.maxPlanCharacters - planCharacters);
-				if (remaining > 0) lines.push(`${line.slice(0, Math.max(0, remaining - 1))}…`);
-				break;
-			}
-			lines.push(line);
-			planCharacters += line.length;
-		}
-	}
-	if (snapshot.queues.pendingInputRequestId !== undefined)
-		lines.push(`Input request pending · ${sanitizeTranscriptText(snapshot.queues.pendingInputRequestId)}`);
+	const maxItems = options.maxTranscriptItems ?? 48;
+	const maxCharacters = options.maxTranscriptCharacters ?? 6_000;
+	const model = `${snapshot.model.provider}/${snapshot.model.id}`;
+	const operation = state.lifecycle.status === "busy" ? ` operation=${state.lifecycle.operationId}` : "";
+	const lines = [`Session ${snapshot.id} · phase=${snapshot.phase} · model=${model}${operation}`];
+	for (const agent of snapshot.agents.slice(0, options.maxAgentItems ?? 12))
+		lines.push(`Agent ${agent.path} · ${agent.state} · ${agent.model.provider}/${agent.model.id}`);
 	let characters = 0;
 	const transcript = maxItems === 0 ? [] : snapshot.transcript.slice(-maxItems);
 	for (const item of transcript) {
