@@ -644,10 +644,7 @@ export class PiServerV2 {
 		this.agentSessions.set(agent.id, command.sessionId);
 		await this.sendResponse(state, id, { command: command.command, agent });
 		const runtime = state.sessions.get(command.sessionId);
-		if (runtime) {
-			await this.broadcastEvent(command.sessionId, runtime, { agent }, undefined, "agent_updated");
-			this.watchAgent(command.sessionId, runtime, agent.id);
-		}
+		if (runtime) await this.broadcastEvent(command.sessionId, runtime, { agent }, undefined, "agent_updated");
 	}
 
 	private async listAgents(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
@@ -700,16 +697,14 @@ export class PiServerV2 {
 	private async interruptAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		this.requireControl(state, (await this.agents.getSnapshot(agentIdFrom(command, payload))).sessionId);
+		const agent = await this.agents.interrupt(agentIdFrom(command, payload));
 		await this.sendResponse(state, id, {
 			command: command.command,
 			agent,
 		});
 		const sessionId = (await this.agents.getSnapshot(agent.id)).sessionId;
 		const runtime = state.sessions.get(sessionId);
-		if (runtime) {
-			await this.broadcastEvent(sessionId, runtime, { agent }, undefined, "agent_updated");
-			this.watchAgent(sessionId, runtime, agent.id);
-		}
+		if (runtime) await this.broadcastEvent(sessionId, runtime, { agent }, undefined, "agent_updated");
 	}
 
 	private async snapshotForSession(sessionId: string, runtime: PiSessionRuntimeV2): Promise<SessionSnapshotV2> {
