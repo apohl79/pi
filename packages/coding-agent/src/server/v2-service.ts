@@ -9,11 +9,13 @@ import type {
 	SessionSnapshotV2,
 	TranscriptItem,
 } from "@earendil-works/pi-protocol";
+import type { ServerRuntimeExtensionHost } from "./extension-host.ts";
 
 export interface CodingAgentV2SessionDefinition {
 	metadata: SessionMetadataV2;
 	harness: AgentHarness;
 	goals?: GoalManager;
+	extensionHost?: ServerRuntimeExtensionHost;
 }
 
 export interface CodingAgentV2Service {
@@ -303,6 +305,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
+		const extensionHost = this.definition.extensionHost;
+		await extensionHost?.onOperationAccepted({ id: _operationId, type: runCommand });
 		if (runCommand === "turn/start") {
 			await harness.prompt(text);
 			if (this.autoName) await this.generateName();
@@ -371,6 +375,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.autoName = payload.enabled;
 		}
 		void this.autoName;
+		await extensionHost?.onOperationTerminal({ id: _operationId, type: runCommand }, "completed");
 		this.revision += 1;
 		this.eventSeq += 1;
 	}
