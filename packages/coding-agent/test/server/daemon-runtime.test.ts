@@ -678,4 +678,86 @@ describe("coding-agent daemon runtime", () => {
 			await runtime.close();
 		}
 	});
+
+	test("restores a pending structured input request after a production daemon restart", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-input-restart-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-input-restart-faux",
+			models: [
+				{
+					id: "coding-agent-daemon-input-restart-model",
+					reasoning: false,
+					contextWindow: 32_000,
+					maxTokens: 1_000,
+				},
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage(
+				fauxToolCall("request_user_input", {
+					questions: [{ id: "confirm", prompt: "Continue?", options: [{ label: "Yes" }] }],
+				}),
+			),
+		]);
+		const createRuntime = () =>
+			createConfiguredCodingAgentDaemonRuntime({
+				agentDir: directory,
+				cwd: directory,
+				models,
+				model: faux.getModel(),
+				socketPath: join(directory, "server.sock"),
+				harness: { activeToolNames: ["request_user_input"] },
+				write: () => {},
+			});
+		const first = await createRuntime();
+		const firstClient = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		let sessionId = "";
+		let requestId = "";
+		try {
+			await first.daemon.start();
+			await firstClient.connect();
+			const created = await firstClient.request({ command: "session/create", payload: { cwd: directory } });
+			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
+			sessionId = (created.result as { session: { id: string } }).session.id;
+			await firstClient.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			await firstClient.request({ command: "turn/start", sessionId, payload: { text: "ask me" } });
+			for (let attempt = 0; attempt < 50; attempt++) {
+				const read = await firstClient.request({ command: "session/read", sessionId });
+				if (read.ok && "result" in read)
+					requestId =
+						(read.result as { session: { queues: { pendingInputRequestId?: string } } }).session.queues
+							.pendingInputRequestId ?? "";
+				if (requestId) break;
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			expect(requestId).toEqual(expect.any(String));
+		} finally {
+			firstClient.dispose();
+			await first.close();
+		}
+
+		const second = await createRuntime();
+		const secondClient = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await second.daemon.start();
+			await secondClient.connect();
+			const read = await secondClient.request({ command: "session/read", sessionId });
+			expect(read).toMatchObject({
+				ok: true,
+				result: { session: { queues: { pendingInputRequestId: requestId } } },
+			});
+			const request = await secondClient.request({ command: "input/request/read", payload: { requestId } });
+			expect(request).toMatchObject({ ok: true, result: { request: { status: "pending", id: requestId } } });
+		} finally {
+			secondClient.dispose();
+			await second.close();
+		}
+	});
 });
