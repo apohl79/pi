@@ -12,18 +12,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import { runAgentLoop } from "../agent-loop.ts";
 import type { AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../types.ts";
-import {
-	type BranchSummaryResult,
-	collectEntriesForBranchSummary,
-	generateBranchSummary,
-} from "./compaction/branch-summarization.ts";
-import {
-	type CompactionSettings,
-	compact,
-	prepareCompaction,
-	resolveCompactionSettings,
-} from "./compaction/compaction.ts";
-import { HarnessEventBus } from "./events.ts";
+import { type CompactionSettings, compact, prepareCompaction } from "./compaction/compaction.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
 import { Result as ResultValue, TaggedError } from "./result.ts";
 import { buildSessionContext } from "./session/context.ts";
