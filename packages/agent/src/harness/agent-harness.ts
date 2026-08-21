@@ -23,6 +23,7 @@ import {
 	prepareCompaction,
 	validateCompactionSettings,
 } from "./compaction/compaction.ts";
+import { HarnessEventBus } from "./events.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
 import { Result as ResultValue, TaggedError } from "./result.ts";
 import { buildSessionContext } from "./session/context.ts";
@@ -482,6 +483,7 @@ export class AgentHarness implements AgentLane {
 	private readonly systemPromptSource: AgentHarnessOptions["systemPrompt"];
 	private readonly toProviderMessages: AgentHarnessOptions["toProviderMessages"];
 	private readonly lifecycle: LifecycleRegistry;
+	private readonly watchBus = new HarnessEventBus();
 	private model: Model<Api>;
 	private thinkingLevel: ThinkingLevel;
 	private activeToolNames: string[];
@@ -702,6 +704,7 @@ export class AgentHarness implements AgentLane {
 			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 			await this.durableSession.appendRecord(started);
 			this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
+			this.watchBus.emit({ type: "run_start", lane: "main", runId });
 			startedEventEmitted = true;
 		} catch (error) {
 			const raced = await this.durableSession.findOpenOperations("main", { limit: 1 }).catch(() => []);
@@ -887,6 +890,7 @@ export class AgentHarness implements AgentLane {
 			if (lastError !== undefined) throw lastError;
 			this.rememberFinishedOperation(runId);
 			this.lifecycle.emit("operation_finished", { operationId: runId, outcome });
+			this.watchBus.emit({ type: "run_end", lane: "main", runId, outcome: outcome === "aborted" ? "aborted" : outcome === "failed" ? "failed" : "completed", leafId: (await this.durableSession.getLeafId()) ?? "" });
 		};
 		const attempt = alreadyLocked ? operation() : this.withLifecycleLock(operation);
 		this.finishingOperations.set(runId, attempt);
@@ -1870,7 +1874,8 @@ export class AgentHarness implements AgentLane {
 		);
 	}
 	async watch(): Promise<WatchHandle<LaneSnapshot>> {
-		return this.unavailable("watch");
+		const snapshot = await this.laneSnapshot("main");
+		return this.watchBus.watch(() => snapshot);
 	}
 
 	async lane(_name: string): Promise<AgentLane | undefined> {
@@ -1943,7 +1948,23 @@ export class AgentHarness implements AgentLane {
 		this.followUpMode = mode;
 	}
 	async watchSession(): Promise<WatchHandle<SessionSnapshot>> {
-		return this.unavailable("watchSession");
+		const snapshot = await this.sessionSnapshot();
+		return this.watchBus.watch(() => snapshot);
+	}
+
+	private async laneSnapshot(lane: string): Promise<LaneSnapshot> {
+		const [leafId, transcript, open] = await Promise.all([
+			this.durableSession.getLeafId(),
+			this.durableSession.findEntriesOnBranch({ order: "oldestFirst" }),
+			this.durableSession.findOpenOperations(lane, { limit: 1 }),
+		]);
+		const operation = open[0];
+		return { lane, transcript, leafId, operation: operation ? { id: operation.id, kind: operation.intent.kind, status: "running" } : null, queues: { steer: [], followUp: [], nextRun: [] }, pendingWrites: [], faulted: false };
+	}
+
+	private async sessionSnapshot(): Promise<SessionSnapshot> {
+		const snapshot = await this.laneSnapshot("main");
+		return { lanes: [{ name: "main", leafId: snapshot.leafId, operation: snapshot.operation }], faulted: false };
 	}
 	async close(): Promise<void> {
 		this.closed = true;
