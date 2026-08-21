@@ -659,10 +659,21 @@ export class PiServerV2 {
 		this.requireControl(state, command.sessionId);
 		const payload = objectPayload(command);
 		if (typeof payload.command !== "string") throw new Error("process/start requires command");
+		let env: Record<string, string> | undefined;
+		if (payload.env !== undefined) {
+			if (typeof payload.env !== "object" || payload.env === null || Array.isArray(payload.env))
+				throw new Error("process/start env must be an object");
+			env = {};
+			for (const [name, value] of Object.entries(payload.env)) {
+				if (typeof value !== "string") throw new Error(`process/start env ${name} must be a string`);
+				env[name] = value;
+			}
+		}
 		const process = await this.processes.start({
 			sessionId: command.sessionId,
 			command: payload.command,
 			...(typeof payload.cwd === "string" ? { cwd: payload.cwd } : {}),
+			...(env === undefined ? {} : { env }),
 			...(typeof payload.pty === "boolean" ? { pty: payload.pty } : {}),
 		});
 		this.processSessions.set(process.processId, command.sessionId);

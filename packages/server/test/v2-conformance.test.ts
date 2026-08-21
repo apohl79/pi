@@ -18,7 +18,7 @@ import { InMemoryForensicRecorder } from "../src/diagnostics.ts";
 import { LocalV2FileReferenceService } from "../src/files.ts";
 import { InMemoryV2InputRegistry } from "../src/inputs.ts";
 import { InMemoryV2OperationStore, JsonlV2OperationStore } from "../src/operation-store.ts";
-import { InMemoryV2ProcessRegistry } from "../src/processes.ts";
+import { InMemoryV2ProcessRegistry, NodeV2ProcessRegistry } from "../src/processes.ts";
 import { connectUnixTestClientV2, Deferred } from "../src/testing/index.ts";
 import { createUnixServerV2 } from "../src/transports/unix/preset.ts";
 import type { PiServerServiceV2, PiSessionRuntimeV2 } from "../src/v2.ts";
@@ -842,6 +842,32 @@ describe("PiServer v2 operation acceptance", () => {
 		await expect(observer.request({ command: "process/terminate", payload: { processId } })).resolves.toMatchObject({ ok: false, error: { code: "request_failed" } });
 		await controller.close();
 		await observer.close();
+	});
+
+	test("forwards process environment deltas to the node process registry", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-process-env-"));
+		directories.push(directory);
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			processes: new NodeV2ProcessRegistry(),
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const started = await client.request({
+			command: "process/start",
+			sessionId: "session-1",
+			payload: {
+				command: `${process.execPath} -e "process.stdout.write(process.env.PI_V2_ENV ?? '')"`,
+				env: { PI_V2_ENV: "forwarded" },
+			},
+		});
+		const processId = (started as unknown as { result: { process: { processId: string } } }).result.process.processId;
+		await client.request({ command: "process/wait", payload: { processId } });
+		const output = await client.request({ command: "process/read", payload: { processId, cursor: 0 } });
+		expect(output).toMatchObject({ ok: true, result: { output: { output: "forwarded", truncated: false } } });
+		await client.close();
 	});
 
 	test("transports content-addressed blobs without embedding binary bytes in CBOR", async () => {
