@@ -2,6 +2,7 @@ import {
 	AgentHarness,
 	type AgentHarnessOptions,
 	type AgentHarnessTool,
+	createApplyPatchTool,
 	createBashTool,
 	createEditTool,
 	createReadTool,
@@ -98,6 +99,10 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 		const metadata = await options.session.getMetadata();
 		const toolContext = { env } satisfies ExecutionToolContext;
 		tools = [
+			createCodingAgentHarnessTool(createApplyPatchTool<ExecutionToolContext>(), toolContext, {
+				promptSnippet: "Apply a Codex patch envelope atomically to repository files.",
+				promptGuidelines: [],
+			}),
 			createCodingAgentHarnessTool(createReadTool<ExecutionToolContext>(), toolContext, {
 				promptSnippet: readToolSystemPromptContribution.snippet,
 				promptGuidelines: readToolSystemPromptContribution.guidelines,

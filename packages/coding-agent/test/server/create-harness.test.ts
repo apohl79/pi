@@ -75,8 +75,14 @@ describe("coding-agent Harness construction", () => {
 		});
 		try {
 			expect(created.suspended).toEqual([]);
-			expect(await created.harness.getActiveTools()).toEqual(["read", "bash", "edit", "write"]);
-			expect((await created.harness.getTools()).map((tool) => tool.name)).toEqual(["read", "bash", "edit", "write"]);
+			expect(await created.harness.getActiveTools()).toEqual(["apply_patch", "read", "bash", "edit", "write"]);
+			expect((await created.harness.getTools()).map((tool) => tool.name)).toEqual([
+				"apply_patch",
+				"read",
+				"bash",
+				"edit",
+				"write",
+			]);
 			expect(await created.harness.getStreamOptions()).toEqual({ maxTokens: 123 });
 			expect(await created.harness.getRetryPolicy()).toEqual({ enabled: true, maxRetries: 2, baseDelayMs: 10 });
 			expect(await created.harness.getSteeringMode()).toBe("all");
