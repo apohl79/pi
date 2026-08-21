@@ -87,7 +87,10 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 /** Compatibility-safe command and rendering boundary for a remote v2 attachment. */
 export class RemoteV2InteractiveAttachment implements Component {
 	readonly #attachment: RemoteV2SessionAttachment;
+	static readonly MAX_INPUT_LENGTH = 4_000;
 	#disposed = false;
+	#input = "";
+	#status = "";
 
 	constructor(attachment: RemoteV2SessionAttachment) {
 		this.#attachment = attachment;
@@ -142,11 +145,53 @@ export class RemoteV2InteractiveAttachment implements Component {
 
 	render(width: number): string[] {
 		this.#assertActive();
-		return this.view.render(width);
+		return [...this.view.render(width), `${this.#status ? `${this.#status} ` : ""}> ${this.#input}`];
 	}
 
 	invalidate(): void {
 		this.view.invalidate();
+	}
+
+	handleInput(data: string): void {
+		this.#assertActive();
+		if (data.length > 1) {
+			for (const character of data) this.handleInput(character);
+			return;
+		}
+		if (data === "\r" || data === "\n") {
+			const input = this.#input.trim();
+			this.#input = "";
+			if (!input) return;
+			const action = input.startsWith("/")
+				? this.execute(input).then((result) =>
+						result.kind === "operation" ? `operation ${result.operationId}` : result.kind,
+					)
+				: this.submit(input).then((operationId) => `operation ${operationId}`);
+			void action
+				.then((result) => {
+					this.#status = result;
+					this.invalidate();
+				})
+				.catch((error: unknown) => {
+					this.#status = error instanceof Error ? error.message : String(error);
+					this.invalidate();
+				});
+			return;
+		}
+		if (data === "\u007f" || data === "\b") {
+			this.#input = this.#input.slice(0, -1);
+			this.invalidate();
+			return;
+		}
+		if (
+			data.length === 1 &&
+			data >= " " &&
+			data !== "\u007f" &&
+			this.#input.length < RemoteV2InteractiveAttachment.MAX_INPUT_LENGTH
+		) {
+			this.#input += data;
+			this.invalidate();
+		}
 	}
 
 	dispose(): Promise<void> {

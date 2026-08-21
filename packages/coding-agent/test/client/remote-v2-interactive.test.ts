@@ -145,4 +145,22 @@ describe("remote v2 interactive command boundary", () => {
 		await adapter.dispose();
 		client.dispose();
 	});
+
+	test("handles bounded terminal lines through the Component boundary", async () => {
+		const { client, commands } = clientWithRequests();
+		await client.connect();
+		const attachment = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const adapter = new RemoteV2InteractiveAttachment(attachment);
+		adapter.handleInput("h");
+		adapter.handleInput("i");
+		adapter.handleInput("\u007f");
+		adapter.handleInput("ello\n");
+		expect(adapter.render(80).at(-1)).toContain("> ");
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(commands).toContain("turn/start");
+		expect(adapter.render(80).at(-1)).toContain("operation operation-1");
+		await adapter.execute("/detach");
+		await adapter.dispose();
+		client.dispose();
+	});
 });
