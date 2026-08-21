@@ -65,6 +65,7 @@ type V2ConnectionState = {
 	ready: boolean;
 	handshakePromise?: Promise<void>;
 	closed: boolean;
+	attachingSessions: Map<string, Promise<PiSessionRuntimeV2>>;
 	disconnectPromise?: Promise<void>;
 	handshakeTimeout: NodeJS.Timeout;
 };
@@ -105,7 +106,11 @@ function requestIdFrom(command: CommandV2, payload: Record<string, unknown>): st
 }
 
 function safeOperationError(error: unknown): string {
-	return error instanceof Error && error.message.length <= 500 ? error.message : "Operation failed";
+	if (!(error instanceof Error) || error.message.length === 0 || error.message.length > 500) return "Operation failed";
+	const message = error.message.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+	if (/bearer\s+\S+|(?:api[_-]?key|token|secret|password)\s*[:=]\s*\S+|\b(?:sk|pk|rk)-[a-z0-9_-]{8,}/i.test(message))
+		return "Operation failed";
+	return message || "Operation failed";
 }
 
 export class PiServerV2 {
@@ -172,7 +177,10 @@ export class PiServerV2 {
 			return this;
 		} catch (error) {
 			this.closing = true;
-			await Promise.allSettled(this.listeners.map((listener) => listener.close()));
+			const listenerResults = await Promise.allSettled(this.listeners.map((listener) => listener.close()));
+			for (const result of listenerResults)
+				if (result.status === "rejected")
+					this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
 			await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state)));
 			throw error;
 		}
@@ -193,7 +201,9 @@ export class PiServerV2 {
 
 	accept(connection: ByteConnection): ByteConnectionHandler {
 		if (this.closing) {
-			void connection.close();
+			void Promise.resolve(connection.close()).catch((error: unknown) =>
+				this.reportError(error instanceof Error ? error : new Error(String(error))),
+			);
 			return { onData: () => {}, onClose: () => {}, onError: (error) => this.reportError(error) };
 		}
 		const state = this.createConnectionState(connection);
@@ -203,7 +213,7 @@ export class PiServerV2 {
 			onClose: () => this.disconnect(state),
 			onError: (error) => {
 				this.reportError(error);
-				void Promise.resolve(state.connection.close()).then(() => this.disconnect(state));
+				void this.closeConnection(state);
 			},
 		};
 	}
@@ -230,6 +240,7 @@ export class PiServerV2 {
 			decoder: new FrameDecoder({ maxFrameLength: this.maxFrameLength }),
 			sessions: new Map<string, PiSessionRuntimeV2>(),
 			visibleSessions: new Set<string>(),
+			attachingSessions: new Map<string, Promise<PiSessionRuntimeV2>>(),
 			ready: false,
 			closed: false,
 			handshakeTimeout: undefined as unknown as NodeJS.Timeout,
@@ -276,8 +287,6 @@ export class PiServerV2 {
 			};
 			for (const session of snapshot.sessions) state.visibleSessions.add(session.id);
 			await this.send(state, { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: state.id, snapshot });
-			state.ready = true;
-			clearTimeout(state.handshakeTimeout);
 			if (message.lastEvent) {
 				if (!state.visibleSessions.has(message.lastEvent.sessionId)) throw new Error("Replay session is not available");
 				const events = this.eventHistory.get(message.lastEvent.sessionId) ?? [];
@@ -291,6 +300,8 @@ export class PiServerV2 {
 					await this.send(state, event);
 				}
 			}
+			state.ready = true;
+			clearTimeout(state.handshakeTimeout);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "Invalid protocol request";
 			await this.failProtocol(state, message.startsWith("Replay ") ? "invalid_request" : "internal_error", message);
@@ -369,8 +380,18 @@ export class PiServerV2 {
 		if (!command.sessionId) throw new Error("session/attach requires sessionId");
 		this.requireVisibleSession(state, command.sessionId);
 		const existing = state.sessions.get(command.sessionId);
-		const runtime = existing ?? (await this.service.openSession(command.sessionId));
+		let runtime = existing;
+		if (!runtime) {
+			let opening = state.attachingSessions.get(command.sessionId);
+			if (!opening) {
+				opening = this.service.openSession(command.sessionId);
+				state.attachingSessions.set(command.sessionId, opening);
+				void opening.finally(() => state.attachingSessions.delete(command.sessionId)).catch(() => undefined);
+			}
+			runtime = await opening;
+		}
 		try {
+			if (!runtime) throw new Error("Session runtime is unavailable");
 			state.sessions.set(command.sessionId, runtime);
 			await this.sendResponse(state, id, {
 				command: command.command,
@@ -686,7 +707,7 @@ export class PiServerV2 {
 			"operation_accepted",
 			{ eventSeq: accepted.eventSeq, revision: accepted.sessionRevision },
 		);
-		await this.diagnostics?.record({
+		void this.recordDiagnostic({
 			kind: "operation_accepted",
 			sessionId: command.sessionId,
 			operationId,
@@ -836,6 +857,10 @@ export class PiServerV2 {
 		state.disconnectPromise = (async () => {
 			const disposals = Array.from(state.sessions.values(), (runtime) => this.disposeRuntime(runtime));
 			state.sessions.clear();
+			const disposalResults = await Promise.allSettled(disposals);
+			for (const result of disposalResults)
+				if (result.status === "rejected")
+					this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
 			try {
 				await state.connection.close(finalChunk);
 			} catch (error) {
@@ -843,10 +868,6 @@ export class PiServerV2 {
 			} finally {
 				this.connections.delete(state);
 			}
-			void Promise.allSettled(disposals).then((results) => {
-				for (const result of results)
-					if (result.status === "rejected") this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
-			});
 		})();
 		return state.disconnectPromise;
 	}
