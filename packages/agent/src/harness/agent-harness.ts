@@ -248,21 +248,57 @@ export interface Events {
 	on(type: string, listener: (event: unknown) => void | Promise<void>): () => void;
 }
 
-class UnavailableRegistry implements Hooks, Events {
-	private readonly operation: string;
+class LifecycleRegistry implements Hooks, Events {
+	private readonly hooks = new Map<
+		HookName,
+		Array<{ id: string; handler: (event: unknown) => unknown | Promise<unknown> }>
+	>();
+	private readonly events = new Map<string, Set<(event: unknown) => void | Promise<void>>>();
+	private nextId = 0;
 	private readonly isClosed: () => boolean;
 
-	constructor(operation: string, isClosed: () => boolean) {
-		this.operation = operation;
+	constructor(isClosed: () => boolean) {
 		this.isClosed = isClosed;
 	}
 
 	on(
-		_name: HookName | string,
-		_handler: (event: unknown) => unknown | Promise<unknown>,
-		_options?: { id?: string },
+		name: HookName | string,
+		handler: (event: unknown) => unknown | Promise<unknown>,
+		options?: { id?: string },
 	): () => void {
-		throw this.isClosed() ? new HarnessClosed() : new HarnessNotImplemented(this.operation);
+		if (this.isClosed()) throw new HarnessClosed();
+		const id = options?.id ?? `hook-${++this.nextId}`;
+		const handlers = this.hooks.get(name as HookName) ?? [];
+		const registration = { id, handler };
+		if (handlers.some((candidate) => candidate.id === id)) throw new Error(`Duplicate lifecycle hook id: ${id}`);
+		handlers.push(registration);
+		this.hooks.set(name as HookName, handlers);
+		return () => {
+			const current = this.hooks.get(name as HookName);
+			if (!current) return;
+			const remaining = current.filter((candidate) => candidate !== registration);
+			if (remaining.length === 0) this.hooks.delete(name as HookName);
+			else this.hooks.set(name as HookName, remaining);
+		};
+	}
+
+	emit(type: string, event: unknown): void {
+		for (const listener of this.events.get(type) ?? []) void Promise.resolve(listener(event));
+	}
+
+	async runHook(name: HookName, event: unknown): Promise<void> {
+		for (const registration of this.hooks.get(name) ?? []) await registration.handler(event);
+	}
+
+	onEvent(type: string, listener: (event: unknown) => void | Promise<void>): () => void {
+		if (this.isClosed()) throw new HarnessClosed();
+		const listeners = this.events.get(type) ?? new Set();
+		listeners.add(listener);
+		this.events.set(type, listeners);
+		return () => {
+			listeners.delete(listener);
+			if (listeners.size === 0) this.events.delete(type);
+		};
 	}
 }
 
@@ -355,6 +391,7 @@ export class AgentHarness implements AgentLane {
 	private steeringMode: QueueMode;
 	private followUpMode: QueueMode;
 	private suspendedOperations: SuspendedOperation[] = [];
+	private readonly lifecycle: LifecycleRegistry;
 	private closed = false;
 
 	private constructor(options: AgentHarnessOptions) {
@@ -363,8 +400,9 @@ export class AgentHarness implements AgentLane {
 		this.systemPromptSource = options.systemPrompt;
 		this.toProviderMessages = options.toProviderMessages;
 		this.session = options.session;
-		this.hooks = new UnavailableRegistry("hooks.on", () => this.closed);
-		this.events = new UnavailableRegistry("events.on", () => this.closed);
+		this.lifecycle = new LifecycleRegistry(() => this.closed);
+		this.hooks = this.lifecycle;
+		this.events = { on: (type, listener) => this.lifecycle.onEvent(type, listener) };
 		this.model = options.model;
 		this.thinkingLevel = options.thinkingLevel ?? "off";
 		this.activeToolNames = [...(options.activeToolNames ?? options.tools?.map((tool) => tool.name) ?? [])];
@@ -467,7 +505,9 @@ export class AgentHarness implements AgentLane {
 			},
 		};
 		await this.durableSession.appendRecord(started);
+		this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
 		try {
+			await this.lifecycle.runHook("before_run", { operationId: runId, prompts: durableClone(prompts) });
 			const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
 			const persisted = buildSessionContext(entries);
 			const systemPrompt =
@@ -514,6 +554,7 @@ export class AgentHarness implements AgentLane {
 			const finalMessage = newMessages.at(-1);
 			if (!finalEntryId || !finalMessage || finalMessage.role !== "assistant")
 				throw new Error("Agent loop produced no assistant message");
+			await this.lifecycle.runHook("after_response", { operationId: runId, message: durableClone(finalMessage) });
 			await this.durableSession.appendRecord({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
@@ -521,6 +562,8 @@ export class AgentHarness implements AgentLane {
 				runId,
 				outcome: "completed",
 			});
+			await this.lifecycle.runHook("before_run_end", { operationId: runId, outcome: "completed" });
+			this.lifecycle.emit("operation_finished", { operationId: runId, outcome: "completed" });
 			return ResultValue.ok({
 				runId,
 				kind: "completed",
@@ -595,6 +638,7 @@ export class AgentHarness implements AgentLane {
 			return ResultValue.err(new NothingToCompact({ lane: "main", message: "Nothing to compact" }));
 		const runId = this.durableSession.idGenerator.next();
 		const resultEntryId = this.durableSession.idGenerator.next();
+		await this.lifecycle.runHook("before_compaction", { operationId: runId, model: this.model });
 		await this.durableSession.appendRecord({
 			type: "operation_started",
 			id: runId,
@@ -706,6 +750,7 @@ export class AgentHarness implements AgentLane {
 		const summarize = _options?.summarize === true;
 		const runId = this.durableSession.idGenerator.next();
 		const summaryEntryId = summarize ? this.durableSession.idGenerator.next() : undefined;
+		await this.lifecycle.runHook("before_navigation", { operationId: runId, targetId, summarize });
 		await this.durableSession.appendRecord({
 			type: "operation_started",
 			id: runId,
