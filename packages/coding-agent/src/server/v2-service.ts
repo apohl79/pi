@@ -22,11 +22,17 @@ export interface CodingAgentV2Service {
 	listSessions(): Promise<SessionMetadataV2[]>;
 	listModels(): Promise<ModelMetadata[]>;
 	openSession(sessionId: string): Promise<CodingAgentV2Runtime>;
+	createSession?(options: Record<string, unknown>): Promise<{ sessionId: string; runtime: CodingAgentV2Runtime }>;
+	deleteSession?(sessionId: string): Promise<void>;
 }
 
 export interface CodingAgentV2ServiceOptions {
 	/** Provider-local fast model used only for side-band automatic naming. */
 	fastModel?: Model<string>;
+	/** Durable owner creates a fully initialized session definition. */
+	createSession?: (options: Record<string, unknown>) => Promise<CodingAgentV2SessionDefinition>;
+	/** Durable owner removes a session after the adapter disposes its runtime. */
+	deleteSession?: (sessionId: string) => Promise<void>;
 }
 
 export interface CodingAgentV2Runtime {
@@ -397,9 +403,34 @@ export function createCodingAgentV2Service(
 ): CodingAgentV2Service {
 	const byId = new Map(definitions.map((definition) => [definition.metadata.id, definition]));
 	const runtimes = new Map<string, CodingAgentV2RuntimeImpl>();
+	const sessionFactory = options?.createSession;
+	const sessionDeleter = options?.deleteSession;
 	return {
-		listSessions: async () => definitions.map((definition) => structuredClone(definition.metadata)),
+		listSessions: async () => [...byId.values()].map((definition) => structuredClone(definition.metadata)),
 		listModels: async () => models.getModels().map((model) => modelMetadata(model)),
+		createSession: sessionFactory
+			? async (payload) => {
+					const definition = await sessionFactory(payload);
+					if (byId.has(definition.metadata.id))
+						throw new Error(`Session ${definition.metadata.id} already exists`);
+					byId.set(definition.metadata.id, definition);
+					const model = await definition.harness.getModel();
+					const runtime = new CodingAgentV2RuntimeImpl(definition, models, model, options);
+					runtimes.set(definition.metadata.id, runtime);
+					return { sessionId: definition.metadata.id, runtime };
+				}
+			: undefined,
+		deleteSession: sessionDeleter
+			? async (sessionId) => {
+					const runtime = runtimes.get(sessionId);
+					if (runtime) {
+						await runtime.dispose();
+						runtimes.delete(sessionId);
+					}
+					if (!byId.delete(sessionId)) throw new Error(`Unknown session ${sessionId}`);
+					await sessionDeleter(sessionId);
+				}
+			: undefined,
 		openSession: async (sessionId) => {
 			const definition = byId.get(sessionId);
 			if (!definition) throw new Error(`Unknown session ${sessionId}`);
