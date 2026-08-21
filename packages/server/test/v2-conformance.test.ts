@@ -23,6 +23,7 @@ import { InMemoryV2OperationStore, JsonlV2OperationStore } from "../src/operatio
 import { InMemoryV2ProcessRegistry, NodeV2ProcessRegistry } from "../src/processes.ts";
 import { connectUnixTestClientV2, Deferred } from "../src/testing/index.ts";
 import { createUnixServerV2 } from "../src/transports/unix/preset.ts";
+import { InMemoryV2UsageLedger } from "../src/usage-ledger.ts";
 import type { PiServerServiceV2, PiSessionRuntimeV2 } from "../src/v2.ts";
 import { AdapterV2WebService } from "../src/web.ts";
 
@@ -330,6 +331,41 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(exported).toMatchObject({ ok: true, result: { format: "json", events: [{ seq: 1 }] } });
 		expect(verified).toMatchObject({ ok: true, result: { valid: true, gaps: [] } });
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
+	});
+
+	test("exposes usage ledger aggregates and entries through v2", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-usage-wire-"));
+		directories.push(directory);
+		const usage = new InMemoryV2UsageLedger();
+		await usage.record({
+			responseId: "response-1",
+			sessionId: "session-1",
+			agentId: "agent-1",
+			operationId: "operation-1",
+			purpose: "agent",
+			provider: "test",
+			model: "small",
+			input: 3,
+			output: 2,
+			cacheRead: 0,
+			cacheWrite: 0,
+			pricing: "catalog",
+			costUsd: 0.1,
+			createdAt: 1,
+		});
+		const server = createUnixServerV2(new TestService(), { path: join(directory, "server.sock"), usage });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const response = await client.request({ command: "usage/read", payload: { sessionId: "session-1" } });
+		expect(response).toMatchObject({
+			ok: true,
+			result: {
+				aggregate: { responses: 1, input: 3, output: 2, costUsd: 0.1 },
+				entries: [{ responseId: "response-1" }],
+			},
+		});
 	});
 
 	test("routes image view and generation through blob references", async () => {
