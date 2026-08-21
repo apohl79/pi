@@ -439,6 +439,19 @@ function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLau
 	});
 }
 
+function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
+	if (request.pty) {
+		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
+		return ptyLauncher.spawn(request);
+	}
+	return spawn(request.command, {
+		shell: true,
+		cwd: request.cwd,
+		env: { ...process.env, ...request.env },
+		stdio: ["pipe", "pipe", "pipe"],
+	});
+}
+
 export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 	private readonly maxOutputBytes: number;
 	private readonly ptyLauncher: V2PtyLauncher | undefined;
