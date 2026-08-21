@@ -99,10 +99,14 @@ export class GoalManager {
 		return this.withSessionLock(async () => {
 			const current = await this.readUnlocked();
 			if (!current) throw new Error("No active goal");
+			const timestamp = this.now();
+			const activeTimeSeconds =
+				current.status === "active" ? current.activeTimeSeconds + Math.max(0, timestamp - current.updatedAt) / 1000 : current.activeTimeSeconds;
 			const goal: GoalSnapshot = {
 				...current,
 				...patch,
-				updatedAt: this.now(),
+				...(patch.activeTimeSeconds === undefined ? { activeTimeSeconds } : {}),
+				updatedAt: timestamp,
 			};
 			if (goal.tokenBudget !== undefined && goal.tokensUsed > goal.tokenBudget && goal.status === "active")
 				goal.status = "budgetLimited";
