@@ -30,6 +30,7 @@ import { InMemoryV2PluginRegistry, type V2PluginRegistry } from "./plugins.ts";
 import { InMemoryV2ProcessRegistry, type V2ProcessRegistry } from "./processes.ts";
 import { toProtocolJsonValue } from "./protocol.ts";
 import type { MaybePromise } from "./types.ts";
+import { InMemoryV2UsageLedger, type V2UsageFilter, type V2UsageLedger } from "./usage-ledger.ts";
 import { UnavailableV2WebService, type V2WebOperation, type V2WebService } from "./web.ts";
 
 export interface PiSessionRuntimeV2 {
@@ -62,6 +63,7 @@ export interface PiServerV2Options {
 	web?: V2WebService;
 	images?: V2ImageService;
 	plugins?: V2PluginRegistry;
+	usage?: V2UsageLedger;
 }
 
 type V2ConnectionState = {
@@ -124,6 +126,7 @@ export class PiServerV2 {
 	private readonly web: V2WebService;
 	private readonly images: V2ImageService;
 	private readonly plugins: V2PluginRegistry;
+	private readonly usage: V2UsageLedger;
 	private readonly connections = new Set<V2ConnectionState>();
 	private readonly eventHistory = new Map<string, EventEnvelopeV2[]>();
 	private readonly operations = new Map<string, OperationRecordV2>();
@@ -151,6 +154,7 @@ export class PiServerV2 {
 		this.web = options.web ?? new UnavailableV2WebService();
 		this.images = options.images ?? new BlobV2ImageService(this.files, this.blobs);
 		this.plugins = options.plugins ?? new InMemoryV2PluginRegistry();
+		this.usage = options.usage ?? new InMemoryV2UsageLedger();
 	}
 
 	get addresses(): readonly string[] {
@@ -336,6 +340,7 @@ export class PiServerV2 {
 			if (command.command === "plugin/uninstall") return void (await this.uninstallPlugin(state, id, command));
 			if (command.command === "plugin/enable") return void (await this.setPluginEnabled(state, id, command, true));
 			if (command.command === "plugin/disable") return void (await this.setPluginEnabled(state, id, command, false));
+			if (command.command === "usage/read") return void (await this.readUsage(state, id, command));
 			if (command.command === "session/detach") return void (await this.detach(state, id, command));
 			if (
 				command.command === "turn/start" ||
@@ -840,6 +845,28 @@ export class PiServerV2 {
 				enabled,
 				payload.scope === "user" || payload.scope === "project" ? payload.scope : undefined,
 			),
+		});
+	}
+
+	private async readUsage(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		const filter: V2UsageFilter = {};
+		for (const key of ["sessionId", "agentId", "turnId", "goalId", "provider", "model"] as const) {
+			if (payload[key] !== undefined && typeof payload[key] !== "string")
+				throw new Error(`usage/read ${key} must be a string`);
+			if (typeof payload[key] === "string") (filter as { [name: string]: string })[key] = payload[key];
+		}
+		if (
+			payload.purpose !== undefined &&
+			!["agent", "compaction", "sessionName", "otherSideband"].includes(String(payload.purpose))
+		)
+			throw new Error("usage/read purpose is invalid");
+		if (typeof payload.purpose === "string")
+			(filter as { purpose: V2UsageFilter["purpose"] }).purpose = payload.purpose as V2UsageFilter["purpose"];
+		await this.sendResponse(state, id, {
+			command: command.command,
+			aggregate: await this.usage.aggregate(filter),
+			entries: await this.usage.read(filter),
 		});
 	}
 
