@@ -697,23 +697,30 @@ export class PiServerV2 {
 			state: "accepted",
 			accepted,
 		});
-		await this.operationStore.putOperation(this.operations.get(operationId)!);
-		await this.send(state, { type: "response", id, ok: true, accepted });
-		await this.broadcastEvent(
-			command.sessionId,
-			runtime,
-			{ state: "accepted", accepted },
-			operationId,
-			"operation_accepted",
-			{ eventSeq: accepted.eventSeq, revision: accepted.sessionRevision },
-		);
-		void this.recordDiagnostic({
-			kind: "operation_accepted",
-			sessionId: command.sessionId,
-			operationId,
-			payload: { command: command.command, payload: command.payload },
-		});
-		void this.runOperation(runtime, command.sessionId, operationId, command);
+		try {
+			await this.operationStore.putOperation(this.operations.get(operationId)!);
+			await this.send(state, { type: "response", id, ok: true, accepted });
+			await this.broadcastEvent(
+				command.sessionId,
+				runtime,
+				{ state: "accepted", accepted },
+				operationId,
+				"operation_accepted",
+				{ eventSeq: accepted.eventSeq, revision: accepted.sessionRevision },
+			);
+			void this.recordDiagnostic({
+				kind: "operation_accepted",
+				sessionId: command.sessionId,
+				operationId,
+				payload: { command: command.command, payload: command.payload },
+			});
+		} catch (error) {
+			this.reportError(error instanceof Error ? error : new Error(String(error)));
+		} finally {
+			void this.runOperation(runtime, command.sessionId, operationId, command).catch((error: unknown) =>
+				this.reportError(error instanceof Error ? error : new Error(String(error))),
+			);
+		}
 	}
 
 	private async runOperation(
