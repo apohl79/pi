@@ -113,9 +113,11 @@ describe("coding-agent v2 service adapter", () => {
 				sessionId: "adapter-session",
 				payload: { text: "hello" },
 			});
-			const usageSnapshot = (await runtime.snapshot()).usage;
+			const turnSnapshot = await runtime.snapshot();
+			const usageSnapshot = turnSnapshot.usage;
 			expect(usageSnapshot.input).toBeGreaterThan(0);
 			expect(usageSnapshot.output).toBeGreaterThan(0);
+			expect(turnSnapshot.transcript.map((item) => item.role)).toEqual(["user", "assistant"]);
 			await runtime.run("operation-2", {
 				command: "goal/create",
 				sessionId: "adapter-session",
