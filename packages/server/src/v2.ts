@@ -393,6 +393,12 @@ export class PiServerV2 {
 				return void (await this.resolveFile(state, id, command));
 			if (command.command === "filesystem/reference/read") return void (await this.readFile(state, id, command));
 			if (command.command === "web") return void (await this.webRequest(state, id, command));
+			if (command.command === "diagnostics/status") return void (await this.diagnosticsStatus(state, id, command));
+			if (command.command === "diagnostics/timeline")
+				return void (await this.diagnosticsTimeline(state, id, command));
+			if (command.command === "diagnostics/export") return void (await this.diagnosticsExport(state, id, command));
+			if (command.command === "diagnostics/verify") return void (await this.diagnosticsVerify(state, id, command));
+			if (command.command === "diagnostics/doctor") return void (await this.diagnosticsDoctor(state, id, command));
 			if (command.command === "session/detach") return void (await this.detach(state, id, command));
 			if (
 				command.command === "turn/start" ||
@@ -838,6 +844,64 @@ export class PiServerV2 {
 			command: command.command,
 			results: await this.web.execute(command.sessionId, request),
 		});
+	}
+
+	private async diagnosticsStatus(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const events = await this.diagnosticEvents();
+		await this.sendResponse(state, id, {
+			command: command.command,
+			capture: this.diagnostics ? "metadata" : "unavailable",
+			degraded: false,
+			lastCriticalEventSeq: events.at(-1)?.seq ?? 0,
+			eventCount: events.length,
+		});
+	}
+
+	private async diagnosticsTimeline(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		const events = await this.diagnosticEvents(typeof payload.afterSeq === "number" ? payload.afterSeq : 0);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			events: events.filter(
+				(event) =>
+					(typeof payload.sessionId !== "string" || event.sessionId === payload.sessionId) &&
+					(typeof payload.operationId !== "string" || event.operationId === payload.operationId),
+			),
+		});
+	}
+
+	private async diagnosticsExport(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		await this.sendResponse(state, id, {
+			command: command.command,
+			format: "json",
+			events: await this.diagnosticEvents(),
+		});
+	}
+
+	private async diagnosticsVerify(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const events = await this.diagnosticEvents();
+		const gaps = events.slice(1).flatMap((event, index) => {
+			const previous = events[index];
+			return previous && event.seq !== previous.seq + 1 ? [{ from: previous.seq, to: event.seq }] : [];
+		});
+		await this.sendResponse(state, id, { command: command.command, valid: gaps.length === 0, gaps });
+	}
+
+	private async diagnosticsDoctor(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const events = await this.diagnosticEvents();
+		const sequenceOk = events.every((event, index) => index === 0 || event.seq === events[index - 1]!.seq + 1);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			ok: this.diagnostics !== undefined && sequenceOk,
+			checks: [
+				{ name: "recorder", ok: this.diagnostics !== undefined },
+				{ name: "sequence", ok: sequenceOk },
+			],
+		});
+	}
+
+	private async diagnosticEvents(afterSeq = 0): Promise<Awaited<ReturnType<ForensicRecorder["read"]>>> {
+		return this.diagnostics ? this.diagnostics.read(afterSeq) : [];
 	}
 
 	private async detach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
