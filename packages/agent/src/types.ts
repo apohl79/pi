@@ -154,7 +154,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * Returned messages are converted for that request and are never appended to
 	 * the durable context or emitted as conversation events.
 	 */
-	samplingInput?: (context: SamplingInputContext) => AgentMessage[] | Promise<AgentMessage[]>;
+	samplingInput?: SamplingInput;
 
 	/**
 	 * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
@@ -306,6 +306,8 @@ export type SamplingInputContext = Readonly<{
 	tools: readonly AgentTool[];
 	signal?: AbortSignal;
 }>;
+
+export type SamplingInput = (context: SamplingInputContext) => AgentMessage[] | Promise<AgentMessage[]>;
 
 /**
  * Thinking/reasoning level for models that support it.
