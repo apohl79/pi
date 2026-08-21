@@ -463,7 +463,6 @@ export class PiServerV2 {
 		}
 		const created = await this.service.createSession(payload);
 		if (state.sessions.has(created.sessionId)) throw new Error(`Session ${created.sessionId} is already attached`);
-		this.trackRuntime(created.runtime);
 		state.sessions.set(created.sessionId, created.runtime);
 		await this.sendResponse(state, id, {
 			command: command.command,
