@@ -85,6 +85,7 @@ function sessionSnapshot(id: string): SessionSnapshotV2 {
 
 class TestRuntime implements PiSessionRuntimeV2 {
 	readonly accepted: OperationAccepted[] = [];
+	readonly commands: CommandV2[] = [];
 	readonly started = new Deferred<void>();
 	readonly release = new Deferred<void>();
 	disposeCount = 0;
@@ -105,6 +106,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	}
 
 	async run(operationId: string, _command: CommandV2): Promise<void> {
+		this.commands.push(structuredClone(_command));
 		await this.release.promise;
 		this.started.resolve(undefined);
 		this.current = {
@@ -348,6 +350,46 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: { image: { provider: "fake", model: "image-fast", mimeType: "image/png" } },
 		});
+	});
+
+	test("resolves blob-backed turn content before durable acceptance", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-turn-content-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const stored = await client.request({
+			command: "blob/put",
+			payload: { data: "aGVsbG8=", encoding: "base64", mimeType: "image/png" },
+		});
+		const digest = (stored as unknown as { result: { blob: { digest: string } } }).result.blob.digest;
+		const accepted = await client.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: {
+				content: [
+					{ type: "text", text: "inspect" },
+					{ type: "image", digest, mimeType: "image/png" },
+				],
+			},
+		});
+		expect(accepted).toMatchObject({ ok: true, accepted: { sessionRevision: 2 } });
+		const runtime = service.sessions.get("session-1")!;
+		runtime.release.resolve(undefined);
+		await runtime.started.promise;
+		expect(runtime.commands[0]).toMatchObject({
+			payload: {
+				content: [
+					{ type: "text", text: "inspect" },
+					{ type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+				],
+			},
+		});
+		await client.close();
 	});
 
 	test("delegates session creation and deletion through the v2 service boundary", async () => {
