@@ -1,4 +1,4 @@
-import { createModels, type Usage } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, type Usage } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
 import { describe, expect, it } from "vitest";
 import {
@@ -54,7 +54,76 @@ const usage: Usage = {
 };
 
 describe("AgentHarness v2 scaffold", () => {
-	it("opens only record-free sessions before restore is implemented", async () => {
+	it("runs a deterministic prompt and persists its operation lifecycle", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-faux",
+			models: [{ id: "harness-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("hello from faux")]);
+		const session = createSession("prompt");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+
+		const result = await harness.prompt("hello");
+
+		expect(result).toMatchObject({ ok: true, value: { kind: "completed" } });
+		if (!result.ok || result.value.kind !== "completed") throw new Error("Expected completed prompt");
+		expect(result.value.finalMessage.content).toEqual([{ type: "text", text: "hello from faux" }]);
+		expect((await session.findRecords({ type: "operation_started" })).length).toBe(1);
+		expect((await session.findRecords({ type: "operation_finished" })).map((record) => record.outcome)).toEqual([
+			"completed",
+		]);
+		const messages = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		expect(messages.filter((entry) => entry.type === "message").map((entry) => entry.message.role)).toEqual([
+			"user",
+			"assistant",
+		]);
+		await harness.close();
+	});
+
+	it("runs idle callbacks after the durable lane is idle", async () => {
+		const harness = await createHarness();
+		let callbackCalled = false;
+		await harness.waitForIdle();
+		await harness.runWhenIdle(() => {
+			callbackCalled = true;
+		});
+		expect(callbackCalled).toBe(true);
+		await harness.close();
+	});
+
+	it("compacts durable history and records the terminal operation", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-compaction-faux",
+			models: [{ id: "harness-compaction-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("first response"), fauxAssistantMessage("second response")]);
+		const session = createSession("compaction");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+		});
+		await harness.prompt("first request with enough text to create history");
+		await harness.prompt("second request with enough text to create history");
+		faux.setResponses([fauxAssistantMessage("durable summary"), fauxAssistantMessage("durable turn prefix")]);
+
+		const result = await harness.compact({ customInstructions: "focus on decisions" });
+
+		expect(result).toMatchObject({ ok: true, value: { kind: "completed", entry: { type: "compaction" } } });
+		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		expect(entries.some((entry) => entry.type === "compaction" && entry.summary.includes("durable summary"))).toBe(
+			true,
+		);
+		expect((await session.findRecords({ type: "operation_finished" })).at(-1)?.outcome).toBe("completed");
+		await harness.close();
+	});
+
+	it("discovers unfinished operations for crash recovery", async () => {
 		const session = createSession();
 		const { harness, suspended } = await AgentHarness.create({
 			session,
@@ -72,13 +141,99 @@ describe("AgentHarness v2 scaffold", () => {
 
 		const recorded = createSession("recorded");
 		await recorded.appendRecord(operationStarted("run"));
-		await expect(
-			AgentHarness.create({
-				session: recorded,
-				models: createModels(),
-				model: getModel("google", "gemini-2.5-flash"),
-			}),
-		).rejects.toMatchObject({ name: "HarnessNotImplemented", operation: "create.restore" });
+		const restored = await AgentHarness.create({
+			session: recorded,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+		});
+		expect(restored.suspended).toMatchObject([
+			{
+				lane: "main",
+				kind: "run",
+				id: "run",
+				startedAt: expect.any(Number),
+				reason: "crash",
+				missing: { tools: [], models: [] },
+			},
+		]);
+		await restored.harness.close();
+	});
+
+	it("persists usage adjustments in the durable session ledger", async () => {
+		const session = createSession("usage");
+		const harness = await createHarness(session);
+		const result = await harness.recordUsage(usage, { entryId: "assistant-1", details: { purpose: "agent" } });
+		expect(result).toEqual({ ok: true, value: undefined });
+		const records = await session.findRecords({ type: "usage", order: "oldestFirst" });
+		expect(records).toMatchObject([
+			{ type: "usage", cause: "adjustment", entryId: "assistant-1", details: { purpose: "agent" }, usage },
+		]);
+		await harness.close();
+	});
+
+	it("persists model, thinking, and active-tool projection changes", async () => {
+		const session = createSession("projection");
+		const harness = await createHarness(session);
+		const model = getModel("anthropic", "claude-sonnet-4-5");
+		await harness.setModel(model);
+		await harness.setThinkingLevel("high");
+		await harness.setActiveTools(["read", "bash"]);
+		const entries = await session.findEntries({ order: "oldestFirst" });
+		expect(entries).toMatchObject([
+			{ type: "model_change", provider: model.provider, modelId: model.id },
+			{ type: "thinking_level_change", thinkingLevel: "high" },
+			{ type: "active_tools_change", activeToolNames: ["read", "bash"] },
+		]);
+		await harness.close();
+		const reopened = await AgentHarness.create({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+		});
+		expect((await reopened.harness.getModel()).provider).toBe("google");
+		expect((await reopened.harness.getModel()).id).toBe("gemini-2.5-flash");
+		expect(await reopened.harness.getThinkingLevel()).toBe("high");
+		expect(await reopened.harness.getActiveTools()).toEqual(["read", "bash"]);
+		await reopened.harness.close();
+	});
+
+	it("persists queued steering, follow-up, next-run input, and cancellation", async () => {
+		const session = createSession("queues");
+		const harness = await createHarness(session);
+		await expect(harness.steer(userMessage)).resolves.toMatchObject({ ok: false, error: { name: "NoActiveRun" } });
+		await session.appendRecord(operationStarted("run"));
+		const steer = await harness.steer("steer now");
+		const followUp = await harness.followUp("follow up later");
+		const nextRun = await harness.nextRun("next run");
+		expect(steer).toMatchObject({ ok: true, value: { entryId: expect.any(String) } });
+		expect(followUp).toMatchObject({ ok: true, value: { entryId: expect.any(String) } });
+		expect(nextRun).toMatchObject({ ok: true, value: { entryId: expect.any(String) } });
+		const queued = await session.findRecords({ type: "queue_enqueued", order: "oldestFirst" });
+		expect(queued.map((record) => record.queue)).toEqual(["steer", "followUp", "nextRun"]);
+		const entryId = nextRun.ok ? nextRun.value.entryId : "missing";
+		expect(await harness.cancelQueued(entryId)).toEqual({ ok: true, value: { outcome: "cancelled" } });
+		expect(await harness.cancelQueued(entryId)).toEqual({ ok: true, value: { outcome: "already_cleared" } });
+		await harness.close();
+	});
+
+	it("durably aborts a run and recalls only steer/follow-up input", async () => {
+		const session = createSession("abort");
+		const harness = await createHarness(session);
+		await session.appendRecord(operationStarted("run-1"));
+		const steer = await harness.steer("steer");
+		const followUp = await harness.followUp("follow");
+		await harness.nextRun("next");
+		const result = await harness.abort();
+		expect(result).toMatchObject({
+			ok: true,
+			value: { runId: "run-1", steer: [{ role: "user" }], followUp: [{ role: "user" }] },
+		});
+		const records = await session.findRecords({ order: "oldestFirst" });
+		expect(records.filter((record) => record.type === "abort_requested")).toHaveLength(1);
+		expect(records.filter((record) => record.type === "operation_finished")).toMatchObject([{ outcome: "aborted" }]);
+		expect(records.filter((record) => record.type === "queue_cancelled")).toHaveLength(2);
+		expect(steer.ok && followUp.ok).toBe(true);
+		await harness.close();
 	});
 
 	it("keeps scaffold-safe configuration as defensive copies", async () => {
@@ -144,28 +299,11 @@ describe("AgentHarness v2 scaffold", () => {
 
 	it("rejects every unfinished public operation explicitly", async () => {
 		const harness = await createHarness();
-		let callbackCalled = false;
 		const unfinished: [string, () => unknown | Promise<unknown>][] = [
-			["prompt", () => harness.prompt("hello")],
 			["skill", () => harness.skill("skill")],
 			["promptFromTemplate", () => harness.promptFromTemplate("template")],
-			["compact", () => harness.compact()],
 			["navigateTree", () => harness.navigateTree(null)],
 			["resume", () => harness.resume()],
-			["abort", () => harness.abort()],
-			["steer", () => harness.steer(userMessage)],
-			["followUp", () => harness.followUp(userMessage)],
-			["nextRun", () => harness.nextRun(userMessage)],
-			["cancelQueued", () => harness.cancelQueued("queued")],
-			["recordUsage", () => harness.recordUsage(usage)],
-			["waitForIdle", () => harness.waitForIdle()],
-			[
-				"runWhenIdle",
-				() =>
-					harness.runWhenIdle(() => {
-						callbackCalled = true;
-					}),
-			],
 			["peekAction", () => harness.peekAction()],
 			["executeAction", () => harness.executeAction()],
 			["runToCompletion", () => harness.runToCompletion()],
@@ -182,7 +320,6 @@ describe("AgentHarness v2 scaffold", () => {
 				operation,
 			});
 		}
-		expect(callbackCalled).toBe(false);
 		expect(() => harness.hooks.on("before_run", () => {})).toThrow(HarnessNotImplemented);
 		expect(() => harness.events.on("event", () => {})).toThrow(HarnessNotImplemented);
 	});
@@ -191,7 +328,7 @@ describe("AgentHarness v2 scaffold", () => {
 		const harness = await createHarness();
 		await harness.close();
 
-		await expect(harness.prompt("hello")).rejects.toBeInstanceOf(HarnessClosed);
+		expect(await harness.prompt("hello")).toMatchObject({ ok: false, error: { name: "Closed" } });
 		await expect(harness.waitForIdle()).rejects.toBeInstanceOf(HarnessClosed);
 		expect(() => harness.hooks.on("before_run", () => {})).toThrow(HarnessClosed);
 		expect(() => harness.events.on("event", () => {})).toThrow(HarnessClosed);
