@@ -6,6 +6,7 @@
  * Test with: npx tsx src/cli-new.ts [args...]
  */
 import { join } from "node:path";
+import { DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-agent-core";
 import { isExperimentalCommand } from "./cli/experimental/dispatch.ts";
 import { APP_NAME, getAgentDir } from "./config.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
@@ -37,6 +38,15 @@ async function runCli(): Promise<void> {
 		cwd: process.cwd(),
 		models: modelRuntime,
 		model,
+		compaction: (selectedModel) => {
+			const override = modelRuntime.getCompactionOverride(selectedModel.provider, selectedModel.id);
+			return {
+				...DEFAULT_COMPACTION_SETTINGS,
+				...(override === undefined
+					? {}
+					: { modelOverrides: { [`${selectedModel.provider}/${selectedModel.id}`]: override } }),
+			};
+		},
 		socketPath: join(agentDir, "pi.sock"),
 		write: (value) => console.log(JSON.stringify(value)),
 	});
