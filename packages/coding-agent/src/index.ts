@@ -30,13 +30,18 @@ export {
 	type CodexMarketplacePlugin,
 	type CodexMarketplaceSource,
 	type CodexPluginDiagnostic,
+	type CodexPluginDiskResolution,
 	type CodexPluginJson,
 	type CodexPluginManifest,
 	type CodexPluginParseResult,
 	type CodexPluginResourceResolution,
+	loadCodexMarketplaceManifest,
+	loadCodexPluginManifest,
 	parseCodexMarketplaceManifest,
 	parseCodexPluginManifest,
 	resolveCodexPluginResource,
+	resolveCodexPluginResourceOnDisk,
+	resolveLocalCodexMarketplacePlugin,
 } from "./core/codex-plugin.ts";
 // Compaction
 export {
