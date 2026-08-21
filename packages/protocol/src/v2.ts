@@ -1,4 +1,4 @@
-import Type, { type Static } from "typebox";
+import Type, { type Static, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { ThinkingLevelSchema } from "./schemas.ts";
 
@@ -6,6 +6,7 @@ export const PROTOCOL_V2_VERSION = 2 as const;
 
 export const MAX_V2_STRING_LENGTH = 1_048_576;
 export const MAX_V2_ARRAY_ITEMS = 10_000;
+export const MAX_V2_JSON_DEPTH = 8;
 
 const BoundedStringSchema = Type.String({ maxLength: MAX_V2_STRING_LENGTH });
 const BoundedNonEmptyStringSchema = Type.String({ minLength: 1, maxLength: MAX_V2_STRING_LENGTH });
@@ -20,19 +21,25 @@ const NonNegativeIntegerSchema = Type.Integer({ minimum: 0 });
 const StrictObject = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
 	Type.Object(properties, { additionalProperties: false });
 
-const BoundedJsonValueSchema = Type.Cyclic(
-	{
-		JsonValue: Type.Union([
-			Type.Null(),
-			Type.Boolean(),
-			Type.Number(),
-			BoundedStringSchema,
-			Type.Array(Type.Ref("JsonValue"), { maxItems: MAX_V2_ARRAY_ITEMS }),
-			Type.Record(BoundedStringSchema, Type.Ref("JsonValue"), { maxProperties: MAX_V2_ARRAY_ITEMS }),
-		]),
-	},
-	"JsonValue",
-);
+const createBoundedJsonValueSchema = (remainingDepth: number): TSchema => {
+	const scalarSchemas: TSchema[] = [Type.Null(), Type.Boolean(), Type.Number(), BoundedStringSchema];
+	return remainingDepth === 0
+		? Type.Union(scalarSchemas)
+		: Type.Union([
+				...scalarSchemas,
+				...(() => {
+				const childSchema: TSchema = createBoundedJsonValueSchema(remainingDepth - 1);
+					return [
+						Type.Array(childSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
+						Type.Record(BoundedStringSchema, childSchema, {
+							maxProperties: MAX_V2_ARRAY_ITEMS,
+						}),
+					];
+				})(),
+			]);
+};
+
+const BoundedJsonValueSchema = createBoundedJsonValueSchema(MAX_V2_JSON_DEPTH);
 
 const BoundedModelRefSchema = StrictObject({ provider: IdSchema, id: IdSchema });
 const BoundedModelCostSchema = StrictObject({
@@ -397,7 +404,7 @@ export type ServerSnapshotV2 = Static<typeof ServerSnapshotV2Schema>;
 
 const hasValidTerminalSequence = (acceptedSeq: unknown, terminalSeq: unknown): boolean =>
 	terminalSeq === undefined ||
-	(typeof acceptedSeq === "number" && typeof terminalSeq === "number" && terminalSeq >= acceptedSeq);
+	(typeof acceptedSeq === "number" && typeof terminalSeq === "number" && terminalSeq > acceptedSeq);
 
 export const isOperationSummary = (value: unknown): value is OperationSummary => {
 	const summary = value as { acceptedSeq?: unknown; terminalSeq?: unknown };
