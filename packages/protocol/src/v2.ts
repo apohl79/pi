@@ -506,6 +506,7 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("diagnostics/export"),
 	Type.Literal("diagnostics/verify"),
 	Type.Literal("diagnostics/doctor"),
+	Type.Literal("web"),
 ]);
 export type CommandNameV2 = Static<typeof CommandNameV2Schema>;
 

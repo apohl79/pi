@@ -32,6 +32,7 @@ import { InMemoryV2PluginRegistry, type V2PluginRegistry } from "./plugins.ts";
 import { InMemoryV2ProcessRegistry, type V2ProcessRegistry } from "./processes.ts";
 import { toProtocolJsonValue } from "./protocol.ts";
 import type { MaybePromise } from "./types.ts";
+import { UnavailableV2WebService, type V2WebOperation, type V2WebService } from "./web.ts";
 
 export interface PiSessionRuntimeV2 {
 	snapshot(): MaybePromise<SessionSnapshotV2>;
@@ -63,6 +64,7 @@ export interface PiServerV2Options {
 	plans?: V2PlanRegistry;
 	inputs?: V2InputRegistry;
 	files?: V2FileReferenceService;
+	web?: V2WebService;
 }
 
 type V2ConnectionState = {
@@ -143,6 +145,7 @@ export class PiServerV2 {
 	private readonly plans: V2PlanRegistry;
 	private readonly inputs: V2InputRegistry;
 	private readonly files: V2FileReferenceService;
+	private readonly web: V2WebService;
 	private readonly connections = new Set<V2ConnectionState>();
 	private readonly controls = new Map<string, string>();
 	private readonly runtimes = new Set<PiSessionRuntimeV2>();
@@ -184,6 +187,7 @@ export class PiServerV2 {
 		this.inputs = options.inputs ?? new InMemoryV2InputRegistry();
 		this.files =
 			options.files ?? new LocalV2FileReferenceService({ projectRoot: process.cwd(), allowAbsolute: false });
+		this.web = options.web ?? new UnavailableV2WebService();
 	}
 
 	get addresses(): readonly string[] {
@@ -413,6 +417,7 @@ export class PiServerV2 {
 			if (command.command === "filesystem/reference/resolve")
 				return void (await this.resolveFile(state, id, command));
 			if (command.command === "filesystem/reference/read") return void (await this.readFile(state, id, command));
+			if (command.command === "web") return void (await this.webRequest(state, id, command));
 			if (command.command === "session/detach") return void (await this.detach(state, id, command));
 			if (
 				command.command === "turn/start" ||
@@ -979,6 +984,33 @@ export class PiServerV2 {
 			file: result.file,
 			encoding: "base64",
 			data: Buffer.from(result.data).toString("base64"),
+		});
+	}
+
+	private async webRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("web requires sessionId");
+		const payload = objectPayload(command);
+		const operation = payload.operation;
+		const operations: readonly V2WebOperation[] = [
+			"search_query",
+			"open",
+			"click",
+			"find",
+			"screenshot",
+			"image_query",
+		];
+		if (typeof operation !== "string" || !operations.includes(operation as V2WebOperation))
+			throw new Error("web operation is invalid");
+		const request = {
+			operation: operation as V2WebOperation,
+			...(typeof payload.query === "string" ? { query: payload.query } : {}),
+			...(typeof payload.url === "string" ? { url: payload.url } : {}),
+			...(typeof payload.refId === "string" ? { refId: payload.refId } : {}),
+			...(typeof payload.pattern === "string" ? { pattern: payload.pattern } : {}),
+		};
+		await this.sendResponse(state, id, {
+			command: command.command,
+			results: await this.web.execute(command.sessionId, request),
 		});
 	}
 
