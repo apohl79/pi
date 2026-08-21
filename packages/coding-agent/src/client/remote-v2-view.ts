@@ -7,14 +7,20 @@ export interface RemoteV2SessionViewOptions {
 	readonly maxTranscriptItems?: number;
 	readonly maxTranscriptCharacters?: number;
 	readonly maxAgentItems?: number;
+	readonly maxPlanItems?: number;
+	readonly maxGoalCharacters?: number;
 }
 
 const DEFAULT_MAX_TRANSCRIPT_ITEMS = 48;
 const DEFAULT_MAX_TRANSCRIPT_CHARACTERS = 6_000;
 const DEFAULT_MAX_AGENT_ITEMS = 12;
+const DEFAULT_MAX_PLAN_ITEMS = 12;
+const DEFAULT_MAX_GOAL_CHARACTERS = 240;
 const MAX_TRANSCRIPT_ITEMS = 10_000;
 const MAX_TRANSCRIPT_CHARACTERS = 1_000_000;
 const MAX_AGENT_ITEMS = 1_000;
+const MAX_PLAN_ITEMS = 1_000;
+const MAX_GOAL_CHARACTERS = 10_000;
 
 function normalizeLimit(value: number | undefined, fallback: number, maximum: number): number {
 	if (value === undefined || !Number.isFinite(value)) return fallback;
@@ -30,6 +36,8 @@ function normalizeOptions(options: RemoteV2SessionViewOptions): Required<RemoteV
 			MAX_TRANSCRIPT_CHARACTERS,
 		),
 		maxAgentItems: normalizeLimit(options.maxAgentItems, DEFAULT_MAX_AGENT_ITEMS, MAX_AGENT_ITEMS),
+		maxPlanItems: normalizeLimit(options.maxPlanItems, DEFAULT_MAX_PLAN_ITEMS, MAX_PLAN_ITEMS),
+		maxGoalCharacters: normalizeLimit(options.maxGoalCharacters, DEFAULT_MAX_GOAL_CHARACTERS, MAX_GOAL_CHARACTERS),
 	};
 }
 
@@ -74,6 +82,16 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 		lines.push(
 			`Agent ${sanitizeTranscriptText(agent.path)} · ${sanitizeTranscriptText(agent.state)} · ${sanitizeTranscriptText(agent.model.provider)}/${sanitizeTranscriptText(agent.model.id)}`,
 		);
+	if (snapshot.goal) {
+		lines.push(
+			`Goal ${sanitizeTranscriptText(snapshot.goal.status)} · ${sanitizeTranscriptText(snapshot.goal.objective).slice(0, normalizedOptions.maxGoalCharacters)}`,
+		);
+	}
+	if (snapshot.plan) {
+		lines.push(`Plan v${snapshot.plan.version}`);
+		for (const item of snapshot.plan.items.slice(0, normalizedOptions.maxPlanItems))
+			lines.push(`Plan ${sanitizeTranscriptText(item.status)} · ${sanitizeTranscriptText(item.step)}`);
+	}
 	let characters = 0;
 	const transcript = maxItems === 0 ? [] : snapshot.transcript.slice(-maxItems);
 	for (const item of transcript) {

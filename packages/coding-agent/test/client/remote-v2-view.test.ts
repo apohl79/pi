@@ -122,4 +122,29 @@ describe("formatRemoteV2Session", () => {
 		);
 		expect(output).toContain("Agent /root/worker · running · anthropic/sonnet");
 	});
+
+	test("renders authoritative goal and plan state", () => {
+		const output = formatRemoteV2Session({
+			lifecycle: { status: "ready" },
+			snapshot: {
+				...snapshot,
+				goal: {
+					id: "goal-1",
+					objective: "finish the remote implementation",
+					status: "active",
+					tokensUsed: 4,
+					activeTimeSeconds: 2,
+					createdAt: 1,
+					updatedAt: 2,
+				},
+				plan: {
+					version: 3,
+					items: [{ step: "verify the daemon", status: "in_progress" }],
+				},
+			},
+		});
+		expect(output).toContain("Goal active · finish the remote implementation");
+		expect(output).toContain("Plan v3");
+		expect(output).toContain("Plan in_progress · verify the daemon");
+	});
 });
