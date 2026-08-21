@@ -105,6 +105,8 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 			planCharacters += line.length;
 		}
 	}
+	if (snapshot.queues.pendingInputRequestId !== undefined)
+		lines.push(`Input request pending · ${sanitizeTranscriptText(snapshot.queues.pendingInputRequestId)}`);
 	let characters = 0;
 	const transcript = maxItems === 0 ? [] : snapshot.transcript.slice(-maxItems);
 	for (const item of transcript) {

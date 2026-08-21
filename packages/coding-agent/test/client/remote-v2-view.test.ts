@@ -165,4 +165,12 @@ describe("formatRemoteV2Session", () => {
 		const planLines = output.split("\n").filter((line) => line.startsWith("Plan "));
 		expect(planLines.join("\n").length).toBeLessThanOrEqual(108);
 	});
+
+	test("renders a pending structured input request", () => {
+		const output = formatRemoteV2Session({
+			lifecycle: { status: "ready" },
+			snapshot: { ...snapshot, queues: { ...snapshot.queues, pendingInputRequestId: "input-1" } },
+		});
+		expect(output).toContain("Input request pending · input-1");
+	});
 });
