@@ -108,6 +108,14 @@ describe("coding-agent v2 service adapter", () => {
 			expect(usageSnapshot.output).toBeGreaterThan(0);
 			expect(turnSnapshot.transcript.map((item) => item.role)).toEqual(["user", "assistant"]);
 			expect(lifecycle).toEqual(["accepted:turn/start", "terminal:turn/start:completed"]);
+			await expect(
+				runtime.run("bad-operation", {
+					command: "session/thinking/set",
+					sessionId: "adapter-session",
+					payload: {},
+				}),
+			).rejects.toThrow("requires level");
+			expect(lifecycle.at(-1)).toBe("terminal:session/thinking/set:failed");
 			await runtime.run("operation-2", {
 				command: "goal/create",
 				sessionId: "adapter-session",
