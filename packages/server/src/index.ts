@@ -1,4 +1,5 @@
 export * from "./diagnostics.ts";
+export * from "./agents.ts";
 export * from "./errors.ts";
 export * from "./listener.ts";
 export * from "./operation-store.ts";
