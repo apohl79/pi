@@ -60,7 +60,7 @@ describe("coding-agent SQLite v2 service", () => {
 			databasePath: "sessions.sqlite",
 		});
 		const models = createModels();
-		let observedText: string[] = [];
+		const observedRequests: string[][] = [];
 		const faux = fauxProvider({
 			provider: "coding-agent-v2-plugin-sampling-faux",
 			models: [
@@ -70,8 +70,10 @@ describe("coding-agent SQLite v2 service", () => {
 		models.setProvider(faux.provider);
 		faux.setResponses([
 			(context) => {
-				observedText = context.messages.flatMap((message) =>
-					message.role === "user" && typeof message.content === "string" ? [message.content] : [],
+				observedRequests.push(
+					context.messages.flatMap((message) =>
+						message.role === "user" && typeof message.content === "string" ? [message.content] : [],
+					),
 				);
 				return fauxAssistantMessage("done");
 			},
@@ -103,7 +105,33 @@ describe("coding-agent SQLite v2 service", () => {
 				sessionId: created.sessionId,
 				payload: { text: "work" },
 			});
-			expect(observedText).toContain("plugin reminder");
+			expect(observedRequests[0]).toContain("plugin reminder");
+			await pluginRegistry.installPlugin({
+				name: "next-context",
+				marketplace: "local",
+				version: "1",
+				manifest: {
+					context: {
+						sampling: [{ id: "next", slot: "contextual_user", position: "supplement", text: "next reminder" }],
+					},
+				},
+			});
+			faux.appendResponses([
+				(context) => {
+					observedRequests.push(
+						context.messages.flatMap((message) =>
+							message.role === "user" && typeof message.content === "string" ? [message.content] : [],
+						),
+					);
+					return fauxAssistantMessage("done again");
+				},
+			]);
+			await created.runtime.run("plugin-sampling-turn-2", {
+				command: "turn/start",
+				sessionId: created.sessionId,
+				payload: { text: "work again" },
+			});
+			expect(observedRequests[1]).toContain("next reminder");
 		} finally {
 			await repository.close();
 			await env.cleanup();
