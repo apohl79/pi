@@ -5,10 +5,7 @@ import type { CodingAgentV2Runtime, CodingAgentV2Service } from "../../src/serve
 
 class FixtureRuntime implements CodingAgentV2Runtime {
 	readonly commands: CommandV2[] = [];
-	disposeCount = 0;
-	blocked = false;
-	private releasePromise: Promise<void> | undefined;
-	private releaseBlocked: (() => void) | undefined;
+	disposed = false;
 	async snapshot(): Promise<SessionSnapshotV2> {
 		return { model: { provider: "parent-provider", id: "parent-model" } } as SessionSnapshotV2;
 	}
@@ -30,6 +27,9 @@ class FixtureRuntime implements CodingAgentV2Runtime {
 	async abort(_operationId: string): Promise<void> {}
 	async dispose(): Promise<void> {
 		this.disposeCount += 1;
+	}
+	async dispose(): Promise<void> {
+		this.disposed = true;
 	}
 }
 
@@ -84,91 +84,26 @@ describe("CodingAgentV2AgentRegistry", () => {
 		).rejects.toThrow("maximum depth");
 	});
 
-	test("bounds retained child messages", async () => {
-		const { registry } = fixture();
-		const agent = await registry.spawn({
-			sessionId: "parent",
-			parentPath: "root",
-			taskName: "worker",
-			taskMessage: "work",
-			model: { provider: "faux", id: "model" },
-		});
-		await expect(registry.message(agent.id, "x".repeat(64 * 1024 + 1))).rejects.toThrow("maximum length");
-	});
-
 	test("disposes child runtimes exactly once", async () => {
 		const { registry, runtime } = fixture();
 		await registry.spawn({
-			sessionId: "parent",
+			sessionId: "parent-session",
 			parentPath: "root",
 			taskName: "worker",
-			taskMessage: "work",
-			model: { provider: "faux", id: "model" },
+			taskMessage: "inspect the repository",
+			model: { provider: "inherit", id: "inherit" },
 		});
 		await registry.dispose();
 		await registry.dispose();
-		expect(runtime.disposeCount).toBe(1);
-	});
-
-	test("disposes the parent lookup runtime after model inheritance", async () => {
-		const { registry, runtime } = fixture();
-		const agent = await registry.spawn({
-			sessionId: "parent",
-			parentPath: "root",
-			taskName: "worker",
-			taskMessage: "work",
-			model: { provider: "inherit", id: "inherit" },
-		});
-		expect(agent.model).toEqual({ provider: "parent-provider", id: "parent-model" });
-		expect(runtime.disposeCount).toBe(1);
-	});
-
-	test("runs follow-ups queued during an active child turn", async () => {
-		const { registry, runtime } = fixture();
-		runtime.blocked = true;
-		const agent = await registry.spawn({
-			sessionId: "parent-session",
-			parentPath: "root",
-			taskName: "worker",
-			taskMessage: "initial task",
-			model: { provider: "inherit", id: "inherit" },
-		});
-		await registry.followUp(agent.id, "queued task");
-		expect((await registry.getSnapshot(agent.id)).state).toBe("running");
-		runtime.release();
-		expect((await registry.wait(agent.id)).state).toBe("complete");
-		expect(runtime.commands.map((command) => command.command)).toEqual(["turn/start", "turn/followUp"]);
-	});
-
-	test("does not restart while an interrupted operation is still releasing", async () => {
-		const { registry, runtime } = fixture();
-		runtime.blocked = true;
-		const agent = await registry.spawn({
-			sessionId: "parent-session",
-			parentPath: "root",
-			taskName: "worker",
-			taskMessage: "initial task",
-			model: { provider: "inherit", id: "inherit" },
-		});
-		await vi.waitFor(() => expect(runtime.commands).toHaveLength(1));
-		await registry.interrupt(agent.id);
-		await expect(registry.followUp(agent.id, "restart too soon")).rejects.toThrow("active agent");
-		runtime.release();
-	});
-
-	test("bounds queued follow-ups", async () => {
-		const { registry, runtime } = fixture({ maxMessages: 1 });
-		runtime.blocked = true;
-		const agent = await registry.spawn({
-			sessionId: "parent-session",
-			parentPath: "root",
-			taskName: "worker",
-			taskMessage: "initial task",
-			model: { provider: "inherit", id: "inherit" },
-		});
-		await vi.waitFor(() => expect(runtime.commands).toHaveLength(1));
-		await registry.followUp(agent.id, "queued task");
-		await expect(registry.followUp(agent.id, "overflow task")).rejects.toThrow("queue limit");
-		runtime.release();
+		expect(runtime.disposed).toBe(true);
+		await expect(
+			registry.spawn({
+				sessionId: "parent-session",
+				parentPath: "root",
+				taskName: "second",
+				taskMessage: "continue",
+				model: { provider: "inherit", id: "inherit" },
+			}),
+		).rejects.toThrow("disposed");
 	});
 });

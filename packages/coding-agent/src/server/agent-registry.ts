@@ -40,8 +40,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private readonly maxMessages: number;
 	private readonly agents = new Map<string, ChildAgent>();
 	private readonly service: CodingAgentV2Service;
-	private spawnTail: Promise<void> = Promise.resolve();
-	private disposePromise?: Promise<void>;
+	private disposed = false;
 
 	constructor(service: CodingAgentV2Service, options: CodingAgentV2AgentRegistryOptions = {}) {
 		this.service = service;
@@ -52,19 +51,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
-		if (this.disposePromise) throw new Error("Agent registry is disposed");
-		const previous = this.spawnTail;
-		let release!: () => void;
-		this.spawnTail = new Promise<void>((resolve) => (release = resolve));
-		try {
-			await previous;
-			return await this.spawnUnlocked(request);
-		} finally {
-			release();
-		}
-	}
-
-	private async spawnUnlocked(request: V2AgentRequest): Promise<AgentSummary> {
+		if (this.disposed) throw new Error("Coding-agent child registry is disposed");
 		this.validateRequest(request);
 		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
 		if (!this.service.createSession) throw new Error("Coding-agent service does not support child sessions");
@@ -172,6 +159,15 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			}
 		}
 		return this.snapshot(agent);
+	}
+
+	async dispose(): Promise<void> {
+		if (this.disposed) return;
+		this.disposed = true;
+		const agents = [...this.agents.values()];
+		this.agents.clear();
+		await Promise.allSettled(agents.map((agent) => agent.runtime.dispose()));
+		for (const agent of agents) this.resolveWaiters(agent);
 	}
 
 	private async run(agent: ChildAgent, command: "turn/start" | "turn/followUp", text: string): Promise<void> {

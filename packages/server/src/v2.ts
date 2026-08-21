@@ -281,6 +281,7 @@ export class PiServerV2 {
 		await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state)));
 		await Promise.all(Array.from(this.runtimes, (runtime) => this.disposeRuntime(runtime)));
 		this.runtimes.clear();
+		await this.agents.dispose?.();
 		this.started = false;
 	}
 
