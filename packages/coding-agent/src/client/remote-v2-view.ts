@@ -6,12 +6,15 @@ import { stripAnsi } from "../utils/ansi.ts";
 export interface RemoteV2SessionViewOptions {
 	readonly maxTranscriptItems?: number;
 	readonly maxTranscriptCharacters?: number;
+	readonly maxAgentItems?: number;
 }
 
 const DEFAULT_MAX_TRANSCRIPT_ITEMS = 48;
 const DEFAULT_MAX_TRANSCRIPT_CHARACTERS = 6_000;
+const DEFAULT_MAX_AGENT_ITEMS = 12;
 const MAX_TRANSCRIPT_ITEMS = 10_000;
 const MAX_TRANSCRIPT_CHARACTERS = 1_000_000;
+const MAX_AGENT_ITEMS = 1_000;
 
 function normalizeLimit(value: number | undefined, fallback: number, maximum: number): number {
 	if (value === undefined || !Number.isFinite(value)) return fallback;
@@ -26,6 +29,7 @@ function normalizeOptions(options: RemoteV2SessionViewOptions): Required<RemoteV
 			DEFAULT_MAX_TRANSCRIPT_CHARACTERS,
 			MAX_TRANSCRIPT_CHARACTERS,
 		),
+		maxAgentItems: normalizeLimit(options.maxAgentItems, DEFAULT_MAX_AGENT_ITEMS, MAX_AGENT_ITEMS),
 	};
 }
 
@@ -66,6 +70,10 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	const lines = [
 		`Session ${sanitizeTranscriptText(snapshot.id)} · phase=${sanitizeTranscriptText(snapshot.phase)} · model=${model}${operation}`,
 	];
+	for (const agent of snapshot.agents.slice(0, normalizedOptions.maxAgentItems))
+		lines.push(
+			`Agent ${sanitizeTranscriptText(agent.path)} · ${sanitizeTranscriptText(agent.state)} · ${sanitizeTranscriptText(agent.model.provider)}/${sanitizeTranscriptText(agent.model.id)}`,
+		);
 	let characters = 0;
 	const transcript = maxItems === 0 ? [] : snapshot.transcript.slice(-maxItems);
 	for (const item of transcript) {
