@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, readFile, rename, stat as statFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, stat as statFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export interface V2BlobStat {
@@ -80,12 +80,19 @@ export class InMemoryV2BlobStore implements V2BlobStore {
 export class FileV2BlobStore implements V2BlobStore {
 	private readonly root: string;
 	private readonly maxBytes: number;
+	private readonly maxTotalBytes: number;
+	private readonly maxBlobCount: number;
 	private writeLock: Promise<void> = Promise.resolve();
 
-	constructor(root: string, options: { maxBytes?: number } = {}) {
+	constructor(root: string, options: { maxBytes?: number; maxTotalBytes?: number; maxBlobCount?: number } = {}) {
 		this.root = root;
 		this.maxBytes = options.maxBytes ?? 256 * 1024 * 1024;
+		this.maxTotalBytes = options.maxTotalBytes ?? 1024 * 1024 * 1024;
+		this.maxBlobCount = options.maxBlobCount ?? 10_000;
 		assertLimit(this.maxBytes, "maxBytes");
+		assertLimit(this.maxTotalBytes, "maxTotalBytes");
+		assertLimit(this.maxBlobCount, "maxBlobCount");
+		if (this.maxTotalBytes < this.maxBytes) throw new Error("maxTotalBytes must be at least maxBytes");
 	}
 
 	async put(data: Uint8Array, mimeType: string): Promise<V2BlobStat> {
@@ -97,6 +104,10 @@ export class FileV2BlobStore implements V2BlobStore {
 		const metadataPath = join(this.root, `${digest}.json`);
 		await this.withWriteLock(async () => {
 			if (!(await this.exists(dataPath))) {
+				const usage = await this.getUsage();
+				if (usage.blobCount >= this.maxBlobCount) throw new Error("Blob count exceeds maximum");
+				if (usage.totalBytes + data.byteLength > this.maxTotalBytes)
+					throw new Error(`Blob store exceeds maximum size of ${this.maxTotalBytes} bytes`);
 				const tempPath = join(this.root, `${digest}.${randomUUID()}.tmp`);
 				await writeFile(tempPath, data);
 				await rename(tempPath, dataPath);
@@ -135,6 +146,7 @@ export class FileV2BlobStore implements V2BlobStore {
 			throw new Error(`Blob metadata is invalid for ${digest}`);
 		assertMimeType(metadata.mimeType);
 		const file = await statFile(join(this.root, `${digest}.blob`));
+		if (file.size > this.maxBytes) throw new Error(`Blob exceeds maximum size of ${this.maxBytes} bytes`);
 		if (file.size !== metadata.size) throw new Error(`Blob metadata size mismatch for ${digest}`);
 		if (digestOf(await readFile(join(this.root, `${digest}.blob`))) !== digest)
 			throw new Error(`Blob digest mismatch for ${digest}`);
@@ -162,5 +174,11 @@ export class FileV2BlobStore implements V2BlobStore {
 		} catch {
 			return false;
 		}
+	}
+
+	private async getUsage(): Promise<{ readonly totalBytes: number; readonly blobCount: number }> {
+		const blobNames = (await readdir(this.root)).filter((name) => name.endsWith(".blob"));
+		const sizes = await Promise.all(blobNames.map(async (name) => (await statFile(join(this.root, name))).size));
+		return { totalBytes: sizes.reduce((total, size) => total + size, 0), blobCount: sizes.length };
 	}
 }
