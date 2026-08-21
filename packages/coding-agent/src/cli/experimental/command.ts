@@ -16,6 +16,7 @@ export type CommandOptionParseResult<TValue> =
 
 export interface CommandOption<TValue> {
 	readonly name: `--${string}`;
+	readonly takesValue?: boolean;
 	parse(value: string): CommandOptionParseResult<TValue>;
 }
 
@@ -175,6 +176,7 @@ export class Command<
 			}
 
 			let value = equals === -1 ? undefined : argument.slice(equals + 1);
+			if (option.takesValue === false) value = "true";
 			if (value === undefined) {
 				const next = argv[index + 1];
 				if (next !== undefined && !next.startsWith("-")) {

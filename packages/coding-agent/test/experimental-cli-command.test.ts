@@ -38,6 +38,36 @@ describe("experimental CLI commands", () => {
 		});
 	});
 
+	test("parses daemon lifecycle commands", () => {
+		expect(experimentalCli.parse(["server", "start", "--foreground", "--socket", "/tmp/pi.sock"])).toEqual({
+			ok: true,
+			command: { command: "server", action: "start", foreground: true, socket: "/tmp/pi.sock" },
+		});
+		expect(experimentalCli.parse(["server", "status"])).toEqual({
+			ok: true,
+			command: { command: "server", action: "status" },
+		});
+		expect(experimentalCli.parse(["server", "stop"])).toEqual({
+			ok: true,
+			command: { command: "server", action: "stop" },
+		});
+	});
+
+	test("parses attach and sessions commands", () => {
+		expect(experimentalCli.parse(["attach", "--connect", "unix:///tmp/pi.sock", "session-1"])).toEqual({
+			ok: true,
+			command: {
+				command: "attach",
+				sessionId: "session-1",
+				connect: { transport: "unix", path: "/tmp/pi.sock" },
+			},
+		});
+		expect(experimentalCli.parse(["sessions", "--connect", "unix:///tmp/pi.sock"])).toEqual({
+			ok: true,
+			command: { command: "sessions", connect: { transport: "unix", path: "/tmp/pi.sock" } },
+		});
+	});
+
 	test("leaves experimental-looking existing option values with the existing parser", () => {
 		expect(experimentalCli.parse(["--system-prompt", "--listen", "unix:///tmp/pi.sock"])).toMatchObject({
 			ok: true,
