@@ -598,8 +598,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				throw new Error("session/name/set requires name or null");
 			this.sessionName = payload.name === null ? undefined : payload.name;
 			this.nameSource = payload.name === null ? undefined : "explicit";
-			this.nameRevision += 1;
 			await harness.session.setName(this.sessionName);
+			this.nameRevision += 1;
 		} else if (runCommand === "session/name/generate") {
 			const generated =
 				typeof payload.name === "string" && payload.name.trim().length > 0
@@ -608,8 +608,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			if (this.nameSource !== "explicit") {
 				this.sessionName = generated;
 				this.nameSource = "generated";
+				await harness.session.setName(generated);
 				this.nameRevision += 1;
-				await harness.session.setName(this.sessionName);
 			}
 		} else if (runCommand === "session/name/auto/set") {
 			if (typeof payload.enabled !== "boolean") throw new Error("session/name/auto/set requires enabled");
