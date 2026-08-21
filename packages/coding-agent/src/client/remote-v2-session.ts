@@ -231,7 +231,12 @@ export class RemoteV2Session {
 		return request.then((response) => {
 			if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
 			if (!("accepted" in response)) throw new Error("Expected an accepted operation response");
-			this.#lifecycle = { status: "busy", operationId: response.accepted.operationId, command };
+			const terminalAlreadyObserved =
+				this.#lastEvent?.event === "operation_terminal" &&
+				this.#lastEvent.operationId === response.accepted.operationId;
+			this.#lifecycle = terminalAlreadyObserved
+				? { status: "ready" }
+				: { status: "busy", operationId: response.accepted.operationId, command };
 			this.#emit();
 			return response.accepted.operationId;
 		});
