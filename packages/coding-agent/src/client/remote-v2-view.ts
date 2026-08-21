@@ -7,8 +7,6 @@ export interface RemoteV2SessionViewOptions {
 	readonly maxTranscriptItems?: number;
 	readonly maxTranscriptCharacters?: number;
 	readonly maxAgentItems?: number;
-	readonly maxPlanItems?: number;
-	readonly maxGoalCharacters?: number;
 }
 
 /** Renderable TUI projection of one server-authoritative v2 session. */
@@ -22,8 +20,6 @@ export class RemoteV2SessionView implements Component {
 			maxTranscriptItems: options.maxTranscriptItems ?? 48,
 			maxTranscriptCharacters: options.maxTranscriptCharacters ?? 6_000,
 			maxAgentItems: options.maxAgentItems ?? 12,
-			maxPlanItems: options.maxPlanItems ?? 12,
-			maxGoalCharacters: options.maxGoalCharacters ?? 240,
 		};
 		this.#state = session.state;
 		this.#unsubscribe = session.subscribe((state) => {
@@ -56,25 +52,8 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 				? ""
 				: ` operation=${snapshot.activeOperation.operationId} (${snapshot.activeOperation.state})`;
 	const lines = [`Session ${snapshot.id} · phase=${snapshot.phase} · model=${model}${operation}`];
-	const cost = snapshot.usage.costUsd === undefined ? "unknown" : `$${snapshot.usage.costUsd.toFixed(6)}`;
-	lines.push(
-		`Usage input=${snapshot.usage.input} output=${snapshot.usage.output} cacheRead=${snapshot.usage.cacheRead} cost=${cost}`,
-	);
-	if (snapshot.persistence.recoveryState !== "clean") lines.push(`Persistence ${snapshot.persistence.recoveryState}`);
-	if (snapshot.diagnostics.degraded) lines.push("Diagnostics degraded");
 	for (const agent of snapshot.agents.slice(0, options.maxAgentItems ?? 12))
 		lines.push(`Agent ${agent.path} · ${agent.state} · ${agent.model.provider}/${agent.model.id}`);
-	if (snapshot.goal) {
-		const maxGoalCharacters = options.maxGoalCharacters ?? 240;
-		lines.push(`Goal ${snapshot.goal.status} · ${snapshot.goal.objective.slice(0, maxGoalCharacters)}`);
-	}
-	if (snapshot.plan) {
-		lines.push(`Plan v${snapshot.plan.version}`);
-		for (const item of snapshot.plan.items.slice(0, options.maxPlanItems ?? 12))
-			lines.push(`Plan ${item.status} · ${item.step}`);
-	}
-	if (snapshot.queues.pendingInputRequestId !== undefined)
-		lines.push(`Input request pending · ${snapshot.queues.pendingInputRequestId}`);
 	let characters = 0;
 	const transcript = maxItems === 0 ? [] : snapshot.transcript.slice(-maxItems);
 	for (const item of transcript) {
