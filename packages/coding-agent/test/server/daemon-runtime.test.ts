@@ -562,4 +562,57 @@ describe("coding-agent daemon runtime", () => {
 			await second.close();
 		}
 	});
+
+	test("restores content-addressed blobs after a production daemon restart", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-blobs-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-blobs-faux",
+			models: [{ id: "coding-agent-daemon-blobs-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const createRuntime = () =>
+			createConfiguredCodingAgentDaemonRuntime({
+				agentDir: directory,
+				cwd: directory,
+				models,
+				model: faux.getModel(),
+				socketPath: join(directory, "server.sock"),
+				harness: { tools: [], activeToolNames: [] },
+				write: () => {},
+			});
+		const first = await createRuntime();
+		const firstClient = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		let digest: string;
+		try {
+			await first.daemon.start();
+			await firstClient.connect();
+			const put = await firstClient.request({
+				command: "blob/put",
+				payload: { data: "persistent blob", encoding: "utf8", mimeType: "text/plain" },
+			});
+			expect(put).toMatchObject({ ok: true, result: { blob: { digest: expect.any(String), size: 15 } } });
+			if (!put.ok || !("result" in put)) throw new Error("Blob put failed");
+			digest = (put.result as { blob: { digest: string } }).blob.digest;
+		} finally {
+			firstClient.dispose();
+			await first.close();
+		}
+		const second = await createRuntime();
+		const secondClient = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await second.daemon.start();
+			await secondClient.connect();
+			const read = await secondClient.request({ command: "blob/read", payload: { digest } });
+			expect(read).toMatchObject({ ok: true, result: { digest, encoding: "base64", data: "cGVyc2lzdGVudCBibG9i" } });
+		} finally {
+			secondClient.dispose();
+			await second.close();
+		}
+	});
 });
