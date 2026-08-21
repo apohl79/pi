@@ -46,7 +46,6 @@ export async function createCodingAgentDaemonRuntime(
 ): Promise<CodingAgentDaemonRuntime> {
 	const service = await createCodingAgentV2SqliteService(options);
 	const agents = options.agents ?? (service.createSession ? createCodingAgentV2AgentRegistry(service) : undefined);
-	const ownsAgents = options.agents === undefined && agents !== undefined && "dispose" in agents;
 	const daemon = new ServerDaemon({
 		service,
 		socketPath: options.socketPath,
