@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
-import { AdapterV2WebService } from "@earendil-works/pi-server";
+import { AdapterV2WebService, InMemoryV2PluginRegistry } from "@earendil-works/pi-server";
 import { afterEach, describe, expect, test } from "vitest";
 import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemon-runtime.ts";
 
@@ -402,6 +402,43 @@ describe("coding-agent daemon runtime", () => {
 				ok: true,
 				result: { file: { path: await realpath(join(directory, "host-note.txt")) } },
 			});
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("shares configured plugin state with the production daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-plugins-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-plugins-faux",
+			models: [
+				{ id: "coding-agent-daemon-plugins-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		const plugins = new InMemoryV2PluginRegistry();
+		await plugins.addMarketplace("local", "file:///tmp/local-marketplace");
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			pluginRegistry: plugins,
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const response = await client.request({ command: "marketplace/list" });
+			expect(response).toMatchObject({ ok: true, result: { marketplaces: [{ name: "local" }] } });
 		} finally {
 			client.dispose();
 			await runtime.close();

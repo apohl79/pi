@@ -7,6 +7,7 @@ import {
 	InMemoryV2PlanRegistry,
 	JsonlForensicRecorder,
 	JsonlV2PlanRegistry,
+	JsonV2PluginRegistry,
 	LocalDiagnosticCapsuleStore,
 	LocalV2FileReferenceService,
 	NodeV2ProcessRegistry,
@@ -15,6 +16,7 @@ import {
 	type V2FileReferenceService,
 	type V2ImageService,
 	type V2InputRegistry,
+	type V2PluginRegistry,
 	type V2ProcessRegistry,
 	type V2WebService,
 } from "@earendil-works/pi-server";
@@ -41,6 +43,7 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	web?: V2WebService;
 	images?: V2ImageService;
 	files?: V2FileReferenceService;
+	pluginRegistry?: V2PluginRegistry;
 	diagnostics?: ServerDaemonOptions["diagnostics"];
 	createServer?: ServerDaemonOptions["createServer"];
 	write(value: unknown): void;
@@ -105,6 +108,7 @@ export async function createCodingAgentDaemonRuntime(
 		...(options.web === undefined ? {} : { web: options.web }),
 		...(options.images === undefined ? {} : { images: options.images }),
 		...(options.files === undefined ? {} : { files: options.files }),
+		...(options.pluginRegistry === undefined ? {} : { plugins: options.pluginRegistry }),
 		plans,
 		diagnostics,
 		...(diagnosticContent === undefined ? {} : { diagnosticContent }),
@@ -157,6 +161,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			files:
 				options.files ??
 				new LocalV2FileReferenceService({ projectRoot: options.cwd, cwd: options.cwd, allowAbsolute: true }),
+			pluginRegistry: options.pluginRegistry ?? new JsonV2PluginRegistry(join(options.agentDir, "plugins.json")),
 			planStorePath: options.planStorePath ?? join(options.agentDir, "plans.jsonl"),
 			diagnosticStorePath: options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"),
 			diagnosticKeyPath: options.diagnosticKeyPath ?? join(options.agentDir, "diagnostic-keys.json"),
