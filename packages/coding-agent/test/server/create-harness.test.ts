@@ -177,6 +177,37 @@ describe("coding-agent Harness construction", () => {
 		}
 	});
 
+	test("exposes view_image through the configured image boundary", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "image-tool-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: "/workspace" });
+		const created = await createCodingAgentHarness({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+			viewImage: async (reference) => ({ digest: "sha256:image", mimeType: "image/png", size: 3, reference }),
+		});
+		try {
+			const tool = (await created.harness.getTools()).find((candidate) => candidate.name === "view_image");
+			if (!tool) throw new Error("Expected view_image tool");
+			const result = await tool.execute("image-call", { reference: "project:image.png" });
+			expect(result.content).toEqual([
+				{
+					type: "text",
+					text: JSON.stringify({
+						digest: "sha256:image",
+						mimeType: "image/png",
+						size: 3,
+						reference: "project:image.png",
+					}),
+				},
+			]);
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("preserves coding-agent prompt snippets and guideline order", () => {
 		const prompt = buildCodingAgentHarnessSystemPrompt({
 			cwd: "/workspace",

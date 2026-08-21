@@ -57,6 +57,13 @@ export interface CodingAgentWebResult {
 	blobDigest?: string;
 }
 
+export interface CodingAgentImageView {
+	digest: string;
+	mimeType: string;
+	size: number;
+	reference: string;
+}
+
 const requestUserInputSchema = Type.Object({
 	questions: Type.Array(
 		Type.Object({
@@ -86,6 +93,8 @@ const webSchema = Type.Object({
 	refId: Type.Optional(Type.String()),
 	pattern: Type.Optional(Type.String()),
 });
+
+const viewImageSchema = Type.Object({ reference: Type.String({ minLength: 1 }) });
 
 export interface CodingAgentHarnessTool extends HarnessTool {
 	promptSnippet?: string;
@@ -120,6 +129,7 @@ export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOption
 		signal: AbortSignal | undefined,
 	) => Promise<CodingAgentInputResponse>;
 	web?: (request: CodingAgentWebRequest) => Promise<readonly CodingAgentWebResult[]>;
+	viewImage?: (reference: string) => Promise<CodingAgentImageView>;
 }
 
 export interface BuildCodingAgentHarnessSystemPromptOptions {
@@ -254,6 +264,19 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 				execute: async (_toolCallId, input) => {
 					const results = await web(input as Static<typeof webSchema>);
 					return { content: [{ type: "text", text: JSON.stringify(results) }], details: { results } };
+				},
+			});
+		}
+		if (options.viewImage) {
+			const viewImage = options.viewImage;
+			tools.push({
+				name: "view_image",
+				label: "view_image",
+				description: "Inspect a local image through the configured server image service.",
+				parameters: viewImageSchema,
+				execute: async (_toolCallId, input) => {
+					const image = await viewImage((input as Static<typeof viewImageSchema>).reference);
+					return { content: [{ type: "text", text: JSON.stringify(image) }], details: { image } };
 				},
 			});
 		}
