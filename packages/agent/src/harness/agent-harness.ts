@@ -1200,14 +1200,35 @@ export class AgentHarness implements AgentLane {
 		return this.watchBus.watch(() => snapshot);
 	}
 
-	async lane(_name: string): Promise<AgentLane | undefined> {
-		return this.unavailable("lane");
+	async lane(name: string): Promise<AgentLane | undefined> {
+		if (this.closed) throw new HarnessClosed();
+		const lane = (await this.durableSession.getLanes()).find((candidate) => candidate.lane === name);
+		return lane?.lane === "main" ? this : undefined;
 	}
 	async createLane(_name: string, _at: string | null): Promise<CreateLaneResult> {
 		return this.unavailable("createLane");
 	}
 	async lanes(): Promise<LaneInfo[]> {
-		return this.unavailable("lanes");
+		if (this.closed) throw new HarnessClosed();
+		const lanes = await this.durableSession.getLanes();
+		return Promise.all(
+			lanes.map(async (lane) => {
+				const operation = (await this.durableSession.findOpenOperations(lane.lane, { limit: 1 }))[0];
+				return {
+					name: lane.lane,
+					leafId: lane.leafId,
+					operation: operation
+						? {
+								id: operation.id,
+								kind: operation.intent.kind,
+								status: this.suspendedOperations.some((item) => item.id === operation.id)
+									? "suspended"
+									: "running",
+							}
+						: null,
+				};
+			}),
+		);
 	}
 	async getTools(): Promise<HarnessTool[]> {
 		return [...this.tools];
