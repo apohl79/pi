@@ -687,6 +687,7 @@ export class AgentHarness implements AgentLane {
 			intent: { kind: "compaction", resultEntryId, customInstructions: _options?.customInstructions },
 		});
 		try {
+			await this.park({ kind: "stream_assistant", step: "compaction", attempt: 1 });
 			const result = await compact(
 				preparation.value,
 				this.models,
@@ -818,6 +819,7 @@ export class AgentHarness implements AgentLane {
 								commonAncestorId: null,
 							}
 						: await collectEntriesForBranchSummary(this.durableSession, oldLeafId, targetId);
+				await this.park({ kind: "stream_assistant", step: "branch_summary", attempt: 1 });
 				const generated = await generateBranchSummary(collected.entries, {
 					models: this.models,
 					model: this.model,
