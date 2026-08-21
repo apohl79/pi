@@ -27,6 +27,7 @@ export interface V2ProcessSnapshot extends V2ProcessOutput {
 
 export interface V2ProcessRegistry {
 	start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot>;
+	getSnapshot(processId: string): Promise<V2ProcessSnapshot>;
 	write(processId: string, input: string): Promise<V2ProcessOutput>;
 	read(processId: string, cursor: number): Promise<V2ProcessOutput>;
 	wait(processId: string): Promise<V2ProcessSnapshot>;
@@ -69,6 +70,10 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 		if (process.state !== "running") throw new Error(`Process ${processId} is not running`);
 		this.append(process, input);
 		return this.read(processId, process.totalBytes - input.length);
+	}
+
+	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
+		return Promise.resolve(this.snapshot(this.get(processId)));
 	}
 
 	async read(processId: string, cursor: number): Promise<V2ProcessOutput> {
@@ -175,6 +180,10 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		const cursor = process.totalBytes;
 		process.child.stdin.write(input);
 		return this.read(processId, cursor);
+	}
+
+	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
+		return Promise.resolve(this.snapshot(this.get(processId)));
 	}
 
 	async read(processId: string, cursor: number): Promise<V2ProcessOutput> {

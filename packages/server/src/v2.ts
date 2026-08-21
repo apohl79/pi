@@ -468,6 +468,7 @@ export class PiServerV2 {
 
 	private async startProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("process/start requires sessionId");
+		this.requireControl(state, command.sessionId);
 		const payload = objectPayload(command);
 		if (typeof payload.command !== "string") throw new Error("process/start requires command");
 		const process = await this.processes.start({
@@ -485,6 +486,7 @@ export class PiServerV2 {
 	private async writeProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const processId = processIdFrom(command, payload);
+		this.requireControl(state, (await this.processes.getSnapshot(processId)).sessionId);
 		if (typeof payload.input !== "string") throw new Error("process/write requires input");
 		await this.sendResponse(state, id, {
 			command: command.command,
@@ -512,6 +514,7 @@ export class PiServerV2 {
 
 	private async terminateProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
+		this.requireControl(state, (await this.processes.getSnapshot(processIdFrom(command, payload))).sessionId);
 		await this.sendResponse(state, id, {
 			command: command.command,
 			process: await this.processes.terminate(processIdFrom(command, payload)),
