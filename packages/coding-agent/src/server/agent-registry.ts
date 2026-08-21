@@ -10,6 +10,7 @@ interface ChildAgent {
 	readonly runtime: CodingAgentV2Runtime;
 	state: AgentSummary["state"];
 	messages: string[];
+	followUps: string[];
 	waiters: Array<() => void>;
 }
 
@@ -60,6 +61,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			runtime: created.runtime,
 			state: "running",
 			messages: [request.taskMessage],
+			followUps: [],
 			waiters: [],
 		};
 		this.agents.set(summary.id, agent);
@@ -103,7 +105,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		if (agent.state === "complete" || agent.state === "interrupted" || agent.state === "failed") {
 			agent.state = "running";
 			void this.run(agent, "turn/followUp", message);
-		}
+		} else agent.followUps.push(message);
 		return this.snapshot(agent);
 	}
 
@@ -145,10 +147,15 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				payload: { text },
 			});
 			agent.state = "complete";
+			const next = agent.followUps.shift();
+			if (next !== undefined) {
+				agent.state = "running";
+				void this.run(agent, "turn/followUp", next);
+			}
 		} catch {
 			agent.state = "failed";
 		} finally {
-			this.resolveWaiters(agent);
+			if (agent.state !== "running") this.resolveWaiters(agent);
 		}
 	}
 
