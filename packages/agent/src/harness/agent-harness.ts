@@ -497,6 +497,7 @@ export class AgentHarness implements AgentLane {
 	private steeringMode: QueueMode;
 	private followUpMode: QueueMode;
 	private suspendedOperations: SuspendedOperation[] = [];
+	private readonly lifecycle: LifecycleRegistry;
 	private closed = false;
 	private activeOperation:
 		| {
@@ -654,7 +655,6 @@ export class AgentHarness implements AgentLane {
 		};
 		await this.durableSession.appendRecord(started);
 		this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
-		this.watchBus.emit({ type: "run_start", lane: "main", runId });
 		try {
 			await this.lifecycle.runHook("before_run", { operationId: runId, prompts: durableClone(prompts) });
 			const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
@@ -723,13 +723,6 @@ export class AgentHarness implements AgentLane {
 			});
 			await this.lifecycle.runHook("before_run_end", { operationId: runId, outcome: "completed" });
 			this.lifecycle.emit("operation_finished", { operationId: runId, outcome: "completed" });
-			this.watchBus.emit({
-				type: "run_end",
-				lane: "main",
-				runId,
-				outcome: "completed",
-				leafId: (await this.durableSession.getLeafId()) ?? "",
-			});
 			return ResultValue.ok({
 				runId,
 				kind: "completed",
@@ -1299,6 +1292,7 @@ export class AgentHarness implements AgentLane {
 		const summarize = _options?.summarize === true;
 		const runId = this.durableSession.idGenerator.next();
 		const summaryEntryId = summarize ? this.durableSession.idGenerator.next() : undefined;
+		await this.lifecycle.runHook("before_navigation", { operationId: runId, targetId, summarize });
 		await this.durableSession.appendRecord({
 			type: "operation_started",
 			id: runId,
