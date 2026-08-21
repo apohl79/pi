@@ -1,11 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export interface V2BlobStat {
 	readonly digest: string;
 	readonly mimeType: string;
 	readonly size: number;
+}
+
+export interface V2BlobIntegrityReport {
+	readonly ok: boolean;
+	readonly blobs: number;
+	readonly bytes: number;
+	readonly errors: readonly string[];
 }
 
 export interface V2BlobStore {
@@ -89,6 +96,35 @@ export class FileV2BlobStore implements V2BlobStore {
 		const metadata = JSON.parse(await readFile(join(this.root, `${digest}.json`), "utf8")) as V2BlobStat;
 		if (metadata.digest !== digest) throw new Error(`Blob metadata digest mismatch for ${digest}`);
 		return metadata;
+	}
+
+	/** Verifies bounded on-disk blob metadata and content-addressed bytes without repairing them. */
+	async verify(maxEntries = 1024): Promise<V2BlobIntegrityReport> {
+		let entries: string[];
+		try {
+			entries = (await readdir(this.root)).filter((entry) => entry.endsWith(".json"));
+		} catch (error) {
+			const missing = error instanceof Error && "code" in error && error.code === "ENOENT";
+			return missing
+				? { ok: true, blobs: 0, bytes: 0, errors: [] }
+				: { ok: false, blobs: 0, bytes: 0, errors: [error instanceof Error ? error.name : "unknown"] };
+		}
+		const errors: string[] = [];
+		if (entries.length > maxEntries) errors.push(`entry_limit:${entries.length}`);
+		let bytes = 0;
+		for (const metadataFile of entries.slice(0, maxEntries)) {
+			const digest = metadataFile.slice(0, -5);
+			try {
+				const metadata = await this.stat(digest);
+				const data = await this.read(digest);
+				if (metadata.size !== data.byteLength || digestOf(data) !== digest)
+					errors.push(`content_mismatch:${digest}`);
+				bytes += data.byteLength;
+			} catch (error) {
+				errors.push(`${digest}:${error instanceof Error ? error.name : "unknown"}`);
+			}
+		}
+		return { ok: errors.length === 0, blobs: entries.length, bytes, errors };
 	}
 
 	private async exists(path: string): Promise<boolean> {

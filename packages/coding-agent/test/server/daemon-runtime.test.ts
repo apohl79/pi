@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GoalContinuationScheduler } from "@earendil-works/pi-agent-core";
@@ -618,6 +619,45 @@ describe("coding-agent daemon runtime", () => {
 			});
 			await runtime.cli.runDiagnostics({ command: "diagnostics", action: "verify", bundle: bundlePath });
 			expect(output.at(-1)).toEqual({ valid: true });
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	test("reports corrupted configured blobs through the production doctor", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-blob-doctor-"));
+		directories.push(directory);
+		const digest = createHash("sha256").update("hello").digest("hex");
+		const blobDirectory = join(directory, "blobs");
+		await mkdir(blobDirectory, { recursive: true });
+		await writeFile(join(blobDirectory, `${digest}.blob`), "corrupt");
+		await writeFile(
+			join(blobDirectory, `${digest}.json`),
+			JSON.stringify({ digest, mimeType: "text/plain", size: 5 }),
+		);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-blob-doctor-faux",
+			models: [
+				{ id: "coding-agent-daemon-blob-doctor-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		const output: unknown[] = [];
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: (value) => output.push(value),
+		});
+		try {
+			await runtime.daemon.start();
+			await runtime.cli.runDiagnostics({ command: "diagnostics", action: "doctor" });
+			const result = output.at(-1) as { checks: Array<{ name: string; ok: boolean }> };
+			expect(result.checks.find((check) => check.name === "blobs")).toMatchObject({ ok: false });
 		} finally {
 			await runtime.close();
 		}

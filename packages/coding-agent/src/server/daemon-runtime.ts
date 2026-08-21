@@ -1,4 +1,3 @@
-import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { PiClientV2 } from "@earendil-works/pi-client";
@@ -145,6 +144,7 @@ export async function createCodingAgentDaemonRuntime(
 		...(options.blobs === undefined ? {} : { blobs: options.blobs }),
 		plans,
 		diagnostics,
+		...(options.integrity === undefined ? {} : { integrity: options.integrity }),
 		...(diagnosticContent === undefined ? {} : { diagnosticContent }),
 		...(options.createServer === undefined ? {} : { createServer: options.createServer }),
 	});
@@ -251,12 +251,18 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 					});
 				}
 				try {
-					const files = await readdir(options.blobStorePath ?? join(options.agentDir, "blobs"));
-					checks.push({
-						name: "blobs",
-						ok: true,
-						details: { metadataFiles: files.filter((file) => file.endsWith(".json")).length },
-					});
+					if (blobs instanceof FileV2BlobStore) {
+						const report = await blobs.verify();
+						checks.push({
+							name: "blobs",
+							ok: report.ok,
+							details: {
+								metadataFiles: report.blobs,
+								bytes: report.bytes,
+								errors: [...report.errors],
+							},
+						});
+					} else checks.push({ name: "blobs", ok: true, details: { metadataFiles: 0 } });
 				} catch (error) {
 					const missing = error instanceof Error && "code" in error && error.code === "ENOENT";
 					checks.push({ name: "blobs", ok: missing, details: { metadataFiles: 0, missing } });
