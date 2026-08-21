@@ -121,7 +121,8 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 		await options.onAttach(handle);
 	};
 	const runPi = async (command: PiCommand): Promise<void> => {
-		if (!command.options.print) throw new Error("Server-default runtime currently supports print mode only");
+		if (!command.options.print && command.options.mode !== "json")
+			throw new Error("Server-default runtime currently supports print and JSON modes only");
 		const prompt = command.options.messages.join(" ").trim();
 		if (!prompt) throw new Error("Server-default print mode requires a prompt");
 		await options.daemon.start();

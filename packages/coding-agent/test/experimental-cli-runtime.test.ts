@@ -198,6 +198,23 @@ describe("experimental CLI runtime", () => {
 		runtime.close();
 	});
 
+	test("returns the authoritative snapshot for JSON mode", async () => {
+		const server = clientFactory();
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: (value) => output.push(value),
+		});
+		await runtime.runPi({
+			command: "pi",
+			options: { mode: "json", messages: ["hello"], fileArgs: [], unknownFlags: new Map(), diagnostics: [] },
+		});
+		expect(output).toMatchObject([{ id: "session-1", phase: "idle", revision: 2 }]);
+		runtime.close();
+	});
+
 	test("main constructs and closes the runtime for experimental commands", async () => {
 		const controller = daemon();
 		const server = clientFactory();
