@@ -233,6 +233,10 @@ export class PiServerV2 {
 					this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
 			await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state, undefined, true)));
 			await this.disposeActiveOperationRuntimes();
+			this.connections.clear();
+			this.started = false;
+			this.closing = false;
+			this.startPromise = undefined;
 			throw error;
 		}
 	}
