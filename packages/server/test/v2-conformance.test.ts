@@ -88,6 +88,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	runEntered = false;
 	disposed = false;
 	disposeCount = 0;
+	fail = false;
 	private current: SessionSnapshotV2;
 
 	constructor(id: string) {
@@ -106,6 +107,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 
 	async run(operationId: string, _command: CommandV2): Promise<void> {
 		this.commands.push(structuredClone(_command));
+		if (this.fail) throw new Error("runtime failed");
 		this.runEntered = true;
 		await this.release.promise;
 		this.started.resolve(undefined);
@@ -507,6 +509,30 @@ describe("PiServer v2 operation acceptance", () => {
 		);
 		expect(terminal).toMatchObject({ type: "event", sessionId: "session-1", payload: { state: "complete" } });
 		await secondClient.close();
+	});
+
+	test("includes the authoritative snapshot in a failed terminal event", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-failure-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const runtime = service.sessions.get("session-1")!;
+		runtime.fail = true;
+
+		await client.request({ command: "turn/start", sessionId: "session-1", payload: { text: "hello" } });
+		const terminal = await client.next(
+			(message) => message.type === "event" && message.event === "operation_terminal",
+		);
+		expect(terminal).toMatchObject({
+			type: "event",
+			payload: { state: "failed", error: "runtime failed", snapshot: { id: "session-1", phase: "idle" } },
+		});
+		await client.close();
 	});
 
 	test("disposes detached runtimes when the server closes", async () => {
