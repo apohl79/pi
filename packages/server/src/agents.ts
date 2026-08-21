@@ -25,6 +25,7 @@ export interface V2AgentRegistry {
 	message(agentId: string, message: string): Promise<void>;
 	followUp(agentId: string, message: string): Promise<AgentSummary>;
 	interrupt(agentId: string): Promise<AgentSummary>;
+	complete(agentId: string): Promise<AgentSummary>;
 }
 
 interface AgentState {
@@ -37,6 +38,7 @@ interface AgentState {
 
 const DEFAULT_MAX_MESSAGE_LENGTH = 64 * 1024;
 const DEFAULT_MAX_MESSAGES = 1024;
+const DEFAULT_MAX_TOTAL_AGENTS = 1024;
 
 const validateLimit = (name: string, value: number, minimum: number): number => {
 	if (!Number.isFinite(value) || !Number.isInteger(value) || value < minimum)
@@ -49,11 +51,18 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 	private readonly maxActive: number;
 	private readonly maxMessageLength: number;
 	private readonly maxMessages: number;
+	private readonly maxTotalAgents: number;
 	private readonly agents = new Map<string, AgentState>();
 	private readonly waiters = new Map<string, Set<() => void>>();
 
 	constructor(
-		options: { maxDepth?: number; maxActive?: number; maxMessageLength?: number; maxMessages?: number } = {},
+		options: {
+			maxDepth?: number;
+			maxActive?: number;
+			maxMessageLength?: number;
+			maxMessages?: number;
+			maxTotalAgents?: number;
+		} = {},
 	) {
 		this.maxDepth = options.maxDepth === undefined ? 1 : validateLimit("maxDepth", options.maxDepth, 0);
 		this.maxActive = options.maxActive === undefined ? 8 : validateLimit("maxActive", options.maxActive, 0);
@@ -65,6 +74,10 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 			options.maxMessages === undefined
 				? DEFAULT_MAX_MESSAGES
 				: validateLimit("maxMessages", options.maxMessages, 1);
+		this.maxTotalAgents =
+			options.maxTotalAgents === undefined
+				? DEFAULT_MAX_TOTAL_AGENTS
+				: validateLimit("maxTotalAgents", options.maxTotalAgents, 1);
 	}
 
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
@@ -79,6 +92,9 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 			[...this.agents.values()].some((agent) => agent.sessionId === request.sessionId && agent.summary.path === path)
 		)
 			throw new Error(`Agent path ${path} already exists`);
+		this.cleanupTerminalAgents();
+		if (this.agents.size >= this.maxTotalAgents)
+			throw new Error(`Agent total limit ${this.maxTotalAgents} exceeded`);
 		const summary: AgentSummary = {
 			id: randomUUID(),
 			path,
@@ -125,10 +141,10 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	async message(agentId: string, message: string): Promise<void> {
-		this.validateMessage(message);
 		const agent = this.get(agentId);
-		if (agent.messages.length >= this.maxMessages) agent.messages.shift();
-		agent.messages.push(message);
+		if (agent.state === "complete" || agent.state === "interrupted")
+			throw new Error(`Cannot message terminal agent ${agentId}`);
+		this.appendMessage(agent, message);
 	}
 
 	async followUp(agentId: string, message: string): Promise<AgentSummary> {
@@ -138,7 +154,7 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 			this.activeCount() >= this.maxActive
 		)
 			throw new Error(`Agent active limit ${this.maxActive} exceeded`);
-		await this.message(agentId, message);
+		this.appendMessage(agent, message);
 		if (agent.state === "complete" || agent.state === "interrupted" || agent.state === "awaitingInput")
 			this.setState(agent, "running");
 		return this.snapshot(agent);
@@ -158,6 +174,23 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 
 	private activeCount(): number {
 		return [...this.agents.values()].filter((agent) => agent.state === "running").length;
+	}
+
+	private appendMessage(agent: AgentState, message: string): void {
+		this.validateMessage(message);
+		if (agent.messages.length >= this.maxMessages) agent.messages.shift();
+		agent.messages.push(message);
+	}
+
+	private cleanupTerminalAgents(): void {
+		while (this.agents.size >= this.maxTotalAgents) {
+			const terminalId = [...this.agents].find(
+				([, agent]) => agent.state === "complete" || agent.state === "interrupted",
+			)?.[0];
+			if (terminalId === undefined) return;
+			this.agents.delete(terminalId);
+			this.waiters.delete(terminalId);
+		}
 	}
 
 	private snapshot(agent: AgentState): AgentSummary {
