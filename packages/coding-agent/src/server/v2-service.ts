@@ -1,5 +1,5 @@
-import type { AgentHarness, AgentMessage, Entry, GoalManager, LaneRecord } from "@earendil-works/pi-agent-core";
-import type { Model, Models, ThinkingLevel, Usage } from "@earendil-works/pi-ai";
+import type { AgentHarness, GoalManager } from "@earendil-works/pi-agent-core";
+import type { Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
 import type {
 	CommandNameV2,
 	CommandV2,
@@ -257,6 +257,11 @@ export interface CodingAgentV2SessionStore {
 	delete(sessionId: string): Promise<void>;
 }
 
+export interface CodingAgentV2ServiceOptions {
+	/** Provider-local fast model used only for side-band automatic naming. */
+	fastModel?: Model<string>;
+}
+
 export interface CodingAgentV2Runtime {
 	snapshot(): Promise<SessionSnapshotV2>;
 	accept(operationId: string): Promise<OperationAccepted>;
@@ -384,13 +389,87 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	private executionTail: Promise<void> = Promise.resolve();
 	private readonly onDispose?: () => void;
 
-	constructor(definition: CodingAgentV2SessionDefinition, models: Models, model: Model<string>, onDispose?: () => void) {
+	private readonly fastModel: Model<string> | undefined;
+
+	constructor(
+		definition: CodingAgentV2SessionDefinition,
+		models: Models,
+		model: Model<string>,
+		options?: CodingAgentV2ServiceOptions,
+	) {
 		this.definition = definition;
 		this.models = models;
 		this.model = model;
 		this.sessionName = definition.metadata.sessionName;
 		this.nameSource = definition.metadata.nameSource;
-		this.onDispose = onDispose;
+		this.fastModel = options?.fastModel;
+	}
+
+	private async generateName(): Promise<void> {
+		if (!this.fastModel) return;
+		const initialSource = this.nameSource;
+		if (initialSource === "explicit") return;
+		const initialRevision = this.nameRevision;
+		const initialName = await this.definition.harness.session.getName();
+		if (initialName !== undefined) return;
+		const entries = await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" });
+		const transcript = entries
+			.filter((entry): entry is Extract<typeof entry, { type: "message" }> => entry.type === "message")
+			.map((entry) => {
+				if (!("content" in entry.message) || !Array.isArray(entry.message.content)) return undefined;
+				const text = entry.message.content
+					.filter(
+						(content): content is { type: "text"; text: string } =>
+							typeof content === "object" &&
+							content !== null &&
+							content.type === "text" &&
+							typeof content.text === "string",
+					)
+					.map((content) => content.text)
+					.join(" ")
+					.trim();
+				return text.length === 0 ? undefined : `${entry.message.role}: ${text}`;
+			})
+			.filter((line): line is string => line !== undefined)
+			.join("\n")
+			.slice(-4000);
+		if (transcript.length === 0) return;
+		const response = await this.models.completeSimple(this.fastModel, {
+			messages: [
+				{
+					role: "user",
+					content: `Create a concise session title (3-8 words). Return only the title.\n\n${transcript}`,
+					timestamp: Date.now(),
+				},
+			] satisfies Message[],
+		});
+		const generated = response.content
+			.filter((content): content is { type: "text"; text: string } => content.type === "text")
+			.map((content) => content.text)
+			.join(" ")
+			.replace(/[\r\n]+/g, " ")
+			.replace(/^["'`]+|["'`]+$/g, "")
+			.trim()
+			.slice(0, 120);
+		if (generated.length === 0 || this.nameRevision !== initialRevision || this.nameSource !== initialSource) return;
+		if ((await this.definition.harness.session.getName()) !== initialName) return;
+		await this.definition.harness.session.setName(generated);
+		await this.definition.harness.recordUsage(
+			{
+				input: response.usage.input,
+				output: response.usage.output,
+				cacheRead: response.usage.cacheRead,
+				cacheWrite: response.usage.cacheWrite,
+				totalTokens: response.usage.totalTokens,
+				cost: { ...response.usage.cost },
+				...(response.usage.cacheWrite1h === undefined ? {} : { cacheWrite1h: response.usage.cacheWrite1h }),
+				...(response.usage.reasoning === undefined ? {} : { reasoning: response.usage.reasoning }),
+			},
+			{ entryId: entries.at(-1)?.id, details: "purpose:sessionName" },
+		);
+		this.sessionName = generated;
+		this.nameSource = "generated";
+		this.nameRevision += 1;
 	}
 
 	async snapshot(): Promise<SessionSnapshotV2> {
@@ -591,8 +670,10 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
-		if (runCommand === "turn/start") await harness.prompt(text);
-		else if (runCommand === "turn/resume") {
+		if (runCommand === "turn/start") {
+			await harness.prompt(text);
+			if (this.autoName) await this.generateName();
+		} else if (runCommand === "turn/resume") {
 			const result = await harness.resume();
 			if (!result.ok) throw new Error(result.error.message);
 			if (result.value.kind === "failed") throw new Error(result.value.error.message);
@@ -651,15 +732,15 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.nameRevision += 1;
 		} else if (runCommand === "session/name/generate") {
 			const generated =
-				typeof payload.name === "string" && payload.name.trim().length > 0
-					? normalizeGeneratedName(payload.name)
-					: "Untitled session";
-			if (generated && this.nameSource !== "explicit") {
-				await harness.session.setName(generated);
-				this.sessionName = generated;
-				this.nameSource = "generated";
-				await harness.session.setName(generated);
-				this.nameRevision += 1;
+				typeof payload.name === "string" && payload.name.trim().length > 0 ? payload.name.trim() : undefined;
+			if (generated === undefined) await this.generateName();
+			if (this.nameSource !== "explicit") {
+				if (generated !== undefined) {
+					this.sessionName = generated;
+					this.nameSource = "generated";
+					await harness.session.setName(generated);
+					this.nameRevision += 1;
+				}
 			}
 		} else if (runCommand === "session/name/auto/set") {
 			if (typeof payload.enabled !== "boolean") throw new Error("session/name/auto/set requires enabled");
@@ -797,25 +878,11 @@ export function createCodingAgentV2Service(
 			if (!definition) throw new Error(`Unknown session ${sessionId}`);
 			const existing = runtimes.get(sessionId);
 			if (existing) return existing;
-			const pending = opening.get(sessionId);
-			if (pending) return pending;
-			const promise = (async () => {
-				const model = await definition.harness.getModel();
-				if (byId.get(sessionId) !== definition) throw new Error(`Session ${sessionId} was deleted while opening`);
-				let runtime!: CodingAgentV2RuntimeImpl;
-				runtime = new CodingAgentV2RuntimeImpl(definition, models, model, () => {
-					if (runtimes.get(sessionId) === runtime) runtimes.delete(sessionId);
-				});
-				runtimes.set(sessionId, runtime);
-				return runtime;
-			})();
-			opening.set(sessionId, promise);
-			try {
-				return await promise;
-			} finally {
-				opening.delete(sessionId);
-			}
-		}),
+			const model = await definition.harness.getModel();
+			const runtime = new CodingAgentV2RuntimeImpl(definition, models, model, options);
+			runtimes.set(sessionId, runtime);
+			return runtime;
+		},
 	};
 }
 
