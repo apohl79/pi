@@ -413,6 +413,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				output,
 				cacheRead,
 				cacheWrite: 0,
+				imageUnits: 0,
 				...(stats.costTotal > 0 ? { costUsd: stats.costTotal } : {}),
 				pricingState: "known",
 			},
