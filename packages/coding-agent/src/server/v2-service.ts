@@ -36,24 +36,6 @@ export interface CodingAgentV2ServiceOptions {
 	createSession?: (options: Record<string, unknown>) => Promise<CodingAgentV2SessionDefinition>;
 	/** Durable owner removes a session after the adapter disposes its runtime. */
 	deleteSession?: (sessionId: string) => Promise<void>;
-	/** Durable catalog used when definitions are opened lazily. */
-	listSessions?: () => Promise<SessionMetadataV2[]>;
-	/** Durable owner opens a definition for a catalogued session. */
-	openSession?: (sessionId: string) => Promise<CodingAgentV2SessionDefinition>;
-	/** Catalog entries known before their harness is opened. */
-	initialSessions?: readonly SessionMetadataV2[];
-}
-
-export interface CodingAgentV2SessionStore {
-	list(): Promise<SessionMetadataV2[]>;
-	open(sessionId: string): Promise<CodingAgentV2SessionDefinition>;
-	create(options: Record<string, unknown>): Promise<CodingAgentV2SessionDefinition>;
-	delete(sessionId: string): Promise<void>;
-}
-
-export interface CodingAgentV2ServiceOptions {
-	/** Provider-local fast model used only for side-band automatic naming. */
-	fastModel?: Model<string>;
 }
 
 export interface CodingAgentV2Runtime {
@@ -508,10 +490,7 @@ export function createCodingAgentV2Service(
 	const sessionFactory = options?.createSession;
 	const sessionDeleter = options?.deleteSession;
 	return {
-		listSessions: async () =>
-			options?.listSessions
-				? structuredClone(await options.listSessions())
-				: [...byId.values()].map((definition) => structuredClone(definition.metadata)),
+		listSessions: async () => [...byId.values()].map((definition) => structuredClone(definition.metadata)),
 		listModels: async () => models.getModels().map((model) => modelMetadata(model)),
 		createSession: sessionFactory
 			? async (payload) => {
@@ -519,7 +498,6 @@ export function createCodingAgentV2Service(
 					if (byId.has(definition.metadata.id))
 						throw new Error(`Session ${definition.metadata.id} already exists`);
 					byId.set(definition.metadata.id, definition);
-					knownIds.add(definition.metadata.id);
 					const model = await definition.harness.getModel();
 					const runtime = new CodingAgentV2RuntimeImpl(definition, models, model, options);
 					runtimes.set(definition.metadata.id, runtime);
@@ -533,9 +511,7 @@ export function createCodingAgentV2Service(
 						await runtime.dispose();
 						runtimes.delete(sessionId);
 					}
-					if (!byId.delete(sessionId) && !knownIds.delete(sessionId))
-						throw new Error(`Unknown session ${sessionId}`);
-					knownIds.delete(sessionId);
+					if (!byId.delete(sessionId)) throw new Error(`Unknown session ${sessionId}`);
 					await sessionDeleter(sessionId);
 				}
 			: undefined,
