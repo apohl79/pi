@@ -89,7 +89,11 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.definition.harness.getCompactionSettings(),
 		]);
 		void leafId;
-		const goal = await this.definition.goals?.read();
+		const [goal, persistedName] = await Promise.all([
+			this.definition.goals?.read(),
+			this.definition.harness.session.getName(),
+		]);
+		const effectiveName = persistedName ?? this.sessionName;
 		const cacheRead = Math.max(0, stats.cachedTokens);
 		const input = Math.max(0, stats.uncachedTokens);
 		const output = Math.max(0, stats.totalTokens - stats.cachedTokens - stats.uncachedTokens);
@@ -97,9 +101,9 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const reserveTokens = Math.max(0, compaction.reserveTokens);
 		return {
 			id: this.definition.metadata.id,
-			...(this.sessionName === undefined
+			...(effectiveName === undefined
 				? {}
-				: { name: this.sessionName, ...(this.nameSource === undefined ? {} : { nameSource: this.nameSource }) }),
+				: { name: effectiveName, ...(this.nameSource === undefined ? {} : { nameSource: this.nameSource }) }),
 			nameRevision: this.nameRevision,
 			revision: this.revision,
 			eventSeq: this.eventSeq,
@@ -150,8 +154,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
-		if (runCommand === "turn/start" || runCommand === "turn/resume") await harness.prompt(text);
-		else if (runCommand === "turn/steer") await harness.steer(text);
+		if (runCommand === "turn/start") await harness.prompt(text);
+		else if (runCommand === "turn/resume") {
+			const result = await harness.resume();
+			if (!result.ok) throw new Error(result.error.message);
+			if (result.value.kind === "failed") throw new Error(result.value.error.message);
+		} else if (runCommand === "turn/steer") await harness.steer(text);
 		else if (runCommand === "turn/followUp") await harness.followUp(text);
 		else if (runCommand === "turn/abort") await harness.abort();
 		else if (runCommand === "turn/rollback") {
@@ -193,6 +201,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				throw new Error("session/name/set requires name or null");
 			this.sessionName = payload.name === null ? undefined : payload.name;
 			this.nameSource = payload.name === null ? undefined : "explicit";
+			await harness.session.setName(this.sessionName);
 			this.nameRevision += 1;
 		} else if (runCommand === "session/name/generate") {
 			const generated =
@@ -202,6 +211,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			if (this.nameSource !== "explicit") {
 				this.sessionName = generated;
 				this.nameSource = "generated";
+				await harness.session.setName(generated);
 				this.nameRevision += 1;
 			}
 		} else if (runCommand === "session/name/auto/set") {
