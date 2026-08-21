@@ -293,6 +293,14 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		this.nameRevision += 1;
 	}
 
+	private async recordGoalUsage(beforeTokens: number): Promise<void> {
+		if (!this.definition.goals) return;
+		if (!(await this.definition.goals.read())) return;
+		const afterTokens = (await this.definition.harness.session.getStats()).totalTokens;
+		const delta = Math.max(0, afterTokens - beforeTokens);
+		if (delta > 0) await this.definition.goals.recordUsage(delta);
+	}
+
 	async snapshot(): Promise<SessionSnapshotV2> {
 		const [leafId, thinkingLevel, stats, compaction, entries] = await Promise.all([
 			this.definition.harness.getLeafId(),
@@ -381,6 +389,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
+		const usageBefore = (await harness.session.getStats()).totalTokens;
+		let goalUsageRecorded = false;
 		const extensionHost = this.definition.extensionHost;
 		this.phase = "turn";
 		this.activeOperation = {
@@ -393,14 +403,24 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		try {
 			if (runCommand === "turn/start") {
 				await harness.prompt(input);
+				await this.recordGoalUsage(usageBefore);
+				goalUsageRecorded = true;
 				if (this.autoName) await this.generateName();
 			} else if (runCommand === "turn/resume") {
 				const result = await harness.resume();
 				if (!result.ok) throw new Error(result.error.message);
 				if (result.value.kind === "failed") throw new Error(result.value.error.message);
-			} else if (runCommand === "turn/steer") await harness.steer(input);
-			else if (runCommand === "turn/followUp") await harness.followUp(input);
-			else if (runCommand === "turn/abort") await harness.abort();
+				await this.recordGoalUsage(usageBefore);
+				goalUsageRecorded = true;
+			} else if (runCommand === "turn/steer") {
+				await harness.steer(input);
+				await this.recordGoalUsage(usageBefore);
+				goalUsageRecorded = true;
+			} else if (runCommand === "turn/followUp") {
+				await harness.followUp(input);
+				await this.recordGoalUsage(usageBefore);
+				goalUsageRecorded = true;
+			} else if (runCommand === "turn/abort") await harness.abort();
 			else if (runCommand === "turn/rollback") {
 				const turns = typeof payload.turns === "number" ? payload.turns : 1;
 				const result = await harness.rollback(turns);
@@ -459,6 +479,13 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				this.autoName = payload.enabled;
 			}
 		} catch (error) {
+			if (!goalUsageRecorded) {
+				try {
+					await this.recordGoalUsage(usageBefore);
+				} catch {
+					// Usage attribution must not hide the original operation failure.
+				}
+			}
 			this.phase = "failed";
 			this.activeOperation = {
 				...this.activeOperation!,

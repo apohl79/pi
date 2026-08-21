@@ -92,4 +92,12 @@ describe("durable GoalManager", () => {
 		await manager.pause();
 		scheduler.close();
 	});
+
+	test("attributes provider tokens and stops at the token budget", async () => {
+		const manager = new GoalManager(new Session(new InMemorySessionStorage({ id: "goal-usage", createdAt: 1 })));
+		await manager.create("Bound the work", 10);
+		const limited = await manager.recordUsage(11);
+		expect(limited).toMatchObject({ tokensUsed: 11, status: "budgetLimited" });
+		await expect(manager.recordUsage(1)).resolves.toMatchObject({ tokensUsed: 12, status: "budgetLimited" });
+	});
 });
