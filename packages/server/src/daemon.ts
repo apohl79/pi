@@ -1,4 +1,3 @@
-import type { V2AgentRegistry } from "./agents.ts";
 import { createUnixServerV2 } from "./transports/unix/preset.ts";
 import type { UnixServerOptions } from "./transports/unix/types.ts";
 import type { PiServerServiceV2 } from "./v2.ts";
@@ -22,7 +21,6 @@ export interface ServerDaemonOptions {
 	readonly service: PiServerServiceV2;
 	readonly socketPath: string;
 	readonly serverId?: string;
-	readonly agents?: V2AgentRegistry;
 	readonly createServer?: (service: PiServerServiceV2, options: UnixServerOptions) => ServerDaemonServer;
 }
 
@@ -85,7 +83,6 @@ export class ServerDaemon {
 		const server = (this.options.createServer ?? defaultCreateServer)(this.options.service, {
 			path: this.options.socketPath,
 			...(this.options.serverId === undefined ? {} : { serverId: this.options.serverId }),
-			...(this.options.agents === undefined ? {} : { agents: this.options.agents }),
 		});
 		try {
 			await server.start();
