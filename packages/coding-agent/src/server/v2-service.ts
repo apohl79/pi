@@ -10,217 +10,7 @@ import type {
 	SessionSnapshotV2,
 	TranscriptItem,
 } from "@earendil-works/pi-protocol";
-import { MAX_V2_ARRAY_ITEMS, MAX_V2_JSON_DEPTH, MAX_V2_STRING_LENGTH } from "@earendil-works/pi-protocol";
 import type { ServerRuntimeExtensionHost } from "./extension-host.ts";
-
-const OPERATION_ENTRY = "v2_operation";
-type PersistedOperation = {
-	operationId: string;
-	state: "accepted" | "running" | "complete" | "failed" | "aborted" | "suspended";
-	kind: string;
-	acceptedSeq: number;
-	revision: number;
-	eventSeq: number;
-};
-
-function finiteTimestamp(value: unknown, fallback = 0): number {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback;
-}
-
-function boundedString(value: unknown): string {
-	return typeof value === "string" ? value.slice(0, MAX_V2_STRING_LENGTH) : "";
-}
-
-function boundedRequired(value: unknown, max = MAX_V2_STRING_LENGTH): string | undefined {
-	if (typeof value !== "string" || value.length === 0 || value.length > max) return undefined;
-	return value;
-}
-
-function redactText(value: string): string {
-	return value
-		.replace(/\bBearer\s+[^\s"'`,;}\]]+/gi, "Bearer [redacted]")
-		.replace(/\b(?:sk|rk|pk)-[A-Za-z0-9][A-Za-z0-9_-]{8,}\b/gi, "[redacted]")
-		.replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, "[redacted]")
-		.replace(/\bgh[pour]_[A-Za-z0-9]{20,}\b/g, "[redacted]")
-		.replace(/\bghs_[A-Za-z0-9_]{20,}\b/g, "[redacted]")
-		.replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "[redacted]")
-		.replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, "[redacted]")
-		.replace(/([\"']?(?:api[_ -]?key|access[_ -]?token|token|secret|password|authorization|credential)[\"']?)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)/gi, "$1=[redacted]")
-		.replace(/[\u0000-\u001f\u007f]/g, " ")
-		.replace(/\s+/g, " ")
-		.trim()
-		.slice(0, MAX_V2_STRING_LENGTH);
-}
-
-function finiteNonNegative(value: unknown): number {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
-}
-
-function jsonValue(value: unknown, depth = 0, ancestors = new Set<object>(), redact = false): JsonValue {
-	if (value === null || typeof value === "boolean") return value;
-	if (typeof value === "string") return redact ? redactText(value) : boundedString(value);
-	if (typeof value === "number") return Number.isFinite(value) ? value : null;
-	if (depth >= MAX_V2_JSON_DEPTH || typeof value !== "object") return "[truncated]";
-	if (ancestors.has(value)) return "[cycle]";
-	ancestors.add(value);
-	try {
-		if (Array.isArray(value)) return value.slice(0, MAX_V2_ARRAY_ITEMS).map((item) => jsonValue(item, depth + 1, ancestors, redact));
-		return Object.fromEntries(
-			Object.entries(value)
-				.slice(0, MAX_V2_ARRAY_ITEMS)
-				.map(([key, item]) => [boundedString(key), /api[_ -]?key|token|secret|password|authorization|credential/i.test(key) ? "[redacted]" : jsonValue(item, depth + 1, ancestors, redact)]),
-		) as JsonValue;
-	} finally {
-		ancestors.delete(value);
-	}
-}
-
-function usage(value: Usage | undefined): {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	totalTokens: number;
-	cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-} | undefined {
-	if (!value) return undefined;
-	return {
-		input: finiteNonNegative(value.input),
-		output: finiteNonNegative(value.output),
-		cacheRead: finiteNonNegative(value.cacheRead),
-		cacheWrite: finiteNonNegative(value.cacheWrite),
-		totalTokens: finiteNonNegative(value.totalTokens),
-		cost: {
-			input: finiteNonNegative(value.cost.input),
-			output: finiteNonNegative(value.cost.output),
-			cacheRead: finiteNonNegative(value.cost.cacheRead),
-			cacheWrite: finiteNonNegative(value.cost.cacheWrite),
-			total: finiteNonNegative(value.cost.total),
-		},
-	};
-}
-
-function aggregateUsage(records: readonly LaneRecord[], branchEntryIds: ReadonlySet<string>): {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	costUsd: number;
-} {
-	const add = (left: number, right: number): number => {
-		const sum = left + right;
-		if (!Number.isFinite(sum)) return right < 0 ? -Number.MAX_SAFE_INTEGER : Number.MAX_SAFE_INTEGER;
-		return Math.max(-Number.MAX_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, sum));
-	};
-	const signed = (value: number): number => (Number.isFinite(value) ? value : 0);
-	const totals = records
-		.filter(
-			(record): record is Extract<LaneRecord, { type: "usage" }> =>
-				record.type === "usage" && (record.entryId === undefined || branchEntryIds.has(record.entryId)),
-		)
-		.reduce(
-			(total, record) => ({
-				input: add(total.input, signed(record.usage.input)),
-				output: add(total.output, signed(record.usage.output)),
-				cacheRead: add(total.cacheRead, signed(record.usage.cacheRead)),
-				cacheWrite: add(total.cacheWrite, signed(record.usage.cacheWrite)),
-				costUsd: add(total.costUsd, signed(record.usage.cost.total)),
-			}),
-			{ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 },
-		);
-	return {
-		input: Math.max(0, Math.floor(totals.input)),
-		output: Math.max(0, Math.floor(totals.output)),
-		cacheRead: Math.max(0, Math.floor(totals.cacheRead)),
-		cacheWrite: Math.max(0, Math.floor(totals.cacheWrite)),
-		costUsd: Math.max(0, totals.costUsd),
-	};
-}
-
-function contentParts(message: AgentMessage): Array<Record<string, unknown>> {
-	const redact =
-		(message.role === "assistant" && (message.stopReason === "error" || message.stopReason === "deferred" || message.stopReason === "aborted")) ||
-		(message.role === "toolResult" && message.isError === true);
-	if (typeof message !== "object" || message === null || !Array.isArray((message as { content?: unknown }).content)) {
-		return [{ type: "text", text: redact ? redactText(boundedString(messageText(message))) : boundedString(messageText(message)) }];
-	}
-	return (message as { content: unknown[] }).content.slice(0, MAX_V2_ARRAY_ITEMS).flatMap((part) => {
-		if (typeof part !== "object" || part === null) return [];
-		const candidate = part as Record<string, unknown>;
-		if (candidate.type === "text" && typeof candidate.text === "string") return [{ type: "text", text: redact ? redactText(boundedString(candidate.text)) : boundedString(candidate.text) }];
-		if (candidate.type === "thinking" && typeof candidate.thinking === "string") return [{ type: "thinking", thinking: redact ? redactText(boundedString(candidate.thinking)) : boundedString(candidate.thinking) }];
-		if (candidate.type === "image" && typeof candidate.data === "string" && typeof candidate.mimeType === "string") {
-			const mimeType = boundedRequired(candidate.mimeType, 127);
-			if (!mimeType || !/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(mimeType)) return [];
-			return [{ type: "image", data: boundedString(candidate.data), mimeType }];
-		}
-		if (candidate.type === "toolCall") {
-			const toolCallId = boundedRequired(candidate.id, 256);
-			const toolName = boundedRequired(candidate.name, 256);
-			if (!toolCallId || !toolName) return [];
-			return [{ type: "toolCall", toolCallId, toolName, input: jsonValue(candidate.arguments, 0, new Set<object>(), redact) }];
-		}
-		return [];
-	});
-}
-
-function queueContent(message: AgentMessage): Array<Record<string, unknown>> {
-	const parts = contentParts(message).filter((part) => part.type === "text" || part.type === "image");
-	return parts.length > 0 ? parts : [{ type: "text", text: boundedString(messageText(message)) }];
-}
-
-function targetMessage(target: unknown): AgentMessage {
-	if (typeof target === "object" && target !== null && "message" in target) return (target as { message: AgentMessage }).message;
-	return { role: "user", content: "", timestamp: 0 };
-}
-
-function transcriptItem(entry: Extract<Entry, { type: "message" }>): SessionSnapshotV2["transcript"][number] | undefined {
-	const message = entry.message;
-	const timestamp = finiteTimestamp(entry.timestamp);
-	const entryId = boundedRequired(entry.id, 256);
-	if (!entryId) return undefined;
-	if (message.role === "user") return { id: entryId, role: "user", content: contentParts(message) as never, timestamp };
-	if (message.role === "assistant") {
-		const provider = boundedRequired(message.provider, 256);
-		const model = boundedRequired(message.model, 256);
-		if (!provider || !model) return undefined;
-		const base = {
-			id: entryId,
-			role: "assistant" as const,
-			content: contentParts(message) as never,
-			model: { provider, id: model },
-			...(message.responseModel === undefined ? {} : (() => {
-				const responseModel = boundedRequired(message.responseModel, 256);
-				return responseModel ? { responseModel } : {};
-			})()),
-			...(usage(message.usage) === undefined ? {} : { usage: usage(message.usage) }),
-			timestamp,
-		};
-		if (message.stopReason === "aborted") return { ...base, status: "aborted", stopReason: "aborted", ...(message.errorMessage ? { errorMessage: redactText(boundedString(message.errorMessage)) } : {}) };
-		if (message.stopReason === "error" || message.stopReason === "deferred") return { ...base, status: "error", stopReason: "error", ...(message.errorMessage ? { errorMessage: redactText(boundedString(message.errorMessage)) } : {}) };
-		if (message.stopReason === "pending") return { ...base, status: "streaming" };
-		return { ...base, status: "complete", stopReason: message.stopReason === "toolUse" ? "toolUse" : message.stopReason === "length" ? "length" : "stop" };
-	}
-	if (message.role === "toolResult") {
-		const toolCallId = boundedRequired(message.toolCallId, 256);
-		const toolName = boundedRequired(message.toolName, 256);
-		if (!toolCallId || !toolName) return undefined;
-		return {
-			id: entryId,
-			role: "tool",
-			toolCallId,
-			toolName,
-			input: null,
-			content: contentParts(message) as never,
-			...(message.details === undefined ? {} : { details: jsonValue(message.details, 0, new Set<object>(), message.isError === true) }),
-			...(usage(message.usage) === undefined ? {} : { usage: usage(message.usage) }),
-			timestamp,
-			status: message.isError ? "error" : "complete",
-			isError: message.isError,
-		};
-	}
-	return undefined;
-}
 
 export interface CodingAgentV2SessionDefinition {
 	metadata: SessionMetadataV2;
@@ -717,6 +507,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
+		const extensionHost = this.definition.extensionHost;
+		await extensionHost?.onOperationAccepted({ id: _operationId, type: runCommand });
 		if (runCommand === "turn/start") {
 			await harness.prompt(text);
 			if (this.autoName) await this.generateName();
@@ -799,30 +591,9 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			throw error;
 		}
 		void this.autoName;
-		await this.withMutation(async () => {
-			const operation = this.operations.get(operationId);
-			if (!operation) return;
-			const state = runCommand === "turn/abort" ? "aborted" : terminalOutcome === "suspended" ? "suspended" : terminalOutcome === "aborted" ? "aborted" : "complete";
-			await this.persistOperation({ ...operation, state, revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
-			this.operationId = undefined;
-			this.freshOperationId = undefined;
-		});
-		await notifyTerminal(terminalOutcome);
-		} catch (error) {
-			try {
-				await this.withMutation(async () => {
-				const operation = this.operations.get(operationId);
-				if (operation && (operation.state === "accepted" || operation.state === "running"))
-					await this.persistOperation({ ...operation, state: "failed", revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
-				this.operationId = undefined;
-				this.freshOperationId = undefined;
-				});
-			} finally {
-				terminalOutcome = "failed";
-				await notifyTerminal("failed").catch(() => undefined);
-			}
-			throw error;
-		}
+		await extensionHost?.onOperationTerminal({ id: _operationId, type: runCommand }, "completed");
+		this.revision += 1;
+		this.eventSeq += 1;
 	}
 
 	async dispose(): Promise<void> {
