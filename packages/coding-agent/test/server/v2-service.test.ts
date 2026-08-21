@@ -124,7 +124,6 @@ describe("coding-agent v2 service adapter", () => {
 				sessionId: "adapter-session",
 				payload: { text: "hello" },
 			});
-			await runtime.accept("operation-2");
 			const usageSnapshot = (await runtime.snapshot()).usage;
 			expect(usageSnapshot.input).toBeGreaterThan(0);
 			expect(usageSnapshot.output).toBeGreaterThan(0);

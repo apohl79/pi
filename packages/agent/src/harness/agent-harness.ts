@@ -766,14 +766,9 @@ export class AgentHarness implements AgentLane {
 				this.models.streamSimple.bind(this.models),
 			);
 			let finalEntryId: string | undefined;
-			const transcriptMessages = newMessages.map(sanitizeTranscriptMessage);
-			for (const [index, message] of transcriptMessages.entries()) {
-				const sourceMessage = newMessages[index];
-				const target = messageTargets.get(sourceMessage);
-				finalEntryId = target
-					? (await this.durableSession.appendEntry({ ...target, message: durableClone(message) }, "main")).id
-					: await this.durableSession.appendMessage(durableClone(message));
-				if (message.role === "assistant" && message.stopReason !== "pending" && message.usage !== undefined)
+			for (const message of newMessages) {
+				finalEntryId = await this.durableSession.appendMessage(durableClone(message));
+				if (message.role === "assistant" && message.stopReason !== "pending") {
 					await this.durableSession.appendRecord({
 						type: "usage",
 						id: this.durableSession.idGenerator.next(),
@@ -785,6 +780,7 @@ export class AgentHarness implements AgentLane {
 						attempt: 1,
 						stopReason: message.stopReason,
 					});
+				}
 			}
 			const finalMessage = transcriptMessages.at(-1);
 			if (!finalEntryId || !finalMessage || finalMessage.role !== "assistant")
