@@ -1106,6 +1106,7 @@ export class PiServerV2 {
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
+			const failureSnapshot = await runtime.snapshot();
 			const record = this.operations.get(operationId);
 			if (record) {
 				const updated = { ...record, state: "failed" as const, error: message };
@@ -1115,13 +1116,13 @@ export class PiServerV2 {
 			await this.broadcastEvent(
 				sessionId,
 				runtime,
-				{ state: "failed", error: error instanceof Error ? error.message : String(error) },
+				{ state: "failed", error: message, snapshot: toProtocolJsonValue(failureSnapshot) },
 				operationId,
 				"operation_terminal",
 			);
 			const failed = this.operations.get(operationId);
 			if (failed) {
-				const updated = { ...failed, terminalSeq: (await runtime.snapshot()).eventSeq };
+				const updated = { ...failed, terminalSeq: failureSnapshot.eventSeq };
 				this.operations.set(failed.operationId, updated);
 				await this.operationStore.putOperation(updated);
 			}

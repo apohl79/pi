@@ -89,6 +89,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	readonly started = new Deferred<void>();
 	readonly release = new Deferred<void>();
 	disposeCount = 0;
+	fail = false;
 	private current: SessionSnapshotV2;
 
 	constructor(id: string) {
@@ -107,6 +108,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 
 	async run(operationId: string, _command: CommandV2): Promise<void> {
 		this.commands.push(structuredClone(_command));
+		if (this.fail) throw new Error("runtime failed");
 		await this.release.promise;
 		this.started.resolve(undefined);
 		this.current = {
@@ -520,8 +522,37 @@ describe("PiServer v2 operation acceptance", () => {
 		const second = await connectUnixTestClientV2(server.addresses[0]!);
 		await second.hello({ sessionId: "session-1", eventSeq: 2 });
 		const replay = await second.next((message) => message.type === "event" && message.event === "operation_terminal");
-		expect(replay).toMatchObject({ type: "event", seq: 3, payload: { state: "complete" } });
+		expect(replay).toMatchObject({ type: "event", seq: 4, payload: { state: "complete" } });
 		await second.close();
+	});
+
+	test("includes the authoritative snapshot in a failed terminal event", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-failure-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const runtime = service.sessions.get("session-1")!;
+		runtime.fail = true;
+
+		const response = await client.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { text: "hello" },
+		});
+		expect(response).toMatchObject({ ok: true, accepted: { sessionRevision: 2, eventSeq: 2 } });
+		const terminal = await client.next(
+			(message) => message.type === "event" && message.event === "operation_terminal",
+		);
+		expect(terminal).toMatchObject({
+			type: "event",
+			payload: { state: "failed", error: "runtime failed", snapshot: { id: "session-1", phase: "idle" } },
+		});
+		await client.close();
 	});
 
 	test("disposes detached runtimes when the server closes", async () => {
