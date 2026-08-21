@@ -1,4 +1,4 @@
-import type { AgentHarness, GoalManager } from "@earendil-works/pi-agent-core";
+import type { AgentHarness, Entry, GoalManager } from "@earendil-works/pi-agent-core";
 import type { Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
 import type {
 	CommandNameV2,
@@ -8,7 +8,7 @@ import type {
 	OperationAccepted,
 	SessionMetadataV2,
 	SessionSnapshotV2,
-	SessionPhaseV2,
+	TranscriptItem,
 } from "@earendil-works/pi-protocol";
 import { MAX_V2_ARRAY_ITEMS, MAX_V2_JSON_DEPTH, MAX_V2_STRING_LENGTH } from "@earendil-works/pi-protocol";
 import type { ServerRuntimeExtensionHost } from "./extension-host.ts";
@@ -350,15 +350,65 @@ function commandPayload(command: CommandV2): Record<string, unknown> {
 		: {};
 }
 
-function messageText(message: unknown): string {
-	if (typeof message !== "object" || message === null) return String(message ?? "");
-	const content = (message as { content?: unknown }).content;
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter((part): part is { type: "text"; text: string } => typeof part === "object" && part !== null && (part as { type?: unknown }).type === "text" && typeof (part as { text?: unknown }).text === "string")
-		.map((part) => part.text)
-		.join("");
+function transcriptItem(entry: Entry): TranscriptItem | undefined {
+	if (entry.type !== "message" || !("content" in entry.message) || !Array.isArray(entry.message.content))
+		return undefined;
+	const timestamp = entry.message.timestamp ?? entry.timestamp;
+	if (entry.message.role === "user") {
+		return { id: entry.id, role: "user", content: entry.message.content, timestamp };
+	}
+	if (entry.message.role === "assistant") {
+		const content: unknown[] = [];
+		for (const item of entry.message.content) {
+			if (item.type === "text") content.push({ type: "text", text: item.text });
+			else if (item.type === "thinking")
+				content.push({
+					type: "thinking",
+					thinking: item.thinking,
+					...(item.redacted === undefined ? {} : { redacted: item.redacted }),
+				});
+			else if (item.type === "toolCall")
+				content.push({ type: "toolCall", toolCallId: item.id, toolName: item.name, input: item.arguments });
+		}
+		const status =
+			entry.message.stopReason === "error"
+				? "error"
+				: entry.message.stopReason === "aborted"
+					? "aborted"
+					: "complete";
+		return {
+			id: entry.id,
+			role: "assistant",
+			content,
+			model: { provider: entry.message.provider, id: entry.message.model },
+			...(entry.message.responseModel === undefined ? {} : { responseModel: entry.message.responseModel }),
+			usage: entry.message.usage,
+			timestamp,
+			status,
+			...(status === "complete" ? { stopReason: entry.message.stopReason } : {}),
+			...(entry.message.errorMessage === undefined ? {} : { errorMessage: entry.message.errorMessage }),
+		} as TranscriptItem;
+	}
+	if (entry.message.role === "toolResult") {
+		const content = entry.message.content.filter(
+			(item): item is { type: "text"; text: string } | { type: "image"; data: string; mimeType: string } =>
+				item.type === "text" || item.type === "image",
+		);
+		return {
+			id: entry.id,
+			role: "tool",
+			toolCallId: entry.message.toolCallId,
+			toolName: entry.message.toolName,
+			input: {},
+			content,
+			...(entry.message.details === undefined ? {} : { details: entry.message.details }),
+			...(entry.message.usage === undefined ? {} : { usage: entry.message.usage }),
+			timestamp,
+			status: entry.message.isError ? "error" : "complete",
+			isError: entry.message.isError,
+		} as TranscriptItem;
+	}
+	return undefined;
 }
 
 class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
@@ -463,11 +513,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async snapshot(): Promise<SessionSnapshotV2> {
-		const [leafId, thinkingLevel, stats, compaction] = await Promise.all([
+		const [leafId, thinkingLevel, stats, compaction, entries] = await Promise.all([
 			this.definition.harness.getLeafId(),
 			this.definition.harness.getThinkingLevel(),
 			this.definition.harness.session.getStats(),
 			this.definition.harness.getCompactionSettings(),
+			this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }),
 		]);
 		void leafId;
 		const [goal, persistedName] = await Promise.all([
@@ -480,6 +531,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const output = Math.max(0, stats.totalTokens - stats.cachedTokens - stats.uncachedTokens);
 		const contextWindow = Math.max(1, this.model.contextWindow);
 		const reserveTokens = Math.max(0, compaction.reserveTokens);
+		const transcript = entries
+			.flatMap((entry) => {
+				const item = transcriptItem(entry);
+				return item === undefined ? [] : [item];
+			})
+			.slice(-200);
 		return {
 			id: this.definition.metadata.id,
 			...(effectiveName === undefined
@@ -493,7 +550,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			model: { provider: boundedString(this.model.provider), id: boundedString(this.model.id) },
 			thinkingLevel,
 			transcript,
-			queues: { steer: queuedSteer, followUp: queuedFollowUp },
+			queues: { steer: [], followUp: [] },
 			...(goal === undefined ? {} : { goal }),
 			agents: [],
 			usage: {
