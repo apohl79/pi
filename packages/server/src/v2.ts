@@ -78,11 +78,6 @@ type V2ConnectionState = {
 	decoder: FrameDecoder;
 	sessions: Map<string, PiSessionRuntimeV2>;
 	controlSessions: Set<string>;
-	/** Session IDs whose attach response has committed the connection's ownership. */
-	attachedSessions: Set<string>;
-	/** Number of in-flight attach requests for each session on this connection. */
-	pendingAttachCounts: Map<string, number>;
-	visibleSessions: Set<string>;
 	ready: boolean;
 	handshakePromise?: Promise<void>;
 	closed: boolean;
@@ -155,6 +150,7 @@ export class PiServerV2 {
 	private readonly plugins: V2PluginRegistry;
 	private readonly usage: V2UsageLedger;
 	private readonly connections = new Set<V2ConnectionState>();
+	private readonly controls = new Map<string, string>();
 	private readonly runtimes = new Set<PiSessionRuntimeV2>();
 	private readonly eventHistory = new Map<string, EventEnvelopeV2[]>();
 	/** Serializes event reservation per session so concurrent broadcasts cannot reuse cursors. */
@@ -295,10 +291,6 @@ export class PiServerV2 {
 			decoder: new FrameDecoder({ maxFrameLength: this.maxFrameLength }),
 			sessions: new Map<string, PiSessionRuntimeV2>(),
 			controlSessions: new Set<string>(),
-			attachedSessions: new Set<string>(),
-			pendingAttachCounts: new Map<string, number>(),
-			visibleSessions: new Set<string>(),
-			attachingSessions: new Map<string, Promise<PiSessionRuntimeV2>>(),
 			ready: false,
 			closed: false,
 			handshakeTimeout: undefined as unknown as NodeJS.Timeout,
@@ -492,11 +484,16 @@ export class PiServerV2 {
 
 	private async attach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("session/attach requires sessionId");
+		const payload = objectPayload(command);
+		const mode = payload.mode === undefined ? "control" : payload.mode;
+		if (mode !== "control" && mode !== "observer") throw new Error("session/attach mode must be control or observer");
 		const runtime = await this.service.openSession(command.sessionId);
+		if (mode === "control") this.claimControl(state, command.sessionId);
 		this.trackRuntime(runtime);
 		state.sessions.set(command.sessionId, runtime);
 		await this.sendResponse(state, id, {
 			command: command.command,
+			lease: mode,
 			session: toProtocolJsonValue(await this.snapshotForSession(command.sessionId, runtime)),
 		});
 	}
@@ -630,7 +627,7 @@ export class PiServerV2 {
 
 	private async spawnAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("agent/spawn requires sessionId");
-		this.requireControl(state, command);
+		this.requireControl(state, command.sessionId);
 		const payload = objectPayload(command);
 		if (typeof payload.taskName !== "string" || typeof payload.taskMessage !== "string")
 			throw new Error("agent/spawn requires taskName and taskMessage");
@@ -822,7 +819,7 @@ export class PiServerV2 {
 
 	private async updatePlan(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("plan/update requires sessionId");
-		this.requireControl(state, command);
+		this.requireControl(state, command.sessionId);
 		const payload = objectPayload(command);
 		if (!Array.isArray(payload.items) || payload.items.length === 0 || payload.items.length > MAX_V2_ARRAY_ITEMS)
 			throw new Error("plan/update requires one to 10000 items");
@@ -1160,9 +1157,8 @@ export class PiServerV2 {
 		this.requireAttached(state, command.sessionId);
 		const runtime = state.sessions.get(command.sessionId);
 		state.sessions.delete(command.sessionId);
-		state.attachedSessions.delete(command.sessionId);
 		this.releaseControlFor(state, command.sessionId);
-		if (runtime && !this.hasRuntimeReference(runtime) && !this.hasActiveOperation(runtime) && !this.hasPendingAttach(runtime)) await this.disposeRuntime(runtime);
+		if (runtime && !this.hasRuntimeReference(runtime)) await this.disposeRuntime(runtime);
 		await this.sendResponse(state, id, { command: command.command, sessionId: command.sessionId });
 	}
 
@@ -1185,10 +1181,9 @@ export class PiServerV2 {
 
 	private async startTurn(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("turn/start requires sessionId");
-		if (this.deletingSessions.has(command.sessionId)) throw new Error("Session is being deleted");
-		this.requireControl(state, command);
-		const runtime = this.requireAttached(state, command.sessionId);
-		const resolvedCommand = await this.resolveTurnContent(command);
+		this.requireControl(state, command.sessionId);
+		const runtime = state.sessions.get(command.sessionId);
+		if (!runtime) throw new Error(`Session ${command.sessionId} is not attached`);
 		const operationId = randomUUID();
 		this.retainOperation(runtime, command.sessionId);
 		let accepted: OperationAccepted;
@@ -1400,37 +1395,18 @@ export class PiServerV2 {
 		if (state.disconnectPromise) return state.disconnectPromise;
 		state.closed = true;
 		clearTimeout(state.handshakeTimeout);
-		state.disconnectPromise = (async () => {
-			for (const sessionId of state.controlSessions) this.releaseControlFor(state, sessionId);
-		const runtimes = new Set(state.sessions.values());
-		state.sessions.clear();
-		state.attachedSessions.clear();
-		state.pendingAttachCounts.clear();
-			const disposals = Array.from(runtimes)
-				.filter(
-					(runtime) =>
-						forceDispose ||
-						(!this.hasActiveOperation(runtime) && !this.hasPendingAttach(runtime) && !this.hasRuntimeReference(runtime)),
-				)
-				.map((runtime) => this.disposeRuntime(runtime));
-			const disposalResults = await Promise.allSettled(disposals);
-			for (const result of disposalResults)
-				if (result.status === "rejected")
-					this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
-			try {
-				await state.connection.close(finalChunk);
-			} catch (error) {
-				this.reportError(error instanceof Error ? error : new Error(String(error)));
-			} finally {
-				this.connections.delete(state);
-			}
-		})();
-		return state.disconnectPromise;
+		for (const sessionId of state.controlSessions) this.releaseControlFor(state, sessionId);
+		await Promise.allSettled(Array.from(state.sessions.values(), (runtime) => this.disposeRuntime(runtime)));
+		await state.connection.close();
+		this.connections.delete(state);
 	}
 
-	private disconnect(state: V2ConnectionState): Promise<void> {
+	private disconnect(state: V2ConnectionState): void {
+		if (state.closed) return;
+		state.closed = true;
+		clearTimeout(state.handshakeTimeout);
 		for (const sessionId of state.controlSessions) this.releaseControlFor(state, sessionId);
-		return this.closeConnection(state);
+		this.connections.delete(state);
 	}
 
 	private claimControl(state: V2ConnectionState, sessionId: string): void {
@@ -1439,6 +1415,15 @@ export class PiServerV2 {
 			throw new Error(`Session ${sessionId} already has a control lease`);
 		this.controls.set(sessionId, state.id);
 		state.controlSessions.add(sessionId);
+	}
+
+	private requireControl(state: V2ConnectionState, sessionId: string): void {
+		if (this.controls.get(sessionId) === state.id) return;
+		if (this.controls.get(sessionId) === undefined && !state.sessions.has(sessionId)) {
+			this.claimControl(state, sessionId);
+			return;
+		}
+		throw new Error(`Session ${sessionId} requires a control lease`);
 	}
 
 	private releaseControlFor(state: V2ConnectionState, sessionId: string): void {
