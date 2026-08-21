@@ -4,6 +4,7 @@ import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import {
 	InMemoryV2PlanRegistry,
+	JsonlV2PlanRegistry,
 	ServerDaemon,
 	type ServerDaemonOptions,
 	type V2ImageService,
@@ -23,6 +24,7 @@ import { type CodingAgentV2SqliteServiceOptions, createCodingAgentV2SqliteServic
 export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOptions, "repository"> & {
 	repository: SqliteSessionRepository;
 	socketPath: string;
+	planStorePath?: string;
 	serverId?: string;
 	agents?: ServerDaemonOptions["agents"];
 	inputs?: V2InputRegistry;
@@ -55,7 +57,11 @@ export async function createCodingAgentDaemonRuntime(
 	options: CodingAgentDaemonRuntimeOptions,
 ): Promise<CodingAgentDaemonRuntime> {
 	let createdAgents: ServerDaemonOptions["agents"];
-	const plans = options.plans ?? new InMemoryV2PlanRegistry();
+	const plans =
+		options.plans ??
+		(options.planStorePath === undefined
+			? new InMemoryV2PlanRegistry()
+			: new JsonlV2PlanRegistry(options.planStorePath));
 	const service = await createCodingAgentV2SqliteService(
 		options.agentRegistry === undefined
 			? {
@@ -116,7 +122,12 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 		databasePath: options.databasePath ?? join(options.agentDir, "server.sqlite"),
 	});
 	try {
-		const runtime = await createCodingAgentDaemonRuntime({ ...options, repository, env });
+		const runtime = await createCodingAgentDaemonRuntime({
+			...options,
+			repository,
+			env,
+			planStorePath: options.planStorePath ?? join(options.agentDir, "plans.jsonl"),
+		});
 		return {
 			...runtime,
 			repository,
