@@ -22,6 +22,9 @@ import type {
 	StreamFn,
 } from "./types.ts";
 
+const MAX_SAMPLING_MESSAGES = 128;
+const MAX_SAMPLING_CHARACTERS = 32_000;
+
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 
 /**
@@ -292,7 +295,17 @@ async function streamAssistantResponse(
 	}
 
 	// Convert to LLM-compatible messages (AgentMessage[] → Message[])
-	const llmMessages = await config.convertToLlm(messages);
+	const samplingMessages = config.samplingInput
+		? await config.samplingInput({
+				model: config.model,
+				systemPrompt: context.systemPrompt,
+				messages: [...messages],
+				tools: [...(context.tools ?? [])],
+				signal,
+			})
+		: [];
+	const boundedSamplingMessages = boundSamplingMessages(samplingMessages);
+	const llmMessages = await config.convertToLlm([...messages, ...boundedSamplingMessages]);
 
 	// Build LLM context
 	const llmContext: Context = {
@@ -369,6 +382,18 @@ async function streamAssistantResponse(
 	}
 	await emit({ type: "message_end", message: finalMessage });
 	return finalMessage;
+}
+
+function boundSamplingMessages(messages: AgentMessage[]): AgentMessage[] {
+	const bounded: AgentMessage[] = [];
+	let characters = 0;
+	for (const message of messages) {
+		const size = JSON.stringify(message).length;
+		if (bounded.length >= MAX_SAMPLING_MESSAGES || characters + size > MAX_SAMPLING_CHARACTERS) break;
+		bounded.push(message);
+		characters += size;
+	}
+	return bounded;
 }
 
 /**

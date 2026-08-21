@@ -116,6 +116,84 @@ describe("default stream function compatibility", () => {
 });
 
 describe("agentLoop with AgentMessage", () => {
+	it("re-evaluates request-only sampling input without adding it to the transcript", async () => {
+		const requests: Message[][] = [];
+		let samplingStep = 0;
+		const context: AgentContext = { systemPrompt: "", messages: [], tools: [] };
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: (messages) => {
+				const converted = identityConverter(messages);
+				requests.push(converted);
+				return converted;
+			},
+			samplingInput: () => [{ role: "user", content: `overlay-${samplingStep++}`, timestamp: 1 }],
+			getFollowUpMessages: async () => (samplingStep === 1 ? [createUserMessage("follow-up")] : []),
+		};
+		let streamCalls = 0;
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: `reply-${streamCalls++}` }]),
+				});
+			});
+			return stream;
+		};
+
+		const result = await agentLoop([createUserMessage("start")], context, config, undefined, streamFn).result();
+
+		expect(requests).toHaveLength(2);
+		expect(requests[0]?.at(-1)).toEqual({ role: "user", content: "overlay-0", timestamp: 1 });
+		expect(requests[1]?.at(-1)).toEqual({ role: "user", content: "overlay-1", timestamp: 1 });
+		expect(result.some((message) => message.role === "user" && message.content === "overlay-0")).toBe(false);
+		expect(result.some((message) => message.role === "user" && message.content === "overlay-1")).toBe(false);
+		expect(context.messages.some((message) => message.role === "user" && message.content === "overlay-0")).toBe(
+			false,
+		);
+	});
+
+	it("bounds sampling overlays before provider serialization", async () => {
+		let serialized: Message[] = [];
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: (messages) => {
+				serialized = identityConverter(messages);
+				return serialized;
+			},
+			samplingInput: () =>
+				Array.from({ length: 129 }, (_, index) => ({
+					role: "user" as const,
+					content: `sampling-${index}`,
+					timestamp: 1,
+				})),
+		};
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() =>
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: "done" }]),
+				}),
+			);
+			return stream;
+		};
+
+		await agentLoop(
+			[createUserMessage("start")],
+			{ systemPrompt: "", messages: [], tools: [] },
+			config,
+			undefined,
+			streamFn,
+		).result();
+
+		expect(serialized).toHaveLength(129);
+		expect(serialized.at(-1)).toEqual({ role: "user", content: "sampling-127", timestamp: 1 });
+	});
+
 	it("should emit events with AgentMessage types", async () => {
 		const context: AgentContext = {
 			systemPrompt: "You are helpful.",
