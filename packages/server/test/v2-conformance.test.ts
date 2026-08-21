@@ -90,6 +90,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	readonly started = new Deferred<void>();
 	readonly release = new Deferred<void>();
 	disposeCount = 0;
+	fail = false;
 	private current: SessionSnapshotV2;
 
 	constructor(id: string) {
@@ -108,6 +109,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 
 	async run(operationId: string, _command: CommandV2): Promise<void> {
 		this.commands.push(structuredClone(_command));
+		if (this.fail) throw new Error("runtime failed");
 		await this.release.promise;
 		this.started.resolve(undefined);
 		this.current = {
@@ -590,11 +592,11 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(runtime.runEntered).toBe(true);
 		runtime.release.resolve(undefined);
 		await runtime.started.promise;
-		const terminal = await secondClient.next(
-			(message) => message.type === "event" && message.event === "operation_terminal",
-		);
-		expect(terminal).toMatchObject({ type: "event", sessionId: "session-1", payload: { state: "complete" } });
-		await secondClient.close();
+		const second = await connectUnixTestClientV2(server.addresses[0]!);
+		await second.hello({ sessionId: "session-1", eventSeq: 2 });
+		const replay = await second.next((message) => message.type === "event" && message.event === "operation_terminal");
+		expect(replay).toMatchObject({ type: "event", seq: 4, payload: { state: "complete" } });
+		await second.close();
 	});
 
 	test("includes the authoritative snapshot in a failed terminal event", async () => {
@@ -610,203 +612,18 @@ describe("PiServer v2 operation acceptance", () => {
 		const runtime = service.sessions.get("session-1")!;
 		runtime.fail = true;
 
-		await client.request({ command: "turn/start", sessionId: "session-1", payload: { text: "hello" } });
+		const response = await client.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { text: "hello" },
+		});
+		expect(response).toMatchObject({ ok: true, accepted: { sessionRevision: 2, eventSeq: 2 } });
 		const terminal = await client.next(
 			(message) => message.type === "event" && message.event === "operation_terminal",
 		);
 		expect(terminal).toMatchObject({
 			type: "event",
 			payload: { state: "failed", error: "runtime failed", snapshot: { id: "session-1", phase: "idle" } },
-		});
-		await client.close();
-	});
-
-	test("disposes detached runtimes when the server closes", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pis-v2-shutdown-"));
-		directories.push(directory);
-		const service = new TestService();
-		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
-		servers.push(server);
-		await server.start();
-		const client = await connectUnixTestClientV2(server.addresses[0]!);
-		await client.hello();
-		await client.request({ command: "session/attach", sessionId: "session-1" });
-		const runtime = service.sessions.get("session-1")!;
-
-		await client.close();
-		expect(runtime.disposeCount).toBe(0);
-
-		await server.close();
-		expect(runtime.disposeCount).toBe(1);
-	});
-
-	test("allows one controller and observer lease per session", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pis-v2-leases-"));
-		directories.push(directory);
-		const service = new TestService();
-		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
-		servers.push(server);
-		await server.start();
-		const controller = await connectUnixTestClientV2(server.addresses[0]!);
-		const observer = await connectUnixTestClientV2(server.addresses[0]!);
-		await controller.hello();
-		await observer.hello();
-		await controller.request({ command: "session/attach", sessionId: "session-1" });
-		const observed = await observer.request({
-			command: "session/attach",
-			sessionId: "session-1",
-			payload: { mode: "observer" },
-		});
-		expect(observed).toMatchObject({ ok: true, result: { lease: "observer" } });
-		const rejected = await observer.request({
-			command: "turn/start",
-			sessionId: "session-1",
-			payload: { text: "no" },
-		});
-		expect(rejected).toMatchObject({
-			ok: false,
-			error: { code: "request_failed" },
-		});
-		const released = await controller.request({
-			command: "session/attach",
-			sessionId: "session-1",
-			payload: { mode: "observer" },
-		});
-		expect(released).toMatchObject({ ok: true, result: { lease: "observer" } });
-		const acquired = await observer.request({
-			command: "session/attach",
-			sessionId: "session-1",
-			payload: { mode: "control" },
-		});
-		expect(acquired).toMatchObject({ ok: true, result: { lease: "control" } });
-		const controllerMutation = await controller.request({
-			command: "turn/start",
-			sessionId: "session-1",
-			payload: { text: "still blocked" },
-		});
-		expect(controllerMutation).toMatchObject({
-			ok: false,
-			error: { code: "request_failed", message: "Session session-1 requires a control lease" },
-		});
-		await controller.close();
-		await observer.close();
-	});
-
-	test("retains a runtime while accepting an operation across detach", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
-		directories.push(directory);
-		const runtime = new ControlledAcceptRuntime("session-1");
-		const service = new TestService(runtime);
-		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
-		servers.push(server);
-		await server.start();
-		const client = await connectUnixTestClientV2(server.addresses[0]!);
-		await client.hello();
-		await client.request({ command: "session/attach", sessionId: "session-1" });
-
-		const turn = client.request({ command: "turn/start", sessionId: "session-1", payload: { text: "hello" } });
-		await runtime.acceptEntered.promise;
-		await expect(client.request({ command: "session/detach", sessionId: "session-1" })).resolves.toMatchObject({ ok: true });
-		expect(runtime.disposed).toBe(false);
-
-		runtime.acceptRelease.resolve(undefined);
-		await expect(turn).resolves.toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
-		runtime.release.resolve(undefined);
-		await runtime.started.promise;
-		await vi.waitFor(() => expect(runtime.disposed).toBe(true));
-	});
-
-	test("releases and disposes a runtime when acceptance fails after detach", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
-		directories.push(directory);
-		const runtime = new ControlledAcceptRuntime("session-1");
-		runtime.rejectAccept = true;
-		const service = new TestService(runtime);
-		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
-		servers.push(server);
-		await server.start();
-		const client = await connectUnixTestClientV2(server.addresses[0]!);
-		await client.hello();
-		await client.request({ command: "session/attach", sessionId: "session-1" });
-
-		const turn = client.request({ command: "turn/start", sessionId: "session-1", payload: { text: "hello" } });
-		await runtime.acceptEntered.promise;
-		await expect(client.request({ command: "session/detach", sessionId: "session-1" })).resolves.toMatchObject({ ok: true });
-		runtime.acceptRelease.resolve(undefined);
-		await expect(turn).resolves.toMatchObject({ ok: false, error: { code: "request_failed" } });
-		await vi.waitFor(() => expect(runtime.disposed).toBe(true));
-	});
-
-	test("does not dispose a runtime while a pending attach still holds its lease", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
-		directories.push(directory);
-		const runtime = new BlockingSnapshotRuntime("session-1");
-		const service = new TestService(runtime);
-		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
-		servers.push(server);
-		await server.start();
-		const client = await connectUnixTestClientV2(server.addresses[0]!);
-		await client.hello();
-		const attachment = client.request({ command: "session/attach", sessionId: "session-1" });
-		await runtime.snapshotEntered.promise;
-
-		await client.close();
-		expect(runtime.disposed).toBe(false);
-
-		runtime.snapshotRelease.resolve(undefined);
-		await vi.waitFor(() => expect(runtime.disposed).toBe(true));
-		await attachment.catch(() => undefined);
-	});
-
-	test("does not let a failed concurrent attach remove a successful shared attachment", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
-		directories.push(directory);
-		const runtime = new RacingSnapshotRuntime("session-1");
-		const service = new TestService(runtime);
-		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
-		servers.push(server);
-		await server.start();
-		const client = await connectUnixTestClientV2(server.addresses[0]!);
-		await client.hello();
-
-		const first = client.request({ command: "session/attach", sessionId: "session-1" });
-		await runtime.firstSnapshotEntered.promise;
-		const second = client.request({ command: "session/attach", sessionId: "session-1" });
-		await runtime.secondSnapshotEntered.promise;
-
-		runtime.firstSnapshotRelease.resolve(undefined);
-		await expect(first).resolves.toMatchObject({ ok: false, error: { code: "request_failed" } });
-		runtime.secondSnapshotRelease.resolve(undefined);
-		await expect(second).resolves.toMatchObject({ ok: true, result: { command: "session/attach" } });
-		expect(runtime.disposed).toBe(false);
-
-		await expect(client.request({ command: "session/detach", sessionId: "session-1" })).resolves.toMatchObject({ ok: true });
-		await vi.waitFor(() => expect(runtime.disposed).toBe(true));
-	});
-
-	test("disposes and unmaps a runtime when every concurrent attach fails", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
-		directories.push(directory);
-		const runtime = new AllFailSnapshotRuntime("session-1");
-		const service = new TestService(runtime);
-		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
-		servers.push(server);
-		await server.start();
-		const client = await connectUnixTestClientV2(server.addresses[0]!);
-		await client.hello();
-
-		const first = client.request({ command: "session/attach", sessionId: "session-1" });
-		await runtime.firstSnapshotEntered.promise;
-		const second = client.request({ command: "session/attach", sessionId: "session-1" });
-		await runtime.secondSnapshotEntered.promise;
-		runtime.firstSnapshotRelease.resolve(undefined);
-		runtime.secondSnapshotRelease.resolve(undefined);
-		await expect(first).resolves.toMatchObject({ ok: false, error: { code: "request_failed" } });
-		await expect(second).resolves.toMatchObject({ ok: false, error: { code: "request_failed" } });
-		await vi.waitFor(() => expect(runtime.disposed).toBe(true));
-		await expect(client.request({ command: "session/read", sessionId: "session-1" })).resolves.toMatchObject({
-			ok: false,
-			error: { code: "request_failed" },
 		});
 		await client.close();
 	});

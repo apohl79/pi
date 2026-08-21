@@ -1199,10 +1199,33 @@ export class PiServerV2 {
 			await runtime.run(operationId, command);
 			await this.finalizeOperation(runtime, sessionId, operationId, "complete");
 		} catch (error) {
-			await this.finalizeOperation(runtime, sessionId, operationId, "failed", safeOperationError(error));
-		} finally {
-			this.releaseOperation(runtime, sessionId);
-			if (!this.hasRuntimeReference(runtime) && !this.hasActiveOperation(runtime) && !this.hasPendingAttach(runtime)) await this.disposeRuntime(runtime);
+			const message = error instanceof Error ? error.message : String(error);
+			const failureSnapshot = await runtime.snapshot();
+			const record = this.operations.get(operationId);
+			if (record) {
+				const updated = { ...record, state: "failed" as const, error: message };
+				this.operations.set(operationId, updated);
+				await this.operationStore.putOperation(updated);
+			}
+			await this.broadcastEvent(
+				sessionId,
+				runtime,
+				{ state: "failed", error: message, snapshot: toProtocolJsonValue(failureSnapshot) },
+				operationId,
+				"operation_terminal",
+			);
+			const failed = this.operations.get(operationId);
+			if (failed) {
+				const updated = { ...failed, terminalSeq: failureSnapshot.eventSeq };
+				this.operations.set(failed.operationId, updated);
+				await this.operationStore.putOperation(updated);
+			}
+			await this.diagnostics?.record({
+				kind: "operation_terminal",
+				sessionId,
+				operationId,
+				payload: { state: "failed", error: message },
+			});
 		}
 	}
 
