@@ -706,6 +706,10 @@ export class PiServerV2 {
 			...(typeof payload.version === "number" ? { version: payload.version } : {}),
 		});
 		await this.sendResponse(state, id, { command: command.command, plan });
+		const runtime = state.sessions.get(command.sessionId) ?? (await this.service.openSession(command.sessionId));
+		this.trackRuntime(runtime);
+		state.sessions.set(command.sessionId, runtime);
+		await this.broadcastEvent(command.sessionId, runtime, { plan }, undefined, "plan_updated");
 	}
 
 	private async readInputRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

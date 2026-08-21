@@ -930,6 +930,12 @@ describe("PiServer v2 operation acceptance", () => {
 			payload: { items: [{ step: "implement", status: "in_progress" }] },
 		});
 		expect(updated).toMatchObject({ ok: true, result: { plan: { version: 1 } } });
+		await expect(
+			client.next((message) => message.type === "event" && message.event === "plan_updated"),
+		).resolves.toMatchObject({
+			event: "plan_updated",
+			payload: { plan: { version: 1, items: [{ step: "implement" }] } },
+		});
 		const read = await client.request({ command: "session/read", sessionId: "session-1" });
 		expect(read).toMatchObject({
 			ok: true,
