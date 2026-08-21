@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { GoalManager } from "../../src/harness/goals.ts";
 import { InMemorySessionStorage, Session } from "../../src/harness/session/index.ts";
+import { createGoalTools } from "../../src/harness/tools/goals.ts";
 
 describe("durable GoalManager", () => {
 	test("persists goal lifecycle state through append-only session entries", async () => {
@@ -63,5 +64,19 @@ describe("durable GoalManager", () => {
 		timestamp = 18_000;
 		const completed = await manager.update({ status: "complete" });
 		expect(completed.activeTimeSeconds).toBe(7);
+	});
+
+	test("exposes model goal tools with restricted terminal updates", async () => {
+		const manager = new GoalManager(new Session(new InMemorySessionStorage({ id: "goal-tools", createdAt: 1 })));
+		const tools = createGoalTools(manager);
+		const create = tools.find((tool) => tool.name === "create_goal");
+		const read = tools.find((tool) => tool.name === "get_goal");
+		const update = tools.find((tool) => tool.name === "update_goal");
+		if (!create || !read || !update) throw new Error("Expected goal tools");
+		await create.execute("create", { objective: "Ship the feature", token_budget: 10 }, undefined, undefined);
+		expect((await read.execute("read", {}, undefined, undefined)).details.goal?.objective).toBe("Ship the feature");
+		await expect(update.execute("update", { status: "complete" }, undefined, undefined)).resolves.toMatchObject({
+			details: { goal: { status: "complete" } },
+		});
 	});
 });

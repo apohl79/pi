@@ -1,4 +1,4 @@
-import type { ExecutionEnv, Session } from "@earendil-works/pi-agent-core";
+import { type ExecutionEnv, GoalManager, type Session } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { SessionMetadataV2 } from "@earendil-works/pi-protocol";
 import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
@@ -41,15 +41,17 @@ export async function createCodingAgentV2SqliteService(
 		const model =
 			modelOverride ?? (typeof options.model === "function" ? await options.model(metadata) : options.model);
 		const env = typeof options.env === "function" ? await options.env(metadata) : options.env;
+		const goals = new GoalManager(session);
 		const created = await createCodingAgentHarness({
 			...options.harness,
 			session,
 			models: options.models,
 			model,
 			env,
+			goals,
 			sessionFile: metadata.path,
 		});
-		return { metadata: sessionMetadata(metadata), harness: created.harness };
+		return { metadata: sessionMetadata(metadata), harness: created.harness, goals };
 	};
 	const store: CodingAgentV2SessionStore = {
 		list: async () => {

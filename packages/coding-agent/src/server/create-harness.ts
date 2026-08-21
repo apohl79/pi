@@ -5,10 +5,12 @@ import {
 	createApplyPatchTool,
 	createBashTool,
 	createEditTool,
+	createGoalTools,
 	createReadTool,
 	createWriteTool,
 	type ExecutionEnv,
 	type ExecutionToolContext,
+	type GoalManager,
 	type HarnessTool,
 } from "@earendil-works/pi-agent-core";
 import type { Static, TSchema } from "typebox";
@@ -40,6 +42,7 @@ function createCodingAgentHarnessTool<TParameters extends TSchema, TDetails>(
 
 export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOptions, "toolContext" | "tools"> {
 	env: ExecutionEnv;
+	goals?: GoalManager;
 	bashCommandPrefix?: string;
 	/** Path to the JSONL session file exposed to default bash commands as PI_SESSION_FILE. */
 	sessionFile?: string;
@@ -138,6 +141,15 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 				promptGuidelines: writeToolSystemPromptContribution.guidelines,
 			}),
 		];
+		if (options.goals) {
+			tools.push(
+				...createGoalTools(options.goals).map((tool) => ({
+					...tool,
+					promptSnippet: tool.description,
+					promptGuidelines: [],
+				})),
+			);
+		}
 	}
 	const activeToolNames = [...(providedActiveToolNames ?? tools.map((tool) => tool.name))];
 	const systemPrompt =
