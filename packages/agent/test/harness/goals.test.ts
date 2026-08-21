@@ -27,4 +27,22 @@ describe("durable GoalManager", () => {
 		await expect(manager.create("two")).rejects.toThrow("already exists");
 		await expect(manager.update({ tokensUsed: -1 })).rejects.toThrow("non-negative");
 	});
+
+	test("accrues active time only across active transitions", async () => {
+		let timestamp = 1_000;
+		const manager = new GoalManager(
+			new Session(new InMemorySessionStorage({ id: "goal-time", createdAt: 1 })),
+			() => timestamp,
+		);
+		await manager.create("Track time");
+		timestamp = 6_000;
+		const paused = await manager.pause();
+		expect(paused.activeTimeSeconds).toBe(5);
+		timestamp = 16_000;
+		const resumed = await manager.resume();
+		expect(resumed.activeTimeSeconds).toBe(5);
+		timestamp = 18_000;
+		const completed = await manager.update({ status: "complete" });
+		expect(completed.activeTimeSeconds).toBe(7);
+	});
 });
