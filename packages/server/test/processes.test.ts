@@ -42,6 +42,33 @@ describe("InMemoryV2ProcessRegistry", () => {
 		await expect(registry.start({ sessionId: "session-1", command: "echo ok", pty: true })).rejects.toThrow("PTY");
 	});
 
+	test("validates active-process and write limits", async () => {
+		expect(() => new NodeV2ProcessRegistry({ maxActiveProcesses: 0 })).toThrow("maxActiveProcesses");
+		expect(() => new NodeV2ProcessRegistry({ maxWriteBytes: 0 })).toThrow("maxWriteBytes");
+		const registry = new NodeV2ProcessRegistry({ maxWriteBytes: 3 });
+		const started = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "setTimeout(function(){},1000000)"` });
+		await expect(registry.write(started.processId, "🙂")).rejects.toThrow("maxWriteBytes");
+		await registry.terminate(started.processId);
+	});
+
+	test("enforces active-process limit and releases capacity after completion", async () => {
+		const registry = new NodeV2ProcessRegistry({ maxActiveProcesses: 1 });
+		const first = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "setTimeout(function(){},1000000)"` });
+		await expect(registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "setTimeout(function(){},1000000)"` })).rejects.toThrow("Maximum active process limit");
+		await registry.terminate(first.processId);
+		await registry.wait(first.processId);
+		const second = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('ok')"` });
+		await expect(registry.wait(second.processId)).resolves.toMatchObject({ state: "exited", output: "ok" });
+	});
+
+	test("releases active capacity when a child fails to start", async () => {
+		const registry = new NodeV2ProcessRegistry({ maxActiveProcesses: 1 });
+		const failed = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('no')", cwd: "/path/that/does/not/exist"` });
+		await expect(registry.wait(failed.processId)).resolves.toMatchObject({ state: "exited" });
+		const recovered = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('ok')"` });
+		await expect(registry.wait(recovered.processId)).resolves.toMatchObject({ state: "exited", output: "ok" });
+	});
+
 	test("retains UTF-8 output when a code point spans stdout chunks", async () => {
 		const registry = new NodeV2ProcessRegistry({ maxOutputBytes: 4 });
 		const started = await registry.start({
@@ -77,7 +104,7 @@ describe("InMemoryV2ProcessRegistry", () => {
 
 	test("resolves an existing wait when termination needs escalation", async () => {
 		const registry = new NodeV2ProcessRegistry({ terminateGraceMs: 10, terminateTimeoutMs: 10 });
-		const started = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"` });
+		const started = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "process.on('SIGTERM', function(){}),setTimeout(function(){},1000000)"` });
 		const pending = registry.wait(started.processId);
 		await registry.terminate(started.processId);
 		await expect(pending).resolves.toMatchObject({ state: "terminated", exitCode: 143 });

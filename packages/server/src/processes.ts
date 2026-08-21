@@ -164,6 +164,7 @@ type NodeProcessState = ProcessState & Readonly<{ child: ChildProcess }> & {
 	waiters: Array<(value: V2ProcessSnapshot) => void>;
 	decoder: StringDecoder;
 	decoderFlushed: boolean;
+	capacityReleased: boolean;
 	terminationTimer?: ReturnType<typeof setTimeout>;
 	killTimer?: ReturnType<typeof setTimeout>;
 };
@@ -171,20 +172,33 @@ type NodeProcessState = ProcessState & Readonly<{ child: ChildProcess }> & {
 type NodeV2ProcessRegistryOptions = Readonly<{
 	maxOutputBytes?: number;
 	maxCompletedProcesses?: number;
+	maxActiveProcesses?: number;
+	maxWriteBytes?: number;
 	terminateGraceMs?: number;
 	terminateTimeoutMs?: number;
 }>;
 
+const validatePositiveInteger = (name: string, value: number | undefined, fallback: number): number => {
+	const resolved = value ?? fallback;
+	if (!Number.isInteger(resolved) || resolved <= 0) throw new Error(`${name} must be a positive integer`);
+	return resolved;
+};
+
 export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 	private readonly maxOutputBytes: number;
 	private readonly maxCompletedProcesses: number;
+	private readonly maxActiveProcesses: number;
+	private readonly maxWriteBytes: number;
 	private readonly terminateGraceMs: number;
 	private readonly terminateTimeoutMs: number;
 	private readonly processes = new Map<string, NodeProcessState>();
+	private activeProcesses = 0;
 
 	constructor(options: NodeV2ProcessRegistryOptions = {}) {
 		this.maxOutputBytes = options.maxOutputBytes ?? 64 * 1024;
 		this.maxCompletedProcesses = options.maxCompletedProcesses ?? 256;
+		this.maxActiveProcesses = validatePositiveInteger("maxActiveProcesses", options.maxActiveProcesses, 64);
+		this.maxWriteBytes = validatePositiveInteger("maxWriteBytes", options.maxWriteBytes, 1024 * 1024);
 		this.terminateGraceMs = options.terminateGraceMs ?? 1_000;
 		this.terminateTimeoutMs = options.terminateTimeoutMs ?? 1_000;
 	}
@@ -192,8 +206,16 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 	async start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
 		if (request.pty === true) return Promise.reject(new Error("PTY process execution is unsupported"));
 		const [file, ...args] = parseCommand(request.command);
-		const child = spawn(file, args, { shell: false, detached: process.platform !== "win32", cwd: request.cwd, env: { ...process.env, ...request.env }, stdio: ["pipe", "pipe", "pipe"] });
-		const state: NodeProcessState = { processId: randomUUID(), sessionId: request.sessionId, command: request.command, state: "running", output: Buffer.alloc(0), totalBytes: 0, child, waiters: [], decoder: new StringDecoder("utf8"), decoderFlushed: false };
+		if (this.activeProcesses >= this.maxActiveProcesses) throw new Error("Maximum active process limit reached");
+		this.activeProcesses += 1;
+		let child: ChildProcess;
+		try {
+			child = spawn(file, args, { shell: false, detached: process.platform !== "win32", cwd: request.cwd, env: { ...process.env, ...request.env }, stdio: ["pipe", "pipe", "pipe"] });
+		} catch (error) {
+			this.activeProcesses -= 1;
+			throw error;
+		}
+		const state: NodeProcessState = { processId: randomUUID(), sessionId: request.sessionId, command: request.command, state: "running", output: Buffer.alloc(0), totalBytes: 0, child, waiters: [], decoder: new StringDecoder("utf8"), decoderFlushed: false, capacityReleased: false };
 		this.processes.set(state.processId, state);
 		const append = (chunk: Buffer): void => {
 			const decoded = Buffer.from(state.decoder.write(chunk));
@@ -210,6 +232,7 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 	async write(processId: string, input: string): Promise<V2ProcessOutput> {
 		const process = this.get(processId);
 		if (process.state !== "running" || !process.child.stdin) throw new Error(`Process ${processId} is not running`);
+		if (Buffer.byteLength(input, "utf8") > this.maxWriteBytes) throw new Error(`Process write exceeds maxWriteBytes (${this.maxWriteBytes})`);
 		const cursor = process.totalBytes;
 		process.child.stdin.write(input);
 		await new Promise<void>((resolve) => setImmediate(resolve));
@@ -228,7 +251,8 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		if (state.state === "running") {
 			state.state = "terminated";
 			state.exitCode = 143;
-			if (state.child.pid !== null && process.platform !== "win32") {
+			this.releaseCapacity(state);
+			if (state.child.pid != null && process.platform !== "win32") {
 				try { process.kill(-state.child.pid, "SIGTERM"); } catch { state.child.kill("SIGTERM"); }
 			} else state.child.kill("SIGTERM");
 			state.terminationTimer = setTimeout(() => {
@@ -260,10 +284,17 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		if (process.killTimer) clearTimeout(process.killTimer);
 		process.state = state;
 		process.exitCode = process.exitCode ?? exitCode;
+		this.releaseCapacity(process);
 		const result = snapshot(process);
 		for (const resolve of process.waiters) resolve(result);
 		process.waiters = [];
 		this.pruneCompleted();
+	}
+
+	private releaseCapacity(process: NodeProcessState): void {
+		if (process.capacityReleased) return;
+		process.capacityReleased = true;
+		this.activeProcesses -= 1;
 	}
 
 	private pruneCompleted(): void {
