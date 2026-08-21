@@ -239,7 +239,18 @@ export class PiServerV2 {
 	private async restoreStore(): Promise<void> {
 		if (this.restored) return;
 		const stored = await this.operationStore.load();
-		for (const operation of stored.operations) this.operations.set(operation.operationId, operation);
+		for (const operation of stored.operations) {
+			const recovered =
+				operation.state === "accepted" || operation.state === "running"
+					? {
+							...operation,
+							state: "suspended" as const,
+							error: "Operation was suspended by daemon restart",
+						}
+					: operation;
+			this.operations.set(recovered.operationId, recovered);
+			if (recovered !== operation) await this.operationStore.putOperation(recovered);
+		}
 		for (const event of stored.events) {
 			const history = this.eventHistory.get(event.sessionId) ?? [];
 			history.push(event);
