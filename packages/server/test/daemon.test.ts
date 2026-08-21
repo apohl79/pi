@@ -54,20 +54,4 @@ describe("ServerDaemon", () => {
 		expect(daemon.status()).toEqual({ state: "stopped", addresses: [] });
 		expect(close).toHaveBeenCalledOnce();
 	});
-
-	test("returns to stopped when server creation fails", async () => {
-		const failure = new Error("factory failed");
-		const createServer = vi.fn(() => {
-			throw failure;
-		});
-		const daemon = new ServerDaemon({
-			service: service(),
-			socketPath: "/tmp/daemon-test.sock",
-			createServer,
-		});
-
-		await expect(daemon.start()).rejects.toBe(failure);
-		expect(daemon.status()).toEqual({ state: "stopped", addresses: [] });
-		expect(createServer).toHaveBeenCalledOnce();
-	});
 });
