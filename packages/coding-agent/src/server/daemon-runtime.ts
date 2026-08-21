@@ -8,10 +8,12 @@ import {
 	JsonlForensicRecorder,
 	JsonlV2PlanRegistry,
 	LocalDiagnosticCapsuleStore,
+	NodeV2ProcessRegistry,
 	ServerDaemon,
 	type ServerDaemonOptions,
 	type V2ImageService,
 	type V2InputRegistry,
+	type V2ProcessRegistry,
 	type V2WebService,
 } from "@earendil-works/pi-server";
 import { createNodeSqliteFactory, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
@@ -33,6 +35,7 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	serverId?: string;
 	agents?: ServerDaemonOptions["agents"];
 	inputs?: V2InputRegistry;
+	processes?: V2ProcessRegistry;
 	web?: V2WebService;
 	images?: V2ImageService;
 	diagnostics?: ServerDaemonOptions["diagnostics"];
@@ -77,6 +80,7 @@ export async function createCodingAgentDaemonRuntime(
 			: new JsonlForensicRecorder(options.diagnosticStorePath));
 	const diagnosticContent =
 		options.diagnosticKeyPath === undefined ? undefined : new LocalDiagnosticCapsuleStore(options.diagnosticKeyPath);
+	const processes = options.processes ?? new NodeV2ProcessRegistry();
 	const service = await createCodingAgentV2SqliteService(
 		options.agentRegistry === undefined
 			? {
@@ -94,6 +98,7 @@ export async function createCodingAgentDaemonRuntime(
 		...(options.serverId === undefined ? {} : { serverId: options.serverId }),
 		...(agents === undefined ? {} : { agents }),
 		...(options.inputs === undefined ? {} : { inputs: options.inputs }),
+		processes,
 		...(options.web === undefined ? {} : { web: options.web }),
 		...(options.images === undefined ? {} : { images: options.images }),
 		plans,
