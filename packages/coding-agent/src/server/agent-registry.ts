@@ -67,20 +67,21 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		this.validateRequest(request);
 		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
 		if (!this.service.createSession) throw new Error("Coding-agent service does not support child sessions");
+		const model = await this.resolveModel(request);
 		const path = `${request.parentPath.replace(/\/$/, "")}/${request.taskName}`;
 		if ([...this.agents.values()].some((agent) => agent.summary.path === path))
 			throw new Error(`Agent path ${path} already exists`);
 		const created = await this.service.createSession({
 			parentSessionId: request.sessionId,
 			name: request.taskName,
-			model: request.model,
+			model,
 		});
 		const summary: AgentSummary = {
 			id: randomUUID(),
 			path,
 			taskName: request.taskName,
 			state: "running",
-			model: request.model,
+			model,
 		};
 		const agent: ChildAgent = {
 			summary,
@@ -210,6 +211,16 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private appendMessage(agent: ChildAgent, message: string): void {
 		if (agent.messages.length >= this.maxMessages) agent.messages.shift();
 		agent.messages.push(message);
+	}
+
+	private async resolveModel(request: V2AgentRequest): Promise<{ provider: string; id: string }> {
+		if (request.model.provider !== "inherit" && request.model.id !== "inherit") return request.model;
+		const parent = await this.service.openSession(request.sessionId);
+		const inherited = (await parent.snapshot()).model;
+		return {
+			provider: request.model.provider === "inherit" ? inherited.provider : request.model.provider,
+			id: request.model.id === "inherit" ? inherited.id : request.model.id,
+		};
 	}
 
 	private activeCount(): number {

@@ -36,8 +36,10 @@ export async function createCodingAgentV2SqliteService(
 	const definition = async (
 		metadata: SqliteSessionMetadata,
 		session: Session<SqliteSessionMetadata>,
+		modelOverride?: Model<Api>,
 	): Promise<CodingAgentV2SessionDefinition> => {
-		const model = typeof options.model === "function" ? await options.model(metadata) : options.model;
+		const model =
+			modelOverride ?? (typeof options.model === "function" ? await options.model(metadata) : options.model);
 		const env = typeof options.env === "function" ? await options.env(metadata) : options.env;
 		const created = await createCodingAgentHarness({
 			...options.harness,
@@ -76,7 +78,21 @@ export async function createCodingAgentV2SqliteService(
 				await session.setName(name);
 				metadata.name = name;
 			}
-			return definition(metadata, session);
+			const requestedModel =
+				typeof payload.model === "object" && payload.model !== null && !Array.isArray(payload.model)
+					? (payload.model as Record<string, unknown>)
+					: undefined;
+			const modelOverride =
+				requestedModel &&
+				typeof requestedModel.provider === "string" &&
+				typeof requestedModel.id === "string" &&
+				requestedModel.provider !== "inherit" &&
+				requestedModel.id !== "inherit"
+					? options.models.getModel(requestedModel.provider, requestedModel.id)
+					: undefined;
+			if (requestedModel && modelOverride === undefined)
+				throw new Error("Requested child model is not available in the configured model catalog");
+			return definition(metadata, session, modelOverride);
 		},
 		delete: async (sessionId) => {
 			const metadata =
