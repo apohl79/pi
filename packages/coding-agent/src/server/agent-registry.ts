@@ -192,21 +192,16 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				sessionId: agent.childSessionId,
 				payload: { text },
 			});
-			if (agent.state !== "interrupted") {
-				nextFollowUp = agent.followUps.shift();
-				if (nextFollowUp === undefined) agent.state = "complete";
-				else {
-					agent.state = "running";
-				}
+			agent.state = "complete";
+			const next = agent.followUps.shift();
+			if (next !== undefined) {
+				agent.state = "running";
+				void this.run(agent, "turn/followUp", next);
 			}
 		} catch {
 			if (agent.state !== "interrupted") agent.state = "failed";
 		} finally {
-			agent.activeOperationId = undefined;
-			agent.activeOperationAccepted = false;
-			agent.abortRequested = false;
-			if (nextFollowUp !== undefined) void this.run(agent, "turn/followUp", nextFollowUp);
-			else if (agent.state !== "running") this.resolveWaiters(agent);
+			if (agent.state !== "running") this.resolveWaiters(agent);
 		}
 	}
 
