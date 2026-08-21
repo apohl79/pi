@@ -151,8 +151,13 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		if (agent.state === "running" || agent.state === "awaitingInput") {
 			agent.abortRequested = true;
 			try {
-				const operationId = agent.activeOperationId;
-				if (operationId !== undefined && agent.activeOperationAccepted) await agent.runtime.abort(operationId);
+				const operationId = randomUUID();
+				await agent.runtime.accept(operationId);
+				await agent.runtime.run(operationId, {
+					command: "turn/abort",
+					sessionId: agent.childSessionId,
+					payload: {},
+				});
 			} finally {
 				agent.state = "interrupted";
 				this.resolveWaiters(agent);
