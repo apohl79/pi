@@ -5,11 +5,7 @@ import { describe, expect, test } from "vitest";
 import { SessionSnapshotV2Schema } from "@earendil-works/pi-protocol";
 import { createCodingAgentHarness } from "../../src/server/create-harness.ts";
 import { ServerRuntimeExtensionHost } from "../../src/server/extension-host.ts";
-import {
-	createCodingAgentV2Service,
-	createCodingAgentV2ServiceFromStore,
-	normalizeGeneratedName,
-} from "../../src/server/v2-service.ts";
+import { createCodingAgentV2Service } from "../../src/server/v2-service.ts";
 
 describe("coding-agent v2 service adapter", () => {
 	test("generates a bounded provider-backed name without overwriting an explicit name", async () => {
@@ -118,6 +114,7 @@ describe("coding-agent v2 service adapter", () => {
 			expect(usageSnapshot.input).toBeGreaterThan(0);
 			expect(usageSnapshot.output).toBeGreaterThan(0);
 			expect(turnSnapshot.transcript.map((item) => item.role)).toEqual(["user", "assistant"]);
+			expect(lifecycle).toEqual(["accepted:turn/start", "terminal:turn/start:completed"]);
 			await runtime.run("operation-2", {
 				command: "goal/create",
 				sessionId: "adapter-session",
