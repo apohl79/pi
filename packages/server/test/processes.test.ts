@@ -28,8 +28,21 @@ describe("InMemoryV2ProcessRegistry", () => {
 
 	test("rejects unsupported PTY and shell command requests", async () => {
 		const registry = new NodeV2ProcessRegistry();
-		await expect(registry.start({ sessionId: "session-1", command: "echo ok; touch /tmp/unsafe" })).rejects.toThrow("Unsupported process command");
+		const invalidCommand = registry.start({ sessionId: "session-1", command: "echo ok; touch /tmp/unsafe" });
+		expect(invalidCommand).toBeInstanceOf(Promise);
+		await expect(invalidCommand).rejects.toThrow("Unsupported process command");
 		await expect(registry.start({ sessionId: "session-1", command: "echo ok", pty: true })).rejects.toThrow("PTY");
+	});
+
+	test("retains UTF-8 output when a code point spans stdout chunks", async () => {
+		const registry = new NodeV2ProcessRegistry({ maxOutputBytes: 4 });
+		const started = await registry.start({
+			sessionId: "session-1",
+			command: `${JSON.stringify(process.execPath)} -e 'process.stdout.write(Buffer.from([240,159])),setTimeout(function(){return process.stdout.write(Buffer.from([153,130]))},10)'`,
+		});
+		const completed = await registry.wait(started.processId);
+
+		expect(completed).toMatchObject({ state: "exited", output: "🙂", cursor: 4, truncated: false });
 	});
 
 	test("runs a node-backed process without tying it to a client connection", async () => {

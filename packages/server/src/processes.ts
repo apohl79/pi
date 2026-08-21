@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 
 export type V2ProcessState = "running" | "exited" | "terminated" | "lost";
 
@@ -160,6 +161,7 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 
 type NodeProcessState = ProcessState & Readonly<{ child: ChildProcess }> & {
 	waiters: Array<(value: V2ProcessSnapshot) => void>;
+	decoder: StringDecoder;
 	terminationTimer?: ReturnType<typeof setTimeout>;
 	killTimer?: ReturnType<typeof setTimeout>;
 };
@@ -185,13 +187,17 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		this.terminateTimeoutMs = options.terminateTimeoutMs ?? 1_000;
 	}
 
-	start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
+	async start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
 		if (request.pty === true) return Promise.reject(new Error("PTY process execution is unsupported"));
 		const [file, ...args] = parseCommand(request.command);
 		const child = spawn(file, args, { shell: false, detached: process.platform !== "win32", cwd: request.cwd, env: { ...process.env, ...request.env }, stdio: ["pipe", "pipe", "pipe"] });
-		const state: NodeProcessState = { processId: randomUUID(), sessionId: request.sessionId, command: request.command, state: "running", output: Buffer.alloc(0), totalBytes: 0, child, waiters: [] };
+		const state: NodeProcessState = { processId: randomUUID(), sessionId: request.sessionId, command: request.command, state: "running", output: Buffer.alloc(0), totalBytes: 0, child, waiters: [], decoder: new StringDecoder("utf8") };
 		this.processes.set(state.processId, state);
-		const append = (chunk: Buffer): void => appendOutput(state, chunk, this.maxOutputBytes);
+		const append = (chunk: Buffer): void => {
+			state.totalBytes += chunk.length;
+			const decoded = Buffer.from(state.decoder.write(chunk));
+			state.output = retainOutput(Buffer.concat([state.output, decoded]), this.maxOutputBytes);
+		};
 		child.stdout?.on("data", append);
 		child.stderr?.on("data", append);
 		child.once("error", (error) => { append(Buffer.from(error.message)); this.finish(state, "exited", 1); });
