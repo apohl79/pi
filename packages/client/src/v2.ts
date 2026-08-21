@@ -77,20 +77,9 @@ export class PiClientV2 {
 		return this.connectedValue;
 	}
 
-	get lastEventCursor(): EventCursor | undefined {
-		return this.lastEventCursorValue === undefined ? undefined : { ...this.lastEventCursorValue };
-	}
-
-	get lastEventCursors(): readonly EventCursor[] {
-		return [...this.eventCursors.values()].map((cursor) => ({ ...cursor }));
-	}
-
 	async connect(lastEvent?: EventCursor): Promise<ServerSnapshotV2> {
 		if (this.disposed) throw new Error("PiClientV2 is disposed");
 		if (this.connectedValue || this.handshake) throw new Error("PiClientV2 is already connecting or connected");
-		if (lastEvent === undefined && this.eventCursors.size > 1)
-			throw new Error("PiClientV2 requires an explicit event cursor when multiple sessions have events");
-		const effectiveLastEvent = lastEvent ?? this.lastEventCursorValue;
 		this.decoder = new FrameDecoder({ maxFrameLength: this.options.maxFrameLength ?? DEFAULT_MAX_FRAME_LENGTH });
 		const snapshot = new Promise<ServerSnapshotV2>((resolve, reject) => {
 			this.handshake = { resolve, reject };
@@ -104,16 +93,11 @@ export class PiClientV2 {
 			onError: (error) => this.fail(error, generation),
 		};
 		try {
-			const transport = await this.options.transportFactory(handlers);
-			if (generation !== this.transportGeneration || this.disposed) {
-				transport.close();
-				throw new Error("PiClientV2 transport closed");
-			}
-			this.transport = transport;
+			this.transport = await this.options.transportFactory(handlers);
 			await this.send({
 				type: "hello",
 				version: PROTOCOL_V2_VERSION,
-				...(effectiveLastEvent === undefined ? {} : { lastEvent: effectiveLastEvent }),
+				...(lastEvent === undefined ? {} : { lastEvent }),
 			});
 			return await snapshot;
 		} catch (error) {
@@ -128,6 +112,12 @@ export class PiClientV2 {
 		this.transport?.close();
 		this.transport = undefined;
 		this.listeners.clear();
+	}
+
+	dispose(): void {
+		if (this.disposed) return;
+		this.disconnect();
+		this.disposed = true;
 	}
 
 	dispose(): void {
