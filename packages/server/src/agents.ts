@@ -100,7 +100,7 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 			path,
 			taskName: request.taskName,
 			state: "running",
-			model: request.model,
+			model: structuredClone(request.model),
 			...(request.role === undefined ? {} : { role: request.role }),
 		};
 		this.agents.set(summary.id, {
