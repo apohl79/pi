@@ -853,7 +853,8 @@ export class PiServerV2 {
 	private async respondInputRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const requestId = requestIdFrom(command, payload);
-		this.requireResource(state, this.inputSessions, requestId, "input request");
+		const request = await this.inputs.read(requestId);
+		this.requireControl(state, request.sessionId);
 		if (typeof payload.answers !== "object" || payload.answers === null || Array.isArray(payload.answers))
 			throw new Error("input/request/respond requires answers");
 		const answers = Object.fromEntries(
@@ -870,7 +871,8 @@ export class PiServerV2 {
 
 	private async cancelInputRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const requestId = requestIdFrom(command, objectPayload(command));
-		this.requireResource(state, this.inputSessions, requestId, "input request");
+		const request = await this.inputs.read(requestId);
+		this.requireControl(state, request.sessionId);
 		await this.sendResponse(state, id, { command: command.command, request: await this.inputs.cancel(requestId) });
 	}
 
@@ -942,6 +944,7 @@ export class PiServerV2 {
 
 	private async generateImage(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("image/generate requires sessionId");
+		this.requireControl(state, command.sessionId);
 		const payload = objectPayload(command);
 		if (typeof payload.prompt !== "string") throw new Error("image/generate requires prompt");
 		await this.sendResponse(state, id, {
