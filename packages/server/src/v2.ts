@@ -22,9 +22,8 @@ import { InMemoryV2AgentRegistry, type V2AgentRegistry } from "./agents.ts";
 import { InMemoryV2AppRegistry, type V2AppRegistry } from "./apps.ts";
 import { InMemoryV2BlobStore, type V2BlobStore } from "./blobs.ts";
 import type { ByteConnection, ByteConnectionHandler } from "./connection.ts";
-import { type ForensicRecorder, InMemoryForensicRecorder } from "./diagnostics.ts";
+import type { ForensicRecorder } from "./diagnostics.ts";
 import { LocalV2FileReferenceService, type V2FileReferenceService } from "./files.ts";
-import { BlobV2ImageService, type V2ImageService } from "./images.ts";
 import { InMemoryV2InputRegistry, type V2InputRegistry } from "./inputs.ts";
 import type { PiServerListener } from "./listener.ts";
 import { InMemoryV2OperationStore, type V2OperationStore } from "./operation-store.ts";
@@ -66,10 +65,6 @@ export interface PiServerV2Options {
 	plans?: V2PlanRegistry;
 	inputs?: V2InputRegistry;
 	files?: V2FileReferenceService;
-	web?: V2WebService;
-	images?: V2ImageService;
-	plugins?: V2PluginRegistry;
-	usage?: V2UsageLedger;
 }
 
 type V2ConnectionState = {
@@ -145,10 +140,6 @@ export class PiServerV2 {
 	private readonly plans: V2PlanRegistry;
 	private readonly inputs: V2InputRegistry;
 	private readonly files: V2FileReferenceService;
-	private readonly web: V2WebService;
-	private readonly images: V2ImageService;
-	private readonly plugins: V2PluginRegistry;
-	private readonly usage: V2UsageLedger;
 	private readonly connections = new Set<V2ConnectionState>();
 	private readonly controls = new Map<string, string>();
 	private readonly runtimes = new Set<PiSessionRuntimeV2>();
@@ -188,10 +179,6 @@ export class PiServerV2 {
 		this.inputs = options.inputs ?? new InMemoryV2InputRegistry();
 		this.files =
 			options.files ?? new LocalV2FileReferenceService({ projectRoot: process.cwd(), allowAbsolute: false });
-		this.web = options.web ?? new UnavailableV2WebService();
-		this.images = options.images ?? new BlobV2ImageService(this.files, this.blobs);
-		this.plugins = options.plugins ?? new InMemoryV2PluginRegistry();
-		this.usage = options.usage ?? new InMemoryV2UsageLedger();
 	}
 
 	get addresses(): readonly string[] {
@@ -403,26 +390,6 @@ export class PiServerV2 {
 			if (command.command === "filesystem/reference/resolve")
 				return void (await this.resolveFile(state, id, command));
 			if (command.command === "filesystem/reference/read") return void (await this.readFile(state, id, command));
-			if (command.command === "web") return void (await this.webRequest(state, id, command));
-			if (command.command === "image/view") return void (await this.viewImage(state, id, command));
-			if (command.command === "image/generate") return void (await this.generateImage(state, id, command));
-			if (command.command === "diagnostics/status") return void (await this.diagnosticsStatus(state, id, command));
-			if (command.command === "diagnostics/timeline")
-				return void (await this.diagnosticsTimeline(state, id, command));
-			if (command.command === "diagnostics/export") return void (await this.diagnosticsExport(state, id, command));
-			if (command.command === "diagnostics/verify") return void (await this.diagnosticsVerify(state, id, command));
-			if (command.command === "diagnostics/doctor") return void (await this.diagnosticsDoctor(state, id, command));
-			if (command.command === "marketplace/add") return void (await this.addMarketplace(state, id, command));
-			if (command.command === "marketplace/list") return void (await this.listMarketplaces(state, id, command));
-			if (command.command === "marketplace/upgrade") return void (await this.upgradeMarketplace(state, id, command));
-			if (command.command === "marketplace/remove") return void (await this.removeMarketplace(state, id, command));
-			if (command.command === "plugin/list") return void (await this.listPlugins(state, id, command));
-			if (command.command === "plugin/read") return void (await this.readPlugin(state, id, command));
-			if (command.command === "plugin/install") return void (await this.installPlugin(state, id, command));
-			if (command.command === "plugin/uninstall") return void (await this.uninstallPlugin(state, id, command));
-			if (command.command === "plugin/enable") return void (await this.setPluginEnabled(state, id, command, true));
-			if (command.command === "plugin/disable") return void (await this.setPluginEnabled(state, id, command, false));
-			if (command.command === "usage/read") return void (await this.readUsage(state, id, command));
 			if (command.command === "session/detach") return void (await this.detach(state, id, command));
 			if (
 				command.command === "turn/start" ||
@@ -841,286 +808,6 @@ export class PiServerV2 {
 			encoding: "base64",
 			data: Buffer.from(result.data).toString("base64"),
 		});
-	}
-
-	private async webRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		if (!command.sessionId) throw new Error("web requires sessionId");
-		const payload = objectPayload(command);
-		const operation = payload.operation;
-		const operations: readonly V2WebOperation[] = [
-			"search_query",
-			"open",
-			"click",
-			"find",
-			"screenshot",
-			"image_query",
-		];
-		if (typeof operation !== "string" || !operations.includes(operation as V2WebOperation))
-			throw new Error("web operation is invalid");
-		const request = {
-			operation: operation as V2WebOperation,
-			...(typeof payload.query === "string" ? { query: payload.query } : {}),
-			...(typeof payload.url === "string" ? { url: payload.url } : {}),
-			...(typeof payload.refId === "string" ? { refId: payload.refId } : {}),
-			...(typeof payload.pattern === "string" ? { pattern: payload.pattern } : {}),
-		};
-		await this.sendResponse(state, id, {
-			command: command.command,
-			results: await this.web.execute(command.sessionId, request),
-		});
-	}
-
-	private async viewImage(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		if (!command.sessionId) throw new Error("image/view requires sessionId");
-		const payload = objectPayload(command);
-		if (typeof payload.reference !== "string") throw new Error("image/view requires reference");
-		await this.sendResponse(state, id, {
-			command: command.command,
-			image: await this.images.view(command.sessionId, payload.reference),
-		});
-	}
-
-	private async generateImage(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		if (!command.sessionId) throw new Error("image/generate requires sessionId");
-		this.requireControl(state, command.sessionId);
-		const payload = objectPayload(command);
-		if (typeof payload.prompt !== "string") throw new Error("image/generate requires prompt");
-		await this.sendResponse(state, id, {
-			command: command.command,
-			image: await this.images.generate(command.sessionId, {
-				prompt: payload.prompt,
-				...(typeof payload.sourceDigest === "string" ? { sourceDigest: payload.sourceDigest } : {}),
-			}),
-		});
-	}
-
-	private async diagnosticsStatus(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const events = await this.diagnosticEvents();
-		await this.sendResponse(state, id, {
-			command: command.command,
-			capture: "metadata",
-			degraded: false,
-			lastCriticalEventSeq: events.at(-1)?.seq ?? 0,
-			eventCount: events.length,
-		});
-	}
-
-	private async diagnosticsTimeline(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const payload = objectPayload(command);
-		const events = await this.diagnosticEvents(typeof payload.afterSeq === "number" ? payload.afterSeq : 0);
-		await this.sendResponse(state, id, {
-			command: command.command,
-			events: events.filter(
-				(event) =>
-					(typeof payload.sessionId !== "string" || event.sessionId === payload.sessionId) &&
-					(typeof payload.operationId !== "string" || event.operationId === payload.operationId),
-			),
-		});
-	}
-
-	private async diagnosticsExport(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const events = await this.diagnosticEvents();
-		const serializedEvents = JSON.stringify(events);
-		const manifest = {
-			schemaVersion: 1,
-			eventCount: events.length,
-			firstSeq: events[0]?.seq ?? 0,
-			lastSeq: events.at(-1)?.seq ?? 0,
-			eventsSha256: createHash("sha256").update(serializedEvents).digest("hex"),
-		};
-		await this.sendResponse(state, id, {
-			command: command.command,
-			format: "json",
-			events,
-			bundle: { manifest, events },
-		});
-	}
-
-	private async diagnosticsVerify(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const payload = objectPayload(command);
-		const bundle = payload.bundle;
-		if (typeof bundle === "object" && bundle !== null && !Array.isArray(bundle)) {
-			const candidate = bundle as Record<string, unknown>;
-			const events = candidate.events;
-			const manifest = candidate.manifest;
-			if (!Array.isArray(events) || typeof manifest !== "object" || manifest === null || Array.isArray(manifest))
-				throw new Error("diagnostics/verify bundle requires events and manifest");
-			const fields = manifest as Record<string, unknown>;
-			const serializedEvents = JSON.stringify(events);
-			const digest = createHash("sha256").update(serializedEvents).digest("hex");
-			const valid =
-				fields.schemaVersion === 1 && fields.eventCount === events.length && fields.eventsSha256 === digest;
-			await this.sendResponse(state, id, {
-				command: command.command,
-				valid,
-				...(valid ? {} : { reason: "Diagnostic bundle manifest does not match its events" }),
-			});
-			return;
-		}
-		const events = await this.diagnosticEvents();
-		const gaps = events.slice(1).flatMap((event, index) => {
-			const previous = events[index];
-			return previous && event.seq !== previous.seq + 1 ? [{ from: previous.seq, to: event.seq }] : [];
-		});
-		await this.sendResponse(state, id, { command: command.command, valid: gaps.length === 0, gaps });
-	}
-
-	private async diagnosticsDoctor(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const events = await this.diagnosticEvents();
-		const sequenceOk = events.every((event, index) => index === 0 || event.seq === events[index - 1]!.seq + 1);
-		await this.sendResponse(state, id, {
-			command: command.command,
-			ok: sequenceOk,
-			checks: [
-				{ name: "recorder", ok: true },
-				{ name: "sequence", ok: sequenceOk },
-			],
-		});
-	}
-
-	private async addMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const payload = objectPayload(command);
-		if (typeof payload.name !== "string" || typeof payload.source !== "string")
-			throw new Error("marketplace/add requires name and source");
-		await this.sendResponse(state, id, {
-			command: command.command,
-			marketplace: await this.plugins.addMarketplace(payload.name, payload.source),
-		});
-	}
-
-	private async listMarketplaces(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		await this.sendResponse(state, id, {
-			command: command.command,
-			marketplaces: await this.plugins.listMarketplaces(),
-		});
-	}
-
-	private async upgradeMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const payload = objectPayload(command);
-		if (typeof payload.name !== "string") throw new Error("marketplace/upgrade requires name");
-		await this.sendResponse(state, id, {
-			command: command.command,
-			marketplace: await this.plugins.upgradeMarketplace(payload.name),
-		});
-	}
-
-	private async removeMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const payload = objectPayload(command);
-		if (typeof payload.name !== "string") throw new Error("marketplace/remove requires name");
-		await this.plugins.removeMarketplace(payload.name);
-		await this.sendResponse(state, id, { command: command.command, name: payload.name });
-	}
-
-	private async listPlugins(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const payload = objectPayload(command);
-		await this.sendResponse(state, id, {
-			command: command.command,
-			plugins: await this.plugins.listPlugins(payload.installedOnly === true),
-		});
-	}
-
-	private async readPlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const payload = objectPayload(command);
-		if (typeof payload.id !== "string") throw new Error("plugin/read requires id");
-		const plugin = await this.plugins.readPlugin(payload.id);
-		if (!plugin) throw new Error(`Unknown plugin: ${payload.id}`);
-		await this.sendResponse(state, id, { command: command.command, plugin });
-	}
-
-	private async installPlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const payload = objectPayload(command);
-		if (
-			typeof payload.name !== "string" ||
-			typeof payload.marketplace !== "string" ||
-			typeof payload.version !== "string" ||
-			typeof payload.manifest !== "object" ||
-			payload.manifest === null ||
-			Array.isArray(payload.manifest)
-		)
-			throw new Error("plugin/install requires name, marketplace, version, and manifest");
-		await this.sendResponse(state, id, {
-			command: command.command,
-			plugin: await this.plugins.installPlugin({
-				name: payload.name,
-				marketplace: payload.marketplace,
-				version: payload.version,
-				manifest: payload.manifest as Record<string, unknown>,
-				...(typeof payload.root === "string" ? { root: payload.root } : {}),
-				...(payload.scope === "user" || payload.scope === "project" ? { scope: payload.scope } : {}),
-			}),
-		});
-	}
-
-	private async uninstallPlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const payload = objectPayload(command);
-		if (typeof payload.id !== "string") throw new Error("plugin/uninstall requires id");
-		await this.plugins.uninstallPlugin(payload.id);
-		await this.sendResponse(state, id, { command: command.command, id: payload.id });
-	}
-
-	private async setPluginEnabled(
-		state: V2ConnectionState,
-		id: string,
-		command: CommandV2,
-		enabled: boolean,
-	): Promise<void> {
-		const payload = objectPayload(command);
-		if (typeof payload.id !== "string") throw new Error(`${command.command} requires id`);
-		await this.sendResponse(state, id, {
-			command: command.command,
-			plugin: await this.plugins.setEnabled(
-				payload.id,
-				enabled,
-				payload.scope === "user" || payload.scope === "project" ? payload.scope : undefined,
-			),
-		});
-	}
-
-	private async listApps(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		await this.sendResponse(state, id, { command: command.command, apps: await this.apps.list() });
-	}
-
-	private async readApp(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const payload = objectPayload(command);
-		if (typeof payload.id !== "string") throw new Error("app/read requires id");
-		const app = await this.apps.read(payload.id);
-		if (!app) throw new Error(`Unknown app: ${payload.id}`);
-		await this.sendResponse(state, id, { command: command.command, app });
-	}
-
-	private async startAppAuth(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const payload = objectPayload(command);
-		if (typeof payload.id !== "string") throw new Error("app/auth/start requires id");
-		await this.sendResponse(state, id, {
-			command: command.command,
-			auth: await this.apps.startAuth(payload.id, payload),
-		});
-	}
-
-	private async readUsage(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const payload = objectPayload(command);
-		const filter: V2UsageFilter = {};
-		for (const key of ["sessionId", "agentId", "turnId", "goalId", "provider", "model"] as const) {
-			if (payload[key] !== undefined && typeof payload[key] !== "string")
-				throw new Error(`usage/read ${key} must be a string`);
-			if (typeof payload[key] === "string") (filter as { [name: string]: string })[key] = payload[key];
-		}
-		if (
-			payload.purpose !== undefined &&
-			!["agent", "compaction", "sessionName", "otherSideband"].includes(String(payload.purpose))
-		)
-			throw new Error("usage/read purpose is invalid");
-		if (typeof payload.purpose === "string")
-			(filter as { purpose: V2UsageFilter["purpose"] }).purpose = payload.purpose as V2UsageFilter["purpose"];
-		await this.sendResponse(state, id, {
-			command: command.command,
-			aggregate: await this.usage.aggregate(filter),
-			entries: await this.usage.read(filter),
-		});
-	}
-
-	private async diagnosticEvents(afterSeq = 0): Promise<Awaited<ReturnType<ForensicRecorder["read"]>>> {
-		return this.diagnostics.read(afterSeq);
 	}
 
 	private async detach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

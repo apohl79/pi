@@ -49,9 +49,5 @@ export function createUnixServerV2(service: PiServerServiceV2, options: UnixServ
 		plans: options.plans,
 		inputs: options.inputs,
 		files: options.files,
-		web: options.web,
-		images: options.images,
-		plugins: options.plugins,
-		usage: options.usage,
 	});
 }
