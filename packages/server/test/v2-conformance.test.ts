@@ -277,6 +277,29 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(Buffer.from(read.result.data, "base64").toString("utf8")).toBe("export const answer = 42;");
 	});
 
+	test("routes a bounded adapter-backed web request", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-web-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, {
+			path: join(directory, "server.sock"),
+			web: new AdapterV2WebService({
+				execute: async () => [{ id: "result-1", title: "Example", source: "fake", retrievedAt: 1, extract: "ok" }],
+			}),
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const response = await client.request({
+			command: "web",
+			sessionId: "session-1",
+			payload: { operation: "search_query", query: "example" },
+		});
+		expect(response).toMatchObject({ ok: true, result: { results: [{ id: "result-1", source: "fake" }] } });
+	});
+
 	test("acknowledges a turn before starting runtime execution", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
