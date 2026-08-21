@@ -1,10 +1,13 @@
 import type { SessionSnapshotV2 } from "@earendil-works/pi-protocol";
 import { describe, expect, test } from "vitest";
+import type { RemoteV2SessionState } from "../../src/client/remote-v2-session.ts";
 import {
 	createRemoteV2StatuslinePayload,
 	formatRemoteV2Session,
 	type RemoteV2SessionViewOptions,
+	RemoteV2StatuslineController,
 } from "../../src/client/remote-v2-view.ts";
+import { StatuslineRunner } from "../../src/server/statusline.ts";
 
 const options: RemoteV2SessionViewOptions = { maxTranscriptItems: 1, maxTranscriptCharacters: 32 };
 const snapshot: SessionSnapshotV2 = {
@@ -197,5 +200,45 @@ describe("formatRemoteV2Session", () => {
 			agents: { active: 1, total: 1 },
 			server: { connected: true, phase: "turn", detachable: true },
 		});
+	});
+
+	test("executes the statusline locally from remote snapshot state", async () => {
+		let listener: ((state: RemoteV2SessionState) => void) | undefined;
+		const source: {
+			readonly state: RemoteV2SessionState;
+			subscribe(callback: (state: RemoteV2SessionState) => void): () => void;
+		} = {
+			state: { lifecycle: { status: "ready" as const }, snapshot },
+			subscribe: (callback: (state: RemoteV2SessionState) => void) => {
+				listener = callback;
+				callback(source.state);
+				return () => {
+					listener = undefined;
+				};
+			},
+		};
+		const payloads: unknown[] = [];
+		const runner = new StatuslineRunner({
+			command: "statusline.sh",
+			execute: async (_command, payload) => {
+				payloads.push(JSON.parse(payload));
+				return { stdout: "remote status", stderr: "", exitCode: 0 };
+			},
+		});
+		const controller = new RemoteV2StatuslineController(source, runner, {
+			cwd: "/work",
+			transcriptPath: "/tmp/session.jsonl",
+		});
+		try {
+			await controller.refresh();
+			expect(controller.snapshot.output).toBe("remote status");
+			expect(payloads).toHaveLength(1);
+			expect(payloads[0]).toMatchObject({ harness: "pi", session_id: "session-1", server: { connected: true } });
+			listener?.({ lifecycle: { status: "ready" }, snapshot: { ...snapshot, revision: 3 } });
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(payloads).toHaveLength(1);
+		} finally {
+			await controller.dispose();
+		}
 	});
 });
