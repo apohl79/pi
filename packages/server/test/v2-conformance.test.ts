@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type {
 	AgentSummary,
 	CommandV2,
+	JsonValue,
 	ModelMetadata,
 	OperationAccepted,
 	SessionMetadataV2,
@@ -261,6 +262,19 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(exported).toMatchObject({ ok: true, result: { format: "json", events: [{ seq: 1 }] } });
 		expect(verified).toMatchObject({ ok: true, result: { valid: true, gaps: [] } });
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
+		const bundle = (exported as unknown as { result: { bundle: JsonValue } }).result.bundle;
+		const bundleVerified = await client.request({ command: "diagnostics/verify", payload: { bundle } });
+		expect(bundleVerified).toMatchObject({ ok: true, result: { valid: true } });
+		const tampered = structuredClone(bundle) as {
+			events: Array<{ [key: string]: JsonValue }>;
+			manifest: { [key: string]: JsonValue };
+		};
+		tampered.events[0]!.payload = { token: "changed" };
+		const tamperedVerification = await client.request({
+			command: "diagnostics/verify",
+			payload: { bundle: tampered as JsonValue },
+		});
+		expect(tamperedVerification).toMatchObject({ ok: true, result: { valid: false } });
 	});
 
 	test("enables metadata diagnostics when no recorder is injected", async () => {
