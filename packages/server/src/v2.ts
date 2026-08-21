@@ -150,7 +150,6 @@ export class PiServerV2 {
 	private readonly plugins: V2PluginRegistry;
 	private readonly usage: V2UsageLedger;
 	private readonly connections = new Set<V2ConnectionState>();
-	private readonly controls = new Map<string, string>();
 	private readonly runtimes = new Set<PiSessionRuntimeV2>();
 	private readonly eventHistory = new Map<string, EventEnvelopeV2[]>();
 	private readonly agentWatches = new Set<string>();
@@ -279,7 +278,6 @@ export class PiServerV2 {
 		await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state)));
 		await Promise.all(Array.from(this.runtimes, (runtime) => this.disposeRuntime(runtime)));
 		this.runtimes.clear();
-		await this.agents.dispose?.();
 		this.started = false;
 	}
 
@@ -463,6 +461,7 @@ export class PiServerV2 {
 		}
 		const created = await this.service.createSession(payload);
 		if (state.sessions.has(created.sessionId)) throw new Error(`Session ${created.sessionId} is already attached`);
+		this.trackRuntime(created.runtime);
 		state.sessions.set(created.sessionId, created.runtime);
 		await this.sendResponse(state, id, {
 			command: command.command,
@@ -486,8 +485,6 @@ export class PiServerV2 {
 		const mode = payload.mode === undefined ? "control" : payload.mode;
 		if (mode !== "control" && mode !== "observer") throw new Error("session/attach mode must be control or observer");
 		const runtime = await this.service.openSession(command.sessionId);
-		if (mode === "control") this.claimControl(state, command.sessionId);
-		else this.releaseControlFor(state, command.sessionId);
 		this.trackRuntime(runtime);
 		state.sessions.set(command.sessionId, runtime);
 		await this.sendResponse(state, id, {
