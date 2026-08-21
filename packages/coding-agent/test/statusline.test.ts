@@ -54,4 +54,18 @@ describe("StatuslineRunner", () => {
 		expect(result.error).toBe("statusline timeout");
 		expect(aborted).toBe(true);
 	});
+
+	test("uses the first non-empty output line and supports argv commands", async () => {
+		let received: string | readonly string[] | undefined;
+		const runner = new StatuslineRunner({
+			command: ["statusline", "--json"],
+			execute: async (command) => {
+				received = command;
+				return { stdout: "\nfirst line\nsecond line", stderr: "", exitCode: 0 };
+			},
+		});
+		const result = await runner.update({ session: "one" });
+		expect(received).toEqual(["statusline", "--json"]);
+		expect(result.output).toBe("first line");
+	});
 });
