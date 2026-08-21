@@ -58,4 +58,28 @@ describe("PiClientV2", () => {
 		client.disconnect();
 		expect(client.connected).toBe(false);
 	});
+
+	test("routes typed session helpers and surfaces failed responses", async () => {
+		const pair = transportPair();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		const connecting = client.connect();
+		await Promise.resolve();
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
+		await connecting;
+
+		const sessions = client.listSessions();
+		pair.deliver({ type: "response", id: "v2-request-1", ok: true, result: { sessions: [] } });
+		expect(await sessions).toEqual([]);
+		const attached = client.attachSession("session-1", "observer");
+		pair.deliver({ type: "response", id: "v2-request-2", ok: true, result: { command: "session/attach" } });
+		await attached;
+		const read = client.readSession("session-1");
+		pair.deliver({
+			type: "response",
+			id: "v2-request-3",
+			ok: false,
+			error: { code: "not_found", message: "missing" },
+		});
+		await expect(read).rejects.toThrow("not_found: missing");
+	});
 });
