@@ -7,6 +7,8 @@ export interface RemoteV2SessionViewOptions {
 	readonly maxTranscriptItems?: number;
 	readonly maxTranscriptCharacters?: number;
 	readonly maxAgentItems?: number;
+	readonly maxPlanItems?: number;
+	readonly maxGoalCharacters?: number;
 }
 
 /** Renderable TUI projection of one server-authoritative v2 session. */
@@ -20,6 +22,8 @@ export class RemoteV2SessionView implements Component {
 			maxTranscriptItems: options.maxTranscriptItems ?? 48,
 			maxTranscriptCharacters: options.maxTranscriptCharacters ?? 6_000,
 			maxAgentItems: options.maxAgentItems ?? 12,
+			maxPlanItems: options.maxPlanItems ?? 12,
+			maxGoalCharacters: options.maxGoalCharacters ?? 240,
 		};
 		this.#state = session.state;
 		this.#unsubscribe = session.subscribe((state) => {
@@ -54,6 +58,15 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	const lines = [`Session ${snapshot.id} · phase=${snapshot.phase} · model=${model}${operation}`];
 	for (const agent of snapshot.agents.slice(0, options.maxAgentItems ?? 12))
 		lines.push(`Agent ${agent.path} · ${agent.state} · ${agent.model.provider}/${agent.model.id}`);
+	if (snapshot.goal) {
+		const maxGoalCharacters = options.maxGoalCharacters ?? 240;
+		lines.push(`Goal ${snapshot.goal.status} · ${snapshot.goal.objective.slice(0, maxGoalCharacters)}`);
+	}
+	if (snapshot.plan) {
+		lines.push(`Plan v${snapshot.plan.version}`);
+		for (const item of snapshot.plan.items.slice(0, options.maxPlanItems ?? 12))
+			lines.push(`Plan ${item.status} · ${item.step}`);
+	}
 	let characters = 0;
 	const transcript = maxItems === 0 ? [] : snapshot.transcript.slice(-maxItems);
 	for (const item of transcript) {
