@@ -115,4 +115,36 @@ describe("coding-agent daemon runtime", () => {
 			await runtime.close();
 		}
 	});
+
+	test("runs server-default print mode through the production daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-daemon-print-e2e-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-print-faux",
+			models: [{ id: "coding-agent-daemon-print-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("server default response")]);
+		const output: string[] = [];
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+			writeText: (value) => output.push(value),
+		});
+		try {
+			await runtime.cli.runPi({
+				command: "pi",
+				options: { print: true, messages: ["hello"], fileArgs: [], unknownFlags: new Map(), diagnostics: [] },
+			});
+			expect(output).toEqual(["server default response"]);
+		} finally {
+			await runtime.close();
+		}
+	});
 });
