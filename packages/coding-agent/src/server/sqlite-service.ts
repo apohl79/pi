@@ -119,7 +119,12 @@ export async function createCodingAgentV2SqliteService(
 				? {}
 				: { viewImage: async (reference) => imageService.view(metadata.id, reference) }),
 		});
-		return { metadata: sessionMetadata(metadata), harness: created.harness, goals };
+		return {
+			metadata: sessionMetadata(metadata),
+			harness: created.harness,
+			goals,
+			...(inputRegistry === undefined ? {} : { inputs: inputRegistry }),
+		};
 	};
 	const store: CodingAgentV2SessionStore = {
 		list: async () => {
