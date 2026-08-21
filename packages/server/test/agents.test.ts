@@ -47,6 +47,23 @@ describe("InMemoryV2AgentRegistry", () => {
 		);
 	});
 
+	test("isolates stored model state from the spawn request", async () => {
+		const registry = new InMemoryV2AgentRegistry();
+		const model = { provider: "test", id: "small" };
+		const child = await registry.spawn({
+			sessionId: "session-1",
+			parentPath: "/root",
+			taskName: "isolated",
+			taskMessage: "start",
+			model,
+		});
+
+		model.provider = "mutated";
+		model.id = "changed";
+
+		expect(await registry.list("session-1")).toEqual([child]);
+	});
+
 	test("waits for completion, preserves role, and scopes paths to a session", async () => {
 		const registry = new InMemoryV2AgentRegistry();
 		const first = await registry.spawn({
