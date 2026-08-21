@@ -13,5 +13,6 @@ export * from "./processes.ts";
 export * from "./protocol.ts";
 export * from "./server.ts";
 export * from "./types.ts";
+export * from "./usage-ledger.ts";
 export * from "./v2.ts";
 export * from "./web.ts";
