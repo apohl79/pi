@@ -43,6 +43,10 @@ export interface DiagnosticCapsuleInput {
 	maxBytes?: number;
 }
 
+export interface DiagnosticContentStore {
+	encrypt(input: DiagnosticCapsuleInput): Promise<DiagnosticCapsule>;
+}
+
 export interface DiagnosticBundleVerification {
 	valid: boolean;
 	reason?: string;
