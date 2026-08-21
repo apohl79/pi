@@ -83,6 +83,7 @@ export class GoalManager {
 	async update(patch: GoalUpdate): Promise<GoalSnapshot> {
 		const current = await this.read();
 		if (!current) throw new Error("No active goal");
+		const timestamp = this.now();
 		assertNonNegativeInteger(patch.tokensUsed, "tokensUsed");
 		assertNonNegativeInteger(patch.tokenBudget, "tokenBudget");
 		if (
@@ -91,10 +92,15 @@ export class GoalManager {
 		)
 			throw new Error("activeTimeSeconds must be non-negative");
 		if (patch.status !== undefined && !GOAL_STATUSES.has(patch.status)) throw new Error("Invalid goal status");
+		const activeTimeSeconds =
+			current.status === "active"
+				? current.activeTimeSeconds + Math.max(0, timestamp - current.updatedAt) / 1000
+				: current.activeTimeSeconds;
 		const goal: GoalSnapshot = {
 			...current,
 			...patch,
-			updatedAt: this.now(),
+			...(patch.activeTimeSeconds === undefined ? { activeTimeSeconds } : {}),
+			updatedAt: timestamp,
 		};
 		if (goal.tokenBudget !== undefined && goal.tokensUsed > goal.tokenBudget && goal.status === "active")
 			goal.status = "budgetLimited";
