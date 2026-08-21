@@ -145,6 +145,12 @@ function combineUsage(first: Usage, second: Usage): Usage {
 }
 
 /** Compaction thresholds and retention settings. */
+export interface CompactionSettingsOverride {
+	enabled?: boolean;
+	reserveTokens?: number;
+	keepRecentTokens?: number;
+}
+
 export interface CompactionSettings {
 	/** Enable automatic compaction decisions. */
 	enabled: boolean;
@@ -152,6 +158,8 @@ export interface CompactionSettings {
 	reserveTokens: number;
 	/** Approximate recent-context tokens to keep after compaction. */
 	keepRecentTokens: number;
+	/** Optional field-level overrides keyed by the canonical provider/model pair. */
+	modelOverrides?: Record<string, CompactionSettingsOverride>;
 }
 
 /** Keep compaction arithmetic bounded and meaningful for every caller, including restored options. */
@@ -179,6 +187,21 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	reserveTokens: 16384,
 	keepRecentTokens: 20000,
 };
+
+export function resolveCompactionSettings(
+	settings: CompactionSettings,
+	provider: string,
+	modelId: string,
+): CompactionSettings {
+	const override = settings.modelOverrides?.[`${provider}/${modelId}`];
+	if (!override) return { ...settings };
+	return {
+		enabled: override.enabled ?? settings.enabled,
+		reserveTokens: override.reserveTokens ?? settings.reserveTokens,
+		keepRecentTokens: override.keepRecentTokens ?? settings.keepRecentTokens,
+		modelOverrides: { ...settings.modelOverrides },
+	};
+}
 
 /** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
