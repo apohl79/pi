@@ -1,11 +1,5 @@
-import type {
-	AgentHarness,
-	AgentMessage,
-	Entry,
-	GoalContinuationScheduler,
-	GoalManager,
-} from "@earendil-works/pi-agent-core";
-import type { ImageContent, Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
+import type { AgentHarness, GoalManager } from "@earendil-works/pi-agent-core";
+import type { Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
 import type {
 	CommandNameV2,
 	CommandV2,
@@ -56,6 +50,11 @@ export interface CodingAgentV2SessionStore {
 	open(sessionId: string): Promise<CodingAgentV2SessionDefinition>;
 	create(options: Record<string, unknown>): Promise<CodingAgentV2SessionDefinition>;
 	delete(sessionId: string): Promise<void>;
+}
+
+export interface CodingAgentV2ServiceOptions {
+	/** Provider-local fast model used only for side-band automatic naming. */
+	fastModel?: Model<string>;
 }
 
 export interface CodingAgentV2Runtime {
@@ -255,7 +254,6 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const entries = await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" });
 		const transcript = entries
 			.filter((entry): entry is Extract<typeof entry, { type: "message" }> => entry.type === "message")
-			.slice(-48)
 			.map((entry) => {
 				if (!("content" in entry.message) || !Array.isArray(entry.message.content)) return undefined;
 				const text = entry.message.content
@@ -273,7 +271,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			})
 			.filter((line): line is string => line !== undefined)
 			.join("\n")
-			.slice(-6000);
+			.slice(-4000);
 		if (transcript.length === 0) return;
 		const response = await this.models.completeSimple(this.fastModel, {
 			messages: [
@@ -284,13 +282,15 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				},
 			] satisfies Message[],
 		});
-		const generated = normalizeGeneratedName(
-			response.content
-				.filter((content): content is { type: "text"; text: string } => content.type === "text")
-				.map((content) => content.text)
-				.join(" "),
-		);
-		if (!generated || this.nameRevision !== initialRevision || this.nameSource !== initialSource) return;
+		const generated = response.content
+			.filter((content): content is { type: "text"; text: string } => content.type === "text")
+			.map((content) => content.text)
+			.join(" ")
+			.replace(/[\r\n]+/g, " ")
+			.replace(/^["'`]+|["'`]+$/g, "")
+			.trim()
+			.slice(0, 120);
+		if (generated.length === 0 || this.nameRevision !== initialRevision || this.nameSource !== initialSource) return;
 		if ((await this.definition.harness.session.getName()) !== initialName) return;
 		await this.definition.harness.session.setName(generated);
 		await this.definition.harness.recordUsage(
@@ -392,8 +392,10 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
-		if (runCommand === "turn/start") await harness.prompt(text);
-		else if (runCommand === "turn/resume") {
+		if (runCommand === "turn/start") {
+			await harness.prompt(text);
+			if (this.autoName) await this.generateName();
+		} else if (runCommand === "turn/resume") {
 			const result = await harness.resume();
 			if (!result.ok) throw new Error(result.error.message);
 			if (result.value.kind === "failed") throw new Error(result.value.error.message);
@@ -443,29 +445,15 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.nameRevision += 1;
 		} else if (runCommand === "session/name/generate") {
 			const generated =
-				typeof payload.name === "string" && payload.name.trim().length > 0
-					? payload.name.trim()
-					: "Untitled session";
+				typeof payload.name === "string" && payload.name.trim().length > 0 ? payload.name.trim() : undefined;
+			if (generated === undefined) await this.generateName();
 			if (this.nameSource !== "explicit") {
-				this.sessionName = generated;
-				this.nameSource = "generated";
-				await harness.session.setName(generated);
-				this.nameRevision += 1;
-			} else if (runCommand === "session/name/generate") {
-				const generated =
-					typeof payload.name === "string" && payload.name.trim().length > 0 ? payload.name.trim() : undefined;
-				if (generated === undefined) await this.generateName();
-				if (this.nameSource !== "explicit") {
-					if (generated !== undefined) {
-						this.sessionName = generated;
-						this.nameSource = "generated";
-						await harness.session.setName(generated);
-						this.nameRevision += 1;
-					}
+				if (generated !== undefined) {
+					this.sessionName = generated;
+					this.nameSource = "generated";
+					await harness.session.setName(generated);
+					this.nameRevision += 1;
 				}
-			} else if (runCommand === "session/name/auto/set") {
-				if (typeof payload.enabled !== "boolean") throw new Error("session/name/auto/set requires enabled");
-				this.autoName = payload.enabled;
 			}
 		} catch (error) {
 			this.phase = "failed";
