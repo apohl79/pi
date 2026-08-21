@@ -55,7 +55,6 @@ export class InMemoryV2AppRegistry implements V2AppRegistry {
 		if (!app) throw new Error(`Unknown app: ${appId}`);
 		if (app.auth === "unsupported") throw new Error(`App does not support authentication: ${appId}`);
 		const authorizationUrl = typeof payload.authorizationUrl === "string" ? payload.authorizationUrl : undefined;
-		this.apps.set(appId, { ...app, auth: "pending" });
 		return { appId, state: "pending", ...(authorizationUrl === undefined ? {} : { authorizationUrl }) };
 	}
 }
