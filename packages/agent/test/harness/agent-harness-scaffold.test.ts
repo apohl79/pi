@@ -87,6 +87,33 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("rolls back user turns while retaining historical entries", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-rollback-faux",
+			models: [{ id: "harness-rollback-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
+		const session = createSession("rollback");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		await harness.prompt("first");
+		await harness.prompt("second");
+
+		const result = await harness.rollback(1);
+
+		expect(result).toMatchObject({ ok: true, value: { removedTurns: 1, targetId: expect.any(String) } });
+		expect(
+			(await session.findEntriesOnBranch({ order: "oldestFirst" })).some(
+				(entry) => entry.type === "custom" && entry.customType === "conversation_rollback",
+			),
+		).toBe(true);
+		expect(
+			(await session.findEntries({ order: "oldestFirst" })).filter((entry) => entry.type === "message"),
+		).toHaveLength(4);
+		await harness.close();
+	});
+
 	it("compacts durable history and records the terminal operation", async () => {
 		const models = createModels();
 		const faux = fauxProvider({

@@ -635,54 +635,14 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
-		const extensionHost = this.definition.extensionHost;
-		let terminalNotified = false;
-		let terminalOutcome = "completed";
-		const notifyTerminal = async (outcome: string): Promise<void> => {
-			if (terminalNotified) return;
-			try {
-				await extensionHost?.onOperationTerminal({ id: operationId, type: runCommand }, outcome);
-				terminalNotified = true;
-			} catch (error) {
-				if (outcome !== "completed") terminalNotified = true;
-				throw error;
-			}
-		};
-		try {
-			await extensionHost?.onOperationAccepted({ id: operationId, type: runCommand });
-		} catch (error) {
-			terminalOutcome = "failed";
-			await notifyTerminal("failed");
-			throw error;
-		}
-		try {
-		const unwrap = <T>(result: { ok: boolean; value?: T; error?: unknown }): T => {
-			if (!result.ok) throw result.error instanceof Error ? result.error : new Error(String(result.error));
-			return result.value as T;
-		};
-		if (runCommand === "turn/start") {
-			const outcome = unwrap(await harness.prompt(commandInput(command)));
-			if ("kind" in outcome) {
-				if (outcome.kind === "failed") { terminalOutcome = "failed"; throw new Error(outcome.error.message); }
-				if (outcome.kind === "aborted") terminalOutcome = "aborted";
-				if (outcome.kind === "suspended") terminalOutcome = "suspended";
-			}
-		} else if (runCommand === "turn/resume") {
-			const outcome = unwrap(await harness.resume());
-			if ("kind" in outcome) {
-				if (outcome.kind === "failed") { terminalOutcome = "failed"; throw new Error(outcome.error.message); }
-				if (outcome.kind === "aborted") terminalOutcome = "aborted";
-				if (outcome.kind === "suspended") terminalOutcome = "suspended";
-			}
-		} else if (runCommand === "turn/steer") unwrap(await harness.steer(commandInput(command)));
-		else if (runCommand === "turn/followUp") unwrap(await harness.followUp(commandInput(command)));
-		else if (runCommand === "turn/abort") {
-			unwrap(await harness.abort());
-			terminalOutcome = "aborted";
-		}
+		if (runCommand === "turn/start" || runCommand === "turn/resume") await harness.prompt(text);
+		else if (runCommand === "turn/steer") await harness.steer(text);
+		else if (runCommand === "turn/followUp") await harness.followUp(text);
+		else if (runCommand === "turn/abort") await harness.abort();
 		else if (runCommand === "turn/rollback") {
 			const turns = typeof payload.turns === "number" ? payload.turns : 1;
-			unwrap(await harness.rollback(turns));
+			const result = await harness.rollback(turns);
+			if (!result.ok) throw new Error(result.error.message);
 		} else if (runCommand === "goal/create") {
 			if (!this.definition.goals || typeof payload.objective !== "string")
 				throw new Error("goal/create requires an objective");
