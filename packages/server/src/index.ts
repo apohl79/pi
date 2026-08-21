@@ -5,6 +5,7 @@ export * from "./errors.ts";
 export * from "./listener.ts";
 export * from "./operation-store.ts";
 export * from "./plans.ts";
+export * from "./processes.ts";
 export * from "./protocol.ts";
 export * from "./server.ts";
 export * from "./types.ts";
