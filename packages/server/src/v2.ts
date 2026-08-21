@@ -269,7 +269,7 @@ export class PiServerV2 {
 		return this.listeners.flatMap((listener) => (listener.address === undefined ? [] : [listener.address]));
 	}
 
-	async start(): Promise<this> {
+	start(): Promise<this> {
 		if (this.started || this.closing) return Promise.reject(new Error("PiServerV2 is already started or closing"));
 		if (this.startPromise) return this.startPromise;
 		this.startPromise = this.startInternal();
