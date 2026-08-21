@@ -487,62 +487,20 @@ export class PiServerV2 {
 				throw new Error(`session/create ${field} must be a string`);
 		}
 		const created = await this.service.createSession(payload);
-		const staleReference = Array.from(this.connections).some(
-			(connection) =>
-				connection.sessions.has(created.sessionId) ||
-				connection.attachingSessions.has(created.sessionId) ||
-				(connection.pendingAttachCounts.get(created.sessionId) ?? 0) > 0,
-		);
-		if (staleReference) {
-			if (this.service.deleteSession)
-				await this.service.deleteSession(created.sessionId).catch((cleanupError) => this.reportError(cleanupError));
-			await this.disposeRuntime(created.runtime).catch((disposeError) => this.reportError(disposeError));
-			throw new Error(`Session ${created.sessionId} still has stale connection references`);
-		}
-		this.deletedSessions.delete(created.sessionId);
-		if (state.sessions.has(created.sessionId) || state.visibleSessions.has(created.sessionId)) {
-			await this.disposeRuntime(created.runtime);
-			throw new Error(`Session ${created.sessionId} is already attached`);
-		}
-		this.trackRuntime(created.runtime);
+		if (state.sessions.has(created.sessionId)) throw new Error(`Session ${created.sessionId} is already attached`);
 		state.sessions.set(created.sessionId, created.runtime);
-		state.visibleSessions.add(created.sessionId);
-		state.attachedSessions.add(created.sessionId);
-		try {
-			await this.sendResponse(state, id, {
-				command: command.command,
-				session: toProtocolJsonValue(await this.snapshotForSession(created.sessionId, created.runtime)),
-			});
-		} catch (error) {
-			state.sessions.delete(created.sessionId);
-			state.visibleSessions.delete(created.sessionId);
-			state.attachedSessions.delete(created.sessionId);
-			if (this.service.deleteSession) await this.service.deleteSession(created.sessionId).catch((cleanupError) => this.reportError(cleanupError));
-			await this.disposeRuntime(created.runtime).catch((disposeError) => this.reportError(disposeError));
-			throw error;
-		}
+		await this.sendResponse(state, id, {
+			command: command.command,
+			session: toProtocolJsonValue(await this.snapshotForSession(created.sessionId, created.runtime)),
+		});
 	}
 
 	private async deleteSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("session/delete requires sessionId");
 		if (!this.service.deleteSession) throw new Error("session/delete is not supported by this service");
-		this.requireVisibleSession(state, command.sessionId);
-		const runtime = this.requireAttached(state, command.sessionId);
-		if (this.deletingSessions.has(command.sessionId)) throw new Error("Session is already being deleted");
-		const references = Array.from(this.connections).filter((connection) => connection !== state && connection.sessions.has(command.sessionId));
-		if (references.length > 0 || this.hasActiveOperationForSession(command.sessionId))
-			throw new Error("Session is still referenced by another connection or active operation");
-		if (this.hasPendingAttachSession(command.sessionId)) throw new Error("Session has an attach in progress");
-		this.deletingSessions.add(command.sessionId);
-		try {
-			await this.service.deleteSession(command.sessionId);
-			this.deletedSessions.add(command.sessionId);
-		} finally {
-			this.deletingSessions.delete(command.sessionId);
-		}
+		await this.service.deleteSession(command.sessionId);
+		const runtime = state.sessions.get(command.sessionId);
 		state.sessions.delete(command.sessionId);
-		state.visibleSessions.delete(command.sessionId);
-		state.attachedSessions.delete(command.sessionId);
 		if (runtime && !this.hasRuntimeReference(runtime)) await this.disposeRuntime(runtime);
 		await this.sendResponse(state, id, { command: command.command, sessionId: command.sessionId });
 	}

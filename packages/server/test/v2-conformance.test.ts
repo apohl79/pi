@@ -424,6 +424,28 @@ describe("PiServer v2 operation acceptance", () => {
 		});
 	});
 
+	test("delegates session creation and deletion through the v2 service boundary", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-session-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const created = await client.request({
+			command: "session/create",
+			payload: { id: "created-session", cwd: "/tmp" },
+		});
+		expect(created).toMatchObject({
+			ok: true,
+			result: { command: "session/create", session: { id: "created-session" } },
+		});
+		const deleted = await client.request({ command: "session/delete", sessionId: "created-session" });
+		expect(deleted).toMatchObject({ ok: true, result: { command: "session/delete", sessionId: "created-session" } });
+		expect(service.sessions.has("created-session")).toBe(false);
+	});
+
 	test("acknowledges a turn before starting runtime execution", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
