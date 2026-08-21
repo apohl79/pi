@@ -1,5 +1,5 @@
-import type { AgentHarness, Entry, GoalManager } from "@earendil-works/pi-agent-core";
-import type { Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
+import type { AgentHarness, AgentMessage, Entry, GoalManager } from "@earendil-works/pi-agent-core";
+import type { ImageContent, Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
 import type {
 	CommandNameV2,
 	CommandV2,
@@ -92,25 +92,6 @@ async function modelMetadata(models: Models, model: Model<string>): Promise<Mode
 }
 
 type PromptPart = { type: "text"; text: string } | ImageContent;
-
-export function normalizeGeneratedName(value: string): string | undefined {
-	const cleaned = value
-		.replace(/[\u0000-\u001f\u007f]/g, " ")
-		.replace(/^(?:title|session\s+name)\s*[:-]\s*/i, "")
-		.replace(/^here(?:'s| is)\s+(?:a|the)?\s*(?:title|session\s+name)\s*[:-]?\s*/i, "")
-		.replace(/\s+/g, " ")
-		.replace(/^['"`]+|['"`]+$/g, "")
-		.trim();
-	if (/^(?:answer|sure|okay|ok|here you go)\b[.!]?$/i.test(cleaned)) return undefined;
-	if (/(?:sk|pk|api[_-]?key|bearer)\s*[:=]\s*\S+/i.test(cleaned)) return undefined;
-	const words = cleaned.split(" ").filter(Boolean).slice(0, 7);
-	if (words.length < 2) return undefined;
-	const joined = words.join(" ");
-	let name = joined.slice(0, 32);
-	if (joined.length > 32) name = name.replace(/\s+\S*$/, "").trimEnd();
-	if (name.split(" ").length < 2) return undefined;
-	return name;
-}
 
 function commandInput(command: CommandV2): AgentMessage {
 	const payload = command.payload;
@@ -397,14 +378,14 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		await extensionHost?.onOperationAccepted({ id: _operationId, type: runCommand });
 		try {
 			if (runCommand === "turn/start") {
-				await harness.prompt(text);
+				await harness.prompt(input);
 				if (this.autoName) await this.generateName();
 			} else if (runCommand === "turn/resume") {
 				const result = await harness.resume();
 				if (!result.ok) throw new Error(result.error.message);
 				if (result.value.kind === "failed") throw new Error(result.value.error.message);
-			} else if (runCommand === "turn/steer") await harness.steer(text);
-			else if (runCommand === "turn/followUp") await harness.followUp(text);
+			} else if (runCommand === "turn/steer") await harness.steer(input);
+			else if (runCommand === "turn/followUp") await harness.followUp(input);
 			else if (runCommand === "turn/abort") await harness.abort();
 			else if (runCommand === "turn/rollback") {
 				const turns = typeof payload.turns === "number" ? payload.turns : 1;
