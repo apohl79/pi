@@ -133,7 +133,17 @@ describe("AgentHarness v2 scaffold", () => {
 			session,
 			models,
 			model: faux.getModel(),
-			compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+			compaction: {
+				enabled: true,
+				reserveTokens: 1,
+				keepRecentTokens: 1,
+				modelOverrides: { "harness-compaction-faux/harness-compaction-model": { reserveTokens: 7 } },
+			},
+		});
+		expect(await harness.getCompactionSettings()).toMatchObject({
+			enabled: true,
+			reserveTokens: 7,
+			keepRecentTokens: 1,
 		});
 		await harness.prompt("first request with enough text to create history");
 		await harness.prompt("second request with enough text to create history");

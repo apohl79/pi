@@ -17,7 +17,12 @@ import {
 	collectEntriesForBranchSummary,
 	generateBranchSummary,
 } from "./compaction/branch-summarization.ts";
-import { type CompactionSettings, compact, prepareCompaction } from "./compaction/compaction.ts";
+import {
+	type CompactionSettings,
+	compact,
+	prepareCompaction,
+	resolveCompactionSettings,
+} from "./compaction/compaction.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
 import { Result as ResultValue, TaggedError } from "./result.ts";
 import { buildSessionContext } from "./session/context.ts";
@@ -576,7 +581,8 @@ export class AgentHarness implements AgentLane {
 			);
 		}
 		const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
-		const preparation = prepareCompaction(entries, this.compactionSettings);
+		const settings = resolveCompactionSettings(this.compactionSettings, this.model.provider, this.model.id);
+		const preparation = prepareCompaction(entries, settings);
 		if (!preparation.ok) {
 			return ResultValue.ok({
 				runId: this.durableSession.idGenerator.next(),
@@ -1159,7 +1165,7 @@ export class AgentHarness implements AgentLane {
 		this.retryPolicy = { ...policy };
 	}
 	async getCompactionSettings(): Promise<CompactionSettings> {
-		return { ...this.compactionSettings };
+		return resolveCompactionSettings(this.compactionSettings, this.model.provider, this.model.id);
 	}
 	async setCompactionSettings(settings: CompactionSettings): Promise<void> {
 		this.compactionSettings = { ...settings };
