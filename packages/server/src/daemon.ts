@@ -90,15 +90,23 @@ export class ServerDaemon {
 
 	private async startInternal(): Promise<void> {
 		await this.recordDiagnostic("daemon_starting", { socketPath: this.options.socketPath });
-		const server = (this.options.createServer ?? defaultCreateServer)(this.options.service, {
-			path: this.options.socketPath,
-			...(this.options.serverId === undefined ? {} : { serverId: this.options.serverId }),
-			...(this.options.agents === undefined ? {} : { agents: this.options.agents }),
-			...(this.options.inputs === undefined ? {} : { inputs: this.options.inputs }),
-			...(this.options.plans === undefined ? {} : { plans: this.options.plans }),
-			...(this.options.diagnostics === undefined ? {} : { diagnostics: this.options.diagnostics }),
-			...(this.options.diagnosticContent === undefined ? {} : { diagnosticContent: this.options.diagnosticContent }),
-		});
+		let server: ServerDaemonServer;
+		try {
+			server = (this.options.createServer ?? defaultCreateServer)(this.options.service, {
+				path: this.options.socketPath,
+				...(this.options.serverId === undefined ? {} : { serverId: this.options.serverId }),
+				...(this.options.agents === undefined ? {} : { agents: this.options.agents }),
+				...(this.options.inputs === undefined ? {} : { inputs: this.options.inputs }),
+				...(this.options.plans === undefined ? {} : { plans: this.options.plans }),
+				...(this.options.diagnostics === undefined ? {} : { diagnostics: this.options.diagnostics }),
+				...(this.options.diagnosticContent === undefined
+					? {}
+					: { diagnosticContent: this.options.diagnosticContent }),
+			});
+		} catch (error) {
+			this.state = "stopped";
+			throw error;
+		}
 		try {
 			await server.start();
 		} catch (error) {

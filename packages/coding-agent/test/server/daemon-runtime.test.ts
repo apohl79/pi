@@ -181,4 +181,41 @@ describe("coding-agent daemon runtime", () => {
 			await runtime.close();
 		}
 	});
+
+	test("runs server-default interactive mode through the production daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-interactive-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-interactive-faux",
+			models: [
+				{ id: "coding-agent-daemon-interactive-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("interactive response")]);
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+			runInteractive: async (session) => {
+				const operationId = await session.submit("hello interactive");
+				const snapshot = await session.waitForOperation(operationId);
+				expect(snapshot.phase).toBe("idle");
+				expect(snapshot.transcript.some((item) => item.role === "assistant")).toBe(true);
+			},
+		});
+		try {
+			await runtime.cli.runPi({
+				command: "pi",
+				options: { messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] },
+			});
+		} finally {
+			await runtime.close();
+		}
+	});
 });
