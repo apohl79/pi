@@ -22,7 +22,7 @@ import { InMemoryV2AgentRegistry, type V2AgentRegistry } from "./agents.ts";
 import { InMemoryV2AppRegistry, type V2AppRegistry } from "./apps.ts";
 import { InMemoryV2BlobStore, type V2BlobStore } from "./blobs.ts";
 import type { ByteConnection, ByteConnectionHandler } from "./connection.ts";
-import { type ForensicRecorder, InMemoryForensicRecorder } from "./diagnostics.ts";
+import type { ForensicRecorder } from "./diagnostics.ts";
 import { LocalV2FileReferenceService, type V2FileReferenceService } from "./files.ts";
 import { InMemoryV2InputRegistry, type V2InputRegistry } from "./inputs.ts";
 import type { PiServerListener } from "./listener.ts";
@@ -63,7 +63,6 @@ export interface PiServerV2Options {
 	plans?: V2PlanRegistry;
 	inputs?: V2InputRegistry;
 	files?: V2FileReferenceService;
-	plugins?: V2PluginRegistry;
 }
 
 type V2ConnectionState = {
@@ -122,39 +121,6 @@ function requestIdFrom(command: CommandV2, payload: Record<string, unknown>): st
 	return requestId;
 }
 
-function safeOperationError(error: unknown): string {
-	if (!(error instanceof Error) || error.message.length === 0 || error.message.length > 500) return "Operation failed";
-	const message = error.message.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
-	if (/bearer\s+\S+|(?:api[_-]?key|token|secret|password)\s*[:=]\s*\S+|\b(?:sk|pk|rk)-[a-z0-9_-]{8,}/i.test(message))
-		return "Operation failed";
-	return message || "Operation failed";
-}
-
-function safeDiagnosticMessage(error: unknown): string {
-	const raw = error instanceof Error ? error.message : String(error);
-	const message = raw.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
-	if (
-		message.length === 0 ||
-		message.length > 500 ||
-		/\bbearer\s+\S+|(?:api[_-]?key|token|secret|password)\s*[:=]\s*\S+|\b(?:sk|pk|rk)-[a-z0-9_-]{8,}/i.test(
-			message,
-		)
-	)
-		return "Server error";
-	return message;
-}
-
-function safeAgentMessage(message: string): string {
-	const normalized = message.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
-	const redacted = normalized
-		.replace(/bearer\s+\S+/gi, "Bearer [redacted]")
-		.replace(/((?:api[_-]?key|token|secret|password)\s*[:=]\s*)\S+/gi, "$1[redacted]")
-		.replace(/\b(?:sk|pk|rk)-[a-z0-9_-]{8,}/gi, "[redacted]");
-	return redacted.length > MAX_AGENT_MESSAGE_EVENT_LENGTH
-		? `${redacted.slice(0, MAX_AGENT_MESSAGE_EVENT_LENGTH - 1)}…`
-		: redacted;
-}
-
 function referenceFrom(command: CommandV2, payload: Record<string, unknown>): string {
 	const reference = payload.reference ?? command.operationId;
 	if (typeof reference !== "string" || reference.length === 0) throw new Error("file reference is required");
@@ -177,8 +143,6 @@ export class PiServerV2 {
 	private readonly plans: V2PlanRegistry;
 	private readonly inputs: V2InputRegistry;
 	private readonly files: V2FileReferenceService;
-	private readonly plugins: V2PluginRegistry;
-	private readonly ownsAgents: boolean;
 	private readonly connections = new Set<V2ConnectionState>();
 	private readonly controls = new Map<string, string>();
 	private readonly runtimes = new Set<PiSessionRuntimeV2>();
@@ -220,8 +184,6 @@ export class PiServerV2 {
 		this.inputs = options.inputs ?? new InMemoryV2InputRegistry();
 		this.files =
 			options.files ?? new LocalV2FileReferenceService({ projectRoot: process.cwd(), allowAbsolute: false });
-		this.plugins = options.plugins ?? new InMemoryV2PluginRegistry();
-		this.ownsAgents = options.agents === undefined;
 	}
 
 	get addresses(): readonly string[] {
@@ -451,22 +413,6 @@ export class PiServerV2 {
 			if (command.command === "filesystem/reference/resolve")
 				return void (await this.resolveFile(state, id, command));
 			if (command.command === "filesystem/reference/read") return void (await this.readFile(state, id, command));
-			if (command.command === "diagnostics/status") return void (await this.diagnosticsStatus(state, id, command));
-			if (command.command === "diagnostics/timeline")
-				return void (await this.diagnosticsTimeline(state, id, command));
-			if (command.command === "diagnostics/export") return void (await this.diagnosticsExport(state, id, command));
-			if (command.command === "diagnostics/verify") return void (await this.diagnosticsVerify(state, id, command));
-			if (command.command === "diagnostics/doctor") return void (await this.diagnosticsDoctor(state, id, command));
-			if (command.command === "marketplace/add") return void (await this.addMarketplace(state, id, command));
-			if (command.command === "marketplace/list") return void (await this.listMarketplaces(state, id, command));
-			if (command.command === "marketplace/upgrade") return void (await this.upgradeMarketplace(state, id, command));
-			if (command.command === "marketplace/remove") return void (await this.removeMarketplace(state, id, command));
-			if (command.command === "plugin/list") return void (await this.listPlugins(state, id, command));
-			if (command.command === "plugin/read") return void (await this.readPlugin(state, id, command));
-			if (command.command === "plugin/install") return void (await this.installPlugin(state, id, command));
-			if (command.command === "plugin/uninstall") return void (await this.uninstallPlugin(state, id, command));
-			if (command.command === "plugin/enable") return void (await this.setPluginEnabled(state, id, command, true));
-			if (command.command === "plugin/disable") return void (await this.setPluginEnabled(state, id, command, false));
 			if (command.command === "session/detach") return void (await this.detach(state, id, command));
 			if (
 				command.command === "turn/start" ||
@@ -1009,7 +955,6 @@ export class PiServerV2 {
 
 	private async completeFiles(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("filesystem/complete requires sessionId");
-		this.requireAttached(state, command.sessionId);
 		const payload = objectPayload(command);
 		const prefix = typeof payload.prefix === "string" ? payload.prefix : "";
 		await this.sendResponse(state, id, {
@@ -1020,7 +965,6 @@ export class PiServerV2 {
 
 	private async resolveFile(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("filesystem/reference/resolve requires sessionId");
-		this.requireAttached(state, command.sessionId);
 		await this.sendResponse(state, id, {
 			command: command.command,
 			file: await this.files.resolve(command.sessionId, referenceFrom(command, objectPayload(command))),
@@ -1029,303 +973,13 @@ export class PiServerV2 {
 
 	private async readFile(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("filesystem/reference/read requires sessionId");
-		this.requireAttached(state, command.sessionId);
 		const result = await this.files.read(command.sessionId, referenceFrom(command, objectPayload(command)));
-		const response = {
+		await this.sendResponse(state, id, {
 			command: command.command,
 			file: result.file,
 			encoding: "base64",
 			data: Buffer.from(result.data).toString("base64"),
-		};
-		try {
-			encodeServerMessageV2(
-				{ type: "response", id, ok: true, result: toProtocolJsonValue(response) },
-				{ maxFrameLength: this.maxFrameLength },
-			);
-		} catch {
-			throw new Error("File response exceeds the maximum frame size");
-		}
-		await this.sendResponse(state, id, {
-			...response,
 		});
-	}
-
-	private async diagnosticsStatus(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		this.requireControl(state, command);
-		const events = await this.diagnosticEvents();
-		await this.sendResponse(state, id, {
-			command: command.command,
-			capture: "metadata",
-			degraded: false,
-			lastCriticalEventSeq: events.at(-1)?.seq ?? 0,
-			eventCount: events.length,
-		});
-	}
-
-	private async diagnosticsTimeline(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		this.requireControl(state, command);
-		const payload = objectPayload(command);
-		const events = await this.diagnosticEvents(typeof payload.afterSeq === "number" ? payload.afterSeq : 0);
-		await this.sendBoundedDiagnosticsResponse(state, id, {
-			command: command.command,
-			events: events
-			.filter(
-				(event) =>
-					(typeof payload.sessionId !== "string" || event.sessionId === payload.sessionId) &&
-					(typeof payload.operationId !== "string" || event.operationId === payload.operationId),
-			)
-			.slice(0, MAX_REPLAY_EVENTS),
-		});
-	}
-
-	private async diagnosticsExport(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		this.requireControl(state, command);
-		const events: Awaited<ReturnType<ForensicRecorder["read"]>> = [];
-		const exportBudget = Math.max(1, Math.min(MAX_DIAGNOSTIC_EXPORT_BYTES, Math.floor(this.maxFrameLength * 0.75)));
-		for (const event of (await this.diagnosticEvents()).slice(0, MAX_REPLAY_EVENTS)) {
-			const candidate = [...events, event];
-			if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > exportBudget) break;
-			events.push(event);
-		}
-		const serializedEvents = JSON.stringify(events);
-		const manifest = {
-			schemaVersion: 1,
-			integrity: "corruption-detection-only",
-			eventCount: events.length,
-			firstSeq: events[0]?.seq ?? 0,
-			lastSeq: events.at(-1)?.seq ?? 0,
-			eventsSha256: createHash("sha256").update(serializedEvents).digest("hex"),
-		};
-		await this.sendBoundedDiagnosticsResponse(state, id, {
-			command: command.command,
-			format: "json",
-			bundle: { manifest, events },
-		});
-	}
-
-	private async sendBoundedDiagnosticsResponse(
-		state: V2ConnectionState,
-		id: string,
-		result: Record<string, unknown>,
-	): Promise<void> {
-		try {
-			encodeServerMessageV2(
-				{ type: "response", id, ok: true, result: toProtocolJsonValue(result) },
-				{ maxFrameLength: this.maxFrameLength },
-			);
-		} catch {
-			throw new Error("Diagnostics response exceeds the maximum frame size");
-		}
-		await this.sendResponse(state, id, result);
-	}
-
-	private async diagnosticsVerify(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		this.requireControl(state, command);
-		const payload = objectPayload(command);
-		const bundle = payload.bundle;
-		if (typeof bundle === "object" && bundle !== null && !Array.isArray(bundle)) {
-			const candidate = bundle as Record<string, unknown>;
-			const events = candidate.events;
-			const manifest = candidate.manifest;
-			if (!Array.isArray(events) || typeof manifest !== "object" || manifest === null || Array.isArray(manifest))
-				throw new Error("diagnostics/verify bundle requires events and manifest");
-			const fields = manifest as Record<string, unknown>;
-			const digest = createHash("sha256").update(JSON.stringify(events)).digest("hex");
-			const valid = fields.schemaVersion === 1 && fields.eventCount === events.length && fields.eventsSha256 === digest;
-			await this.sendResponse(state, id, {
-				command: command.command,
-				valid,
-				integrity: "corruption-detection-only",
-				...(valid ? {} : { reason: "Diagnostic bundle manifest does not match its events" }),
-			});
-			return;
-		}
-		const events = await this.diagnosticEvents();
-		const gaps = events.slice(1).flatMap((event, index) => {
-			const previous = events[index];
-			return previous && event.seq !== previous.seq + 1 ? [{ from: previous.seq, to: event.seq }] : [];
-		});
-		await this.sendResponse(state, id, { command: command.command, valid: gaps.length === 0, gaps });
-	}
-
-	private async diagnosticsDoctor(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		this.requireControl(state, command);
-		const events = await this.diagnosticEvents();
-		const sequenceOk = events.every((event, index) => index === 0 || event.seq === events[index - 1]!.seq + 1);
-		await this.sendResponse(state, id, {
-			command: command.command,
-			ok: sequenceOk,
-			checks: [
-				{ name: "recorder", ok: true },
-				{ name: "sequence", ok: sequenceOk },
-			],
-		});
-	}
-
-	private async addMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		this.requireControl(state, command);
-		const payload = objectPayload(command);
-		if (typeof payload.name !== "string" || typeof payload.source !== "string")
-			throw new Error("marketplace/add requires name and source");
-		await this.sendResponse(state, id, {
-			command: command.command,
-			marketplace: await this.plugins.addMarketplace(payload.name, payload.source),
-		});
-	}
-
-	private async listMarketplaces(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		this.requireControl(state, command);
-		await this.sendBoundedPluginResponse(state, id, {
-			command: command.command,
-			marketplaces: (await this.plugins.listMarketplaces()).slice(0, MAX_V2_ARRAY_ITEMS),
-		});
-	}
-
-	private async upgradeMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		this.requireControl(state, command);
-		const payload = objectPayload(command);
-		if (typeof payload.name !== "string") throw new Error("marketplace/upgrade requires name");
-		await this.sendResponse(state, id, {
-			command: command.command,
-			marketplace: await this.plugins.upgradeMarketplace(payload.name),
-		});
-	}
-
-	private async removeMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		this.requireControl(state, command);
-		const payload = objectPayload(command);
-		if (typeof payload.name !== "string") throw new Error("marketplace/remove requires name");
-		await this.plugins.removeMarketplace(payload.name);
-		await this.sendResponse(state, id, { command: command.command, name: payload.name });
-	}
-
-	private async listPlugins(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		this.requireControl(state, command);
-		const payload = objectPayload(command);
-		await this.sendBoundedPluginResponse(state, id, {
-			command: command.command,
-			plugins: (await this.plugins.listPlugins(payload.installedOnly === true)).slice(0, MAX_V2_ARRAY_ITEMS),
-		});
-	}
-
-	private async readPlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		this.requireControl(state, command);
-		const payload = objectPayload(command);
-		if (typeof payload.id !== "string") throw new Error("plugin/read requires id");
-		const plugin = await this.plugins.readPlugin(payload.id);
-		if (!plugin) throw new Error(`Unknown plugin: ${payload.id}`);
-		await this.sendBoundedPluginResponse(state, id, { command: command.command, plugin });
-	}
-
-	private async installPlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		this.requireControl(state, command);
-		const payload = objectPayload(command);
-		if (
-			typeof payload.name !== "string" ||
-			typeof payload.marketplace !== "string" ||
-			typeof payload.version !== "string" ||
-			typeof payload.manifest !== "object" ||
-			payload.manifest === null ||
-			Array.isArray(payload.manifest)
-		)
-			throw new Error("plugin/install requires name, marketplace, version, and manifest");
-		const manifest = payload.manifest as Record<string, unknown>;
-		const boundedResources = (value: unknown): string[] =>
-			Array.isArray(value)
-				? value
-						.filter((item): item is string => typeof item === "string")
-						.slice(0, 256)
-						.map((item) => item.slice(0, 1024))
-				: [];
-		const preview = {
-			id: `${payload.name}@${payload.marketplace}`,
-			name: payload.name,
-			marketplace: payload.marketplace,
-			version: payload.version,
-			manifestDigest: "0".repeat(64),
-			...(typeof payload.root === "string" ? { root: payload.root } : {}),
-			enabled: true,
-			scope: payload.scope === "project" ? "project" : "user",
-			provenance: "manifest",
-			resources: {
-				skills: boundedResources(manifest.skills),
-				commands: boundedResources(manifest.commands),
-				apps: Array.isArray(manifest.apps) ? manifest.apps.length : manifest.apps === undefined ? 0 : 1,
-				hooks: Array.isArray(manifest.hooks) ? manifest.hooks.length : manifest.hooks === undefined ? 0 : 1,
-			},
-		};
-		try {
-			encodeServerMessageV2(
-				{ type: "response", id, ok: true, result: toProtocolJsonValue({ command: command.command, plugin: preview }) },
-				{ maxFrameLength: this.maxFrameLength },
-			);
-		} catch {
-			throw new Error("Plugin response exceeds the maximum frame size");
-		}
-		await this.sendBoundedPluginResponse(state, id, {
-			command: command.command,
-			plugin: await this.plugins.installPlugin({
-				name: payload.name,
-				marketplace: payload.marketplace,
-				version: payload.version,
-				manifest,
-				...(typeof payload.root === "string" ? { root: payload.root } : {}),
-				...(payload.scope === "user" || payload.scope === "project" ? { scope: payload.scope } : {}),
-			}),
-		});
-	}
-
-	private async uninstallPlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		this.requireControl(state, command);
-		const payload = objectPayload(command);
-		if (typeof payload.id !== "string") throw new Error("plugin/uninstall requires id");
-		await this.plugins.uninstallPlugin(payload.id);
-		await this.sendResponse(state, id, { command: command.command, id: payload.id });
-	}
-
-	private async setPluginEnabled(
-		state: V2ConnectionState,
-		id: string,
-		command: CommandV2,
-		enabled: boolean,
-	): Promise<void> {
-		this.requireControl(state, command);
-		const payload = objectPayload(command);
-		if (typeof payload.id !== "string") throw new Error(`${command.command} requires id`);
-		await this.sendResponse(state, id, {
-			command: command.command,
-			plugin: await this.plugins.setEnabled(
-				payload.id,
-				enabled,
-				payload.scope === "user" || payload.scope === "project" ? payload.scope : undefined,
-			),
-		});
-	}
-
-	private requireControl(state: V2ConnectionState, command: CommandV2 | string): void {
-		const sessionId = typeof command === "string" ? command : command.sessionId;
-		if (!sessionId) throw new Error(typeof command === "string" ? "Session ID is required" : `${command.command} requires sessionId`);
-		if (this.controls.get(sessionId) === state.id) {
-			this.requireAttached(state, sessionId);
-			return;
-		}
-		throw new Error(`Session ${sessionId} requires a control lease`);
-	}
-
-	private async sendBoundedPluginResponse(state: V2ConnectionState, id: string, result: Record<string, unknown>): Promise<void> {
-		try {
-			encodeServerMessageV2(
-				{ type: "response", id, ok: true, result: toProtocolJsonValue(result) },
-				{ maxFrameLength: this.maxFrameLength },
-			);
-		} catch {
-			throw new Error("Plugin response exceeds the maximum frame size");
-		}
-		await this.sendResponse(state, id, result);
-	}
-
-	private async diagnosticEvents(afterSeq = 0): Promise<Awaited<ReturnType<ForensicRecorder["read"]>>> {
-		return this.diagnostics.read(afterSeq);
 	}
 
 	private async detach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
