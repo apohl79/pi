@@ -38,12 +38,9 @@ export class GoalContinuationScheduler {
 
 	constructor(options: GoalContinuationSchedulerOptions) {
 		this.options = options;
-		if (
-			options.maxContinuations !== undefined &&
-			(!Number.isInteger(options.maxContinuations) || options.maxContinuations < 0)
-		)
-			throw new Error("maxContinuations must be a non-negative integer");
 		this.maxContinuations = options.maxContinuations ?? Number.POSITIVE_INFINITY;
+		if (!Number.isInteger(this.maxContinuations) || this.maxContinuations < 0)
+			throw new Error("maxContinuations must be a non-negative integer");
 	}
 
 	async schedule(): Promise<boolean> {
@@ -52,12 +49,10 @@ export class GoalContinuationScheduler {
 		let continued = false;
 		try {
 			await this.options.waitForIdle(async () => {
-				if (this.closed) return;
 				const goal = await this.options.goals.read();
-				if (this.closed || !goal || goal.status !== "active" || this.completed >= this.maxContinuations) return;
+				if (!goal || goal.status !== "active" || this.completed >= this.maxContinuations) return;
 				this.completed += 1;
 				continued = true;
-				if (this.closed) return;
 				await this.options.continueGoal(goal);
 			});
 			return continued;
