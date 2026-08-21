@@ -133,6 +133,7 @@ export class PiServerV2 {
 	private readonly plugins: V2PluginRegistry;
 	private readonly usage: V2UsageLedger;
 	private readonly connections = new Set<V2ConnectionState>();
+	private readonly runtimes = new Set<PiSessionRuntimeV2>();
 	private readonly eventHistory = new Map<string, EventEnvelopeV2[]>();
 	private readonly operations = new Map<string, OperationRecordV2>();
 	private readonly disposedRuntimes = new WeakSet<PiSessionRuntimeV2>();
@@ -229,6 +230,8 @@ export class PiServerV2 {
 		this.closing = true;
 		await Promise.all(this.listeners.map((listener) => listener.close()));
 		await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state)));
+		await Promise.all(Array.from(this.runtimes, (runtime) => this.disposeRuntime(runtime)));
+		this.runtimes.clear();
 		this.started = false;
 	}
 
@@ -402,6 +405,7 @@ export class PiServerV2 {
 		}
 		const created = await this.service.createSession(payload);
 		if (state.sessions.has(created.sessionId)) throw new Error(`Session ${created.sessionId} is already attached`);
+		this.trackRuntime(created.runtime);
 		state.sessions.set(created.sessionId, created.runtime);
 		await this.sendResponse(state, id, {
 			command: command.command,
@@ -422,6 +426,7 @@ export class PiServerV2 {
 	private async attach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("session/attach requires sessionId");
 		const runtime = await this.service.openSession(command.sessionId);
+		this.trackRuntime(runtime);
 		state.sessions.set(command.sessionId, runtime);
 		await this.sendResponse(state, id, {
 			command: command.command,
@@ -432,6 +437,7 @@ export class PiServerV2 {
 	private async readSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("session/read requires sessionId");
 		const runtime = state.sessions.get(command.sessionId) ?? (await this.service.openSession(command.sessionId));
+		this.trackRuntime(runtime);
 		state.sessions.set(command.sessionId, runtime);
 		await this.sendResponse(state, id, {
 			command: command.command,
@@ -442,6 +448,7 @@ export class PiServerV2 {
 	private async readGoal(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("goal/read requires sessionId");
 		const runtime = state.sessions.get(command.sessionId) ?? (await this.service.openSession(command.sessionId));
+		this.trackRuntime(runtime);
 		state.sessions.set(command.sessionId, runtime);
 		const snapshot = await runtime.snapshot();
 		await this.sendResponse(
@@ -1120,6 +1127,10 @@ export class PiServerV2 {
 		return Array.from(this.connections).some((connection) =>
 			Array.from(connection.sessions.values()).some((candidate) => candidate === runtime),
 		);
+	}
+
+	private trackRuntime(runtime: PiSessionRuntimeV2): void {
+		this.runtimes.add(runtime);
 	}
 
 	private async disposeRuntime(runtime: PiSessionRuntimeV2): Promise<void> {
