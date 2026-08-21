@@ -78,7 +78,11 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	const maxCharacters = normalizedOptions.maxTranscriptCharacters;
 	const model = `${sanitizeTranscriptText(snapshot.model.provider)}/${sanitizeTranscriptText(snapshot.model.id)}`;
 	const operation =
-		state.lifecycle.status === "busy" ? ` operation=${sanitizeTranscriptText(state.lifecycle.operationId)}` : "";
+		state.lifecycle.status === "busy"
+			? ` operation=${sanitizeTranscriptText(state.lifecycle.operationId)}`
+			: snapshot.activeOperation === undefined
+				? ""
+				: ` operation=${sanitizeTranscriptText(snapshot.activeOperation.operationId)} (${sanitizeTranscriptText(snapshot.activeOperation.state)})`;
 	const lines = [
 		`Session ${sanitizeTranscriptText(snapshot.id)} · phase=${sanitizeTranscriptText(snapshot.phase)} · model=${model}${operation}`,
 	];

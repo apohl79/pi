@@ -197,4 +197,20 @@ describe("formatRemoteV2Session", () => {
 		expect(output).toContain("cost=subscription");
 		expect(output).not.toContain("$12.500000");
 	});
+
+	test("uses the snapshot operation after reattach", () => {
+		const output = formatRemoteV2Session({
+			lifecycle: { status: "ready" },
+			snapshot: {
+				...snapshot,
+				activeOperation: {
+					operationId: "op-reconnected",
+					kind: "turn/start",
+					state: "running",
+					acceptedSeq: 4,
+				},
+			},
+		});
+		expect(output).toContain("operation=op-reconnected (running)");
+	});
 });
