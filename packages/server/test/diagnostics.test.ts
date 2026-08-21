@@ -112,6 +112,19 @@ describe("LocalDiagnosticCapsuleStore", () => {
 		};
 		await expect(store.decrypt(tampered)).rejects.toThrow();
 	});
+
+	test("persists bounded capsules separately from the key file", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostic-capsules-persist-"));
+		const keyPath = join(directory, "keys.json");
+		const firstStore = new LocalDiagnosticCapsuleStore(keyPath, { maxCapsules: 1 });
+		const first = await firstStore.encrypt({ eventId: "event-1", kind: "prompt", content: "one" });
+		const second = await firstStore.encrypt({ eventId: "event-2", kind: "prompt", content: "two" });
+		await firstStore.save(first);
+		await firstStore.save(second);
+		const reopened = new LocalDiagnosticCapsuleStore(keyPath, { maxCapsules: 1 });
+		expect(await reopened.list()).toEqual([second]);
+		expect(await reopened.decrypt(second)).toEqual(new Uint8Array(Buffer.from("two")));
+	});
 });
 
 describe("verifyDiagnosticBundle", () => {

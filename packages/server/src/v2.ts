@@ -884,8 +884,8 @@ export class PiServerV2 {
 			command: command.command,
 			format: "json",
 			events,
-			capsules: [...this.diagnosticCapsules.values()],
-			bundle: { manifest, events, capsules: [...this.diagnosticCapsules.values()] },
+			capsules: await this.diagnosticCapsulesForExport(),
+			bundle: { manifest, events, capsules: await this.diagnosticCapsulesForExport() },
 		});
 	}
 
@@ -1091,7 +1091,10 @@ export class PiServerV2 {
 					content: JSON.stringify(resolvedCommand.payload ?? {}),
 				})
 			: undefined;
-		if (capsule !== undefined) this.diagnosticCapsules.set(capsule.eventId, capsule);
+		if (capsule !== undefined) {
+			await this.diagnosticContent?.save?.(capsule);
+			this.diagnosticCapsules.set(capsule.eventId, capsule);
+		}
 		const accepted = await runtime.accept(operationId);
 		this.operations.set(operationId, {
 			operationId,
@@ -1131,6 +1134,11 @@ export class PiServerV2 {
 			},
 		});
 		void this.runOperation(runtime, command.sessionId, operationId, resolvedCommand);
+	}
+
+	private async diagnosticCapsulesForExport(): Promise<readonly DiagnosticCapsule[]> {
+		const persisted = await this.diagnosticContent?.list?.();
+		return persisted === undefined ? [...this.diagnosticCapsules.values()] : persisted;
 	}
 
 	private async resolveTurnContent(command: CommandV2): Promise<CommandV2> {
