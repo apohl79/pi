@@ -7,6 +7,46 @@ import { ServerRuntimeExtensionHost } from "../../src/server/extension-host.ts";
 import { createCodingAgentV2Service } from "../../src/server/v2-service.ts";
 
 describe("coding-agent v2 service adapter", () => {
+	test("backs v2 session lifecycle with injected durable factories", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-session-faux",
+			models: [{ id: "coding-agent-v2-session-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const session = new Session(new InMemorySessionStorage({ id: "factory-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		let deleted = false;
+		try {
+			const service = createCodingAgentV2Service(models, [], {
+				createSession: async (payload) => ({
+					metadata: { id: String(payload.id), createdAt: 1, updatedAt: 1 },
+					harness: created.harness,
+				}),
+				deleteSession: async (sessionId) => {
+					deleted = sessionId === "factory-session";
+				},
+			});
+			const createdSession = await service.createSession!({ id: "factory-session" });
+			expect(createdSession.sessionId).toBe("factory-session");
+			expect((await service.listSessions()).map((item) => item.id)).toEqual(["factory-session"]);
+			await service.deleteSession!("factory-session");
+			expect(deleted).toBe(true);
+			expect(await service.listSessions()).toEqual([]);
+		} finally {
+			if (!deleted) await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("generates a bounded provider-backed name without overwriting an explicit name", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
