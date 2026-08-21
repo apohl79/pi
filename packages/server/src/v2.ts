@@ -700,7 +700,6 @@ export class PiServerV2 {
 	private async interruptAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		this.requireControl(state, (await this.agents.getSnapshot(agentIdFrom(command, payload))).sessionId);
-		const agent = await this.agents.interrupt(agentIdFrom(command, payload));
 		await this.sendResponse(state, id, {
 			command: command.command,
 			agent,
