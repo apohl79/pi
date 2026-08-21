@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ByteTransport, ByteTransportHandlers } from "@earendil-works/pi-client";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import {
@@ -177,6 +181,39 @@ describe("experimental CLI runtime", () => {
 		});
 		await runtime.runDiagnostics({ command: "diagnostics", action: "status" });
 		expect(output).toEqual([{ command: "diagnostics/status", eventCount: 2 }]);
+		runtime.close();
+	});
+
+	test("verifies a bundle file without connecting to a daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-cli-diagnostics-"));
+		const events = [{ seq: 1, kind: "boot" }];
+		const eventsSha256 = createHash("sha256").update(JSON.stringify(events)).digest("hex");
+		const bundle = {
+			manifest: {
+				schemaVersion: 1,
+				eventCount: 1,
+				firstSeq: 1,
+				lastSeq: 1,
+				eventsSha256,
+			},
+			events,
+		};
+		await writeFile(join(directory, "bundle.json"), JSON.stringify(bundle));
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: () => {
+				throw new Error("offline verification must not create a client");
+			},
+			write: (value) => output.push(value),
+		});
+		await runtime.runDiagnostics({
+			command: "diagnostics",
+			action: "verify",
+			bundle: join(directory, "bundle.json"),
+		});
+		expect(output).toEqual([{ valid: true }]);
 		runtime.close();
 	});
 
