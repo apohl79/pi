@@ -7,7 +7,7 @@ import {
 import { expect, test, vi } from "vitest";
 import type { ByteConnection } from "../src/connection.ts";
 import { InMemoryV2OperationStore } from "../src/operation-store.ts";
-import { type PiServerServiceV2, PiServerV2 } from "../src/v2.ts";
+import { type PiServerServiceV2, type PiSessionRuntimeV2, PiServerV2 } from "../src/v2.ts";
 
 class RecordingConnection implements ByteConnection {
 	readonly chunks: Uint8Array[] = [];
@@ -204,4 +204,74 @@ test("connection errors still disconnect when close rejects", async () => {
 	handler.onError(error);
 	await vi.waitFor(() => expect((server as unknown as { connections: Set<unknown> }).connections.size).toBe(0));
 	await server.close();
+});
+
+test("close reports listener failures after closing connections and runtimes", async () => {
+	const dispose = vi.fn(async () => {});
+	const runtime: PiSessionRuntimeV2 = {
+		snapshot: async () => {
+			throw new Error("snapshot is not used by this test");
+		},
+		accept: async () => ({ operationId: "operation-1", sessionRevision: 0, eventSeq: 0 }),
+		run: async () => {},
+		dispose,
+	};
+	const errors: Error[] = [];
+	const listener = {
+		address: "failing",
+		start: async () => {},
+		close: async () => {
+			throw new Error("listener close failed");
+		},
+	};
+	const server = new PiServerV2(
+		{
+			listSessions: async () => [{ id: "session-1", createdAt: 0, updatedAt: 0 }],
+			listModels: async () => [],
+			openSession: async () => runtime,
+		},
+		{ listeners: [listener], onError: (error) => errors.push(error) },
+	);
+	const connection = new RecordingConnection();
+	const handler = server.accept(connection);
+	handler.onData(encodeClientMessageV2({ type: "hello", version: PROTOCOL_V2_VERSION }));
+	await vi.waitFor(() => expect(connection.chunks).toHaveLength(1));
+	handler.onData(
+		encodeClientMessageV2({
+			type: "request",
+			id: "read",
+			request: { command: "session/read", sessionId: "session-1" },
+		}),
+	);
+	await vi.waitFor(() => expect(connection.chunks).toHaveLength(2));
+
+	await server.close();
+
+	expect(connection.closed).toBe(true);
+	expect(dispose).toHaveBeenCalledOnce();
+	expect(errors).toEqual([new Error("listener close failed")]);
+});
+
+test("startup failure closes connections accepted before a listener rejects", async () => {
+	const firstConnection = new RecordingConnection();
+	const secondConnection = new RecordingConnection();
+	const failure = new Error("listener start failed");
+	const first = {
+		start: async (accept: (connection: ByteConnection) => void) => accept(firstConnection),
+		close: async () => {},
+	};
+	const second = {
+		start: async (accept: (connection: ByteConnection) => void) => {
+			accept(secondConnection);
+			throw failure;
+		},
+		close: async () => {},
+	};
+	const server = new PiServerV2(service, { listeners: [first, second] });
+
+	await expect(server.start()).rejects.toBe(failure);
+
+	expect(firstConnection.closed).toBe(true);
+	expect(secondConnection.closed).toBe(true);
+	await expect(server.start()).rejects.toThrow(/already started or closing/);
 });
