@@ -19,7 +19,9 @@ export type V2GeneratedImage = Readonly<{
 }>;
 
 export interface V2ImageGenerationAdapter {
-	generate(request: V2ImageGenerationRequest): Promise<
+	generate(
+		request: V2ImageGenerationRequest,
+	): Promise<
 		Readonly<{
 			data: Uint8Array;
 			mimeType: string;

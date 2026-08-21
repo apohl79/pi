@@ -24,6 +24,7 @@ import { InMemoryV2BlobStore, type V2BlobStore } from "./blobs.ts";
 import type { ByteConnection, ByteConnectionHandler } from "./connection.ts";
 import type { ForensicRecorder } from "./diagnostics.ts";
 import { LocalV2FileReferenceService, type V2FileReferenceService } from "./files.ts";
+import { BlobV2ImageService, type V2ImageService } from "./images.ts";
 import { InMemoryV2InputRegistry, type V2InputRegistry } from "./inputs.ts";
 import type { PiServerListener } from "./listener.ts";
 import { InMemoryV2OperationStore, type V2OperationStore } from "./operation-store.ts";
@@ -65,6 +66,7 @@ export interface PiServerV2Options {
 	inputs?: V2InputRegistry;
 	files?: V2FileReferenceService;
 	web?: V2WebService;
+	images?: V2ImageService;
 }
 
 type V2ConnectionState = {
@@ -141,6 +143,7 @@ export class PiServerV2 {
 	private readonly inputs: V2InputRegistry;
 	private readonly files: V2FileReferenceService;
 	private readonly web: V2WebService;
+	private readonly images: V2ImageService;
 	private readonly connections = new Set<V2ConnectionState>();
 	private readonly controls = new Map<string, string>();
 	private readonly runtimes = new Set<PiSessionRuntimeV2>();
@@ -181,6 +184,7 @@ export class PiServerV2 {
 		this.files =
 			options.files ?? new LocalV2FileReferenceService({ projectRoot: process.cwd(), allowAbsolute: false });
 		this.web = options.web ?? new UnavailableV2WebService();
+		this.images = options.images ?? new BlobV2ImageService(this.files, this.blobs);
 	}
 
 	get addresses(): readonly string[] {
@@ -393,6 +397,8 @@ export class PiServerV2 {
 				return void (await this.resolveFile(state, id, command));
 			if (command.command === "filesystem/reference/read") return void (await this.readFile(state, id, command));
 			if (command.command === "web") return void (await this.webRequest(state, id, command));
+			if (command.command === "image/view") return void (await this.viewImage(state, id, command));
+			if (command.command === "image/generate") return void (await this.generateImage(state, id, command));
 			if (command.command === "diagnostics/status") return void (await this.diagnosticsStatus(state, id, command));
 			if (command.command === "diagnostics/timeline")
 				return void (await this.diagnosticsTimeline(state, id, command));
@@ -843,6 +849,29 @@ export class PiServerV2 {
 		await this.sendResponse(state, id, {
 			command: command.command,
 			results: await this.web.execute(command.sessionId, request),
+		});
+	}
+
+	private async viewImage(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("image/view requires sessionId");
+		const payload = objectPayload(command);
+		if (typeof payload.reference !== "string") throw new Error("image/view requires reference");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			image: await this.images.view(command.sessionId, payload.reference),
+		});
+	}
+
+	private async generateImage(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("image/generate requires sessionId");
+		const payload = objectPayload(command);
+		if (typeof payload.prompt !== "string") throw new Error("image/generate requires prompt");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			image: await this.images.generate(command.sessionId, {
+				prompt: payload.prompt,
+				...(typeof payload.sourceDigest === "string" ? { sourceDigest: payload.sourceDigest } : {}),
+			}),
 		});
 	}
 

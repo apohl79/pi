@@ -78,7 +78,15 @@ function mimeTypeFor(path: string): string | undefined {
 				? "application/json"
 				: extension === "md"
 					? "text/markdown"
-					: undefined;
+					: extension === "png"
+						? "image/png"
+						: extension === "jpg" || extension === "jpeg"
+							? "image/jpeg"
+							: extension === "webp"
+								? "image/webp"
+								: extension === "gif"
+									? "image/gif"
+									: undefined;
 }
 
 export class LocalV2FileReferenceService implements V2FileReferenceService {
