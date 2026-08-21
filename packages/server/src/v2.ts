@@ -1043,6 +1043,27 @@ export class PiServerV2 {
 		});
 	}
 
+	private async listApps(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		await this.sendResponse(state, id, { command: command.command, apps: await this.apps.list() });
+	}
+
+	private async readApp(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.id !== "string") throw new Error("app/read requires id");
+		const app = await this.apps.read(payload.id);
+		if (!app) throw new Error(`Unknown app: ${payload.id}`);
+		await this.sendResponse(state, id, { command: command.command, app });
+	}
+
+	private async startAppAuth(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.id !== "string") throw new Error("app/auth/start requires id");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			auth: await this.apps.startAuth(payload.id, payload),
+		});
+	}
+
 	private async readUsage(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const filter: V2UsageFilter = {};
