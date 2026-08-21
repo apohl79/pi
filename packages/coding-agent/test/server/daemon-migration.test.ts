@@ -47,5 +47,8 @@ describe("production daemon migration", () => {
 		} finally {
 			await runtime.close();
 		}
+		const diagnostics = await readFile(join(directory, "diagnostics.jsonl"), "utf8");
+		expect(diagnostics).toContain('"kind":"daemon_migration_started"');
+		expect(diagnostics).toContain('"kind":"daemon_migration_completed"');
 	});
 });
