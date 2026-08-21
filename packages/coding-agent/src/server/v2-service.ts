@@ -1,4 +1,4 @@
-import type { AgentHarness, GoalManager } from "@earendil-works/pi-agent-core";
+import type { AgentHarness, Entry, GoalManager } from "@earendil-works/pi-agent-core";
 import type { Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
 import type {
 	CommandNameV2,
@@ -312,11 +312,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async snapshot(): Promise<SessionSnapshotV2> {
-		const [leafId, thinkingLevel, stats, compaction] = await Promise.all([
+		const [leafId, thinkingLevel, stats, compaction, entries] = await Promise.all([
 			this.definition.harness.getLeafId(),
 			this.definition.harness.getThinkingLevel(),
 			this.definition.harness.session.getStats(),
 			this.definition.harness.getCompactionSettings(),
+			this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }),
 		]);
 		void leafId;
 		const [goal, persistedName] = await Promise.all([
@@ -329,6 +330,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const output = Math.max(0, stats.totalTokens - stats.cachedTokens - stats.uncachedTokens);
 		const contextWindow = Math.max(1, this.model.contextWindow);
 		const reserveTokens = Math.max(0, compaction.reserveTokens);
+		const transcript = entries
+			.flatMap((entry) => {
+				const item = transcriptItem(entry);
+				return item === undefined ? [] : [item];
+			})
+			.slice(-200);
 		return {
 			id: this.definition.metadata.id,
 			...(effectiveName === undefined
