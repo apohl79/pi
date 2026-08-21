@@ -38,6 +38,12 @@ interface AgentState {
 const DEFAULT_MAX_MESSAGE_LENGTH = 64 * 1024;
 const DEFAULT_MAX_MESSAGES = 1024;
 
+const validateLimit = (name: string, value: number, minimum: number): number => {
+	if (!Number.isFinite(value) || !Number.isInteger(value) || value < minimum)
+		throw new Error(`${name} must be a finite integer greater than or equal to ${minimum}`);
+	return value;
+};
+
 export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 	private readonly maxDepth: number;
 	private readonly maxActive: number;
@@ -46,11 +52,19 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 	private readonly agents = new Map<string, AgentState>();
 	private readonly waiters = new Map<string, Set<() => void>>();
 
-	constructor(options: { maxDepth?: number; maxActive?: number; maxMessageLength?: number; maxMessages?: number } = {}) {
-		this.maxDepth = options.maxDepth ?? 1;
-		this.maxActive = options.maxActive ?? 8;
-		this.maxMessageLength = options.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH;
-		this.maxMessages = options.maxMessages ?? DEFAULT_MAX_MESSAGES;
+	constructor(
+		options: { maxDepth?: number; maxActive?: number; maxMessageLength?: number; maxMessages?: number } = {},
+	) {
+		this.maxDepth = options.maxDepth === undefined ? 1 : validateLimit("maxDepth", options.maxDepth, 0);
+		this.maxActive = options.maxActive === undefined ? 8 : validateLimit("maxActive", options.maxActive, 0);
+		this.maxMessageLength =
+			options.maxMessageLength === undefined
+				? DEFAULT_MAX_MESSAGE_LENGTH
+				: validateLimit("maxMessageLength", options.maxMessageLength, 1);
+		this.maxMessages =
+			options.maxMessages === undefined
+				? DEFAULT_MAX_MESSAGES
+				: validateLimit("maxMessages", options.maxMessages, 1);
 	}
 
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
@@ -61,7 +75,9 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 			throw new Error("Agent taskName contains unsupported characters");
 		this.validateMessage(request.taskMessage);
 		const path = `${request.parentPath.replace(/\/$/, "")}/${request.taskName}`;
-		if ([...this.agents.values()].some((agent) => agent.sessionId === request.sessionId && agent.summary.path === path))
+		if (
+			[...this.agents.values()].some((agent) => agent.sessionId === request.sessionId && agent.summary.path === path)
+		)
 			throw new Error(`Agent path ${path} already exists`);
 		const summary: AgentSummary = {
 			id: randomUUID(),
@@ -117,8 +133,14 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 
 	async followUp(agentId: string, message: string): Promise<AgentSummary> {
 		const agent = this.get(agentId);
+		if (
+			(agent.state === "complete" || agent.state === "interrupted" || agent.state === "awaitingInput") &&
+			this.activeCount() >= this.maxActive
+		)
+			throw new Error(`Agent active limit ${this.maxActive} exceeded`);
 		await this.message(agentId, message);
-		if (agent.state === "complete" || agent.state === "interrupted" || agent.state === "awaitingInput") this.setState(agent, "running");
+		if (agent.state === "complete" || agent.state === "interrupted" || agent.state === "awaitingInput")
+			this.setState(agent, "running");
 		return this.snapshot(agent);
 	}
 
@@ -144,7 +166,8 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 
 	private validateMessage(message: string): void {
 		if (message.trim().length === 0) throw new Error("Agent message must not be empty");
-		if (message.length > this.maxMessageLength) throw new Error(`Agent message exceeds maximum length ${this.maxMessageLength}`);
+		if (message.length > this.maxMessageLength)
+			throw new Error(`Agent message exceeds maximum length ${this.maxMessageLength}`);
 	}
 
 	private setState(agent: AgentState, state: AgentSummary["state"]): void {
