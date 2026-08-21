@@ -857,10 +857,15 @@ describe("PiServer v2 operation acceptance", () => {
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
 		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const agentEvent = client.next((message) => message.type === "event" && message.event === "agent_updated");
 		const spawned = await client.request({
 			command: "agent/spawn",
 			sessionId: "session-1",
 			payload: { taskName: "research", taskMessage: "inspect auth" },
+		});
+		expect(await agentEvent).toMatchObject({
+			event: "agent_updated",
+			payload: { agent: { path: "/root/research" } },
 		});
 		const agent = (spawned as unknown as { result: { agent: { id: string; path: string } } }).result.agent;
 		expect(agent.path).toBe("/root/research");
