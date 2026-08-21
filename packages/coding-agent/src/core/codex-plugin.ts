@@ -1,7 +1,5 @@
-import { constants, realpathSync } from "node:fs";
-import { open, realpath, stat } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { MAX_V2_ARRAY_ITEMS, MAX_V2_JSON_DEPTH, MAX_V2_STRING_LENGTH } from "@earendil-works/pi-protocol";
+import { readFile, realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 
 export type CodexPluginJson = null | boolean | number | string | CodexPluginJson[] | { [key: string]: CodexPluginJson };
 
@@ -50,21 +48,6 @@ export type CodexPluginResourceResolution =
 	| { ok: true; path: string }
 	| { ok: false; code: "absolute_path" | "path_escape"; message: string };
 
-function canonicalizeWithMissingSuffix(path: string): string | undefined {
-	const missing: string[] = [];
-	let current = path;
-	while (true) {
-		try {
-			const canonical = realpathSync(current);
-			return join(canonical, ...missing.reverse());
-		} catch {
-			const parent = dirname(current);
-			if (parent === current) return undefined;
-			missing.push(current.slice(parent.length + 1));
-			current = parent;
-		}
-	}
-}
 export type CodexPluginDiskResolution =
 	| { ok: true; path: string }
 	| { ok: false; code: "absolute_path" | "path_escape" | "symlink_escape" | "missing"; message: string };
@@ -198,6 +181,103 @@ export async function loadCodexMarketplaceManifest(
 			root: canonicalRoot,
 			path: candidate.path,
 			...parseCodexMarketplaceManifest(parsed.value),
+		};
+	}
+	return {
+		root: canonicalRoot,
+		diagnostics: [
+			{ code: "invalid_manifest", severity: "error", message: "Codex marketplace manifest was not found" },
+		],
+	};
+}
+
+/** Resolve a local marketplace plugin source relative to the marketplace root. */
+export async function resolveLocalCodexMarketplacePlugin(
+	marketplaceRoot: string,
+	plugin: CodexMarketplacePlugin,
+): Promise<CodexPluginParseResult & { root: string }> {
+	if (plugin.source.kind !== "local") {
+		return {
+			root: marketplaceRoot,
+			diagnostics: [
+				{ code: "invalid_manifest", severity: "error", message: `Plugin source is not local: ${plugin.name}` },
+			],
+		};
+	}
+	const source = await resolveCodexPluginResourceOnDisk(marketplaceRoot, plugin.source.value);
+	if (!source.ok)
+		return {
+			root: marketplaceRoot,
+			diagnostics: [{ code: "invalid_manifest", severity: "error", message: source.message }],
+		};
+	return loadCodexPluginManifest(source.path);
+}
+
+/** Resolve an existing resource and reject symlink targets outside the plugin root. */
+export async function resolveCodexPluginResourceOnDisk(
+	root: string,
+	resource: string,
+): Promise<CodexPluginDiskResolution> {
+	const lexical = resolveCodexPluginResource(root, resource);
+	if (!lexical.ok) return lexical;
+	try {
+		const [canonicalRoot, canonicalPath] = await Promise.all([realpath(root), realpath(lexical.path)]);
+		const fromRoot = relative(canonicalRoot, canonicalPath);
+		if (fromRoot === ".." || fromRoot.startsWith("../") || isAbsolute(fromRoot))
+			return { ok: false, code: "symlink_escape", message: `Plugin resource symlink escapes its root: ${resource}` };
+		return { ok: true, path: canonicalPath };
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT")
+			return { ok: false, code: "missing", message: `Plugin resource does not exist: ${resource}` };
+		throw error;
+	}
+}
+
+async function readJson(path: string): Promise<unknown | undefined> {
+	try {
+		return JSON.parse(await readFile(path, "utf8")) as unknown;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+}
+
+/** Load the Codex plugin manifest from a declared plugin root. */
+export async function loadCodexPluginManifest(root: string): Promise<CodexPluginParseResult & { root: string }> {
+	const canonicalRoot = await realpath(root);
+	const manifestPath = await resolveCodexPluginResourceOnDisk(canonicalRoot, ".codex-plugin/plugin.json");
+	if (!manifestPath.ok && manifestPath.code === "missing") {
+		return {
+			root: canonicalRoot,
+			diagnostics: [{ code: "invalid_manifest", severity: "error", message: "Codex plugin manifest was not found" }],
+		};
+	}
+	if (!manifestPath.ok) {
+		return {
+			root: canonicalRoot,
+			diagnostics: [{ code: "invalid_manifest", severity: "error", message: manifestPath.message }],
+		};
+	}
+	return { root: canonicalRoot, ...parseCodexPluginManifest(await readJson(manifestPath.path)) };
+}
+
+/** Discover a marketplace manifest at a supported Codex marketplace location. */
+export async function loadCodexMarketplaceManifest(
+	root: string,
+): Promise<CodexMarketplaceParseResult & { root: string; path?: string }> {
+	const canonicalRoot = await realpath(root);
+	for (const relativePath of [".agents/plugins/marketplace.json", ".codex-plugin/marketplace.json"]) {
+		const candidate = await resolveCodexPluginResourceOnDisk(canonicalRoot, relativePath);
+		if (!candidate.ok && candidate.code === "missing") continue;
+		if (!candidate.ok)
+			return {
+				root: canonicalRoot,
+				diagnostics: [{ code: "invalid_manifest", severity: "error", message: candidate.message }],
+			};
+		return {
+			root: canonicalRoot,
+			path: candidate.path,
+			...parseCodexMarketplaceManifest(await readJson(candidate.path)),
 		};
 	}
 	return {
