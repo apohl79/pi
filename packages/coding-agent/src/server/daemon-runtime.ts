@@ -5,6 +5,7 @@ import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import {
 	ServerDaemon,
 	type ServerDaemonOptions,
+	type V2ImageService,
 	type V2InputRegistry,
 	type V2WebService,
 } from "@earendil-works/pi-server";
@@ -25,6 +26,7 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	agents?: ServerDaemonOptions["agents"];
 	inputs?: V2InputRegistry;
 	web?: V2WebService;
+	images?: V2ImageService;
 	createServer?: ServerDaemonOptions["createServer"];
 	write(value: unknown): void;
 	onAttach?: ExperimentalCliRuntimeOptions["onAttach"];
@@ -60,6 +62,7 @@ export async function createCodingAgentDaemonRuntime(
 		...(agents === undefined ? {} : { agents }),
 		...(options.inputs === undefined ? {} : { inputs: options.inputs }),
 		...(options.web === undefined ? {} : { web: options.web }),
+		...(options.images === undefined ? {} : { images: options.images }),
 		...(options.createServer === undefined ? {} : { createServer: options.createServer }),
 	});
 	const defaultConnect: TransportAddress = { transport: "unix", path: options.socketPath };
