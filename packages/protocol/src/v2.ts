@@ -1,6 +1,6 @@
 import Type, { type Static } from "typebox";
 import { Check } from "typebox/value";
-import { ModelMetadataSchema, ModelRefSchema, ThinkingLevelSchema, TranscriptItemSchema } from "./schemas.ts";
+import { ThinkingLevelSchema } from "./schemas.ts";
 
 export const PROTOCOL_V2_VERSION = 2 as const;
 
@@ -8,6 +8,7 @@ export const MAX_V2_STRING_LENGTH = 1_048_576;
 export const MAX_V2_ARRAY_ITEMS = 10_000;
 
 const BoundedStringSchema = Type.String({ maxLength: MAX_V2_STRING_LENGTH });
+const BoundedNonEmptyStringSchema = Type.String({ minLength: 1, maxLength: MAX_V2_STRING_LENGTH });
 const IdSchema = Type.String({ minLength: 1, maxLength: 256 });
 const DigestSchema = Type.String({ pattern: "^[0-9a-f]{64}$" });
 const MimeTypeSchema = Type.String({
@@ -18,6 +19,136 @@ const TimestampSchema = Type.Integer({ minimum: 0 });
 const NonNegativeIntegerSchema = Type.Integer({ minimum: 0 });
 const StrictObject = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
 	Type.Object(properties, { additionalProperties: false });
+
+const BoundedJsonValueSchema = Type.Cyclic(
+	{
+		JsonValue: Type.Union([
+			Type.Null(),
+			Type.Boolean(),
+			Type.Number(),
+			BoundedStringSchema,
+			Type.Array(Type.Ref("JsonValue"), { maxItems: MAX_V2_ARRAY_ITEMS }),
+			Type.Record(BoundedStringSchema, Type.Ref("JsonValue"), { maxProperties: MAX_V2_ARRAY_ITEMS }),
+		]),
+	},
+	"JsonValue",
+);
+
+const BoundedModelRefSchema = StrictObject({ provider: IdSchema, id: IdSchema });
+const BoundedModelCostSchema = StrictObject({
+	input: Type.Number({ minimum: 0 }),
+	output: Type.Number({ minimum: 0 }),
+	cacheRead: Type.Number({ minimum: 0 }),
+	cacheWrite: Type.Number({ minimum: 0 }),
+});
+const BoundedModelMetadataSchema = StrictObject({
+	provider: IdSchema,
+	id: IdSchema,
+	name: BoundedNonEmptyStringSchema,
+	api: IdSchema,
+	reasoning: Type.Boolean(),
+	input: Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]), { maxItems: MAX_V2_ARRAY_ITEMS }),
+	contextWindow: Type.Integer({ minimum: 1 }),
+	maxTokens: Type.Integer({ minimum: 1 }),
+	cost: BoundedModelCostSchema,
+	supportedThinkingLevels: Type.Array(ThinkingLevelSchema, { minItems: 1, maxItems: MAX_V2_ARRAY_ITEMS }),
+	authenticated: Type.Boolean(),
+});
+const BoundedUsageSchema = StrictObject({
+	input: NonNegativeIntegerSchema,
+	output: NonNegativeIntegerSchema,
+	cacheRead: NonNegativeIntegerSchema,
+	cacheWrite: NonNegativeIntegerSchema,
+	reasoning: Type.Optional(NonNegativeIntegerSchema),
+	totalTokens: NonNegativeIntegerSchema,
+	cost: StrictObject({
+		input: Type.Number({ minimum: 0 }),
+		output: Type.Number({ minimum: 0 }),
+		cacheRead: Type.Number({ minimum: 0 }),
+		cacheWrite: Type.Number({ minimum: 0 }),
+		total: Type.Number({ minimum: 0 }),
+	}),
+});
+const BoundedTextContentSchema = StrictObject({ type: Type.Literal("text"), text: BoundedStringSchema });
+const BoundedThinkingContentSchema = StrictObject({
+	type: Type.Literal("thinking"),
+	thinking: BoundedStringSchema,
+	redacted: Type.Optional(Type.Boolean()),
+});
+const BoundedImageContentSchema = StrictObject({
+	type: Type.Literal("image"),
+	data: BoundedStringSchema,
+	mimeType: BoundedNonEmptyStringSchema,
+});
+const BoundedToolCallContentSchema = StrictObject({
+	type: Type.Literal("toolCall"),
+	toolCallId: IdSchema,
+	toolName: IdSchema,
+	input: BoundedJsonValueSchema,
+});
+const BoundedUserContentSchema = Type.Union([BoundedTextContentSchema, BoundedImageContentSchema]);
+const BoundedAssistantContentSchema = Type.Union([
+	BoundedTextContentSchema,
+	BoundedThinkingContentSchema,
+	BoundedToolCallContentSchema,
+]);
+const BoundedToolContentSchema = Type.Union([BoundedTextContentSchema, BoundedImageContentSchema]);
+const BoundedUserTranscriptItemSchema = StrictObject({
+	id: IdSchema,
+	role: Type.Literal("user"),
+	content: Type.Array(BoundedUserContentSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
+	timestamp: TimestampSchema,
+});
+const BoundedAssistantTranscriptProperties = {
+	id: IdSchema,
+	role: Type.Literal("assistant"),
+	content: Type.Array(BoundedAssistantContentSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
+	model: BoundedModelRefSchema,
+	responseModel: Type.Optional(BoundedNonEmptyStringSchema),
+	usage: Type.Optional(BoundedUsageSchema),
+	timestamp: TimestampSchema,
+} as const;
+const BoundedAssistantTranscriptItemSchema = Type.Union([
+	StrictObject({ ...BoundedAssistantTranscriptProperties, status: Type.Literal("streaming") }),
+	StrictObject({
+		...BoundedAssistantTranscriptProperties,
+		status: Type.Literal("complete"),
+		stopReason: Type.Union([Type.Literal("stop"), Type.Literal("length"), Type.Literal("toolUse")]),
+	}),
+	StrictObject({
+		...BoundedAssistantTranscriptProperties,
+		status: Type.Literal("error"),
+		stopReason: Type.Literal("error"),
+		errorMessage: Type.Optional(BoundedNonEmptyStringSchema),
+	}),
+	StrictObject({
+		...BoundedAssistantTranscriptProperties,
+		status: Type.Literal("aborted"),
+		stopReason: Type.Literal("aborted"),
+		errorMessage: Type.Optional(BoundedStringSchema),
+	}),
+]);
+const BoundedToolTranscriptProperties = {
+	id: IdSchema,
+	role: Type.Literal("tool"),
+	toolCallId: IdSchema,
+	toolName: IdSchema,
+	input: BoundedJsonValueSchema,
+	content: Type.Array(BoundedToolContentSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
+	details: Type.Optional(BoundedJsonValueSchema),
+	usage: Type.Optional(BoundedUsageSchema),
+	timestamp: TimestampSchema,
+} as const;
+const BoundedToolTranscriptItemSchema = Type.Union([
+	StrictObject({ ...BoundedToolTranscriptProperties, status: Type.Literal("running"), isError: Type.Literal(false) }),
+	StrictObject({ ...BoundedToolTranscriptProperties, status: Type.Literal("complete"), isError: Type.Literal(false) }),
+	StrictObject({ ...BoundedToolTranscriptProperties, status: Type.Literal("error"), isError: Type.Literal(true) }),
+]);
+const BoundedTranscriptItemSchema = Type.Union([
+	BoundedUserTranscriptItemSchema,
+	BoundedAssistantTranscriptItemSchema,
+	BoundedToolTranscriptItemSchema,
+]);
 
 export const SessionPhaseV2Schema = Type.Union([
 	Type.Literal("idle"),
@@ -158,7 +289,7 @@ export const AgentSummarySchema = StrictObject({
 		Type.Literal("failed"),
 		Type.Literal("interrupted"),
 	]),
-	model: ModelRefSchema,
+	model: BoundedModelRefSchema,
 });
 export type AgentSummary = Static<typeof AgentSummarySchema>;
 
@@ -224,9 +355,9 @@ export const SessionSnapshotV2Schema = StrictObject({
 	eventSeq: NonNegativeIntegerSchema,
 	phase: SessionPhaseV2Schema,
 	activeOperation: Type.Optional(OperationSummarySchema),
-	model: ModelRefSchema,
+	model: BoundedModelRefSchema,
 	thinkingLevel: ThinkingLevelSchema,
-	transcript: Type.Array(TranscriptItemSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
+	transcript: Type.Array(BoundedTranscriptItemSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
 	queues: QueueSnapshotSchema,
 	plan: Type.Optional(PlanSnapshotSchema),
 	goal: Type.Optional(GoalSnapshotSchema),
@@ -260,13 +391,28 @@ export const ServerSnapshotV2Schema = StrictObject({
 	revision: NonNegativeIntegerSchema,
 	eventSeq: NonNegativeIntegerSchema,
 	sessions: Type.Array(SessionMetadataV2Schema, { maxItems: MAX_V2_ARRAY_ITEMS }),
-	models: Type.Array(ModelMetadataSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
+	models: Type.Array(BoundedModelMetadataSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
 });
 export type ServerSnapshotV2 = Static<typeof ServerSnapshotV2Schema>;
 
-export const isOperationSummary = (value: unknown): value is OperationSummary => Check(OperationSummarySchema, value);
+const hasValidTerminalSequence = (acceptedSeq: unknown, terminalSeq: unknown): boolean =>
+	terminalSeq === undefined ||
+	(typeof acceptedSeq === "number" && typeof terminalSeq === "number" && terminalSeq >= acceptedSeq);
+
+export const isOperationSummary = (value: unknown): value is OperationSummary => {
+	const summary = value as { acceptedSeq?: unknown; terminalSeq?: unknown };
+	return Check(OperationSummarySchema, value) && hasValidTerminalSequence(summary.acceptedSeq, summary.terminalSeq);
+};
 
 export const isOperationRecordV2 = (value: unknown): value is OperationRecordV2 => {
-	const record = value as { operationId?: unknown; accepted?: { operationId?: unknown } };
-	return Check(OperationRecordV2Schema, value) && record.operationId === record.accepted?.operationId;
+	const record = value as {
+		operationId?: unknown;
+		accepted?: { operationId?: unknown; eventSeq?: unknown };
+		terminalSeq?: unknown;
+	};
+	return (
+		Check(OperationRecordV2Schema, value) &&
+		record.operationId === record.accepted?.operationId &&
+		hasValidTerminalSequence(record.accepted?.eventSeq, record.terminalSeq)
+	);
 };
