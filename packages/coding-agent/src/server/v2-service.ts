@@ -1,5 +1,5 @@
-import type { AgentHarness, Entry, GoalManager } from "@earendil-works/pi-agent-core";
-import type { Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
+import type { AgentHarness, AgentMessage, Entry, GoalManager } from "@earendil-works/pi-agent-core";
+import type { ImageContent, Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
 import type {
 	CommandNameV2,
 	CommandV2,
@@ -71,16 +71,36 @@ function modelMetadata(model: Model<string>): ModelMetadata {
 	};
 }
 
-function commandText(command: CommandV2): string {
+type PromptPart = { type: "text"; text: string } | ImageContent;
+
+function commandInput(command: CommandV2): AgentMessage {
 	const payload = command.payload;
-	if (
-		typeof payload === "object" &&
-		payload !== null &&
-		!Array.isArray(payload) &&
-		typeof (payload as { text?: unknown }).text === "string"
-	)
-		return (payload as { text: string }).text;
-	return "";
+	if (typeof payload !== "object" || payload === null || Array.isArray(payload))
+		return { role: "user", content: [{ type: "text", text: "" }], timestamp: Date.now() };
+	const record = payload as Record<string, unknown>;
+	if (record.content === undefined)
+		return {
+			role: "user",
+			content: [{ type: "text", text: typeof record.text === "string" ? record.text : "" }],
+			timestamp: Date.now(),
+		};
+	if (!Array.isArray(record.content) || record.content.length === 0)
+		throw new Error("turn content must be a non-empty array");
+	const content: PromptPart[] = record.content.map((part, index) => {
+		if (typeof part !== "object" || part === null || Array.isArray(part))
+			throw new Error(`turn content item ${index} must be an object`);
+		const item = part as Record<string, unknown>;
+		if (item.type === "text" && typeof item.text === "string") return { type: "text", text: item.text };
+		if (
+			item.type === "image" &&
+			typeof item.data === "string" &&
+			typeof item.mimeType === "string" &&
+			item.mimeType.startsWith("image/")
+		)
+			return { type: "image", data: item.data, mimeType: item.mimeType };
+		throw new Error(`turn content item ${index} must be text or resolved image data`);
+	});
+	return { role: "user", content, timestamp: Date.now() };
 }
 
 function commandPayload(command: CommandV2): Record<string, unknown> {
@@ -320,7 +340,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async run(_operationId: string, command: CommandV2): Promise<void> {
-		const text = commandText(command);
+		const input = commandInput(command);
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
@@ -328,14 +348,14 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		await extensionHost?.onOperationAccepted({ id: _operationId, type: runCommand });
 		try {
 			if (runCommand === "turn/start") {
-				await harness.prompt(text);
+				await harness.prompt(input);
 				if (this.autoName) await this.generateName();
 			} else if (runCommand === "turn/resume") {
 				const result = await harness.resume();
 				if (!result.ok) throw new Error(result.error.message);
 				if (result.value.kind === "failed") throw new Error(result.value.error.message);
-			} else if (runCommand === "turn/steer") await harness.steer(text);
-			else if (runCommand === "turn/followUp") await harness.followUp(text);
+			} else if (runCommand === "turn/steer") await harness.steer(input);
+			else if (runCommand === "turn/followUp") await harness.followUp(input);
 			else if (runCommand === "turn/abort") await harness.abort();
 			else if (runCommand === "turn/rollback") {
 				const turns = typeof payload.turns === "number" ? payload.turns : 1;
