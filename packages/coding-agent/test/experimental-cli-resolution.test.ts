@@ -85,6 +85,8 @@ describe("experimental CLI command composition", () => {
 			runPi: vi.fn(() => undefined),
 			runServer: vi.fn(() => undefined),
 			runClient: vi.fn(() => undefined),
+			runAttach: vi.fn(() => undefined),
+			runSessions: vi.fn(() => undefined),
 		};
 		const result = await experimentalCli.execute(name === "pi" ? [] : [name], context);
 
