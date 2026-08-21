@@ -101,6 +101,7 @@ import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
+import { StatuslineRunner } from "../../server/statusline.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -605,7 +606,12 @@ export class InteractiveMode {
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
-		this.footer = new FooterComponent(this.session, this.footerDataProvider);
+		this.footer = new FooterComponent(this.session, this.footerDataProvider, {
+			runner: new StatuslineRunner({ command: this.settingsManager.getStatusLineCommand() }),
+			command: this.settingsManager.getStatusLineCommand(),
+			useColors: this.settingsManager.getStatusLineUseColors(),
+			onUpdated: () => this.ui.requestRender(),
+		});
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerContainer = new Container();
 		this.footerContainer.addChild(this.footer);
@@ -3006,6 +3012,12 @@ export class InteractiveMode {
 			if (text === "/session") {
 				this.handleSessionCommand();
 				this.editor.setText("");
+				return;
+			}
+			if (text === "/statusline" || text.startsWith("/statusline ")) {
+				const command = text.startsWith("/statusline ") ? text.slice(12).trim() : undefined;
+				this.editor.setText("");
+				await this.handleStatuslineCommand(command);
 				return;
 			}
 			if (text === "/changelog") {
@@ -6215,6 +6227,17 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${sessionName ?? name}`), 1, 0));
 		this.ui.requestRender();
+	}
+
+	private async handleStatuslineCommand(command?: string): Promise<void> {
+		const value = command ?? (await this.showExtensionInput("Statusline command", "~/.claude/statusline.sh"));
+		if (value === undefined) return;
+		const normalized = value.trim();
+		const nextCommand = normalized === "" || normalized.toLowerCase() === "off" ? undefined : normalized;
+		this.settingsManager.setStatusLineCommand(nextCommand);
+		this.footer.setStatuslineCommand(nextCommand);
+		this.footer.invalidate();
+		this.showStatus(nextCommand === undefined ? "External statusline disabled" : "External statusline configured");
 	}
 
 	private handleSessionCommand(): void {

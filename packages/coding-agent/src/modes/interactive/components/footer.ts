@@ -4,6 +4,8 @@ import type { AgentSession } from "../../../core/agent-session.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
 import { addUsageToTotals, createUsageTotals } from "../../../core/usage-totals.ts";
+import type { StatuslineCommand, StatuslineRunner, StatuslineSnapshot } from "../../../server/statusline.ts";
+import { stripAnsi } from "../../../utils/ansi.ts";
 import { theme } from "../theme/theme.ts";
 
 /**
@@ -43,6 +45,13 @@ export function formatCwdForFooter(cwd: string, home: string | undefined): strin
 	return relativeToHome === "" ? "~" : `~${sep}${relativeToHome}`;
 }
 
+export interface FooterStatuslineOptions {
+	readonly runner?: StatuslineRunner;
+	readonly command?: StatuslineCommand;
+	readonly useColors?: boolean;
+	readonly onUpdated?: () => void;
+}
+
 /**
  * Footer component that shows pwd, token stats, and context usage.
  * Computes token/context stats from session, gets git branch and extension statuses from provider.
@@ -51,10 +60,23 @@ export class FooterComponent implements Component {
 	private autoCompactEnabled = true;
 	private session: AgentSession;
 	private footerData: ReadonlyFooterDataProvider;
+	private statuslineRunner: StatuslineRunner | undefined;
+	private statuslineCommand: StatuslineCommand | undefined;
+	private statuslineUseColors: boolean;
+	private statuslineSnapshot: StatuslineSnapshot = { pending: false };
+	private onStatuslineUpdated: (() => void) | undefined;
 
-	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider) {
+	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider, options: FooterStatuslineOptions = {}) {
 		this.session = session;
 		this.footerData = footerData;
+		this.statuslineRunner = options.runner;
+		this.statuslineCommand = options.command;
+		this.statuslineUseColors = options.useColors ?? true;
+		this.onStatuslineUpdated = options.onUpdated;
+	}
+
+	setStatuslineCommand(command: StatuslineCommand | undefined): void {
+		this.statuslineCommand = command;
 	}
 
 	setSession(session: AgentSession): void {
@@ -79,6 +101,7 @@ export class FooterComponent implements Component {
 	 */
 	dispose(): void {
 		// Git watcher cleanup handled by provider
+		void this.statuslineRunner?.dispose();
 	}
 
 	render(width: number): string[] {
@@ -238,6 +261,42 @@ export class FooterComponent implements Component {
 			const statusLine = sortedStatuses.join(" ");
 			// Truncate to terminal width with dim ellipsis for consistency with footer style
 			lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
+		}
+
+		if (this.statuslineRunner) {
+			const payload = {
+				harness: "pi",
+				session_id: this.session.sessionId,
+				transcript_path: this.session.sessionManager.getSessionFile() ?? "",
+				cwd: this.session.sessionManager.getCwd(),
+				session_name: this.session.sessionManager.getSessionName() ?? "",
+				model: state.model
+					? { id: state.model.id, display_name: state.model.name, provider: state.model.provider }
+					: undefined,
+				effort: { level: state.thinkingLevel ?? "off" },
+				workspace: { current_dir: this.session.sessionManager.getCwd() },
+				cost: { total_cost_usd: usageTotals.cost },
+				context_window: {
+					total_input_tokens: usageTotals.input,
+					total_output_tokens: usageTotals.output,
+					context_window_size: contextWindow,
+					used_percentage: contextPercentValue,
+					remaining_percentage: Math.max(0, 100 - contextPercentValue),
+				},
+				server: { connected: true, phase: this.session.isStreaming ? "turn" : "idle", detachable: false },
+			};
+			void this.statuslineRunner.update(payload, this.statuslineCommand).then((snapshot) => {
+				if (JSON.stringify(snapshot) === JSON.stringify(this.statuslineSnapshot)) return;
+				this.statuslineSnapshot = snapshot;
+				this.onStatuslineUpdated?.();
+			});
+			if (this.statuslineSnapshot.output) {
+				lines.push(
+					this.statuslineUseColors ? this.statuslineSnapshot.output : stripAnsi(this.statuslineSnapshot.output),
+				);
+			} else if (this.statuslineSnapshot.error) {
+				lines.push(`statusline error: ${this.statuslineSnapshot.error}`);
+			}
 		}
 
 		return lines;
