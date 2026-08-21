@@ -1,5 +1,5 @@
-import type { AgentHarness, Entry, GoalManager } from "@earendil-works/pi-agent-core";
-import type { Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
+import type { AgentHarness, AgentMessage, Entry, GoalManager } from "@earendil-works/pi-agent-core";
+import type { ImageContent, Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
 import type {
 	CommandNameV2,
 	CommandV2,
@@ -89,56 +89,36 @@ async function modelMetadata(models: Models, model: Model<string>): Promise<Mode
 	};
 }
 
-function requirePayload(command: CommandV2): Record<string, unknown> {
-	const payload = command.payload;
-	if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
-		throw new Error(`${command.command} requires an object payload`);
-	}
-	return payload as Record<string, unknown>;
-}
-
-function requireText(command: CommandV2, payload: Record<string, unknown>): string {
-	if (typeof payload.text !== "string" || payload.text.trim().length === 0 || payload.text.length > MAX_V2_STRING_LENGTH)
-		throw new Error(`${command.command} requires bounded non-empty text`);
-	return payload.text;
-}
+type PromptPart = { type: "text"; text: string } | ImageContent;
 
 function commandInput(command: CommandV2): AgentMessage {
-	const payload = requirePayload(command);
-	if (payload.content === undefined) return { role: "user", content: [{ type: "text", text: requireText(command, payload) }], timestamp: Date.now() };
-	if (!Array.isArray(payload.content) || payload.content.length === 0) throw new Error("turn content must be a non-empty array");
-	const content = payload.content.map((part, index) => {
-		if (typeof part !== "object" || part === null || Array.isArray(part)) throw new Error(`turn content item ${index} must be an object`);
+	const payload = command.payload;
+	if (typeof payload !== "object" || payload === null || Array.isArray(payload))
+		return { role: "user", content: [{ type: "text", text: "" }], timestamp: Date.now() };
+	const record = payload as Record<string, unknown>;
+	if (record.content === undefined)
+		return {
+			role: "user",
+			content: [{ type: "text", text: typeof record.text === "string" ? record.text : "" }],
+			timestamp: Date.now(),
+		};
+	if (!Array.isArray(record.content) || record.content.length === 0)
+		throw new Error("turn content must be a non-empty array");
+	const content: PromptPart[] = record.content.map((part, index) => {
+		if (typeof part !== "object" || part === null || Array.isArray(part))
+			throw new Error(`turn content item ${index} must be an object`);
 		const item = part as Record<string, unknown>;
 		if (item.type === "text" && typeof item.text === "string") return { type: "text", text: item.text };
-		if (item.type === "image" && typeof item.data === "string" && typeof item.mimeType === "string" && item.mimeType.startsWith("image/")) return { type: "image", data: item.data, mimeType: item.mimeType };
+		if (
+			item.type === "image" &&
+			typeof item.data === "string" &&
+			typeof item.mimeType === "string" &&
+			item.mimeType.startsWith("image/")
+		)
+			return { type: "image", data: item.data, mimeType: item.mimeType };
 		throw new Error(`turn content item ${index} must be text or resolved image data`);
 	});
 	return { role: "user", content, timestamp: Date.now() };
-}
-
-function requireBoundedNonEmptyString(command: CommandV2, value: unknown, field: string): string {
-	if (typeof value !== "string" || value.trim().length === 0 || value.length > MAX_V2_STRING_LENGTH)
-		throw new Error(`${command.command} requires bounded non-empty ${field}`);
-	return value;
-}
-
-function sessionNameValue(command: CommandV2, value: unknown): string {
-	const sanitized = redactText(requireBoundedNonEmptyString(command, value, "name")).slice(0, 256).trim();
-	if (sanitized.length === 0) throw new Error(`${command.command} requires a non-empty name after sanitization`);
-	return sanitized;
-}
-
-export function normalizeGeneratedName(value: string): string | undefined {
-	const cleaned = value.replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, " ").replace(/^(?:title|session\s+name)\s*[:-]\s*/i, "").replace(/\s+/g, " ").replace(/^[\'\"`]+|[\'\"`]+$/g, "").trim();
-	if (/^(?:answer|sure|okay|ok|here you go)\b[.!]?$/i.test(cleaned)) return undefined;
-	if (/(?:sk|pk|api[_-]?key|bearer|token|password|secret|authorization)\s*[:=]\s*\S+/i.test(cleaned)) return undefined;
-	const words = cleaned.split(" ").filter(Boolean).slice(0, 7);
-	if (words.length < 2) return undefined;
-	const joined = words.join(" ");
-	let name = joined.slice(0, 32);
-	if (joined.length > 32) name = name.replace(/\s+\S*$/, "").trimEnd();
-	return name.split(" ").length < 2 ? undefined : name;
 }
 
 function commandPayload(command: CommandV2): Record<string, unknown> {
@@ -396,121 +376,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		}
 	}
 
-	private async persistOperation(operation: PersistedOperation): Promise<void> {
-		try {
-			await this.definition.harness.session.appendCustomEntry(OPERATION_ENTRY, operation);
-		} catch (error) {
-			const entries = await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }).catch(() => []);
-			const committed = entries.some(
-				(entry) =>
-					entry.type === "custom" &&
-					entry.customType === OPERATION_ENTRY &&
-					JSON.stringify(entry.data) === JSON.stringify(operation),
-			);
-			if (!committed) throw error;
-		}
-		this.operations.set(operation.operationId, operation);
-		this.revision = Math.max(this.revision, operation.revision);
-		this.eventSeq = Math.max(this.eventSeq, operation.eventSeq);
-	}
-
-	private activeOperation(laneOperation: { id: string; intent: { kind: string } } | undefined): SessionSnapshotV2["activeOperation"] {
-		const persisted = this.operationId ? this.operations.get(this.operationId) : [...this.operations.values()].find((operation) => operation.state === "accepted" || operation.state === "running" || operation.state === "suspended");
-		if (!persisted) return undefined;
-		const state = laneOperation || this.operationId === persisted.operationId
-			? "running"
-			: this.freshOperationId === persisted.operationId && persisted.state === "accepted"
-				? "accepted"
-			: persisted.state === "accepted" || persisted.state === "running"
-				? "suspended"
-				: persisted.state;
-		return { operationId: persisted.operationId, kind: persisted.kind, state: state === "suspended" ? "suspended" : state === "accepted" ? "accepted" : "running", acceptedSeq: persisted.acceptedSeq };
-	}
-
-	private withMutation<T>(operation: () => Promise<T>): Promise<T> {
-		const previous = this.mutationTail;
-		let resolveTail!: () => void;
-		this.mutationTail = new Promise<void>((resolve) => (resolveTail = resolve));
-		return previous.then(operation).finally(resolveTail);
-	}
-
-	async accept(operationId: string): Promise<OperationAccepted> {
-		return this.withMutation(async () => {
-			const validatedOperationId = boundedRequired(operationId, 256);
-			if (!validatedOperationId) throw new Error("Operation ID must be a non-empty bounded string");
-			this.restoreOperationState(await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }));
-			if (this.operations.has(validatedOperationId)) throw new Error(`Operation ${validatedOperationId} was already accepted`);
-			const active = [...this.operations.values()].find((operation) => operation.state === "accepted" || operation.state === "running" || operation.state === "suspended");
-			if (active) throw new Error(`Session is busy with ${active.operationId}`);
-			const accepted = { operationId: validatedOperationId, sessionRevision: this.revision + 1, eventSeq: this.eventSeq + 1 };
-			await this.persistOperation({ operationId: validatedOperationId, state: "accepted", kind: "turn", acceptedSeq: accepted.eventSeq, revision: accepted.sessionRevision, eventSeq: accepted.eventSeq });
-			this.freshOperationId = validatedOperationId;
-			return accepted;
-		});
-	}
-
-	async run(operationId: string, command: CommandV2): Promise<void> {
-		if (command.command === "turn/abort") {
-			await this.abortImmediately(operationId);
-			return;
-		}
-		const previous = this.executionTail;
-		let release!: () => void;
-		this.executionTail = new Promise<void>((resolve) => (release = resolve));
-		try {
-			await previous;
-			await this.runUnlocked(operationId, command);
-		} finally {
-			release();
-		}
-	}
-
-	async abort(operationId: string): Promise<void> {
-		await this.abortImmediately(operationId);
-	}
-
-	private async abortImmediately(operationId: string): Promise<void> {
-		if (this.disposed) throw new Error("Session runtime is disposed");
-		let abortHarness = false;
-		let cancelledBeforeExecution = false;
-		await this.withMutation(async () => {
-			const operation = this.operations.get(operationId);
-			if (!operation || (operation.state !== "accepted" && operation.state !== "running"))
-				throw new Error(`Operation ${operationId} is not active`);
-			if (operation.state === "running") {
-				abortHarness = true;
-				return;
-			}
-			await this.persistOperation({ ...operation, state: "aborted", revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
-			this.operationId = undefined;
-			this.freshOperationId = undefined;
-			cancelledBeforeExecution = true;
-		});
-		if (abortHarness) {
-			const result = await this.definition.harness.abort();
-			if (!result.ok) throw result.error instanceof Error ? result.error : new Error(String(result.error));
-		}
-		if (cancelledBeforeExecution) await this.definition.extensionHost?.onOperationTerminal({ id: operationId, type: "turn/start" }, "aborted");
-	}
-
-	private async runUnlocked(operationId: string, command: CommandV2): Promise<void> {
-		if (this.disposed) throw new Error("Session runtime is disposed");
-		try {
-		let cancelledBeforeExecution = false;
-		await this.withMutation(async () => {
-			this.restoreOperationState(await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }));
-			const operation = this.operations.get(operationId);
-			if (!operation) throw new Error(`Operation ${operationId} was not accepted`);
-			if (operation.state === "aborted") {
-				cancelledBeforeExecution = true;
-				return;
-			}
-			if (operation.state !== "accepted") throw new Error(`Operation ${operationId} was already run`);
-			this.operationId = operationId;
-			this.freshOperationId = undefined;
-			await this.persistOperation({ ...operation, state: "running", revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
-		});
-		if (cancelledBeforeExecution) return;
+	async run(_operationId: string, command: CommandV2): Promise<void> {
+		const input = commandInput(command);
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
@@ -518,14 +385,14 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		await extensionHost?.onOperationAccepted({ id: _operationId, type: runCommand });
 		try {
 			if (runCommand === "turn/start") {
-				await harness.prompt(text);
+				await harness.prompt(input);
 				if (this.autoName) await this.generateName();
 			} else if (runCommand === "turn/resume") {
 				const result = await harness.resume();
 				if (!result.ok) throw new Error(result.error.message);
 				if (result.value.kind === "failed") throw new Error(result.value.error.message);
-			} else if (runCommand === "turn/steer") await harness.steer(text);
-			else if (runCommand === "turn/followUp") await harness.followUp(text);
+			} else if (runCommand === "turn/steer") await harness.steer(input);
+			else if (runCommand === "turn/followUp") await harness.followUp(input);
 			else if (runCommand === "turn/abort") await harness.abort();
 			else if (runCommand === "turn/rollback") {
 				const turns = typeof payload.turns === "number" ? payload.turns : 1;
