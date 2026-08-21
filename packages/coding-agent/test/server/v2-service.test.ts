@@ -3,6 +3,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { describe, expect, test } from "vitest";
 import { createCodingAgentHarness } from "../../src/server/create-harness.ts";
+import { ServerRuntimeExtensionHost } from "../../src/server/extension-host.ts";
 import { createCodingAgentV2Service } from "../../src/server/v2-service.ts";
 
 describe("coding-agent v2 service adapter", () => {
@@ -73,8 +74,26 @@ describe("coding-agent v2 service adapter", () => {
 			systemPrompt: "adapter",
 		});
 		try {
+			const lifecycle: string[] = [];
+			const extensionHost = new ServerRuntimeExtensionHost({
+				resolveModel: () => ({ id: faux.getModel().id, provider: faux.getModel().provider }),
+			});
+			await extensionHost.register({
+				id: "test-extension",
+				onOperationAccepted: ({ operation }) => {
+					lifecycle.push(`accepted:${operation.type}`);
+				},
+				onOperationTerminal: ({ operation, outcome }) => {
+					lifecycle.push(`terminal:${operation.type}:${outcome}`);
+				},
+			});
 			const service = createCodingAgentV2Service(models, [
-				{ metadata: { id: "adapter-session", createdAt: 1, updatedAt: 1 }, harness: created.harness, goals },
+				{
+					metadata: { id: "adapter-session", createdAt: 1, updatedAt: 1 },
+					harness: created.harness,
+					goals,
+					extensionHost,
+				},
 			]);
 			const runtime = await service.openSession("adapter-session");
 			const accepted = await runtime.accept("operation-1");
@@ -88,6 +107,7 @@ describe("coding-agent v2 service adapter", () => {
 			expect(usageSnapshot.input).toBeGreaterThan(0);
 			expect(usageSnapshot.output).toBeGreaterThan(0);
 			expect(turnSnapshot.transcript.map((item) => item.role)).toEqual(["user", "assistant"]);
+			expect(lifecycle).toEqual(["accepted:turn/start", "terminal:turn/start:completed"]);
 			await runtime.run("operation-2", {
 				command: "goal/create",
 				sessionId: "adapter-session",
