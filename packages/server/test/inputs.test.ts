@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { InMemoryV2InputRegistry, MAX_V2_INPUT_TIMER_MS } from "../src/inputs.ts";
+import { InMemoryV2InputRegistry, MAX_V2_INPUT_TEXT_LENGTH, MAX_V2_INPUT_TIMER_MS } from "../src/inputs.ts";
 
 describe("InMemoryV2InputRegistry", () => {
 	test("validates structured questions and accepts one response", async () => {
@@ -19,6 +19,51 @@ describe("InMemoryV2InputRegistry", () => {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(await registry.read(request.id)).toMatchObject({ status: "expired", answers: {} });
 		expect(await registry.pendingForSession("session-1")).toBeUndefined();
+	});
+
+	test("rejects unknown answer keys before storing a response", async () => {
+		const registry = new InMemoryV2InputRegistry();
+		const request = await registry.create("session-1", [{ id: "mode", prompt: "Choose mode" }]);
+
+		await expect(registry.respond(request.id, { mode: "Fast", extra: "unexpected" })).rejects.toThrow(
+			"unknown question",
+		);
+		expect((await registry.read(request.id)).status).toBe("pending");
+	});
+
+	test("accepts freeform answers when enabled alongside options", async () => {
+		const registry = new InMemoryV2InputRegistry();
+		const request = await registry.create("session-1", [
+			{ id: "mode", prompt: "Choose mode", options: [{ label: "Fast" }], allowFreeform: true },
+		]);
+
+		await expect(registry.respond(request.id, { mode: "Custom mode" })).resolves.toMatchObject({
+			status: "responded",
+			answers: { mode: "Custom mode" },
+		});
+	});
+
+	test("rejects invalid option answers and empty or oversized freeform answers", async () => {
+		const registry = new InMemoryV2InputRegistry();
+		const optionRequest = await registry.create("session-1", [
+			{ id: "mode", prompt: "Choose mode", options: [{ label: "Fast" }] },
+		]);
+		await expect(registry.respond(optionRequest.id, { mode: "Custom mode" })).rejects.toThrow(
+			"not one of the offered options",
+		);
+
+		const freeformRequest = await registry.create("session-1", [{ id: "note", prompt: "Add a note" }]);
+		await expect(registry.respond(freeformRequest.id, { note: "   " })).rejects.toThrow("must not be empty");
+		await expect(registry.respond(freeformRequest.id, { note: "x".repeat(MAX_V2_INPUT_TEXT_LENGTH + 1) })).rejects.toThrow(
+			"too long",
+		);
+	});
+
+	test("rejects empty option labels", async () => {
+		const registry = new InMemoryV2InputRegistry();
+		await expect(
+			registry.create("session-1", [{ id: "mode", prompt: "Choose mode", options: [{ label: "  " }] }]),
+		).rejects.toThrow("option label must not be empty");
 	});
 
 	test("rejects timer values that Node cannot schedule accurately", async () => {

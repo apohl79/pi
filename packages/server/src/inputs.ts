@@ -78,6 +78,8 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 			ids.add(question.id);
 			if (question.options && question.options.length > MAX_V2_INPUT_OPTIONS)
 				throw new Error(`Input question ${question.id} has too many options`);
+			if (question.options?.some((option) => option.label.trim().length === 0))
+				throw new Error(`Input question ${question.id} option label must not be empty`);
 			if (
 				question.options &&
 				question.options.some(
@@ -133,17 +135,23 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 		const state = this.get(requestId);
 		if (state.request.status !== "pending") throw new Error(`Input request ${requestId} is not pending`);
 		const answerKeys = Object.keys(answers);
+		const questionIds = new Set(state.request.questions.map((question) => question.id));
+		if (answerKeys.some((answerKey) => !questionIds.has(answerKey)))
+			throw new Error("Input response contains an unknown question");
 		if (answerKeys.length > state.request.questions.length)
 			throw new Error("Input response contains too many answers");
 		for (const question of state.request.questions) {
+			if (!Object.hasOwn(answers, question.id)) continue;
 			const answer = answers[question.id];
-			if (answer === undefined) continue;
 			if (typeof answer !== "string" || answer.length > MAX_V2_INPUT_TEXT_LENGTH)
 				throw new Error(`Answer for ${question.id} is too long`);
-			if (question.options && !question.options.some((option) => option.label === answer || option.value === answer))
+			if (answer.trim().length === 0) throw new Error(`Answer for ${question.id} must not be empty`);
+			if (
+				question.options &&
+				question.allowFreeform !== true &&
+				!question.options.some((option) => option.label === answer || option.value === answer)
+			)
 				throw new Error(`Answer for ${question.id} is not one of the offered options`);
-			if (!question.allowFreeform && question.options === undefined && answer.trim().length === 0)
-				throw new Error(`Answer for ${question.id} must not be empty`);
 		}
 		state.request = { ...state.request, status: "responded", answers: { ...answers } };
 		if (state.timer) clearTimeout(state.timer);
