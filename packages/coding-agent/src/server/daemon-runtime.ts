@@ -39,6 +39,7 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	createServer?: ServerDaemonOptions["createServer"];
 	write(value: unknown): void;
 	writeText?: (value: string) => void;
+	runInteractive?: ExperimentalCliRuntimeOptions["runInteractive"];
 	onAttach?: ExperimentalCliRuntimeOptions["onAttach"];
 };
 
@@ -116,6 +117,7 @@ export async function createCodingAgentDaemonRuntime(
 			new PiClientV2({ transportFactory: createUnixTransportFactory({ path: address.path }) }),
 		write: options.write,
 		...(options.writeText === undefined ? {} : { writeText: options.writeText }),
+		...(options.runInteractive === undefined ? {} : { runInteractive: options.runInteractive }),
 		onAttach: options.onAttach,
 	});
 	return {

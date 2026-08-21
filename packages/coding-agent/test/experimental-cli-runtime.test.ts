@@ -284,6 +284,27 @@ describe("experimental CLI runtime", () => {
 		runtime.close();
 	});
 
+	test("hands interactive mode to the injected remote runner", async () => {
+		const server = clientFactory();
+		const runInteractive = vi.fn(async (session, options) => {
+			expect(session.phase).toBe("idle");
+			expect(options.messages).toEqual([]);
+		});
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: () => {},
+			runInteractive,
+		});
+		await runtime.runPi({
+			command: "pi",
+			options: { messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] },
+		});
+		expect(runInteractive).toHaveBeenCalledTimes(1);
+		runtime.close();
+	});
+
 	test("main constructs and closes the runtime for experimental commands", async () => {
 		const controller = daemon();
 		const server = clientFactory();

@@ -3,6 +3,7 @@ import type { PiClientV2, PiSessionV2Handle } from "@earendil-works/pi-client";
 import type { CommandV2, JsonValue } from "@earendil-works/pi-protocol";
 import { verifyDiagnosticBundle } from "@earendil-works/pi-server";
 import { RemoteV2Session } from "../../client/remote-v2-session.ts";
+import type { Args } from "../args.ts";
 import type { ExperimentalCliContext } from "./cli.ts";
 import type { AttachCommand } from "./commands/attach.ts";
 import type { ClientCommand } from "./commands/client.ts";
@@ -24,6 +25,7 @@ export type ExperimentalCliRuntimeOptions = {
 	createClient(address: TransportAddress): PiClientV2;
 	write(value: unknown): void;
 	writeText?(value: string): void;
+	runInteractive?(session: RemoteV2Session, options: Args): Promise<void>;
 	onAttach?(handle: PiSessionV2Handle): void | Promise<void>;
 };
 
@@ -125,10 +127,6 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 		await options.onAttach(handle);
 	};
 	const runPi = async (command: PiCommand): Promise<void> => {
-		if (!command.options.print && command.options.mode !== "json")
-			throw new Error("Server-default runtime currently supports print and JSON modes only");
-		const prompt = command.options.messages.join(" ").trim();
-		if (!prompt) throw new Error("Server-default print mode requires a prompt");
 		await options.daemon.start();
 		const client = connect(options.defaultConnect);
 		await client.connect();
@@ -137,6 +135,14 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 			cwd: process.cwd(),
 		});
 		try {
+			if (!command.options.print && command.options.mode !== "json") {
+				if (options.runInteractive === undefined)
+					throw new Error("Server-default interactive runner is unavailable");
+				await options.runInteractive(session, command.options);
+				return;
+			}
+			const prompt = command.options.messages.join(" ").trim();
+			if (!prompt) throw new Error("Server-default print mode requires a prompt");
 			const operationId = await session.submit(prompt);
 			const snapshot = await session.waitForOperation(operationId);
 			if (command.options.mode === "json") {
