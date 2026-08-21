@@ -14,6 +14,13 @@ import {
 	type ServerMessage,
 	ServerMessageSchema,
 } from "./schemas.ts";
+import {
+	type ClientMessageV2,
+	isClientMessageV2,
+	isServerMessageV2,
+	PROTOCOL_V2_VERSION,
+	type ServerMessageV2,
+} from "./v2.ts";
 
 export class ProtocolValidationError extends Error {
 	constructor(message: string, _value?: unknown) {
@@ -75,6 +82,13 @@ function encodeProtocolMessage<T>(
 	}
 }
 
+function parseV2Message<T>(value: unknown, check: (candidate: unknown) => candidate is T, kind: string): T {
+	if (!isProtocolValue(value) || !check(value)) {
+		throw new ProtocolValidationError(`Invalid ${kind} protocol v2 message`);
+	}
+	return value;
+}
+
 /** Validates and encodes one complete length-prefixed client message. */
 export function encodeClientMessage(message: ClientMessage, options?: FrameDecoderOptions): Uint8Array {
 	return encodeProtocolMessage(message, parseClientMessage, "client", options);
@@ -83,6 +97,22 @@ export function encodeClientMessage(message: ClientMessage, options?: FrameDecod
 /** Validates and encodes one complete length-prefixed server message. */
 export function encodeServerMessage(message: ServerMessage, options?: FrameDecoderOptions): Uint8Array {
 	return encodeProtocolMessage(message, parseServerMessage, "server", options);
+}
+
+export function parseClientMessageV2(value: unknown): ClientMessageV2 {
+	return parseV2Message(value, isClientMessageV2, "client");
+}
+
+export function parseServerMessageV2(value: unknown): ServerMessageV2 {
+	return parseV2Message(value, isServerMessageV2, "server");
+}
+
+export function encodeClientMessageV2(message: ClientMessageV2, options?: FrameDecoderOptions): Uint8Array {
+	return encodeProtocolMessage(message, parseClientMessageV2, "client v2", options);
+}
+
+export function encodeServerMessageV2(message: ServerMessageV2, options?: FrameDecoderOptions): Uint8Array {
+	return encodeProtocolMessage(message, parseServerMessageV2, "server v2", options);
 }
 
 class ValidatedMessageDecoder<T> {
@@ -169,4 +199,8 @@ export function createServerMessageDecoder(options?: FrameDecoderOptions): Serve
 
 export function isSupportedProtocolVersion(version: number): version is typeof PROTOCOL_VERSION {
 	return Number.isInteger(version) && version === PROTOCOL_VERSION;
+}
+
+export function isSupportedProtocolV2Version(version: number): version is typeof PROTOCOL_V2_VERSION {
+	return Number.isInteger(version) && version === PROTOCOL_V2_VERSION;
 }
