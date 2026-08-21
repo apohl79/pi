@@ -67,6 +67,7 @@ export interface PiServerV2Options {
 	files?: V2FileReferenceService;
 	web?: V2WebService;
 	images?: V2ImageService;
+	plugins?: V2PluginRegistry;
 }
 
 type V2ConnectionState = {
@@ -144,6 +145,7 @@ export class PiServerV2 {
 	private readonly files: V2FileReferenceService;
 	private readonly web: V2WebService;
 	private readonly images: V2ImageService;
+	private readonly plugins: V2PluginRegistry;
 	private readonly connections = new Set<V2ConnectionState>();
 	private readonly controls = new Map<string, string>();
 	private readonly runtimes = new Set<PiSessionRuntimeV2>();
@@ -185,6 +187,7 @@ export class PiServerV2 {
 			options.files ?? new LocalV2FileReferenceService({ projectRoot: process.cwd(), allowAbsolute: false });
 		this.web = options.web ?? new UnavailableV2WebService();
 		this.images = options.images ?? new BlobV2ImageService(this.files, this.blobs);
+		this.plugins = options.plugins ?? new InMemoryV2PluginRegistry();
 	}
 
 	get addresses(): readonly string[] {
@@ -405,6 +408,16 @@ export class PiServerV2 {
 			if (command.command === "diagnostics/export") return void (await this.diagnosticsExport(state, id, command));
 			if (command.command === "diagnostics/verify") return void (await this.diagnosticsVerify(state, id, command));
 			if (command.command === "diagnostics/doctor") return void (await this.diagnosticsDoctor(state, id, command));
+			if (command.command === "marketplace/add") return void (await this.addMarketplace(state, id, command));
+			if (command.command === "marketplace/list") return void (await this.listMarketplaces(state, id, command));
+			if (command.command === "marketplace/upgrade") return void (await this.upgradeMarketplace(state, id, command));
+			if (command.command === "marketplace/remove") return void (await this.removeMarketplace(state, id, command));
+			if (command.command === "plugin/list") return void (await this.listPlugins(state, id, command));
+			if (command.command === "plugin/read") return void (await this.readPlugin(state, id, command));
+			if (command.command === "plugin/install") return void (await this.installPlugin(state, id, command));
+			if (command.command === "plugin/uninstall") return void (await this.uninstallPlugin(state, id, command));
+			if (command.command === "plugin/enable") return void (await this.setPluginEnabled(state, id, command, true));
+			if (command.command === "plugin/disable") return void (await this.setPluginEnabled(state, id, command, false));
 			if (command.command === "session/detach") return void (await this.detach(state, id, command));
 			if (
 				command.command === "turn/start" ||
@@ -926,6 +939,104 @@ export class PiServerV2 {
 				{ name: "recorder", ok: this.diagnostics !== undefined },
 				{ name: "sequence", ok: sequenceOk },
 			],
+		});
+	}
+
+	private async addMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.name !== "string" || typeof payload.source !== "string")
+			throw new Error("marketplace/add requires name and source");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			marketplace: await this.plugins.addMarketplace(payload.name, payload.source),
+		});
+	}
+
+	private async listMarketplaces(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		await this.sendResponse(state, id, {
+			command: command.command,
+			marketplaces: await this.plugins.listMarketplaces(),
+		});
+	}
+
+	private async upgradeMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.name !== "string") throw new Error("marketplace/upgrade requires name");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			marketplace: await this.plugins.upgradeMarketplace(payload.name),
+		});
+	}
+
+	private async removeMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.name !== "string") throw new Error("marketplace/remove requires name");
+		await this.plugins.removeMarketplace(payload.name);
+		await this.sendResponse(state, id, { command: command.command, name: payload.name });
+	}
+
+	private async listPlugins(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			plugins: await this.plugins.listPlugins(payload.installedOnly === true),
+		});
+	}
+
+	private async readPlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.id !== "string") throw new Error("plugin/read requires id");
+		const plugin = await this.plugins.readPlugin(payload.id);
+		if (!plugin) throw new Error(`Unknown plugin: ${payload.id}`);
+		await this.sendResponse(state, id, { command: command.command, plugin });
+	}
+
+	private async installPlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (
+			typeof payload.name !== "string" ||
+			typeof payload.marketplace !== "string" ||
+			typeof payload.version !== "string" ||
+			typeof payload.manifest !== "object" ||
+			payload.manifest === null ||
+			Array.isArray(payload.manifest)
+		)
+			throw new Error("plugin/install requires name, marketplace, version, and manifest");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			plugin: await this.plugins.installPlugin({
+				name: payload.name,
+				marketplace: payload.marketplace,
+				version: payload.version,
+				manifest: payload.manifest as Record<string, unknown>,
+				...(typeof payload.root === "string" ? { root: payload.root } : {}),
+				...(payload.scope === "user" || payload.scope === "project" ? { scope: payload.scope } : {}),
+			}),
+		});
+	}
+
+	private async uninstallPlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.id !== "string") throw new Error("plugin/uninstall requires id");
+		await this.plugins.uninstallPlugin(payload.id);
+		await this.sendResponse(state, id, { command: command.command, id: payload.id });
+	}
+
+	private async setPluginEnabled(
+		state: V2ConnectionState,
+		id: string,
+		command: CommandV2,
+		enabled: boolean,
+	): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.id !== "string") throw new Error(`${command.command} requires id`);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			plugin: await this.plugins.setEnabled(
+				payload.id,
+				enabled,
+				payload.scope === "user" || payload.scope === "project" ? payload.scope : undefined,
+			),
 		});
 	}
 
