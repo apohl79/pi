@@ -489,6 +489,7 @@ export class PiServerV2 {
 		if (mode !== "control" && mode !== "observer") throw new Error("session/attach mode must be control or observer");
 		const runtime = await this.service.openSession(command.sessionId);
 		if (mode === "control") this.claimControl(state, command.sessionId);
+		else this.releaseControlFor(state, command.sessionId);
 		this.trackRuntime(runtime);
 		state.sessions.set(command.sessionId, runtime);
 		await this.sendResponse(state, id, {
