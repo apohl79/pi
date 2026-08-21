@@ -49,7 +49,12 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	const maxItems = options.maxTranscriptItems ?? 48;
 	const maxCharacters = options.maxTranscriptCharacters ?? 6_000;
 	const model = `${snapshot.model.provider}/${snapshot.model.id}`;
-	const operation = state.lifecycle.status === "busy" ? ` operation=${state.lifecycle.operationId}` : "";
+	const operation =
+		state.lifecycle.status === "busy"
+			? ` operation=${state.lifecycle.operationId}`
+			: snapshot.activeOperation === undefined
+				? ""
+				: ` operation=${snapshot.activeOperation.operationId} (${snapshot.activeOperation.state})`;
 	const lines = [`Session ${snapshot.id} · phase=${snapshot.phase} · model=${model}${operation}`];
 	const cost = snapshot.usage.costUsd === undefined ? "unknown" : `$${snapshot.usage.costUsd.toFixed(6)}`;
 	lines.push(
