@@ -5,7 +5,8 @@ import type { CodingAgentV2Runtime, CodingAgentV2Service } from "./v2-service.ts
 
 interface ChildAgent {
 	readonly summary: AgentSummary;
-	readonly sessionId: string;
+	readonly parentSessionId: string;
+	readonly childSessionId: string;
 	readonly runtime: CodingAgentV2Runtime;
 	state: AgentSummary["state"];
 	messages: string[];
@@ -54,7 +55,8 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		};
 		const agent: ChildAgent = {
 			summary,
-			sessionId: created.sessionId,
+			parentSessionId: request.sessionId,
+			childSessionId: created.sessionId,
 			runtime: created.runtime,
 			state: "running",
 			messages: [request.taskMessage],
@@ -67,13 +69,13 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 
 	async list(sessionId: string): Promise<readonly AgentSummary[]> {
 		return [...this.agents.values()]
-			.filter((agent) => agent.sessionId === sessionId)
+			.filter((agent) => agent.parentSessionId === sessionId)
 			.map((agent) => this.snapshot(agent));
 	}
 
 	async getSnapshot(agentId: string): Promise<V2AgentSnapshot> {
 		const agent = this.get(agentId);
-		return { ...this.snapshot(agent), sessionId: agent.sessionId };
+		return { ...this.snapshot(agent), sessionId: agent.parentSessionId };
 	}
 
 	async wait(agentId: string, timeoutMs?: number): Promise<AgentSummary> {
@@ -113,7 +115,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				await agent.runtime.accept(operationId);
 				await agent.runtime.run(operationId, {
 					command: "turn/abort",
-					sessionId: agent.sessionId,
+					sessionId: agent.childSessionId,
 					payload: {},
 				});
 			} finally {
@@ -139,7 +141,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			await agent.runtime.accept(operationId);
 			await agent.runtime.run(operationId, {
 				command,
-				sessionId: agent.sessionId,
+				sessionId: agent.childSessionId,
 				payload: { text },
 			});
 			agent.state = "complete";
