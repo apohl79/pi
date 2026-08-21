@@ -1,6 +1,8 @@
 import {
+	type AgentHarness,
 	type CompactionSettings,
 	type ExecutionEnv,
+	type GoalContinuationScheduler,
 	GoalManager,
 	type SamplingInput,
 	type SamplingInputContext,
@@ -37,6 +39,11 @@ export interface CodingAgentV2SqliteServiceOptions {
 	env: ExecutionEnv | ((metadata: SqliteSessionMetadata) => ExecutionEnv | Promise<ExecutionEnv>);
 	model: Model<Api> | ((metadata: SqliteSessionMetadata) => Model<Api> | Promise<Model<Api>>);
 	fastModel?: Model<Api>;
+	goalContinuation?: (context: {
+		goals: GoalManager;
+		harness: AgentHarness;
+		model: Model<Api>;
+	}) => GoalContinuationScheduler | undefined;
 	compaction?: (model: Model<Api>) => CompactionSettings | undefined;
 	pluginRegistry?: V2PluginRegistry;
 	inputs?: V2InputRegistry;
@@ -151,10 +158,12 @@ export async function createCodingAgentV2SqliteService(
 					}),
 			...(agentRegistry === undefined ? {} : { agents: createAgentTools(agentRegistry, metadata.id, model) }),
 		});
+		const goalContinuation = options.goalContinuation?.({ goals, harness: created.harness, model });
 		return {
 			metadata: sessionMetadata(metadata),
 			harness: created.harness,
 			goals,
+			...(goalContinuation === undefined ? {} : { goalContinuation }),
 			...(inputRegistry === undefined ? {} : { inputs: inputRegistry }),
 			...(usageLedger === undefined ? {} : { usage: usageLedger }),
 		};

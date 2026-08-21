@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { GoalContinuationScheduler } from "@earendil-works/pi-agent-core";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
@@ -225,6 +226,62 @@ describe("coding-agent daemon runtime", () => {
 		} finally {
 			secondClient.dispose();
 			await second.close();
+		}
+	});
+
+	test("runs a configured goal continuation after a production daemon turn", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-goal-continuation-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-goal-faux",
+			models: [{ id: "coding-agent-daemon-goal-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("goal response")]);
+		const continuations: string[] = [];
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			goalContinuation: ({ goals, harness }) =>
+				new GoalContinuationScheduler({
+					goals,
+					waitForIdle: async (callback) => {
+						await harness.waitForIdle();
+						await callback();
+					},
+					continueGoal: async (goal) => {
+						continuations.push(goal.objective);
+					},
+					maxContinuations: 1,
+				}),
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
+			const sessionId = (created.result as { session: { id: string } }).session.id;
+			await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			await client.request({ command: "goal/create", sessionId, payload: { objective: "continue daemon work" } });
+			await client.request({ command: "turn/start", sessionId, payload: { text: "work" } });
+			for (let attempt = 0; attempt < 50; attempt++) {
+				if (continuations.length > 0) break;
+				if (attempt === 49) throw new Error("Timed out waiting for goal continuation");
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			expect(continuations).toEqual(["continue daemon work"]);
+		} finally {
+			client.dispose();
+			await runtime.close();
 		}
 	});
 
