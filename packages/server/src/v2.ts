@@ -2,10 +2,9 @@ import { randomUUID } from "node:crypto";
 import {
 	type ClientHelloV2,
 	type CommandV2,
-	decodeCbor,
+	ClientMessageV2Decoder,
 	type EventEnvelopeV2,
 	encodeServerMessageV2,
-	FrameDecoder,
 	type ModelMetadata,
 	type OperationAccepted,
 	type OperationRecordV2,
@@ -59,15 +58,18 @@ export interface PiServerV2Options {
 type V2ConnectionState = {
 	id: string;
 	connection: ByteConnection;
-	decoder: FrameDecoder;
+	decoder: ClientMessageV2Decoder;
 	sessions: Map<string, PiSessionRuntimeV2>;
 	ready: boolean;
 	closed: boolean;
 	handshakeTimeout: NodeJS.Timeout;
+	handshake?: Promise<void>;
 };
 
 const DEFAULT_MAX_FRAME_LENGTH = 4 * 1024 * 1024;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
+const MAX_REPLAY_EVENTS = 1_024;
+const MAX_REPLAY_BYTES = 16 * 1024 * 1024;
 
 function objectPayload(command: CommandV2): Record<string, unknown> {
 	if (typeof command.payload !== "object" || command.payload === null || Array.isArray(command.payload)) return {};
@@ -130,6 +132,105 @@ export class PiServerV2 {
 		this.inputs = options.inputs ?? new InMemoryV2InputRegistry();
 	}
 
+	private currentRevision(): number {
+		return Math.max(0, ...[...this.eventHistory.values()].flat().map((event) => event.revision));
+	}
+
+	private currentEventSeq(): number {
+		return Math.max(0, ...[...this.eventHistory.values()].flat().map((event) => event.seq));
+	}
+
+	private async handleRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		try {
+			const result = command.command === "session/list"
+				? await this.service.listSessions()
+				: command.command === "model/list"
+					? await this.service.listModels()
+					: command.command === "session/read" && command.sessionId
+						? await (await this.session(state, command.sessionId)).snapshot()
+						: undefined;
+			if (result === undefined) {
+				await this.send(state, { type: "response", id, ok: false, error: { code: "not_implemented", message: "Command not implemented" } });
+				return;
+			}
+			await this.send(state, { type: "response", id, ok: true, result: toProtocolJsonValue(result) });
+		} catch (error) {
+			await this.send(state, { type: "response", id, ok: false, error: this.protocolError(error) });
+		}
+	}
+
+	private async session(state: V2ConnectionState, sessionId: string): Promise<PiSessionRuntimeV2> {
+		const existing = state.sessions.get(sessionId);
+		if (existing) return existing;
+		const runtime = await this.service.openSession(sessionId);
+		state.sessions.set(sessionId, runtime);
+		return runtime;
+	}
+
+	private async send(state: V2ConnectionState, message: ServerMessageV2): Promise<boolean> {
+		if (state.closed || state.connection.closed) return false;
+		try {
+			await state.connection.send(encodeServerMessageV2(message, { maxFrameLength: this.maxFrameLength }));
+			return true;
+		} catch (error) {
+			this.reportError(error);
+			await this.closeConnection(state);
+			return false;
+		}
+	}
+
+	private async failProtocol(state: V2ConnectionState, code: string, message: string, cause?: unknown): Promise<void> {
+		if (state.closed) return;
+		if (cause !== undefined) this.reportError(cause);
+		clearTimeout(state.handshakeTimeout);
+		state.closed = true;
+		try {
+			await state.connection.close(encodeServerMessageV2({ type: "hello_error", error: { code, message: this.sanitizeMessage(message) } }, { maxFrameLength: this.maxFrameLength }));
+		} catch (closeError) {
+			this.reportError(closeError);
+		}
+		await this.disconnect(state);
+	}
+
+	private async disconnect(state: V2ConnectionState): Promise<void> {
+		clearTimeout(state.handshakeTimeout);
+		this.connections.delete(state);
+		await Promise.all([...state.sessions.values()].map((runtime) => runtime.dispose().catch((error) => this.reportError(error))));
+		state.sessions.clear();
+		state.closed = true;
+	}
+
+	private async closeConnection(state: V2ConnectionState): Promise<void> {
+		if (!state.connection.closed) {
+			try {
+				await state.connection.close();
+			} catch (error) {
+				this.reportError(error);
+			}
+		}
+		await this.disconnect(state);
+	}
+
+	private protocolError(error: unknown): { code: string; message: string } {
+		this.reportError(error);
+		return { code: "internal_error", message: "Internal server error" };
+	}
+
+	private sanitizeMessage(message: string): string {
+		const normalized = message.replace(/[\r\n]+/g, " ");
+		return normalized.length <= 500 ? normalized : `${normalized.slice(0, 497)}...`;
+	}
+
+	private reportError(error: unknown): void {
+		const normalized = error instanceof Error ? error : new Error(String(error));
+		void this.diagnostics?.record({ kind: "server_error", payload: { message: normalized.message } }).catch(() => {});
+		try {
+			this.onError?.(normalized);
+		} catch {
+			return;
+		}
+	}
+
 	get addresses(): readonly string[] {
 		return this.listeners.flatMap((listener) => (listener.address === undefined ? [] : [listener.address]));
 	}
@@ -155,7 +256,7 @@ export class PiServerV2 {
 		if (this.restored) return;
 		const stored = await this.operationStore.load();
 		for (const operation of stored.operations) this.operations.set(operation.operationId, operation);
-		for (const event of stored.events) {
+		for (const event of [...stored.events].sort((left, right) => left.seq - right.seq)) {
 			const history = this.eventHistory.get(event.sessionId) ?? [];
 			history.push(event);
 			this.eventHistory.set(event.sessionId, history);
@@ -192,7 +293,7 @@ export class PiServerV2 {
 		const state = {
 			id: randomUUID(),
 			connection,
-			decoder: new FrameDecoder({ maxFrameLength: this.maxFrameLength }),
+			decoder: new ClientMessageV2Decoder({ maxFrameLength: this.maxFrameLength }),
 			sessions: new Map<string, PiSessionRuntimeV2>(),
 			ready: false,
 			closed: false,
@@ -208,16 +309,19 @@ export class PiServerV2 {
 	private receive(state: V2ConnectionState, chunk: Uint8Array): void {
 		if (state.closed) return;
 		try {
-			for (const frame of state.decoder.push(chunk)) this.dispatch(state, parseClientMessageV2(decodeCbor(frame)));
+			for (const message of state.decoder.push(chunk)) this.dispatch(state, message);
 		} catch (error) {
-			void this.failProtocol(state, "invalid_request", error instanceof Error ? error.message : String(error));
+			void this.failProtocol(state, "invalid_request", "Invalid protocol message", error);
 		}
 	}
 
 	private dispatch(state: V2ConnectionState, message: ReturnType<typeof parseClientMessageV2>): void {
 		if (!state.ready) {
 			if (message.type !== "hello") return void this.failProtocol(state, "invalid_request", "Expected v2 hello");
-			void this.handshake(state, message);
+			if (state.handshake) return void this.failProtocol(state, "invalid_request", "Handshake already in progress");
+			state.handshake = this.handshake(state, message).finally(() => {
+				state.handshake = undefined;
+			});
 			return;
 		}
 		if (message.type !== "request")
@@ -232,23 +336,28 @@ export class PiServerV2 {
 			const snapshot: ServerSnapshotV2 = {
 				serverId: this.id,
 				protocolVersion: PROTOCOL_V2_VERSION,
-				revision: 0,
-				eventSeq: 0,
+				revision: this.currentRevision(),
+				eventSeq: this.currentEventSeq(),
 				sessions: await this.service.listSessions(),
 				models: await this.service.listModels(),
 			};
-			await this.send(state, { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: state.id, snapshot });
+			if (!(await this.send(state, { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: state.id, snapshot }))) return;
 			state.ready = true;
 			clearTimeout(state.handshakeTimeout);
 			if (message.lastEvent) {
-				const events = this.eventHistory.get(message.lastEvent.sessionId) ?? [];
-				await Promise.all(
-					events
-						.filter((event) => event.seq > message.lastEvent!.eventSeq)
-						.map((event) => this.send(state, event)),
+				const events = (this.eventHistory.get(message.lastEvent.sessionId) ?? []).filter(
+					(event) => event.seq > message.lastEvent!.eventSeq,
 				);
+				if (events.length > MAX_REPLAY_EVENTS) return void (await this.failProtocol(state, "invalid_request", "Replay exceeds configured limit"));
+				const replayBytes = events.reduce(
+					(total, event) => total + encodeServerMessageV2(event, { maxFrameLength: this.maxFrameLength }).byteLength,
+					0,
+				);
+				if (replayBytes > MAX_REPLAY_BYTES) return void (await this.failProtocol(state, "invalid_request", "Replay exceeds configured limit"));
+				for (const event of events) if (!(await this.send(state, event))) return;
 			}
 		} catch (error) {
-			await this.failProtocol(state, "internal_error", error instanceof Error ? error.message : String(error));
+			await this.failProtocol(state, "internal_error", "Internal server error", error);
 		}
 	}
+}
