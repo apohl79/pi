@@ -26,6 +26,29 @@ export interface RemoteV2SessionState {
 	readonly lastEvent?: ProtocolEvent;
 }
 
+export type RemoteV2PromptPart =
+	| { readonly type: "text"; readonly text: string }
+	| { readonly type: "image"; readonly digest: string; readonly mimeType: string }
+	| { readonly type: "blob"; readonly digest: string; readonly mimeType: string };
+
+export type RemoteV2PromptContent = readonly RemoteV2PromptPart[];
+
+function promptPayload(input: string | RemoteV2PromptContent, label: string): JsonValue {
+	if (typeof input === "string") {
+		const text = input.trim();
+		if (!text) throw new Error(`${label} cannot be empty`);
+		return { text };
+	}
+	if (input.length === 0) throw new Error(`${label} cannot be empty`);
+	const content: JsonValue[] = input.map((part): JsonValue => {
+		if (part.type === "text") return { type: "text", text: part.text } as JsonValue;
+		return { type: part.type, digest: part.digest, mimeType: part.mimeType } as JsonValue;
+	});
+	return {
+		content,
+	};
+}
+
 export interface RemoteV2SessionOptions {
 	readonly onListenerError?: (error: Error) => void;
 	readonly mode?: V2SessionLeaseMode;
@@ -118,13 +141,12 @@ export class RemoteV2Session {
 		return this.#snapshot;
 	}
 
-	async submit(text: string): Promise<string> {
-		const normalized = text.trim();
-		if (!normalized) throw new Error("Session input cannot be empty");
+	async submit(input: string | RemoteV2PromptContent): Promise<string> {
+		const payload = promptPayload(input, "Session input");
 		const command = this.phase === "turn" ? "turn/steer" : "turn/start";
 		if (this.phase !== "idle" && this.phase !== "turn")
 			throw new Error(`Session cannot accept input during ${this.phase ?? "unknown"} phase`);
-		return this.#accept(command, { text: normalized });
+		return this.#accept(command, payload);
 	}
 
 	async waitForOperation(operationId: string): Promise<ProtocolSnapshot> {
@@ -146,10 +168,8 @@ export class RemoteV2Session {
 		});
 	}
 
-	async followUp(text: string): Promise<string> {
-		const normalized = text.trim();
-		if (!normalized) throw new Error("Session follow-up cannot be empty");
-		return this.#accept("turn/followUp", { text: normalized });
+	async followUp(input: string | RemoteV2PromptContent): Promise<string> {
+		return this.#accept("turn/followUp", promptPayload(input, "Session follow-up"));
 	}
 
 	async resume(): Promise<string> {
