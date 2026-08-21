@@ -4,6 +4,7 @@ import {
 	isOperationRecordV2,
 	isOperationSummary,
 	MAX_V2_ARRAY_ITEMS,
+	MAX_V2_JSON_DEPTH,
 	MAX_V2_STRING_LENGTH,
 	OperationRecordV2Schema,
 	OperationSummarySchema,
@@ -73,6 +74,13 @@ describe("protocol v2 contract schemas", () => {
 		expect(Check(OperationSummarySchema, summary)).toBe(true);
 		expect(isOperationSummary(summary)).toBe(false);
 		expect(isOperationRecordV2(record)).toBe(false);
+		expect(isOperationSummary({ ...summary, terminalSeq: 3 })).toBe(false);
+		expect(
+			isOperationRecordV2({
+				...record,
+				terminalSeq: 3,
+			}),
+		).toBe(false);
 	});
 
 	test("bounds nested v2 model and transcript payloads", () => {
@@ -170,6 +178,17 @@ describe("protocol v2 contract schemas", () => {
 						),
 					},
 				],
+			}),
+		).toBe(false);
+		const nested = Array.from({ length: MAX_V2_JSON_DEPTH }, () => 0).reduceRight(
+			(value) => ({ nested: value }),
+			true as unknown,
+		);
+		expect(Check(SessionSnapshotV2Schema, { ...snapshot, transcript: [{ ...toolItem, input: nested }] })).toBe(true);
+		expect(
+			Check(SessionSnapshotV2Schema, {
+				...snapshot,
+				transcript: [{ ...toolItem, input: { nested } }],
 			}),
 		).toBe(false);
 	}, 15_000);
