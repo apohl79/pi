@@ -1,8 +1,10 @@
-import { type ExecutionEnv, GoalManager, type Session } from "@earendil-works/pi-agent-core";
+import { type ExecutionEnv, GoalManager, type SamplingInputContext, type Session } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { SessionMetadataV2 } from "@earendil-works/pi-protocol";
+import type { V2PluginRegistry } from "@earendil-works/pi-server";
 import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import { type CreateCodingAgentHarnessOptions, createCodingAgentHarness } from "./create-harness.ts";
+import { createPluginSamplingInput } from "./plugin-sampling.ts";
 import {
 	type CodingAgentV2Service,
 	type CodingAgentV2SessionDefinition,
@@ -15,6 +17,7 @@ export interface CodingAgentV2SqliteServiceOptions {
 	models: Models;
 	env: ExecutionEnv | ((metadata: SqliteSessionMetadata) => ExecutionEnv | Promise<ExecutionEnv>);
 	model: Model<Api> | ((metadata: SqliteSessionMetadata) => Model<Api> | Promise<Model<Api>>);
+	pluginRegistry?: V2PluginRegistry;
 	harness?: Omit<CreateCodingAgentHarnessOptions, "session" | "models" | "model" | "env" | "sessionFile">;
 }
 
@@ -41,6 +44,28 @@ export async function createCodingAgentV2SqliteService(
 			modelOverride ?? (typeof options.model === "function" ? await options.model(metadata) : options.model);
 		const env = typeof options.env === "function" ? await options.env(metadata) : options.env;
 		const goals = new GoalManager(session);
+		const configuredSamplingInput = options.harness?.samplingInput;
+		const plugins = options.pluginRegistry
+			? (await options.pluginRegistry.listPlugins(true)).filter((plugin) => plugin.enabled)
+			: [];
+		const pluginSamplingInput =
+			plugins.length === 0
+				? undefined
+				: createPluginSamplingInput(
+						env,
+						plugins.map((plugin, activationOrder) => ({
+							pluginId: plugin.id,
+							activationOrder,
+							entries: plugin.sampling,
+						})),
+					);
+		const samplingInput =
+			configuredSamplingInput === undefined
+				? pluginSamplingInput
+				: async (context: SamplingInputContext) => [
+						...(await configuredSamplingInput(context)),
+						...(pluginSamplingInput === undefined ? [] : await pluginSamplingInput(context)),
+					];
 		const created = await createCodingAgentHarness({
 			...options.harness,
 			session,
@@ -48,6 +73,7 @@ export async function createCodingAgentV2SqliteService(
 			model,
 			env,
 			goals,
+			samplingInput,
 			sessionFile: metadata.path,
 		});
 		return { metadata: sessionMetadata(metadata), harness: created.harness, goals };
