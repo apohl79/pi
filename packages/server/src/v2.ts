@@ -19,7 +19,7 @@ import {
 import { InMemoryV2AgentRegistry, type V2AgentRegistry } from "./agents.ts";
 import { InMemoryV2BlobStore, type V2BlobStore } from "./blobs.ts";
 import type { ByteConnection, ByteConnectionHandler } from "./connection.ts";
-import type { ForensicRecorder } from "./diagnostics.ts";
+import { type ForensicRecorder, InMemoryForensicRecorder } from "./diagnostics.ts";
 import { LocalV2FileReferenceService, type V2FileReferenceService } from "./files.ts";
 import { BlobV2ImageService, type V2ImageService } from "./images.ts";
 import { InMemoryV2InputRegistry, type V2InputRegistry } from "./inputs.ts";
@@ -115,7 +115,7 @@ export class PiServerV2 {
 	private readonly maxFrameLength: number;
 	private readonly handshakeTimeoutMs: number;
 	private readonly onError: ((error: Error) => void) | undefined;
-	private readonly diagnostics: ForensicRecorder | undefined;
+	private readonly diagnostics: ForensicRecorder;
 	private readonly operationStore: V2OperationStore;
 	private readonly processes: V2ProcessRegistry;
 	private readonly blobs: V2BlobStore;
@@ -142,7 +142,7 @@ export class PiServerV2 {
 		this.maxFrameLength = options.maxFrameLength ?? DEFAULT_MAX_FRAME_LENGTH;
 		this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
 		this.onError = options.onError;
-		this.diagnostics = options.diagnostics;
+		this.diagnostics = options.diagnostics ?? new InMemoryForensicRecorder();
 		this.operationStore = options.operationStore ?? new InMemoryV2OperationStore();
 		this.processes = options.processes ?? new InMemoryV2ProcessRegistry();
 		this.blobs = options.blobs ?? new InMemoryV2BlobStore();
@@ -700,7 +700,7 @@ export class PiServerV2 {
 		const events = await this.diagnosticEvents();
 		await this.sendResponse(state, id, {
 			command: command.command,
-			capture: this.diagnostics ? "metadata" : "unavailable",
+			capture: "metadata",
 			degraded: false,
 			lastCriticalEventSeq: events.at(-1)?.seq ?? 0,
 			eventCount: events.length,
@@ -742,9 +742,9 @@ export class PiServerV2 {
 		const sequenceOk = events.every((event, index) => index === 0 || event.seq === events[index - 1]!.seq + 1);
 		await this.sendResponse(state, id, {
 			command: command.command,
-			ok: this.diagnostics !== undefined && sequenceOk,
+			ok: sequenceOk,
 			checks: [
-				{ name: "recorder", ok: this.diagnostics !== undefined },
+				{ name: "recorder", ok: true },
 				{ name: "sequence", ok: sequenceOk },
 			],
 		});
@@ -871,7 +871,7 @@ export class PiServerV2 {
 	}
 
 	private async diagnosticEvents(afterSeq = 0): Promise<Awaited<ReturnType<ForensicRecorder["read"]>>> {
-		return this.diagnostics ? this.diagnostics.read(afterSeq) : [];
+		return this.diagnostics.read(afterSeq);
 	}
 
 	private async detach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
