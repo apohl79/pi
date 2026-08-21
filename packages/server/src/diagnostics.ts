@@ -122,6 +122,8 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 	const runtimeManifest = candidate.runtimeManifest;
 	if (runtimeManifest !== undefined && !isDiagnosticRuntimeManifest(runtimeManifest))
 		return { valid: false, reason: "Diagnostic bundle contains an invalid runtime manifest" };
+	if (candidate.clientDiagnostics !== undefined && !isClientDiagnosticExport(candidate.clientDiagnostics))
+		return { valid: false, reason: "Diagnostic bundle contains invalid client diagnostics" };
 	const fields = manifest as Record<string, unknown>;
 	if (
 		fields.unavailable !== undefined &&
@@ -180,6 +182,27 @@ function isDiagnosticCapsule(value: unknown): value is DiagnosticCapsule {
 		(capsule.originalByteLength as number) >= (capsule.byteLength as number) &&
 		typeBoolean(capsule.truncated)
 	);
+}
+
+function isClientDiagnosticExport(value: unknown): boolean {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const exportValue = value as Record<string, unknown>;
+	if (!Number.isSafeInteger(exportValue.afterSeq) || (exportValue.afterSeq as number) < 0) return false;
+	if (!Array.isArray(exportValue.records)) return false;
+	return exportValue.records.every((record) => {
+		if (typeof record !== "object" || record === null || Array.isArray(record)) return false;
+		const candidate = record as Record<string, unknown>;
+		return (
+			candidate.schemaVersion === 1 &&
+			Number.isSafeInteger(candidate.seq) &&
+			(candidate.seq as number) > 0 &&
+			typeNonEmpty(candidate.clientInstanceId) &&
+			typeNonEmpty(candidate.event) &&
+			["debug", "info", "warn", "error"].includes(candidate.severity as string) &&
+			Number.isSafeInteger(candidate.timestamp) &&
+			(candidate.fields === undefined || (typeof candidate.fields === "object" && candidate.fields !== null))
+		);
+	});
 }
 
 function typeNonEmpty(value: unknown): value is string {

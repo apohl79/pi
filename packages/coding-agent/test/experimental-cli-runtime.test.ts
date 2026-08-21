@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ByteTransport, ByteTransportHandlers } from "@earendil-works/pi-client";
 import { PiClientV2 } from "@earendil-works/pi-client";
+import { ClientDiagnosticSpool } from "@earendil-works/pi-client/diagnostics";
 import {
 	decodeCbor,
 	encodeServerMessageV2,
@@ -200,17 +201,21 @@ describe("experimental CLI runtime", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-cli-diagnostics-export-"));
 		const outputPath = join(directory, "bundle.json");
 		const server = clientFactory();
+		const spool = new ClientDiagnosticSpool({ path: join(directory, "client.jsonl"), clientInstanceId: "client-1" });
+		await spool.append({ event: "client.pre_connect" });
 		const output: unknown[] = [];
 		const runtime = createExperimentalCliRuntime({
 			daemon: daemon(),
 			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
 			createClient: server.create,
+			diagnosticsSpool: spool,
 			write: (value) => output.push(value),
 		});
 		await runtime.runDiagnostics({ command: "diagnostics", action: "export", output: outputPath });
-		expect(JSON.parse(await readFile(outputPath, "utf8"))).toEqual({
+		expect(JSON.parse(await readFile(outputPath, "utf8"))).toMatchObject({
 			manifest: { schemaVersion: 1 },
 			events: [],
+			clientDiagnostics: { afterSeq: 1, records: [{ event: "client.pre_connect" }] },
 		});
 		expect(output).toMatchObject([{ command: "diagnostics/export" }]);
 		runtime.close();
