@@ -2,6 +2,7 @@ export * from "./agents.ts";
 export * from "./blobs.ts";
 export * from "./diagnostics.ts";
 export * from "./errors.ts";
+export * from "./files.ts";
 export * from "./inputs.ts";
 export * from "./listener.ts";
 export * from "./operation-store.ts";
