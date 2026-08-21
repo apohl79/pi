@@ -84,4 +84,34 @@ describe("PiClientV2", () => {
 		});
 		await expect(read).rejects.toThrow("not_found: missing");
 	});
+
+	test("keeps session lease transitions and filters session events", async () => {
+		const pair = transportPair();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		const connecting = client.connect();
+		await Promise.resolve();
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
+		await connecting;
+		const handlePromise = client.openSession("session-1");
+		pair.deliver({ type: "response", id: "v2-request-1", ok: true, result: { command: "session/attach" } });
+		const handle = await handlePromise;
+		expect(handle.mode).toBe("control");
+		const events: string[] = [];
+		handle.onEvent((event) => events.push(event.event));
+		pair.deliver({ type: "event", sessionId: "other", seq: 1, revision: 1, event: "usage_updated", payload: {} });
+		pair.deliver({ type: "event", sessionId: "session-1", seq: 2, revision: 1, event: "plan_updated", payload: {} });
+		expect(events).toEqual(["plan_updated"]);
+		const relinquished = handle.relinquishControl();
+		pair.deliver({ type: "response", id: "v2-request-2", ok: true, result: { command: "session/attach" } });
+		await relinquished;
+		expect(handle.mode).toBe("observer");
+		const acquired = handle.acquireControl();
+		pair.deliver({ type: "response", id: "v2-request-3", ok: true, result: { command: "session/attach" } });
+		await acquired;
+		expect(handle.mode).toBe("control");
+		const detached = handle.detach();
+		pair.deliver({ type: "response", id: "v2-request-4", ok: true, result: { command: "session/detach" } });
+		await detached;
+		expect(() => handle.read()).toThrow("detached");
+	});
 });
