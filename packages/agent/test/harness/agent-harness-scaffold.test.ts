@@ -495,9 +495,6 @@ describe("AgentHarness v2 scaffold", () => {
 	it("rejects every unfinished public operation explicitly", async () => {
 		const harness = await createHarness();
 		const unfinished: [string, () => unknown | Promise<unknown>][] = [
-			["peekAction", () => harness.peekAction()],
-			["executeAction", () => harness.executeAction()],
-			["runToCompletion", () => harness.runToCompletion()],
 			["createLane", () => harness.createLane("thread", null)],
 		];
 
@@ -507,6 +504,28 @@ describe("AgentHarness v2 scaffold", () => {
 				operation,
 			});
 		}
+	});
+
+	it("parks one provider action for manual drive and releases it explicitly", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "manual-drive-faux",
+			models: [{ id: "manual-drive-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("manual response")]);
+		const { harness } = await AgentHarness.create({
+			models,
+			model: faux.getModel(),
+			session: createSession("manual"),
+			drive: "manual",
+		});
+		const run = harness.prompt("manual prompt");
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(await harness.peekAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 1 });
+		expect(await harness.executeAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 1 });
+		expect(await run).toMatchObject({ ok: true, value: { kind: "completed" } });
+		await harness.close();
 	});
 
 	it("exposes the durable main lane and lane inventory", async () => {
