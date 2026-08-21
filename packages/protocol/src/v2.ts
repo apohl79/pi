@@ -366,10 +366,27 @@ export const EventEnvelopeV2Schema = StrictObject({
 });
 export type EventEnvelopeV2 = Static<typeof EventEnvelopeV2Schema>;
 
+export const ClientDiagnosticManifestV2Schema = StrictObject({
+	runtime: Type.String({ minLength: 1 }),
+	platform: Type.String({ minLength: 1 }),
+	arch: Type.String({ minLength: 1 }),
+	buildVersion: Type.Optional(Type.String({ minLength: 1 })),
+	forkCommit: Type.Optional(Type.String({ minLength: 1 })),
+	upstreamBaseCommit: Type.Optional(Type.String({ minLength: 1 })),
+	configHash: Type.Optional(Type.String({ minLength: 1 })),
+});
+export type ClientDiagnosticManifestV2 = Static<typeof ClientDiagnosticManifestV2Schema>;
+
 export const ClientHelloV2Schema = StrictObject({
 	type: Type.Literal("hello"),
 	version: Type.Literal(PROTOCOL_V2_VERSION),
 	lastEvent: Type.Optional(EventCursorSchema),
+	diagnostics: Type.Optional(
+		StrictObject({
+			manifest: ClientDiagnosticManifestV2Schema,
+			afterSeq: Type.Optional(NonNegativeIntegerSchema),
+		}),
+	),
 });
 export type ClientHelloV2 = Static<typeof ClientHelloV2Schema>;
 

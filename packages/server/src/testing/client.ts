@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { createConnection, type Socket } from "node:net";
 import {
+	type ClientDiagnosticManifestV2,
 	type ClientMessage,
 	type ClientMessageV2,
 	type Command,
@@ -141,9 +142,17 @@ export class ProtocolTestClientV2 {
 		this.channel = channel;
 	}
 
-	hello(lastEvent?: EventCursor): Promise<ServerMessageV2> {
+	hello(
+		lastEvent?: EventCursor,
+		diagnostics?: { manifest: ClientDiagnosticManifestV2; afterSeq?: number },
+	): Promise<ServerMessageV2> {
 		const response = this.next((message) => message.type === "hello");
-		void this.sendMessage({ type: "hello", version: PROTOCOL_V2_VERSION, lastEvent });
+		void this.sendMessage({
+			type: "hello",
+			version: PROTOCOL_V2_VERSION,
+			...(lastEvent === undefined ? {} : { lastEvent }),
+			...(diagnostics === undefined ? {} : { diagnostics }),
+		});
 		return response;
 	}
 

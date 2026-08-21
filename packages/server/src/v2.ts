@@ -99,6 +99,7 @@ type V2ConnectionState = {
 	controlSessions: Set<string>;
 	ready: boolean;
 	closed: boolean;
+	clientDiagnostics?: ClientHelloV2["diagnostics"];
 	handshakeTimeout: NodeJS.Timeout;
 };
 
@@ -314,6 +315,7 @@ export class PiServerV2 {
 		if (message.version !== PROTOCOL_V2_VERSION)
 			return void (await this.failProtocol(state, "unsupported_version", "Unsupported protocol version"));
 		try {
+			state.clientDiagnostics = message.diagnostics;
 			const snapshot: ServerSnapshotV2 = {
 				serverId: this.id,
 				protocolVersion: PROTOCOL_V2_VERSION,
@@ -936,6 +938,7 @@ export class PiServerV2 {
 			bundle: {
 				manifest,
 				runtimeManifest: this.runtimeManifest,
+				...(state.clientDiagnostics === undefined ? {} : { clientDiagnostics: state.clientDiagnostics }),
 				events,
 				capsules,
 				...(decryptedCapsules === undefined ? {} : { decryptedCapsules }),
