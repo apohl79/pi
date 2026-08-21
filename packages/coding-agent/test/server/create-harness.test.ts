@@ -208,6 +208,45 @@ describe("coding-agent Harness construction", () => {
 		}
 	});
 
+	test("exposes the Codex-compatible child-agent tool set behind an injected registry", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "agent-tool-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: "/workspace" });
+		const created = await createCodingAgentHarness({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+			agents: {
+				spawn: async (request) => ({ id: "agent-1", ...request }),
+				list: async () => [{ id: "agent-1", state: "running" }],
+				wait: async (agentId) => ({ id: agentId, state: "complete" }),
+				message: async () => {},
+				followUp: async (agentId) => ({ id: agentId, state: "running" }),
+				interrupt: async (agentId) => ({ id: agentId, state: "interrupted" }),
+			},
+		});
+		try {
+			expect((await created.harness.getTools()).map((tool) => tool.name).slice(-6)).toEqual([
+				"spawn_agent",
+				"list_agents",
+				"wait_agent",
+				"send_message",
+				"followup_task",
+				"interrupt_agent",
+			]);
+			const spawn = (await created.harness.getTools()).find((tool) => tool.name === "spawn_agent");
+			if (!spawn) throw new Error("Expected spawn_agent tool");
+			expect(await spawn.execute("spawn-call", { taskName: "child", taskMessage: "Inspect the bug" })).toMatchObject(
+				{
+					content: [{ type: "text", text: expect.stringContaining('"taskName":"child"') }],
+				},
+			);
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("preserves coding-agent prompt snippets and guideline order", () => {
 		const prompt = buildCodingAgentHarnessSystemPrompt({
 			cwd: "/workspace",

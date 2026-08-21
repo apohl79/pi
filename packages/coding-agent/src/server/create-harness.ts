@@ -64,6 +64,20 @@ export interface CodingAgentImageView {
 	reference: string;
 }
 
+export interface CodingAgentAgentTools {
+	spawn(request: {
+		taskName: string;
+		taskMessage: string;
+		model?: { provider: string; id: string };
+		role?: string;
+	}): Promise<unknown>;
+	list(): Promise<unknown>;
+	wait(agentId: string, timeoutMs?: number): Promise<unknown>;
+	message(agentId: string, message: string): Promise<void>;
+	followUp(agentId: string, message: string): Promise<unknown>;
+	interrupt(agentId: string): Promise<unknown>;
+}
+
 const requestUserInputSchema = Type.Object({
 	questions: Type.Array(
 		Type.Object({
@@ -95,6 +109,23 @@ const webSchema = Type.Object({
 });
 
 const viewImageSchema = Type.Object({ reference: Type.String({ minLength: 1 }) });
+const spawnAgentSchema = Type.Object({
+	taskName: Type.String({ minLength: 1 }),
+	taskMessage: Type.String({ minLength: 1 }),
+	model: Type.Optional(Type.Object({ provider: Type.String({ minLength: 1 }), id: Type.String({ minLength: 1 }) })),
+	role: Type.Optional(Type.String({ minLength: 1 })),
+});
+const listAgentsSchema = Type.Object({});
+const waitAgentSchema = Type.Object({
+	agentId: Type.String({ minLength: 1 }),
+	timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+});
+const messageAgentSchema = Type.Object({
+	agentId: Type.String({ minLength: 1 }),
+	message: Type.String({ minLength: 1 }),
+});
+const followUpAgentSchema = messageAgentSchema;
+const interruptAgentSchema = Type.Object({ agentId: Type.String({ minLength: 1 }) });
 
 export interface CodingAgentHarnessTool extends HarnessTool {
 	promptSnippet?: string;
@@ -130,6 +161,7 @@ export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOption
 	) => Promise<CodingAgentInputResponse>;
 	web?: (request: CodingAgentWebRequest) => Promise<readonly CodingAgentWebResult[]>;
 	viewImage?: (reference: string) => Promise<CodingAgentImageView>;
+	agents?: CodingAgentAgentTools;
 }
 
 export interface BuildCodingAgentHarnessSystemPromptOptions {
@@ -279,6 +311,94 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 					return { content: [{ type: "text", text: JSON.stringify(image) }], details: { image } };
 				},
 			});
+		}
+		if (options.agents) {
+			const agents = options.agents;
+			tools.push(
+				{
+					name: "spawn_agent",
+					label: "spawn_agent",
+					description: "Start a child coding agent with an explicit task.",
+					parameters: spawnAgentSchema,
+					execute: async (_id, input) => ({
+						content: [
+							{
+								type: "text",
+								text: JSON.stringify(await agents.spawn(input as Static<typeof spawnAgentSchema>)),
+							},
+						],
+						details: {},
+					}),
+				},
+				{
+					name: "list_agents",
+					label: "list_agents",
+					description: "List child agents owned by this session.",
+					parameters: listAgentsSchema,
+					execute: async () => ({
+						content: [{ type: "text", text: JSON.stringify(await agents.list()) }],
+						details: {},
+					}),
+				},
+				{
+					name: "wait_agent",
+					label: "wait_agent",
+					description: "Wait for a child agent and return its current state.",
+					parameters: waitAgentSchema,
+					execute: async (_id, input) => {
+						const params = input as Static<typeof waitAgentSchema>;
+						return {
+							content: [
+								{ type: "text", text: JSON.stringify(await agents.wait(params.agentId, params.timeoutMs)) },
+							],
+							details: {},
+						};
+					},
+				},
+				{
+					name: "send_message",
+					label: "send_message",
+					description: "Send a message to a child agent.",
+					parameters: messageAgentSchema,
+					execute: async (_id, input) => {
+						const params = input as Static<typeof messageAgentSchema>;
+						await agents.message(params.agentId, params.message);
+						return { content: [{ type: "text", text: "Message sent." }], details: {} };
+					},
+				},
+				{
+					name: "followup_task",
+					label: "followup_task",
+					description: "Send a follow-up task to a child agent.",
+					parameters: followUpAgentSchema,
+					execute: async (_id, input) => {
+						const params = input as Static<typeof followUpAgentSchema>;
+						return {
+							content: [
+								{ type: "text", text: JSON.stringify(await agents.followUp(params.agentId, params.message)) },
+							],
+							details: {},
+						};
+					},
+				},
+				{
+					name: "interrupt_agent",
+					label: "interrupt_agent",
+					description: "Interrupt a running child agent.",
+					parameters: interruptAgentSchema,
+					execute: async (_id, input) => ({
+						content: [
+							{
+								type: "text",
+								text: JSON.stringify(
+									await agents.interrupt((input as Static<typeof interruptAgentSchema>).agentId),
+								),
+							},
+						],
+						details: {},
+					}),
+				},
+			);
 		}
 	}
 	const activeToolNames = [...(providedActiveToolNames ?? tools.map((tool) => tool.name))];
