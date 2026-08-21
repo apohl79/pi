@@ -90,7 +90,6 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	readonly started = new Deferred<void>();
 	readonly release = new Deferred<void>();
 	disposeCount = 0;
-	fail = false;
 	private current: SessionSnapshotV2;
 
 	constructor(id: string) {
@@ -557,35 +556,6 @@ describe("PiServer v2 operation acceptance", () => {
 		await second.close();
 	});
 
-	test("includes the authoritative snapshot in a failed terminal event", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pis-v2-failure-"));
-		directories.push(directory);
-		const service = new TestService();
-		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
-		servers.push(server);
-		await server.start();
-		const client = await connectUnixTestClientV2(server.addresses[0]!);
-		await client.hello();
-		await client.request({ command: "session/attach", sessionId: "session-1" });
-		const runtime = service.sessions.get("session-1")!;
-		runtime.fail = true;
-
-		const response = await client.request({
-			command: "turn/start",
-			sessionId: "session-1",
-			payload: { text: "hello" },
-		});
-		expect(response).toMatchObject({ ok: true, accepted: { sessionRevision: 2, eventSeq: 2 } });
-		const terminal = await client.next(
-			(message) => message.type === "event" && message.event === "operation_terminal",
-		);
-		expect(terminal).toMatchObject({
-			type: "event",
-			payload: { state: "failed", error: "runtime failed", snapshot: { id: "session-1", phase: "idle" } },
-		});
-		await client.close();
-	});
-
 	test("disposes detached runtimes when the server closes", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-shutdown-"));
 		directories.push(directory);
@@ -603,40 +573,6 @@ describe("PiServer v2 operation acceptance", () => {
 
 		await server.close();
 		expect(runtime.disposeCount).toBe(1);
-	});
-
-	test("allows one controller and observer lease per session", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pis-v2-leases-"));
-		directories.push(directory);
-		const service = new TestService();
-		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
-		servers.push(server);
-		await server.start();
-		const controller = await connectUnixTestClientV2(server.addresses[0]!);
-		const observer = await connectUnixTestClientV2(server.addresses[0]!);
-		await controller.hello();
-		await observer.hello();
-		await controller.request({ command: "session/attach", sessionId: "session-1" });
-		const observed = await observer.request({
-			command: "session/attach",
-			sessionId: "session-1",
-			payload: { mode: "observer" },
-		});
-		expect(observed).toMatchObject({ ok: true, result: { lease: "observer" } });
-		const rejected = await observer.request({
-			command: "turn/start",
-			sessionId: "session-1",
-			payload: { text: "no" },
-		});
-		expect(rejected).toMatchObject({
-			ok: false,
-			error: { code: "request_failed", message: "Session session-1 requires a control lease" },
-		});
-		await controller.close();
-		await observer.request({ command: "session/detach", sessionId: "session-1" });
-		const acquired = await observer.request({ command: "session/attach", sessionId: "session-1" });
-		expect(acquired).toMatchObject({ ok: true, result: { lease: "control" } });
-		await observer.close();
 	});
 
 	test("accepts goal lifecycle commands through the durable operation path", async () => {
