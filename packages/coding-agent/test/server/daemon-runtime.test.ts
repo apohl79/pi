@@ -170,6 +170,21 @@ describe("coding-agent daemon runtime", () => {
 			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
 			sessionId = (created.result as { session: { id: string } }).session.id;
 			await firstClient.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			await firstClient.request({
+				command: "goal/create",
+				sessionId,
+				payload: { objective: "attribute usage" },
+			});
+			let goalId = "";
+			for (let attempt = 0; attempt < 50; attempt++) {
+				const goal = await firstClient.request({ command: "goal/read", sessionId });
+				if (goal.ok && "result" in goal && (goal.result as { goal?: { id: string } }).goal !== undefined) {
+					goalId = (goal.result as { goal: { id: string } }).goal.id;
+					break;
+				}
+				if (attempt === 49) throw new Error("Timed out waiting for goal creation");
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
 			await firstClient.request({ command: "turn/start", sessionId, payload: { text: "measure usage" } });
 			for (let attempt = 0; attempt < 50; attempt++) {
 				const usage = await firstClient.request({ command: "usage/read", payload: { sessionId } });
@@ -192,6 +207,8 @@ describe("coding-agent daemon runtime", () => {
 				if (attempt === 49) throw new Error("Timed out waiting for usage ledger entry");
 				await new Promise((resolve) => setTimeout(resolve, 10));
 			}
+			const goalUsage = await firstClient.request({ command: "usage/read", payload: { goalId } });
+			expect(goalUsage).toMatchObject({ result: { aggregate: { responses: 1 } } });
 		} finally {
 			firstClient.dispose();
 			await first.close();

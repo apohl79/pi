@@ -325,6 +325,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	private async recordUsageLedger(operationId: string, beforeEntryIds: ReadonlySet<string>): Promise<void> {
 		const ledger = this.definition.usage;
 		if (!ledger) return;
+		const goalId = (await this.definition.goals?.read())?.id;
 		const entries = await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" });
 		for (const entry of entries) {
 			if (
@@ -341,6 +342,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				agentId: this.definition.metadata.id,
 				operationId,
 				turnId: operationId,
+				...(goalId === undefined ? {} : { goalId }),
 				purpose: "agent",
 				provider: entry.message.provider,
 				model: entry.message.model,
