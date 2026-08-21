@@ -310,6 +310,18 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
 	});
 
+	test("enables metadata diagnostics when no recorder is injected", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-diagnostics-default-"));
+		directories.push(directory);
+		const server = createUnixServerV2(new TestService(), { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const status = await client.request({ command: "diagnostics/status" });
+		const doctor = await client.request({ command: "diagnostics/doctor" });
+		expect(status).toMatchObject({ ok: true, result: { capture: "metadata", eventCount: 0 } });
+		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
 	test("acknowledges a turn before starting runtime execution", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
