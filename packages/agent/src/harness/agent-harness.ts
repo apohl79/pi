@@ -1553,13 +1553,6 @@ export class AgentHarness implements AgentLane {
 			outcome: "aborted",
 		};
 		await this.durableSession.appendRecord(finished);
-		this.watchBus.emit({
-			type: "run_end",
-			lane: "main",
-			runId: openRun.id,
-			outcome: "aborted",
-			leafId: (await this.durableSession.getLeafId()) ?? "",
-		});
 		return ResultValue.ok({ runId: openRun.id, ...recalled });
 	}
 	async steer(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
