@@ -82,12 +82,19 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async snapshot(): Promise<SessionSnapshotV2> {
-		const [leafId, thinkingLevel] = await Promise.all([
+		const [leafId, thinkingLevel, stats, compaction] = await Promise.all([
 			this.definition.harness.getLeafId(),
 			this.definition.harness.getThinkingLevel(),
+			this.definition.harness.session.getStats(),
+			this.definition.harness.getCompactionSettings(),
 		]);
 		void leafId;
 		const goal = await this.definition.goals?.read();
+		const cacheRead = Math.max(0, stats.cachedTokens);
+		const input = Math.max(0, stats.uncachedTokens);
+		const output = Math.max(0, stats.totalTokens - stats.cachedTokens - stats.uncachedTokens);
+		const contextWindow = Math.max(1, this.model.contextWindow);
+		const reserveTokens = Math.max(0, compaction.reserveTokens);
 		return {
 			id: this.definition.metadata.id,
 			...(this.sessionName === undefined
@@ -103,14 +110,25 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			queues: { steer: [], followUp: [] },
 			...(goal === undefined ? {} : { goal }),
 			agents: [],
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, pricingState: "known" },
-			context: { inputTokens: 0, contextWindow: this.model.contextWindow, usedPercentage: 0 },
+			usage: {
+				input,
+				output,
+				cacheRead,
+				cacheWrite: 0,
+				...(stats.costTotal > 0 ? { costUsd: stats.costTotal } : {}),
+				pricingState: "known",
+			},
+			context: {
+				inputTokens: Math.max(0, stats.totalTokens),
+				contextWindow,
+				usedPercentage: Math.min(100, (Math.max(0, stats.totalTokens) / contextWindow) * 100),
+			},
 			compactionPolicy: {
-				enabled: true,
-				contextWindow: this.model.contextWindow,
-				reserveTokens: 16_384,
-				keepRecentTokens: 20_000,
-				triggerTokens: Math.max(0, this.model.contextWindow - 16_384),
+				enabled: compaction.enabled,
+				contextWindow,
+				reserveTokens,
+				keepRecentTokens: Math.max(0, compaction.keepRecentTokens),
+				triggerTokens: Math.max(0, contextWindow - reserveTokens),
 				source: "global",
 			},
 			pluginSetHash: "plugins-empty",
