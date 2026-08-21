@@ -647,10 +647,7 @@ export class PiServerV2 {
 		this.agentSessions.set(agent.id, command.sessionId);
 		await this.sendResponse(state, id, { command: command.command, agent });
 		const runtime = state.sessions.get(command.sessionId);
-		if (runtime) {
-			await this.broadcastEvent(command.sessionId, runtime, { agent }, undefined, "agent_updated");
-			this.watchAgent(command.sessionId, runtime, agent.id);
-		}
+		if (runtime) await this.broadcastEvent(command.sessionId, runtime, { agent }, undefined, "agent_updated");
 	}
 
 	private async listAgents(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
@@ -682,7 +679,7 @@ export class PiServerV2 {
 		await this.sendResponse(state, id, { command: command.command, agentId });
 		const sessionId = (await this.agents.getSnapshot(agentId)).sessionId;
 		const runtime = state.sessions.get(sessionId);
-		if (runtime) await this.broadcastEvent(sessionId, runtime, { agentId, message: safeAgentMessage(message) }, undefined, "agent_message");
+		if (runtime) await this.broadcastEvent(sessionId, runtime, { agentId, message }, undefined, "agent_message");
 	}
 
 	private async followUpAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
@@ -697,91 +694,20 @@ export class PiServerV2 {
 		});
 		const sessionId = (await this.agents.getSnapshot(agentId)).sessionId;
 		const runtime = state.sessions.get(sessionId);
-		if (runtime) {
-			await this.broadcastEvent(sessionId, runtime, { agent }, undefined, "agent_updated");
-			this.watchAgent(sessionId, runtime, agent.id);
-		}
+		if (runtime) await this.broadcastEvent(sessionId, runtime, { agent }, undefined, "agent_updated");
 	}
 
 	private async interruptAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		this.requireControl(state, (await this.agents.getSnapshot(agentIdFrom(command, payload))).sessionId);
+		const agent = await this.agents.interrupt(agentIdFrom(command, payload));
 		await this.sendResponse(state, id, {
 			command: command.command,
 			agent,
 		});
 		const sessionId = (await this.agents.getSnapshot(agent.id)).sessionId;
 		const runtime = state.sessions.get(sessionId);
-		if (runtime) {
-			await this.broadcastEvent(sessionId, runtime, { agent }, undefined, "agent_updated");
-			this.watchAgent(sessionId, runtime, agent.id);
-		}
-	}
-
-	private watchAgent(sessionId: string, runtime: PiSessionRuntimeV2, agentId: string): void {
-		const key = `${sessionId}:${agentId}`;
-		const existing = this.agentWatches.get(key);
-		if (existing) {
-			existing.rerun = true;
-			return;
-		}
-		const watch = { rerun: false };
-		this.agentWatches.set(key, watch);
-		void (async () => {
-			try {
-				while (!this.closing) {
-					const agent = await this.agents.wait(agentId);
-					if (this.closing) return;
-					await this.broadcastEvent(sessionId, runtime, { agent }, undefined, "agent_updated");
-					if (watch.rerun) {
-						watch.rerun = false;
-						continue;
-					}
-					const current = await this.agents.getSnapshot(agentId);
-					if (current.state === "running" || current.state === "awaitingInput" || watch.rerun) {
-						watch.rerun = false;
-						continue;
-					}
-					break;
-				}
-			} catch (error) {
-				this.reportError(error instanceof Error ? error : new Error(String(error)));
-			} finally {
-				this.agentWatches.delete(key);
-			}
-		})();
-	}
-
-	private async listApps(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		await this.sendResponse(state, id, { command: command.command, apps: await this.apps.list() });
-	}
-
-	private async readApp(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const payload = objectPayload(command);
-		if (typeof payload.id !== "string") throw new Error("app/read requires id");
-		const app = await this.apps.read(payload.id);
-		if (!app) throw new Error(`Unknown app: ${payload.id}`);
-		await this.sendResponse(state, id, { command: command.command, app });
-	}
-
-	private async startAppAuth(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const payload = objectPayload(command);
-		if (typeof payload.id !== "string") throw new Error("app/auth/start requires id");
-		await this.sendResponse(state, id, {
-			command: command.command,
-			auth: await this.apps.startAuth(payload.id, payload),
-		});
-	}
-
-	private async completeAppAuth(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const payload = objectPayload(command);
-		if (typeof payload.id !== "string") throw new Error("app/auth/complete requires id");
-		if (typeof payload.nonce !== "string" || payload.nonce.length === 0 || payload.nonce.length > 128)
-			throw new Error("app/auth/complete requires bounded nonce");
-		if (payload.authenticated !== undefined && typeof payload.authenticated !== "boolean")
-			throw new Error("app/auth/complete authenticated must be boolean");
-		await this.apps.completeAuth(payload.id, payload);
-		await this.sendResponse(state, id, { command: command.command, appId: payload.id, state: "completed" });
+		if (runtime) await this.broadcastEvent(sessionId, runtime, { agent }, undefined, "agent_updated");
 	}
 
 	private async snapshotForSession(sessionId: string, runtime: PiSessionRuntimeV2): Promise<SessionSnapshotV2> {
@@ -1297,26 +1223,6 @@ export class PiServerV2 {
 	}
 
 	private async broadcastEvent(
-		sessionId: string,
-		runtime: PiSessionRuntimeV2,
-		payload: Record<string, unknown>,
-		operationId: string | undefined,
-		eventName: EventEnvelopeV2["event"],
-		sequence?: { eventSeq: number; revision: number },
-	): Promise<void> {
-		const previous = this.broadcastTails.get(sessionId) ?? Promise.resolve();
-		const current = previous.catch(() => undefined).then(() =>
-			this.broadcastEventInternal(sessionId, runtime, payload, operationId, eventName, sequence),
-		);
-		this.broadcastTails.set(sessionId, current);
-		try {
-			await current;
-		} finally {
-			if (this.broadcastTails.get(sessionId) === current) this.broadcastTails.delete(sessionId);
-		}
-	}
-
-	private async broadcastEventInternal(
 		sessionId: string,
 		runtime: PiSessionRuntimeV2,
 		payload: Record<string, unknown>,
