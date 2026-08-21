@@ -3,6 +3,7 @@ import {
 	type CommandV2,
 	DEFAULT_MAX_FRAME_LENGTH,
 	decodeCbor,
+	type EventCursor,
 	type EventEnvelopeV2,
 	encodeClientMessageV2,
 	FrameDecoder,
@@ -38,7 +39,7 @@ type PendingResponse = { resolve: (message: ResponseEnvelopeV2) => void; reject:
 /** Minimal transport-neutral v2 client used by remote daemon callers and the TUI adapter. */
 export class PiClientV2 {
 	private readonly options: PiClientV2Options;
-	private readonly decoder: FrameDecoder;
+	private decoder: FrameDecoder;
 	private readonly pending = new Map<string, PendingResponse>();
 	private readonly listeners = new Set<(event: EventEnvelopeV2) => void>();
 	private transport?: ByteTransport;
@@ -56,9 +57,10 @@ export class PiClientV2 {
 		return this.connectedValue;
 	}
 
-	async connect(): Promise<ServerSnapshotV2> {
+	async connect(lastEvent?: EventCursor): Promise<ServerSnapshotV2> {
 		if (this.disposed) throw new Error("PiClientV2 is disposed");
 		if (this.connectedValue || this.handshake) throw new Error("PiClientV2 is already connecting or connected");
+		this.decoder = new FrameDecoder({ maxFrameLength: this.options.maxFrameLength ?? DEFAULT_MAX_FRAME_LENGTH });
 		const snapshot = new Promise<ServerSnapshotV2>((resolve, reject) => {
 			this.handshake = { resolve, reject };
 		});
@@ -69,7 +71,11 @@ export class PiClientV2 {
 		};
 		try {
 			this.transport = await this.options.transportFactory(handlers);
-			await this.send({ type: "hello", version: PROTOCOL_V2_VERSION });
+			await this.send({
+				type: "hello",
+				version: PROTOCOL_V2_VERSION,
+				...(lastEvent === undefined ? {} : { lastEvent }),
+			});
 			return await snapshot;
 		} catch (error) {
 			this.fail(error instanceof Error ? error : new Error(String(error)));
@@ -78,11 +84,16 @@ export class PiClientV2 {
 	}
 
 	disconnect(): void {
-		if (this.disposed) return;
-		this.disposed = true;
+		if (!this.transport && !this.handshake && !this.connectedValue) return;
 		this.fail(new Error("PiClientV2 disconnected"));
 		this.transport?.close();
 		this.transport = undefined;
+	}
+
+	dispose(): void {
+		if (this.disposed) return;
+		this.disconnect();
+		this.disposed = true;
 	}
 
 	onEvent(listener: (event: EventEnvelopeV2) => void): () => void {
