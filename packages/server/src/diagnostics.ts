@@ -4,14 +4,35 @@ import { dirname } from "node:path";
 
 export type DiagnosticValue = null | boolean | number | string | DiagnosticValue[] | { [key: string]: DiagnosticValue };
 
+export type DiagnosticSeverity = "debug" | "info" | "warn" | "error";
+export type DiagnosticOutcome = "started" | "ok" | "error" | "cancelled" | "suspended" | "ambiguous";
+
 export interface ForensicEventInput {
 	kind: string;
+	eventId?: string;
+	severity?: DiagnosticSeverity;
+	traceId?: string;
+	spanId?: string;
+	parentSpanId?: string;
+	processInstanceId?: string;
+	daemonInstanceId?: string;
+	clientInstanceId?: string;
 	sessionId?: string;
 	operationId?: string;
+	turnId?: string;
+	agentId?: string;
+	outcome?: DiagnosticOutcome;
+	durationMs?: number;
 	payload?: Record<string, unknown>;
 }
 
 export interface ForensicEvent extends ForensicEventInput {
+	schemaVersion: 1;
+	eventId: string;
+	severity: DiagnosticSeverity;
+	traceId: string;
+	spanId: string;
+	processInstanceId: string;
 	seq: number;
 	timestamp: number;
 	payload: Record<string, DiagnosticValue>;
@@ -361,9 +382,30 @@ function redact(value: unknown, key?: string): DiagnosticValue {
 	return "[UNSERIALIZABLE]";
 }
 
+function materializeEvent(
+	input: ForensicEventInput,
+	seq: number,
+	timestamp: number,
+	processInstanceId: string,
+): ForensicEvent {
+	return {
+		...input,
+		schemaVersion: 1,
+		eventId: input.eventId ?? randomUUID(),
+		severity: input.severity ?? "info",
+		traceId: input.traceId ?? randomUUID(),
+		spanId: input.spanId ?? randomUUID(),
+		processInstanceId: input.processInstanceId ?? processInstanceId,
+		seq,
+		timestamp,
+		payload: redact(input.payload ?? {}) as Record<string, DiagnosticValue>,
+	};
+}
+
 export class InMemoryForensicRecorder implements ForensicRecorder {
 	private readonly events: ForensicEvent[] = [];
 	private readonly maxEvents: number;
+	private readonly processInstanceId = randomUUID();
 	private nextSeq = 1;
 
 	constructor(options: { maxEvents?: number } = {}) {
@@ -371,12 +413,7 @@ export class InMemoryForensicRecorder implements ForensicRecorder {
 	}
 
 	async record(input: ForensicEventInput): Promise<ForensicEvent> {
-		const event: ForensicEvent = {
-			...input,
-			seq: this.nextSeq++,
-			timestamp: Date.now(),
-			payload: redact(input.payload ?? {}) as Record<string, DiagnosticValue>,
-		};
+		const event = materializeEvent(input, this.nextSeq++, Date.now(), this.processInstanceId);
 		this.events.push(event);
 		if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
 		return structuredClone(event);
@@ -392,6 +429,7 @@ export class JsonlForensicRecorder implements ForensicRecorder {
 	private readonly path: string;
 	private readonly maxEvents: number;
 	private readonly events: ForensicEvent[] = [];
+	private readonly processInstanceId = randomUUID();
 	private pendingWrite: Promise<void> = Promise.resolve();
 	private loaded = false;
 	private nextSeq = 1;
@@ -412,8 +450,12 @@ export class JsonlForensicRecorder implements ForensicRecorder {
 			throw error;
 		}
 		for (const line of contents.split("\n").filter(Boolean)) {
-			const event = JSON.parse(line) as ForensicEvent;
-			if (!Number.isInteger(event.seq) || event.seq < 1) throw new Error("Invalid forensic sequence");
+			const parsed = JSON.parse(line) as ForensicEvent;
+			if (!Number.isInteger(parsed.seq) || parsed.seq < 1) throw new Error("Invalid forensic sequence");
+			const event =
+				parsed.schemaVersion === 1 && parsed.eventId !== undefined
+					? parsed
+					: materializeEvent(parsed, parsed.seq, parsed.timestamp, this.processInstanceId);
 			this.events.push(event);
 			this.nextSeq = Math.max(this.nextSeq, event.seq + 1);
 		}
@@ -423,12 +465,7 @@ export class JsonlForensicRecorder implements ForensicRecorder {
 	async record(input: ForensicEventInput): Promise<ForensicEvent> {
 		const write = this.pendingWrite.then(async () => {
 			await this.ensureLoaded();
-			const event: ForensicEvent = {
-				...input,
-				seq: this.nextSeq++,
-				timestamp: Date.now(),
-				payload: redact(input.payload ?? {}) as Record<string, DiagnosticValue>,
-			};
+			const event = materializeEvent(input, this.nextSeq++, Date.now(), this.processInstanceId);
 			const wasFull = this.events.length >= this.maxEvents;
 			this.events.push(event);
 			if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
