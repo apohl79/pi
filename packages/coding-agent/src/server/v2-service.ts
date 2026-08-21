@@ -34,24 +34,6 @@ export interface CodingAgentV2ServiceOptions {
 	createSession?: (options: Record<string, unknown>) => Promise<CodingAgentV2SessionDefinition>;
 	/** Durable owner removes a session after the adapter disposes its runtime. */
 	deleteSession?: (sessionId: string) => Promise<void>;
-	/** Durable catalog used when definitions are opened lazily. */
-	listSessions?: () => Promise<SessionMetadataV2[]>;
-	/** Durable owner opens a definition for a catalogued session. */
-	openSession?: (sessionId: string) => Promise<CodingAgentV2SessionDefinition>;
-	/** Catalog entries known before their harness is opened. */
-	initialSessions?: readonly SessionMetadataV2[];
-}
-
-export interface CodingAgentV2SessionStore {
-	list(): Promise<SessionMetadataV2[]>;
-	open(sessionId: string): Promise<CodingAgentV2SessionDefinition>;
-	create(options: Record<string, unknown>): Promise<CodingAgentV2SessionDefinition>;
-	delete(sessionId: string): Promise<void>;
-}
-
-export interface CodingAgentV2ServiceOptions {
-	/** Provider-local fast model used only for side-band automatic naming. */
-	fastModel?: Model<string>;
 }
 
 export interface CodingAgentV2Runtime {
@@ -627,80 +609,36 @@ export function createCodingAgentV2Service(
 		[...(options?.initialSessions ?? []), ...definitions.map((definition) => definition.metadata)].map((item) => item.id),
 	);
 	const runtimes = new Map<string, CodingAgentV2RuntimeImpl>();
-	const opening = new Map<string, Promise<CodingAgentV2RuntimeImpl>>();
-	const creatingIds = new Set<string>();
-	const sessionLocks = new Map<string, Promise<void>>();
-	const withSessionLock = async <T>(sessionId: string, operation: () => Promise<T>): Promise<T> => {
-		const previous = sessionLocks.get(sessionId) ?? Promise.resolve();
-		let release!: () => void;
-		const current = new Promise<void>((resolve) => (release = resolve));
-		sessionLocks.set(sessionId, current);
-		await previous;
-		try {
-			return await operation();
-		} finally {
-			release();
-			if (sessionLocks.get(sessionId) === current) sessionLocks.delete(sessionId);
-		}
-	};
 	const sessionFactory = options?.createSession;
 	const sessionDeleter = options?.deleteSession;
 	return {
-		listSessions: async () =>
-			options?.listSessions
-				? structuredClone(await options.listSessions())
-				: [...byId.values()].map((definition) => structuredClone(definition.metadata)),
-		listModels: async () => Promise.all(models.getModels().map((model) => modelMetadata(models, model))),
+		listSessions: async () => [...byId.values()].map((definition) => structuredClone(definition.metadata)),
+		listModels: async () => models.getModels().map((model) => modelMetadata(model)),
 		createSession: sessionFactory
-			? async (payload) => withSessionLock("__create__", async () => {
-					if (typeof payload.id === "string" && knownIds.has(payload.id))
-						throw new Error(`Session ${payload.id} already exists`);
+			? async (payload) => {
 					const definition = await sessionFactory(payload);
-					if (creatingIds.has(definition.metadata.id)) throw new Error(`Session ${definition.metadata.id} is being created`);
-					if (byId.has(definition.metadata.id) || knownIds.has(definition.metadata.id)) {
-						await definition.harness.close().catch(() => undefined);
+					if (byId.has(definition.metadata.id))
 						throw new Error(`Session ${definition.metadata.id} already exists`);
-					}
-					creatingIds.add(definition.metadata.id);
-					try {
-					const model = await definition.harness.getModel();
-					let runtime!: CodingAgentV2RuntimeImpl;
-					runtime = new CodingAgentV2RuntimeImpl(definition, models, model, () => {
-						if (runtimes.get(definition.metadata.id) === runtime) runtimes.delete(definition.metadata.id);
-					});
 					byId.set(definition.metadata.id, definition);
-					knownIds.add(definition.metadata.id);
+					const model = await definition.harness.getModel();
+					const runtime = new CodingAgentV2RuntimeImpl(definition, models, model, options);
 					runtimes.set(definition.metadata.id, runtime);
 					return { sessionId: definition.metadata.id, runtime };
-					} finally {
-						creatingIds.delete(definition.metadata.id);
-					}
-				})
+				}
 			: undefined,
 		deleteSession: sessionDeleter
-			? async (sessionId) => withSessionLock(sessionId, async () => {
-					if (creatingIds.has(sessionId)) throw new Error(`Session ${sessionId} is being created`);
-					if (!byId.has(sessionId) && !knownIds.has(sessionId)) throw new Error(`Unknown session ${sessionId}`);
-					await sessionDeleter(sessionId);
+			? async (sessionId) => {
 					const runtime = runtimes.get(sessionId);
-					try {
-						if (runtime) await runtime.dispose();
-					} finally {
+					if (runtime) {
+						await runtime.dispose();
 						runtimes.delete(sessionId);
-						byId.delete(sessionId);
-						knownIds.delete(sessionId);
 					}
-				})
+					if (!byId.delete(sessionId)) throw new Error(`Unknown session ${sessionId}`);
+					await sessionDeleter(sessionId);
+				}
 			: undefined,
-		openSession: (sessionId) => withSessionLock(sessionId, async () => {
-			if (creatingIds.has(sessionId)) throw new Error(`Session ${sessionId} is being created`);
-			let definition = byId.get(sessionId);
-			if (!definition && options?.openSession) {
-				definition = await options.openSession(sessionId);
-				if (definition.metadata.id !== sessionId) throw new Error(`Opened session id mismatch: ${sessionId}`);
-				byId.set(sessionId, definition);
-				knownIds.add(sessionId);
-			}
+		openSession: async (sessionId) => {
+			const definition = byId.get(sessionId);
 			if (!definition) throw new Error(`Unknown session ${sessionId}`);
 			const existing = runtimes.get(sessionId);
 			if (existing) return existing;
