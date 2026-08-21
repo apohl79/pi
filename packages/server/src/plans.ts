@@ -8,6 +8,7 @@ export interface V2PlanRegistry {
 		sessionId: string,
 		input: { readonly items: readonly PlanItem[]; readonly version?: number },
 	): Promise<PlanSnapshot>;
+	clear?(sessionId: string): Promise<void>;
 }
 
 export class InMemoryV2PlanRegistry implements V2PlanRegistry {
@@ -26,6 +27,10 @@ export class InMemoryV2PlanRegistry implements V2PlanRegistry {
 		const plan = validatePlan(current, input);
 		this.plans.set(sessionId, plan);
 		return structuredClone(plan);
+	}
+
+	async clear(sessionId: string): Promise<void> {
+		this.plans.delete(sessionId);
 	}
 }
 
@@ -58,6 +63,12 @@ export class JsonlV2PlanRegistry implements V2PlanRegistry {
 		await this.append({ sessionId, plan });
 		this.plans.set(sessionId, plan);
 		return structuredClone(plan);
+	}
+
+	async clear(sessionId: string): Promise<void> {
+		await this.loaded;
+		await this.append({ sessionId });
+		this.plans.delete(sessionId);
 	}
 
 	private async load(): Promise<void> {

@@ -941,6 +941,24 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: { session: { plan: { version: 1, items: [{ step: "implement" }] } } },
 		});
+		const cleared = await client.request({ command: "plan/clear", sessionId: "session-1" });
+		expect(cleared).toMatchObject({ ok: true, result: { cleared: true } });
+		await expect(
+			client.next(
+				(message) =>
+					message.type === "event" &&
+					message.event === "plan_updated" &&
+					typeof message.payload === "object" &&
+					message.payload !== null &&
+					"plan" in message.payload &&
+					message.payload.plan === null,
+			),
+		).resolves.toMatchObject({ event: "plan_updated", payload: { plan: null } });
+		const clearedSession = await client.request({ command: "session/read", sessionId: "session-1" });
+		expect(clearedSession).toMatchObject({ ok: true, result: { session: {} } });
+		expect((clearedSession as { result?: { session?: Record<string, unknown> } }).result?.session).not.toHaveProperty(
+			"plan",
+		);
 		await client.close();
 	});
 
