@@ -281,7 +281,14 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: { events: [{ kind: "boot", payload: { token: "[REDACTED]" } }] },
 		});
-		expect(exported).toMatchObject({ ok: true, result: { format: "json", events: [{ seq: 1 }] } });
+		expect(exported).toMatchObject({
+			ok: true,
+			result: {
+				format: "json",
+				events: [{ seq: 1 }],
+				bundle: { manifest: { unavailable: ["client-diagnostic-spool"] } },
+			},
+		});
 		expect(exported).toMatchObject({
 			ok: true,
 			result: { bundle: { runtimeManifest: { runtime: "node test", forkCommit: "fork-commit" } } },
