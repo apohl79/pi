@@ -159,6 +159,20 @@ export class RemoteV2Session {
 	async setThinking(thinkingLevel: ProtocolThinkingLevel): Promise<string> {
 		return this.#accept("session/thinking/set", { level: thinkingLevel });
 	}
+	async createGoal(objective: string, tokenBudget?: number): Promise<string> {
+		const normalized = objective.trim();
+		if (!normalized) throw new Error("Goal objective cannot be empty");
+		return this.#accept("goal/create", {
+			objective: normalized,
+			...(tokenBudget === undefined ? {} : { tokenBudget }),
+		});
+	}
+	async pauseGoal(): Promise<string> {
+		return this.#accept("goal/pause");
+	}
+	async resumeGoal(): Promise<string> {
+		return this.#accept("goal/resume");
+	}
 
 	async relinquishControl(): Promise<void> {
 		this.#assertNotDisposed();
