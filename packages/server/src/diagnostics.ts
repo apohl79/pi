@@ -54,6 +54,17 @@ export interface DiagnosticBundleVerification {
 	reason?: string;
 }
 
+export interface DiagnosticRuntimeManifest {
+	readonly schemaVersion: 1;
+	readonly runtime: string;
+	readonly platform: string;
+	readonly arch: string;
+	readonly buildVersion?: string;
+	readonly forkCommit?: string;
+	readonly upstreamBaseCommit?: string;
+	readonly configHash?: string;
+}
+
 /** Pure offline verifier for exported diagnostic bundles; it does not require a daemon or provider access. */
 export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerification {
 	if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -69,6 +80,9 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 		(!Array.isArray(capsules) || capsules.some((capsule) => !isDiagnosticCapsule(capsule)))
 	)
 		return { valid: false, reason: "Diagnostic bundle contains an invalid capsule" };
+	const runtimeManifest = candidate.runtimeManifest;
+	if (runtimeManifest !== undefined && !isDiagnosticRuntimeManifest(runtimeManifest))
+		return { valid: false, reason: "Diagnostic bundle contains an invalid runtime manifest" };
 	const fields = manifest as Record<string, unknown>;
 	const serializedEvents = JSON.stringify(events);
 	const digest = createHash("sha256").update(serializedEvents).digest("hex");
@@ -86,6 +100,20 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 		fields.eventsSha256 === digest &&
 		contiguous;
 	return valid ? { valid: true } : { valid: false, reason: "Diagnostic bundle manifest does not match its events" };
+}
+
+function isDiagnosticRuntimeManifest(value: unknown): value is DiagnosticRuntimeManifest {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const manifest = value as Record<string, unknown>;
+	return (
+		manifest.schemaVersion === 1 &&
+		typeNonEmpty(manifest.runtime) &&
+		typeNonEmpty(manifest.platform) &&
+		typeNonEmpty(manifest.arch) &&
+		["buildVersion", "forkCommit", "upstreamBaseCommit", "configHash"].every(
+			(key) => manifest[key] === undefined || typeNonEmpty(manifest[key]),
+		)
+	);
 }
 
 function isDiagnosticCapsule(value: unknown): value is DiagnosticCapsule {

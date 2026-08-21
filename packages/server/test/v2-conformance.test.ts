@@ -244,6 +244,13 @@ describe("PiServer v2 operation acceptance", () => {
 		const server = createUnixServerV2(new TestService(), {
 			path: join(directory, "server.sock"),
 			diagnostics,
+			runtimeManifest: {
+				schemaVersion: 1,
+				runtime: "node test",
+				platform: "test",
+				arch: "test",
+				forkCommit: "fork-commit",
+			},
 		});
 		servers.push(server);
 		await server.start();
@@ -260,6 +267,10 @@ describe("PiServer v2 operation acceptance", () => {
 			result: { events: [{ kind: "boot", payload: { token: "[REDACTED]" } }] },
 		});
 		expect(exported).toMatchObject({ ok: true, result: { format: "json", events: [{ seq: 1 }] } });
+		expect(exported).toMatchObject({
+			ok: true,
+			result: { bundle: { runtimeManifest: { runtime: "node test", forkCommit: "fork-commit" } } },
+		});
 		expect(verified).toMatchObject({ ok: true, result: { valid: true, gaps: [] } });
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
 		const bundle = (exported as unknown as { result: { bundle: JsonValue } }).result.bundle;
