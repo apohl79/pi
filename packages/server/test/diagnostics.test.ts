@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { InMemoryForensicRecorder, JsonlForensicRecorder } from "../src/diagnostics.ts";
+import { InMemoryForensicRecorder, JsonlForensicRecorder, LocalDiagnosticCapsuleStore } from "../src/diagnostics.ts";
 
 describe("InMemoryForensicRecorder", () => {
 	test("assigns correlated sequence numbers and redacts credential fields", async () => {
@@ -78,5 +78,32 @@ describe("JsonlForensicRecorder", () => {
 		await recorder.record({ kind: "two" });
 		await recorder.record({ kind: "three" });
 		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
+	});
+});
+
+describe("LocalDiagnosticCapsuleStore", () => {
+	test("encrypts bounded content and decrypts after key rotation", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostic-capsules-"));
+		const store = new LocalDiagnosticCapsuleStore(join(directory, "keys.json"), { maxBytes: 5 });
+		const first = await store.encrypt({ eventId: "event-1", kind: "prompt", content: "secret-content" });
+		expect(first).toMatchObject({ byteLength: 5, originalByteLength: 14, truncated: true });
+		expect(Buffer.from(await store.decrypt(first)).toString()).toBe("secre");
+		const oldKey = first.keyId;
+		const newKey = await store.rotateKey();
+		expect(newKey).not.toBe(oldKey);
+		const second = await store.encrypt({ eventId: "event-2", kind: "tool", content: "result" });
+		expect(second.keyId).toBe(newKey);
+		expect(Buffer.from(await store.decrypt(first)).toString()).toBe("secre");
+	});
+
+	test("rejects authenticated ciphertext tampering", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostic-capsules-tamper-"));
+		const store = new LocalDiagnosticCapsuleStore(join(directory, "keys.json"));
+		const capsule = await store.encrypt({ eventId: "event-1", kind: "prompt", content: "secret" });
+		const tampered = {
+			...capsule,
+			ciphertext: `${capsule.ciphertext.slice(0, -1)}${capsule.ciphertext.endsWith("A") ? "B" : "A"}`,
+		};
+		await expect(store.decrypt(tampered)).rejects.toThrow();
 	});
 });
