@@ -367,14 +367,16 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async snapshot(): Promise<SessionSnapshotV2> {
-		const [leafId, thinkingLevel, stats, compaction, entries, pendingInputRequestId] = await Promise.all([
-			this.definition.harness.getLeafId(),
-			this.definition.harness.getThinkingLevel(),
-			this.definition.harness.session.getStats(),
-			this.definition.harness.getCompactionSettings(),
-			this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }),
-			this.definition.inputs?.pendingForSession(this.definition.metadata.id),
-		]);
+		const [leafId, thinkingLevel, stats, compaction, entries, pendingInputRequestId, usageAggregate] =
+			await Promise.all([
+				this.definition.harness.getLeafId(),
+				this.definition.harness.getThinkingLevel(),
+				this.definition.harness.session.getStats(),
+				this.definition.harness.getCompactionSettings(),
+				this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }),
+				this.definition.inputs?.pendingForSession(this.definition.metadata.id),
+				this.definition.usage?.aggregate({ sessionId: this.definition.metadata.id }),
+			]);
 		void leafId;
 		const [goal, persistedName] = await Promise.all([
 			this.definition.goals?.read(),
@@ -413,7 +415,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				output,
 				cacheRead,
 				cacheWrite: 0,
-				imageUnits: 0,
+				imageUnits: usageAggregate?.imageUnits ?? 0,
 				...(stats.costTotal > 0 ? { costUsd: stats.costTotal } : {}),
 				pricingState: "known",
 			},

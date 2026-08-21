@@ -31,7 +31,7 @@ export interface RemoteV2StatuslinePayload {
 		readonly project_dir?: string;
 		readonly added_dirs: readonly string[];
 	};
-	readonly cost: { readonly total_cost_usd?: number; readonly pricing_state: string };
+	readonly cost: { readonly total_cost_usd?: number; readonly image_units: number; readonly pricing_state: string };
 	readonly context_window: {
 		readonly total_input_tokens: number;
 		readonly total_output_tokens: number;
@@ -188,6 +188,7 @@ export function createRemoteV2StatuslinePayload(
 			added_dirs: [...(options.addedDirs ?? [])],
 		},
 		cost: {
+			image_units: snapshot.usage.imageUnits ?? 0,
 			...(snapshot.usage.costUsd === undefined ? {} : { total_cost_usd: snapshot.usage.costUsd }),
 			pricing_state: snapshot.usage.pricingState,
 		},
