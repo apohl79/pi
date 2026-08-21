@@ -53,6 +53,7 @@ export interface DiagnosticCapsuleInput {
 
 export interface DiagnosticContentStore {
 	encrypt(input: DiagnosticCapsuleInput): Promise<DiagnosticCapsule>;
+	decrypt?(capsule: DiagnosticCapsule): Promise<Uint8Array>;
 	save?(capsule: DiagnosticCapsule): Promise<void>;
 	list?(): Promise<readonly DiagnosticCapsule[]>;
 }

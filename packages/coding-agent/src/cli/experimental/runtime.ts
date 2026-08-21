@@ -97,12 +97,29 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 				command.action === "tail" || command.action === "timeline"
 					? "diagnostics/timeline"
 					: `diagnostics/${command.action}`;
-			const payload = {
-				...(command.sessionId === undefined ? {} : { sessionId: command.sessionId }),
-				...(command.operationId === undefined ? {} : { operationId: command.operationId }),
-				...(command.afterSeq === undefined ? {} : { afterSeq: command.afterSeq }),
+			let afterSeq = command.afterSeq;
+			const read = async (): Promise<Record<string, unknown>> => {
+				const payload = {
+					...(command.sessionId === undefined ? {} : { sessionId: command.sessionId }),
+					...(command.operationId === undefined ? {} : { operationId: command.operationId }),
+					...(afterSeq === undefined ? {} : { afterSeq }),
+					...(command.repairSafe === true ? { repairSafe: true } : {}),
+					...(command.decryptContent === true ? { decryptContent: true } : {}),
+				};
+				const result = resultOf(
+					await client.request({ command: protocolCommand as CommandV2["command"], payload }),
+				);
+				if (command.follow === true && Array.isArray(result.events)) {
+					for (const event of result.events) {
+						if (typeof event === "object" && event !== null && !Array.isArray(event)) {
+							const seq = (event as Record<string, unknown>).seq;
+							if (typeof seq === "number" && Number.isSafeInteger(seq)) afterSeq = Math.max(afterSeq ?? 0, seq);
+						}
+					}
+				}
+				return result;
 			};
-			const result = resultOf(await client.request({ command: protocolCommand as CommandV2["command"], payload }));
+			const result = await read();
 			if (command.action === "export" && command.output !== undefined) {
 				const bundle = result.bundle;
 				if (typeof bundle !== "object" || bundle === null || Array.isArray(bundle))
@@ -110,6 +127,16 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 				await writeFile(command.output, `${JSON.stringify(bundle, null, 2)}\n`, { mode: 0o600 });
 			}
 			options.write(result);
+			if (command.action === "tail" && command.follow === true) {
+				for (let idlePolls = 0; idlePolls < 3; idlePolls++) {
+					await new Promise((resolve) => setTimeout(resolve, 100));
+					const next = await read();
+					if (Array.isArray(next.events) && next.events.length > 0) {
+						options.write(next);
+						idlePolls = 0;
+					}
+				}
+			}
 		} finally {
 			closeClient(client);
 		}

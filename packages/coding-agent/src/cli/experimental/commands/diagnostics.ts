@@ -13,6 +13,9 @@ export interface DiagnosticsCommand {
 	readonly sessionId?: string;
 	readonly operationId?: string;
 	readonly afterSeq?: number;
+	readonly follow?: boolean;
+	readonly decryptContent?: boolean;
+	readonly repairSafe?: boolean;
 	readonly output?: string;
 	readonly bundle?: string;
 }
@@ -27,6 +30,21 @@ const operationOption = stringOption("--operation");
 const outputOption = stringOption("--output");
 const bundleOption = stringOption("--bundle");
 const afterSeqOption = stringOption("--after-seq");
+const followOption: CommandOption<boolean> = {
+	name: "--follow",
+	takesValue: false,
+	parse: () => ({ ok: true, value: true }),
+};
+const decryptContentOption: CommandOption<boolean> = {
+	name: "--decrypt-content",
+	takesValue: false,
+	parse: () => ({ ok: true, value: true }),
+};
+const repairSafeOption: CommandOption<boolean> = {
+	name: "--repair-safe",
+	takesValue: false,
+	parse: () => ({ ok: true, value: true }),
+};
 
 function parseSequence(value: string | undefined): { value?: number; error?: string } {
 	if (value === undefined) return {};
@@ -42,9 +60,11 @@ function optionsFor(action: DiagnosticsAction): readonly CommandOption<unknown>[
 		authTokenOption,
 		authTokenFileOption,
 		...(action === "timeline" || action === "tail" ? [sessionOption, operationOption, afterSeqOption] : []),
+		...(action === "tail" ? [followOption] : []),
 		...(action === "status" ? [sessionOption] : []),
-		...(action === "export" ? [sessionOption, operationOption, outputOption] : []),
+		...(action === "export" ? [sessionOption, operationOption, outputOption, decryptContentOption] : []),
 		...(action === "verify" ? [bundleOption] : []),
+		...(action === "doctor" ? [repairSafeOption] : []),
 	];
 }
 
@@ -67,6 +87,12 @@ function actionCommand(action: DiagnosticsAction): Command<DiagnosticsCommand, D
 				errors.push(`diagnostics ${action} requires a session id`);
 			if (action === "verify" && bundle === undefined)
 				errors.push("diagnostics verify requires --bundle PATH or a bundle path");
+			if (
+				action === "export" &&
+				input.value(decryptContentOption) === true &&
+				input.value(outputOption) === undefined
+			)
+				errors.push("diagnostics export --decrypt-content requires --output PATH");
 			if (errors.length > 0) return { ok: false, errors };
 			return {
 				ok: true,
@@ -78,6 +104,11 @@ function actionCommand(action: DiagnosticsAction): Command<DiagnosticsCommand, D
 					...(sessionId === undefined ? {} : { sessionId }),
 					...(input.value(operationOption) === undefined ? {} : { operationId: input.value(operationOption) }),
 					...(sequence.value === undefined ? {} : { afterSeq: sequence.value }),
+					...(input.value(followOption) === undefined ? {} : { follow: input.value(followOption) }),
+					...(input.value(decryptContentOption) === undefined
+						? {}
+						: { decryptContent: input.value(decryptContentOption) }),
+					...(input.value(repairSafeOption) === undefined ? {} : { repairSafe: input.value(repairSafeOption) }),
 					...(input.value(outputOption) === undefined ? {} : { output: input.value(outputOption) }),
 					...(bundle === undefined ? {} : { bundle }),
 				},

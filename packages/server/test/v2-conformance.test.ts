@@ -564,10 +564,21 @@ describe("PiServer v2 operation acceptance", () => {
 		});
 		expect(acceptedEvent.payload).not.toHaveProperty("text");
 		const exported = await client.request({ command: "diagnostics/export" });
+		const decrypted = await client.request({ command: "diagnostics/export", payload: { decryptContent: true } });
+		const repairSafe = await client.request({ command: "diagnostics/doctor", payload: { repairSafe: true } });
 		expect(exported).toMatchObject({
 			ok: true,
 			result: { capsules: [{ eventId: operationId, kind: "turn/start" }] },
 		});
+		expect(decrypted).toMatchObject({
+			ok: true,
+			result: { decryptedCapsules: [{ eventId: operationId, kind: "turn/start", content: expect.any(String) }] },
+		});
+		if (decrypted.ok && "result" in decrypted) {
+			const capsule = (decrypted.result as { decryptedCapsules: Array<{ content: string }> }).decryptedCapsules[0];
+			expect(Buffer.from(capsule!.content, "base64").toString()).toContain('"text":"hello"');
+		}
+		expect(repairSafe).toMatchObject({ ok: true, result: { repairSafe: true, repairs: [] } });
 		await client.close();
 	});
 
