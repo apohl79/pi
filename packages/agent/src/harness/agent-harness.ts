@@ -17,7 +17,12 @@ import {
 	collectEntriesForBranchSummary,
 	generateBranchSummary,
 } from "./compaction/branch-summarization.ts";
-import { type CompactionSettings, compact, prepareCompaction } from "./compaction/compaction.ts";
+import {
+	type CompactionSettings,
+	compact,
+	prepareCompaction,
+	resolveCompactionSettings,
+} from "./compaction/compaction.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
 import { Result as ResultValue, TaggedError } from "./result.ts";
 import { buildSessionContext } from "./session/context.ts";
