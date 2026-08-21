@@ -95,6 +95,7 @@ export class PiServerV2 {
 	private started = false;
 	private restored = false;
 	private startPromise?: Promise<this>;
+	private closePromise?: Promise<void>;
 
 	constructor(service: PiServerServiceV2, options: PiServerV2Options) {
 		this.service = service;
@@ -252,17 +253,18 @@ export class PiServerV2 {
 	}
 
 	private async startInternal(): Promise<this> {
-		const started: PiServerListener[] = [];
 		try {
 			await this.restoreStore();
 			for (const listener of this.listeners) {
 				await listener.start((connection) => this.accept(connection));
-				started.push(listener);
 			}
 			this.started = true;
 			return this;
 		} catch (error) {
-			await Promise.allSettled(started.map((listener) => listener.close()));
+			this.closing = true;
+			await this.closeListeners(this.listeners);
+			await this.closeConnections();
+			this.started = false;
 			throw error;
 		} finally {
 			this.startPromise = undefined;
@@ -304,13 +306,29 @@ export class PiServerV2 {
 	}
 
 	async close(): Promise<void> {
-		if (this.closing) return;
+		if (this.closePromise) return this.closePromise;
 		this.closing = true;
+		this.closePromise = this.closeInternal();
+		return this.closePromise;
+	}
+
+	private async closeInternal(): Promise<void> {
 		const startPromise = this.startPromise;
 		if (startPromise) await startPromise.catch(() => {});
-		await Promise.all(this.listeners.map((listener) => listener.close()));
-		await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state)));
+		await this.closeListeners(this.listeners);
+		await this.closeConnections();
 		this.started = false;
+	}
+
+	private async closeListeners(listeners: readonly PiServerListener[]): Promise<void> {
+		const results = await Promise.allSettled(listeners.map((listener) => listener.close()));
+		for (const result of results) {
+			if (result.status === "rejected") this.reportError(result.reason);
+		}
+	}
+
+	private async closeConnections(): Promise<void> {
+		await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state)));
 	}
 
 	private createConnectionState(connection: ByteConnection): V2ConnectionState {
