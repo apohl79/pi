@@ -286,6 +286,37 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("resumes a suspended run without leaving two open operations", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-resume-faux",
+			models: [{ id: "harness-resume-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("resumed response")]);
+		const session = createSession("resume");
+		await session.appendRecord({
+			type: "operation_started",
+			id: "crashed-run",
+			lane: "main",
+			sourceLeafId: null,
+			intent: { kind: "run", originalPrompt: [userMessage], initialMessages: [] },
+		});
+		const { harness, suspended } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		expect(suspended).toMatchObject([{ id: "crashed-run", kind: "run", reason: "crash" }]);
+
+		const result = await harness.resume();
+
+		expect(result).toMatchObject({ ok: true, value: { operation: "run", kind: "completed" } });
+		expect(await session.findOpenOperations("main")).toEqual([]);
+		expect(
+			(await session.findRecords({ type: "operation_finished", order: "oldestFirst" })).map(
+				(record) => record.runId,
+			),
+		).toEqual(["crashed-run", expect.any(String)]);
+		await harness.close();
+	});
+
 	it("persists queued steering, follow-up, next-run input, and cancellation", async () => {
 		const session = createSession("queues");
 		const harness = await createHarness(session);
@@ -426,7 +457,6 @@ describe("AgentHarness v2 scaffold", () => {
 	it("rejects every unfinished public operation explicitly", async () => {
 		const harness = await createHarness();
 		const unfinished: [string, () => unknown | Promise<unknown>][] = [
-			["resume", () => harness.resume()],
 			["peekAction", () => harness.peekAction()],
 			["executeAction", () => harness.executeAction()],
 			["runToCompletion", () => harness.runToCompletion()],
