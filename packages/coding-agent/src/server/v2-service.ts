@@ -390,45 +390,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.definition.harness.session.getStats(),
 			this.definition.harness.getCompactionSettings(),
 		]);
-		this.restoreOperationState(entries);
-		const open = await this.definition.harness.session.findOpenOperations("main", { limit: 1 });
-		const laneOperation = open[0];
-		const transcript = entries
-			.filter((entry): entry is Extract<Entry, { type: "message" }> => entry.type === "message")
-			.slice(-MAX_V2_ARRAY_ITEMS)
-			.map((entry) => transcriptItem(entry))
-			.filter((item): item is SessionSnapshotV2["transcript"][number] => item !== undefined);
-		const cancelled = new Set(queueRecords.filter((record) => record.type === "queue_cancelled").map((record) => record.entryId));
-		const queued = queueRecords.filter((record) => record.type === "queue_enqueued" && !cancelled.has(record.target.id));
-		const queuedSteer = queued
-			.filter((record) => record.type === "queue_enqueued" && record.queue === "steer")
-			.slice(-MAX_V2_ARRAY_ITEMS)
-			.map((record) => {
-				const id = boundedRequired(record.target.id, 256);
-				return id ? { id, content: queueContent(targetMessage(record.target)).slice(0, MAX_V2_ARRAY_ITEMS) as never, createdAt: finiteTimestamp(record.timestamp) } : undefined;
-			})
-			.filter((record): record is { id: string; content: never; createdAt: number } => record !== undefined);
-		const queuedFollowUp = queued
-			.filter((record) => record.type === "queue_enqueued" && record.queue === "followUp")
-			.slice(-MAX_V2_ARRAY_ITEMS)
-			.map((record) => {
-				const id = boundedRequired(record.target.id, 256);
-				return id ? { id, content: queueContent(targetMessage(record.target)).slice(0, MAX_V2_ARRAY_ITEMS) as never, createdAt: finiteTimestamp(record.timestamp) } : undefined;
-			})
-			.filter((record): record is { id: string; content: never; createdAt: number } => record !== undefined);
-		const active = this.activeOperation(laneOperation);
-		const phase: SessionPhaseV2 = laneOperation === undefined
-			? active?.state === "suspended"
-				? "suspended"
-				: active?.state === "accepted"
-					? "turn"
-					: "idle"
-			: laneOperation.intent.kind === "compaction"
-				? "compaction"
-				: laneOperation.intent.kind === "run"
-					? "turn"
-					: "suspended";
-		const goal = await this.definition.goals?.read();
+		void leafId;
+		const [goal, persistedName] = await Promise.all([
+			this.definition.goals?.read(),
+			this.definition.harness.session.getName(),
+		]);
+		const effectiveName = persistedName ?? this.sessionName;
 		const cacheRead = Math.max(0, stats.cachedTokens);
 		const input = Math.max(0, stats.uncachedTokens);
 		const output = Math.max(0, stats.totalTokens - stats.cachedTokens - stats.uncachedTokens);
@@ -436,9 +403,9 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const reserveTokens = Math.max(0, compaction.reserveTokens);
 		return {
 			id: this.definition.metadata.id,
-			...(sessionName === undefined
+			...(effectiveName === undefined
 				? {}
-				: { name: boundedString(sessionName), ...(this.nameSource === undefined ? {} : { nameSource: this.nameSource }) }),
+				: { name: effectiveName, ...(this.nameSource === undefined ? {} : { nameSource: this.nameSource }) }),
 			nameRevision: this.nameRevision,
 			revision: this.revision,
 			eventSeq: this.eventSeq,
@@ -614,8 +581,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
-		if (runCommand === "turn/start" || runCommand === "turn/resume") await harness.prompt(text);
-		else if (runCommand === "turn/steer") await harness.steer(text);
+		if (runCommand === "turn/start") await harness.prompt(text);
+		else if (runCommand === "turn/resume") {
+			const result = await harness.resume();
+			if (!result.ok) throw new Error(result.error.message);
+			if (result.value.kind === "failed") throw new Error(result.value.error.message);
+		} else if (runCommand === "turn/steer") await harness.steer(text);
 		else if (runCommand === "turn/followUp") await harness.followUp(text);
 		else if (runCommand === "turn/abort") await harness.abort();
 		else if (runCommand === "turn/rollback") {
@@ -666,6 +637,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			await harness.session.setName(nextName);
 			this.sessionName = nextName;
 			this.nameSource = payload.name === null ? undefined : "explicit";
+			await harness.session.setName(this.sessionName);
 			this.nameRevision += 1;
 		} else if (runCommand === "session/name/generate") {
 			const generated =
@@ -676,6 +648,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				await harness.session.setName(generated);
 				this.sessionName = generated;
 				this.nameSource = "generated";
+				await harness.session.setName(generated);
 				this.nameRevision += 1;
 			}
 		} else if (runCommand === "session/name/auto/set") {
