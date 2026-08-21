@@ -5,6 +5,7 @@ import type { CodingAgentV2Runtime, CodingAgentV2Service } from "../../src/serve
 
 class FixtureRuntime implements CodingAgentV2Runtime {
 	readonly commands: CommandV2[] = [];
+	disposed = false;
 	async snapshot(): Promise<SessionSnapshotV2> {
 		return { model: { provider: "parent-provider", id: "parent-model" } } as SessionSnapshotV2;
 	}
@@ -14,7 +15,9 @@ class FixtureRuntime implements CodingAgentV2Runtime {
 	async run(_operationId: string, command: CommandV2): Promise<void> {
 		this.commands.push(command);
 	}
-	async dispose(): Promise<void> {}
+	async dispose(): Promise<void> {
+		this.disposed = true;
+	}
 }
 
 function fixture() {
@@ -63,5 +66,28 @@ describe("CodingAgentV2AgentRegistry", () => {
 				model: { provider: "faux", id: "model" },
 			}),
 		).rejects.toThrow("maximum depth");
+	});
+
+	test("disposes child runtimes exactly once", async () => {
+		const { registry, runtime } = fixture();
+		await registry.spawn({
+			sessionId: "parent-session",
+			parentPath: "root",
+			taskName: "worker",
+			taskMessage: "inspect the repository",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		await registry.dispose();
+		await registry.dispose();
+		expect(runtime.disposed).toBe(true);
+		await expect(
+			registry.spawn({
+				sessionId: "parent-session",
+				parentPath: "root",
+				taskName: "second",
+				taskMessage: "continue",
+				model: { provider: "inherit", id: "inherit" },
+			}),
+		).rejects.toThrow("disposed");
 	});
 });
