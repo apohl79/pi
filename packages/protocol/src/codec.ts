@@ -189,12 +189,54 @@ export class ServerMessageDecoder {
 	}
 }
 
+/** Incrementally decodes and validates framed v2 client messages. */
+export class ClientMessageV2Decoder {
+	private readonly decoder: ValidatedMessageDecoder<ClientMessageV2>;
+
+	constructor(options?: FrameDecoderOptions) {
+		this.decoder = new ValidatedMessageDecoder("client v2", parseClientMessageV2, options);
+	}
+
+	push(chunk: Uint8Array): ClientMessageV2[] {
+		return this.decoder.push(chunk);
+	}
+
+	end(): void {
+		this.decoder.end();
+	}
+}
+
+/** Incrementally decodes and validates framed v2 server messages. */
+export class ServerMessageV2Decoder {
+	private readonly decoder: ValidatedMessageDecoder<ServerMessageV2>;
+
+	constructor(options?: FrameDecoderOptions) {
+		this.decoder = new ValidatedMessageDecoder("server v2", parseServerMessageV2, options);
+	}
+
+	push(chunk: Uint8Array): ServerMessageV2[] {
+		return this.decoder.push(chunk);
+	}
+
+	end(): void {
+		this.decoder.end();
+	}
+}
+
 export function createClientMessageDecoder(options?: FrameDecoderOptions): ClientMessageDecoder {
 	return new ClientMessageDecoder(options);
 }
 
 export function createServerMessageDecoder(options?: FrameDecoderOptions): ServerMessageDecoder {
 	return new ServerMessageDecoder(options);
+}
+
+export function createClientMessageV2Decoder(options?: FrameDecoderOptions): ClientMessageV2Decoder {
+	return new ClientMessageV2Decoder(options);
+}
+
+export function createServerMessageV2Decoder(options?: FrameDecoderOptions): ServerMessageV2Decoder {
+	return new ServerMessageV2Decoder(options);
 }
 
 export function isSupportedProtocolVersion(version: number): version is typeof PROTOCOL_VERSION {
