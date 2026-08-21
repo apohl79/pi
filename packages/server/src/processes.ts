@@ -21,6 +21,7 @@ export interface V2ProcessSnapshot extends V2ProcessOutput {
 	readonly processId: string;
 	readonly sessionId: string;
 	readonly command: string;
+	readonly pty: boolean;
 	readonly state: V2ProcessState;
 	readonly exitCode?: number;
 }
@@ -34,10 +35,16 @@ export interface V2ProcessRegistry {
 	terminate(processId: string): Promise<V2ProcessSnapshot>;
 }
 
+/** Host-provided PTY launcher; the server keeps PTY ownership behind this boundary. */
+export interface V2PtyLauncher {
+	spawn(request: V2ProcessStartRequest): ChildProcess;
+}
+
 interface ProcessState {
 	readonly processId: string;
 	readonly sessionId: string;
 	readonly command: string;
+	readonly pty: boolean;
 	state: V2ProcessState;
 	exitCode?: number;
 	output: string;
@@ -57,6 +64,7 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 			processId: randomUUID(),
 			sessionId: request.sessionId,
 			command: request.command,
+			pty: request.pty === true,
 			state: "running",
 			output: "",
 			totalBytes: 0,
@@ -112,6 +120,7 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 			processId: process.processId,
 			sessionId: process.sessionId,
 			command: process.command,
+			pty: process.pty,
 			state: process.state,
 			...(process.exitCode === undefined ? {} : { exitCode: process.exitCode }),
 			output: process.output,
@@ -132,25 +141,36 @@ interface NodeProcessState extends ProcessState {
 	waiters: Array<(snapshot: V2ProcessSnapshot) => void>;
 }
 
+function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
+	if (request.pty) {
+		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
+		return ptyLauncher.spawn(request);
+	}
+	return spawn(request.command, {
+		shell: true,
+		cwd: request.cwd,
+		env: { ...process.env, ...request.env },
+		stdio: ["pipe", "pipe", "pipe"],
+	});
+}
+
 export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 	private readonly maxOutputBytes: number;
+	private readonly ptyLauncher: V2PtyLauncher | undefined;
 	private readonly processes = new Map<string, NodeProcessState>();
 
-	constructor(options: { maxOutputBytes?: number } = {}) {
+	constructor(options: { maxOutputBytes?: number; ptyLauncher?: V2PtyLauncher } = {}) {
 		this.maxOutputBytes = options.maxOutputBytes ?? 64 * 1024;
+		this.ptyLauncher = options.ptyLauncher;
 	}
 
 	start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
-		const child = spawn(request.command, {
-			shell: true,
-			cwd: request.cwd,
-			env: { ...process.env, ...request.env },
-			stdio: ["pipe", "pipe", "pipe"],
-		});
+		const child = spawnNodeProcess(request, this.ptyLauncher);
 		const state: NodeProcessState = {
 			processId: randomUUID(),
 			sessionId: request.sessionId,
 			command: request.command,
+			pty: request.pty === true,
 			state: "running",
 			output: "",
 			totalBytes: 0,
@@ -228,6 +248,7 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 			processId: process.processId,
 			sessionId: process.sessionId,
 			command: process.command,
+			pty: process.pty,
 			state: process.state,
 			...(process.exitCode === undefined ? {} : { exitCode: process.exitCode }),
 			output: process.output,

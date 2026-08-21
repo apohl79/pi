@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { describe, expect, test } from "vitest";
 import { InMemoryV2ProcessRegistry, NodeV2ProcessRegistry } from "../src/processes.ts";
 
@@ -21,5 +22,28 @@ describe("InMemoryV2ProcessRegistry", () => {
 		const completed = await registry.wait(started.processId);
 
 		expect(completed).toMatchObject({ state: "exited", exitCode: 0, output: "hello", cursor: 5 });
+	});
+
+	test("routes PTY-mode commands through the injected host terminal adapter", async () => {
+		let launches = 0;
+		const registry = new NodeV2ProcessRegistry({
+			ptyLauncher: {
+				spawn: (request) => {
+					launches += 1;
+					return spawn(request.command, { shell: true, stdio: ["pipe", "pipe", "pipe"] });
+				},
+			},
+		});
+		const started = await registry.start({
+			sessionId: "session-pty",
+			command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('pty-output')"`,
+			pty: true,
+		});
+		const completed = await registry.wait(started.processId);
+
+		expect(started.pty).toBe(true);
+		expect(completed.state).toBe("exited");
+		expect(completed.output).toContain("pty-output");
+		expect(launches).toBe(1);
 	});
 });
