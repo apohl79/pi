@@ -7,7 +7,7 @@ import {
 } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { SessionMetadataV2 } from "@earendil-works/pi-protocol";
-import type { V2InputRegistry, V2PluginRegistry } from "@earendil-works/pi-server";
+import type { V2InputRegistry, V2PluginRegistry, V2WebService } from "@earendil-works/pi-server";
 import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import { type CreateCodingAgentHarnessOptions, createCodingAgentHarness } from "./create-harness.ts";
 import { createPluginSamplingInput } from "./plugin-sampling.ts";
@@ -25,6 +25,7 @@ export interface CodingAgentV2SqliteServiceOptions {
 	model: Model<Api> | ((metadata: SqliteSessionMetadata) => Model<Api> | Promise<Model<Api>>);
 	pluginRegistry?: V2PluginRegistry;
 	inputs?: V2InputRegistry;
+	web?: V2WebService;
 	harness?: Omit<CreateCodingAgentHarnessOptions, "session" | "models" | "model" | "env" | "sessionFile">;
 }
 
@@ -52,6 +53,7 @@ export async function createCodingAgentV2SqliteService(
 		const env = typeof options.env === "function" ? await options.env(metadata) : options.env;
 		const goals = new GoalManager(session);
 		const inputRegistry = options.inputs;
+		const webService = options.web;
 		const samplingInputFactory = async (): Promise<SamplingInput> => {
 			const configuredSamplingInput = options.harness?.samplingInputFactory
 				? await options.harness.samplingInputFactory()
@@ -110,6 +112,7 @@ export async function createCodingAgentV2SqliteService(
 							return resolved.answers ?? {};
 						},
 					}),
+			...(webService === undefined ? {} : { web: async (request) => webService.execute(metadata.id, request) }),
 		});
 		return { metadata: sessionMetadata(metadata), harness: created.harness, goals };
 	};

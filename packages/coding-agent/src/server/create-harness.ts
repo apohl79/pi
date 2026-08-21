@@ -36,6 +36,27 @@ export interface CodingAgentInputRequest {
 
 export type CodingAgentInputResponse = Readonly<Record<string, string>>;
 
+export type CodingAgentWebOperation = "search_query" | "open" | "click" | "find" | "screenshot" | "image_query";
+
+export interface CodingAgentWebRequest {
+	operation: CodingAgentWebOperation;
+	query?: string;
+	url?: string;
+	refId?: string;
+	pattern?: string;
+}
+
+export interface CodingAgentWebResult {
+	id: string;
+	url?: string;
+	title: string;
+	source: string;
+	retrievedAt: number;
+	extract?: string;
+	mimeType?: string;
+	blobDigest?: string;
+}
+
 const requestUserInputSchema = Type.Object({
 	questions: Type.Array(
 		Type.Object({
@@ -49,6 +70,21 @@ const requestUserInputSchema = Type.Object({
 		{ minItems: 1, maxItems: 3 },
 	),
 	autoResolutionMs: Type.Optional(Type.Integer({ minimum: 0 })),
+});
+
+const webSchema = Type.Object({
+	operation: Type.Union([
+		Type.Literal("search_query"),
+		Type.Literal("open"),
+		Type.Literal("click"),
+		Type.Literal("find"),
+		Type.Literal("screenshot"),
+		Type.Literal("image_query"),
+	]),
+	query: Type.Optional(Type.String()),
+	url: Type.Optional(Type.String()),
+	refId: Type.Optional(Type.String()),
+	pattern: Type.Optional(Type.String()),
 });
 
 export interface CodingAgentHarnessTool extends HarnessTool {
@@ -83,6 +119,7 @@ export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOption
 		request: CodingAgentInputRequest,
 		signal: AbortSignal | undefined,
 	) => Promise<CodingAgentInputResponse>;
+	web?: (request: CodingAgentWebRequest) => Promise<readonly CodingAgentWebResult[]>;
 }
 
 export interface BuildCodingAgentHarnessSystemPromptOptions {
@@ -204,6 +241,19 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 				execute: async (_toolCallId, input, signal) => {
 					const response = await requestUserInput(input as Static<typeof requestUserInputSchema>, signal);
 					return { content: [{ type: "text", text: JSON.stringify(response) }], details: { response } };
+				},
+			});
+		}
+		if (options.web) {
+			const web = options.web;
+			tools.push({
+				name: "web",
+				label: "web",
+				description: "Search or inspect the web through the configured server web adapter.",
+				parameters: webSchema,
+				execute: async (_toolCallId, input) => {
+					const results = await web(input as Static<typeof webSchema>);
+					return { content: [{ type: "text", text: JSON.stringify(results) }], details: { results } };
 				},
 			});
 		}
