@@ -40,6 +40,16 @@ import type { MaybePromise } from "./types.ts";
 import { InMemoryV2UsageLedger, type V2UsageFilter, type V2UsageLedger } from "./usage-ledger.ts";
 import { UnavailableV2WebService, type V2WebOperation, type V2WebService } from "./web.ts";
 
+function fileReferencePayload(file: Awaited<ReturnType<V2FileReferenceService["resolve"]>>): Record<string, unknown> {
+	return {
+		reference: file.reference,
+		path: file.path,
+		kind: file.kind,
+		...(file.size === undefined ? {} : { size: file.size }),
+		...(file.mimeType === undefined ? {} : { mimeType: file.mimeType }),
+	};
+}
+
 export interface PiSessionRuntimeV2 {
 	snapshot(): MaybePromise<SessionSnapshotV2>;
 	accept(operationId: string): Promise<OperationAccepted>;
@@ -780,7 +790,9 @@ export class PiServerV2 {
 		if (!command.sessionId) throw new Error("filesystem/reference/resolve requires sessionId");
 		await this.sendResponse(state, id, {
 			command: command.command,
-			file: await this.files.resolve(command.sessionId, referenceFrom(command, objectPayload(command))),
+			file: fileReferencePayload(
+				await this.files.resolve(command.sessionId, referenceFrom(command, objectPayload(command))),
+			),
 		});
 	}
 
@@ -789,7 +801,7 @@ export class PiServerV2 {
 		const result = await this.files.read(command.sessionId, referenceFrom(command, objectPayload(command)));
 		await this.sendResponse(state, id, {
 			command: command.command,
-			file: result.file,
+			file: fileReferencePayload(result.file),
 			encoding: "base64",
 			data: Buffer.from(result.data).toString("base64"),
 		});
