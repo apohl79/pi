@@ -753,6 +753,7 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(session).toMatchObject({ result: { session: { queues: { pendingInputRequestId: request.id } } } });
 		const read = await client.request({ command: "input/request/read", payload: { requestId: request.id } });
 		expect(read).toMatchObject({ result: { request: { status: "pending", id: request.id } } });
+		await client.request({ command: "session/attach", sessionId: "session-1" });
 		const response = await client.request({
 			command: "input/request/respond",
 			payload: { requestId: request.id, answers: { choice: "yes" } },
