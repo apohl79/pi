@@ -406,6 +406,20 @@ const hasValidTerminalSequence = (acceptedSeq: unknown, terminalSeq: unknown): b
 	terminalSeq === undefined ||
 	(typeof acceptedSeq === "number" && typeof terminalSeq === "number" && terminalSeq > acceptedSeq);
 
+const hasFiniteNumbers = (value: unknown, ancestors = new Set<object>()): boolean => {
+	if (typeof value === "number") return Number.isFinite(value);
+	if (value === null || typeof value === "boolean" || typeof value === "string") return true;
+	if (typeof value !== "object" || ancestors.has(value)) return false;
+	ancestors.add(value);
+	try {
+		return Array.isArray(value)
+			? value.every((item) => hasFiniteNumbers(item, ancestors))
+			: Object.values(value).every((item) => hasFiniteNumbers(item, ancestors));
+	} finally {
+		ancestors.delete(value);
+	}
+};
+
 export const isOperationSummary = (value: unknown): value is OperationSummary => {
 	const summary = value as { acceptedSeq?: unknown; terminalSeq?: unknown };
 	return Check(OperationSummarySchema, value) && hasValidTerminalSequence(summary.acceptedSeq, summary.terminalSeq);
@@ -613,5 +627,7 @@ export const ServerMessageV2Schema = Type.Union([
 export type ClientMessageV2 = Static<typeof ClientMessageV2Schema>;
 export type ServerMessageV2 = Static<typeof ServerMessageV2Schema>;
 
-export const isClientMessageV2 = (value: unknown): value is ClientMessageV2 => Check(ClientMessageV2Schema, value);
-export const isServerMessageV2 = (value: unknown): value is ServerMessageV2 => Check(ServerMessageV2Schema, value);
+export const isClientMessageV2 = (value: unknown): value is ClientMessageV2 =>
+	hasFiniteNumbers(value) && Check(ClientMessageV2Schema, value);
+export const isServerMessageV2 = (value: unknown): value is ServerMessageV2 =>
+	hasFiniteNumbers(value) && Check(ServerMessageV2Schema, value);
