@@ -49,6 +49,12 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	const model = `${snapshot.model.provider}/${snapshot.model.id}`;
 	const operation = state.lifecycle.status === "busy" ? ` operation=${state.lifecycle.operationId}` : "";
 	const lines = [`Session ${snapshot.id} · phase=${snapshot.phase} · model=${model}${operation}`];
+	const cost = snapshot.usage.costUsd === undefined ? "unknown" : `$${snapshot.usage.costUsd.toFixed(6)}`;
+	lines.push(
+		`Usage input=${snapshot.usage.input} output=${snapshot.usage.output} cacheRead=${snapshot.usage.cacheRead} cost=${cost}`,
+	);
+	if (snapshot.persistence.recoveryState !== "clean") lines.push(`Persistence ${snapshot.persistence.recoveryState}`);
+	if (snapshot.diagnostics.degraded) lines.push("Diagnostics degraded");
 	for (const agent of snapshot.agents.slice(0, options.maxAgentItems ?? 12))
 		lines.push(`Agent ${agent.path} · ${agent.state} · ${agent.model.provider}/${agent.model.id}`);
 	if (snapshot.goal) {
