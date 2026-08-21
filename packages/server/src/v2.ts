@@ -19,7 +19,6 @@ import { InMemoryV2AgentRegistry, type V2AgentRegistry } from "./agents.ts";
 import { InMemoryV2BlobStore, type V2BlobStore } from "./blobs.ts";
 import type { ByteConnection, ByteConnectionHandler } from "./connection.ts";
 import type { ForensicRecorder } from "./diagnostics.ts";
-import { InMemoryV2InputRegistry, type V2InputRegistry } from "./inputs.ts";
 import type { PiServerListener } from "./listener.ts";
 import { InMemoryV2OperationStore, type V2OperationStore } from "./operation-store.ts";
 import { InMemoryV2PlanRegistry, type V2PlanRegistry } from "./plans.ts";
@@ -52,7 +51,6 @@ export interface PiServerV2Options {
 	blobs?: V2BlobStore;
 	agents?: V2AgentRegistry;
 	plans?: V2PlanRegistry;
-	inputs?: V2InputRegistry;
 }
 
 type V2ConnectionState = {
@@ -60,6 +58,7 @@ type V2ConnectionState = {
 	connection: ByteConnection;
 	decoder: ClientMessageV2Decoder;
 	sessions: Map<string, PiSessionRuntimeV2>;
+	visibleSessionIds: Set<string>;
 	ready: boolean;
 	closed: boolean;
 	handshakeTimeout?: NodeJS.Timeout;
@@ -75,29 +74,6 @@ const MAX_REPLAY_BYTES = 16 * 1024 * 1024;
 const MAX_UINT32 = 0xffff_ffff;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
-function objectPayload(command: CommandV2): Record<string, unknown> {
-	if (typeof command.payload !== "object" || command.payload === null || Array.isArray(command.payload)) return {};
-	return command.payload as Record<string, unknown>;
-}
-
-function processIdFrom(command: CommandV2, payload: Record<string, unknown>): string {
-	const processId = payload.processId ?? command.operationId;
-	if (typeof processId !== "string" || processId.length === 0) throw new Error("processId is required");
-	return processId;
-}
-
-function agentIdFrom(command: CommandV2, payload: Record<string, unknown>): string {
-	const agentId = payload.agentId ?? command.operationId;
-	if (typeof agentId !== "string" || agentId.length === 0) throw new Error("agentId is required");
-	return agentId;
-}
-
-function requestIdFrom(command: CommandV2, payload: Record<string, unknown>): string {
-	const requestId = payload.requestId ?? command.operationId;
-	if (typeof requestId !== "string" || requestId.length === 0) throw new Error("requestId is required");
-	return requestId;
-}
-
 export class PiServerV2 {
 	readonly id: string;
 	private readonly listeners: readonly PiServerListener[];
@@ -111,7 +87,6 @@ export class PiServerV2 {
 	private readonly blobs: V2BlobStore;
 	private readonly agents: V2AgentRegistry;
 	private readonly plans: V2PlanRegistry;
-	private readonly inputs: V2InputRegistry;
 	private readonly connections = new Set<V2ConnectionState>();
 	private readonly eventHistory = new Map<string, EventEnvelopeV2[]>();
 	private readonly operations = new Map<string, OperationRecordV2>();
@@ -134,7 +109,6 @@ export class PiServerV2 {
 		this.blobs = options.blobs ?? new InMemoryV2BlobStore();
 		this.agents = options.agents ?? new InMemoryV2AgentRegistry();
 		this.plans = options.plans ?? new InMemoryV2PlanRegistry();
-		this.inputs = options.inputs ?? new InMemoryV2InputRegistry();
 	}
 
 	private currentRevision(): number {
@@ -173,6 +147,7 @@ export class PiServerV2 {
 	private async session(state: V2ConnectionState, sessionId: string): Promise<PiSessionRuntimeV2> {
 		const existing = state.sessions.get(sessionId);
 		if (existing) return existing;
+		if (!state.visibleSessionIds.has(sessionId)) throw new Error(`Unknown session: ${sessionId}`);
 		const runtime = await this.service.openSession(sessionId);
 		state.sessions.set(sessionId, runtime);
 		return runtime;
@@ -308,7 +283,9 @@ export class PiServerV2 {
 
 	accept(connection: ByteConnection): ByteConnectionHandler {
 		if (this.closing) {
-			void connection.close();
+			void Promise.resolve()
+				.then(() => connection.close())
+				.catch((error: unknown) => this.reportError(error));
 			return { onData: () => {}, onClose: () => {}, onError: (error) => this.reportError(error) };
 		}
 		const state = this.createConnectionState(connection);
@@ -318,7 +295,10 @@ export class PiServerV2 {
 			onClose: () => this.disconnect(state),
 			onError: (error) => {
 				this.reportError(error);
-				void Promise.resolve(state.connection.close()).then(() => this.disconnect(state));
+				void Promise.resolve()
+					.then(() => state.connection.close())
+					.catch((closeError: unknown) => this.reportError(closeError))
+					.then(() => this.disconnect(state));
 			},
 		};
 	}
@@ -326,6 +306,8 @@ export class PiServerV2 {
 	async close(): Promise<void> {
 		if (this.closing) return;
 		this.closing = true;
+		const startPromise = this.startPromise;
+		if (startPromise) await startPromise.catch(() => {});
 		await Promise.all(this.listeners.map((listener) => listener.close()));
 		await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state)));
 		this.started = false;
@@ -337,6 +319,7 @@ export class PiServerV2 {
 			connection,
 			decoder: new ClientMessageV2Decoder({ maxFrameLength: this.maxFrameLength }),
 			sessions: new Map<string, PiSessionRuntimeV2>(),
+			visibleSessionIds: new Set<string>(),
 			ready: false,
 			closed: false,
 			handshakeTimeout: undefined as unknown as NodeJS.Timeout,
@@ -387,6 +370,7 @@ export class PiServerV2 {
 				!(await this.send(state, { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: state.id, snapshot }))
 			)
 				return;
+			state.visibleSessionIds = new Set(snapshot.sessions.map((session) => session.id));
 			clearTimeout(state.handshakeTimeout);
 			if (message.lastEvent) {
 				if (!snapshot.sessions.some((session) => session.id === message.lastEvent?.sessionId)) {
