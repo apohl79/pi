@@ -22,6 +22,8 @@ export interface V2AgentRegistry {
 	message(agentId: string, message: string): Promise<void>;
 	followUp(agentId: string, message: string): Promise<AgentSummary>;
 	interrupt(agentId: string): Promise<AgentSummary>;
+	/** Release child runtimes owned by the server lifecycle, when applicable. */
+	dispose?(): Promise<void>;
 }
 
 interface AgentState {
