@@ -13,6 +13,11 @@ export {
 	type RemoteV2SessionOptions,
 	type RemoteV2SessionState,
 } from "./client/remote-v2-session.ts";
+export {
+	formatRemoteV2Session,
+	RemoteV2SessionView,
+	type RemoteV2SessionViewOptions,
+} from "./client/remote-v2-view.ts";
 // Config paths
 export {
 	CONFIG_DIR_NAME,
