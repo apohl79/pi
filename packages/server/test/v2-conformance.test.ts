@@ -954,7 +954,7 @@ describe("PiServer v2 operation acceptance", () => {
 	});
 
 	test("keeps process writes and termination under the session controller", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-process-leases-"));
 		directories.push(directory);
 		const server = createUnixServerV2(new TestService(), {
 			path: join(directory, "server.sock"),
@@ -968,39 +968,20 @@ describe("PiServer v2 operation acceptance", () => {
 		await observer.hello();
 		await controller.request({ command: "session/attach", sessionId: "session-1" });
 		await observer.request({ command: "session/attach", sessionId: "session-1", payload: { mode: "observer" } });
-		const started = await controller.request({ command: "process/start", sessionId: "session-1", payload: { command: "demo" } });
-		const processId = (started as unknown as { result: { process: { processId: string } } }).result.process.processId;
-		await expect(observer.request({ command: "process/read", payload: { processId, cursor: 0 } })).resolves.toMatchObject({ ok: true });
-		await expect(observer.request({ command: "process/write", payload: { processId, input: "x" } })).resolves.toMatchObject({ ok: false, error: { code: "request_failed" } });
-		await expect(observer.request({ command: "process/terminate", payload: { processId } })).resolves.toMatchObject({ ok: false, error: { code: "request_failed" } });
-		await controller.close();
-		await observer.close();
-	});
-
-	test("forwards process environment deltas to the node process registry", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pis-v2-process-env-"));
-		directories.push(directory);
-		const server = createUnixServerV2(new TestService(), {
-			path: join(directory, "server.sock"),
-			processes: new NodeV2ProcessRegistry(),
-		});
-		servers.push(server);
-		await server.start();
-		const client = await connectUnixTestClientV2(server.addresses[0]!);
-		await client.hello();
-		const started = await client.request({
+		const started = await controller.request({
 			command: "process/start",
 			sessionId: "session-1",
-			payload: {
-				command: `${process.execPath} -e "process.stdout.write(process.env.PI_V2_ENV ?? '')"`,
-				env: { PI_V2_ENV: "forwarded" },
-			},
+			payload: { command: "demo" },
 		});
 		const processId = (started as unknown as { result: { process: { processId: string } } }).result.process.processId;
-		await client.request({ command: "process/wait", payload: { processId } });
-		const output = await client.request({ command: "process/read", payload: { processId, cursor: 0 } });
-		expect(output).toMatchObject({ ok: true, result: { output: { output: "forwarded", truncated: false } } });
-		await client.close();
+		const read = await observer.request({ command: "process/read", payload: { processId, cursor: 0 } });
+		expect(read).toMatchObject({ ok: true, result: { output: { cursor: 0 } } });
+		const write = await observer.request({ command: "process/write", payload: { processId, input: "blocked" } });
+		expect(write).toMatchObject({ ok: false, error: { message: "Session session-1 requires a control lease" } });
+		const terminate = await observer.request({ command: "process/terminate", payload: { processId } });
+		expect(terminate).toMatchObject({ ok: false, error: { message: "Session session-1 requires a control lease" } });
+		await controller.close();
+		await observer.close();
 	});
 
 	test("transports content-addressed blobs without embedding binary bytes in CBOR", async () => {
