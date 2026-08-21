@@ -1605,72 +1605,56 @@ export class AgentHarness implements AgentLane {
 	}
 	async abort(): Promise<AbortResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		const activeNavigation = this.activeOperation?.kind === "navigation" ? this.activeOperation : undefined;
-		if (activeNavigation) {
-			activeNavigation.controller.abort();
-			await activeNavigation.done;
-			return ResultValue.ok({ runId: activeNavigation.id, steer: [], followUp: [] });
-		}
-		const request = await this.withLifecycleLock(async () => {
-			if (this.closed) return undefined;
-			// Recheck under the same lifecycle lock used by finishOperation. This
-			// prevents an abort marker from being appended after a terminal record.
-			const openRun = (await this.durableSession.findOpenOperations("main", { limit: 1 })).find(
-				(operation) => operation.intent.kind === "run",
-			);
-			const active = this.activeOperation?.kind === "run" ? this.activeOperation : undefined;
-			// prompt() admits a local run before operation_started is durable. In
-			// that window there is no record to mark, but abort still needs to signal
-			// and await the local operation rather than reporting a phantom idle lane.
-			if (!openRun && active) return { runId: active.id, active, durable: false, recalled: { steer: [], followUp: [] } };
-			if (!openRun) return undefined;
-			const durableActive = active?.id === openRun.id ? active : undefined;
-			await this.durableSession.appendRecord({
-				type: "abort_requested",
+		const openRun = (await this.durableSession.findOpenOperations("main", { limit: 1 })).find(
+			(operation) => operation.intent.kind === "run",
+		);
+		if (!openRun) return ResultValue.err(new NoActiveOperation({ lane: "main", message: "No active operation" }));
+		const queued = await this.durableSession.findRecords({
+			type: "queue_enqueued",
+			lane: "main",
+			order: "oldestFirst",
+		});
+		const cancelled = new Set(
+			(await this.durableSession.findRecords({ type: "queue_cancelled", lane: "main" })).map(
+				(record) => record.entryId,
+			),
+		);
+		const recalled = { steer: [] as AgentMessage[], followUp: [] as AgentMessage[] };
+		for (const item of queued) {
+			if (
+				item.queue === "nextRun" ||
+				item.runId !== openRun.id ||
+				cancelled.has(item.target.id) ||
+				item.target.type !== "message"
+			)
+				continue;
+			recalled[item.queue].push(structuredClone(item.target.message));
+			cancelled.add(item.target.id);
+			const cancellation: NewRecord<QueueCancelledRecord> = {
+				type: "queue_cancelled",
 				id: this.durableSession.idGenerator.next(),
 				lane: "main",
 				runId: openRun.id,
-			});
-			const queued = await this.durableSession.findRecords({
-				type: "queue_enqueued",
-				lane: "main",
-				order: "oldestFirst",
-			});
-			const cancelled = new Set(
-				(await this.durableSession.findRecords({ type: "queue_cancelled", lane: "main" })).map(
-					(record) => record.entryId,
-				),
-			);
-			const recalled = { steer: [] as AgentMessage[], followUp: [] as AgentMessage[] };
-			for (const item of queued) {
-				if (
-					item.queue === "nextRun" ||
-					item.runId !== openRun.id ||
-					cancelled.has(item.target.id) ||
-					this.claimedQueueItems.has(item.target.id) ||
-					item.target.type !== "message"
-				)
-					continue;
-				recalled[item.queue].push(structuredClone(item.target.message));
-				cancelled.add(item.target.id);
-				await this.durableSession.appendRecord({
-					type: "queue_cancelled",
-					id: this.durableSession.idGenerator.next(),
-					lane: "main",
-					runId: openRun.id,
-					entryId: item.target.id,
-				} satisfies NewRecord<QueueCancelledRecord>);
-			}
-			return { runId: openRun.id, active: durableActive, durable: true, recalled };
-		});
-		if (!request) return ResultValue.err(new NoActiveOperation({ lane: "main", message: "No active operation" }));
-		request.active?.controller.abort();
-		await request.active?.done;
-		if (!request.durable) return ResultValue.ok({ runId: request.runId, ...request.recalled });
-		// Remote/recovered runs have no local controller. Persist a durable
-		// terminal outcome rather than waiting on an unrelated local operation.
-		await this.finishOperation(request.runId, "aborted", { code: "aborted", message: "Run aborted" });
-		return ResultValue.ok({ runId: request.runId, ...request.recalled });
+				entryId: item.target.id,
+			};
+			await this.durableSession.appendRecord(cancellation);
+		}
+		const requested: NewRecord<AbortRequestedRecord> = {
+			type: "abort_requested",
+			id: this.durableSession.idGenerator.next(),
+			lane: "main",
+			runId: openRun.id,
+		};
+		await this.durableSession.appendRecord(requested);
+		const finished: NewRecord<OperationFinishedRecord> = {
+			type: "operation_finished",
+			id: this.durableSession.idGenerator.next(),
+			lane: "main",
+			runId: openRun.id,
+			outcome: "aborted",
+		};
+		await this.durableSession.appendRecord(finished);
+		return ResultValue.ok({ runId: openRun.id, ...recalled });
 	}
 	async steer(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
 	async steer(_message: AgentMessage): Promise<QueueResult>;
@@ -1689,33 +1673,27 @@ export class AgentHarness implements AgentLane {
 	}
 	async cancelQueued(entryId: string): Promise<CancelQueuedResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		return this.withLifecycleLock(async () => {
-			if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-			const enqueued = (await this.durableSession.findRecords({ type: "queue_enqueued", lane: "main" })).find(
-				(record) => record.target.id === entryId,
-			);
-			if (!enqueued)
-				return ResultValue.err(new UnknownQueueItem({ lane: "main", entryId, message: "Queued item not found" }));
-			const cancelled = (await this.durableSession.findRecords({ type: "queue_cancelled", lane: "main" })).some(
-				(record) => record.entryId === entryId,
-			);
-			if (cancelled) return ResultValue.ok({ outcome: "already_cleared" });
-			if (this.claimedQueueItems.has(entryId)) return ResultValue.ok({ outcome: "already_consumed" });
-			const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
-			if (entries.some((entry) => entry.id === entryId)) return ResultValue.ok({ outcome: "already_consumed" });
-			await this.durableSession.appendRecord(
-				enqueued.queue === "nextRun"
-					? { type: "queue_cancelled", id: this.durableSession.idGenerator.next(), lane: "main", entryId }
-					: {
-							type: "queue_cancelled",
-							id: this.durableSession.idGenerator.next(),
-							lane: "main",
-							runId: enqueued.runId,
-							entryId,
-						} satisfies NewRecord<QueueCancelledRecord>,
-			);
-			return ResultValue.ok({ outcome: "cancelled" });
-		});
+		const enqueued = (await this.durableSession.findRecords({ type: "queue_enqueued", lane: "main" })).find(
+			(record) => record.target.id === entryId,
+		);
+		if (!enqueued)
+			return ResultValue.err(new UnknownQueueItem({ lane: "main", entryId, message: "Queued item not found" }));
+		const cancelled = (await this.durableSession.findRecords({ type: "queue_cancelled", lane: "main" })).some(
+			(record) => record.entryId === entryId,
+		);
+		if (cancelled) return ResultValue.ok({ outcome: "already_cleared" });
+		const record: NewRecord<QueueCancelledRecord> =
+			enqueued.queue === "nextRun"
+				? { type: "queue_cancelled", id: this.durableSession.idGenerator.next(), lane: "main", entryId }
+				: {
+						type: "queue_cancelled",
+						id: this.durableSession.idGenerator.next(),
+						lane: "main",
+						runId: enqueued.runId,
+						entryId,
+					};
+		await this.durableSession.appendRecord(record);
+		return ResultValue.ok({ outcome: "cancelled" });
 	}
 
 	private async enqueue(
@@ -1725,38 +1703,28 @@ export class AgentHarness implements AgentLane {
 		requiresRun: boolean,
 	): Promise<QueueResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		const openRun = (await this.durableSession.findOpenOperations("main", { limit: 1 })).find(
+			(operation) => operation.intent.kind === "run",
+		);
+		if (requiresRun && !openRun) return ResultValue.err(new NoActiveRun({ lane: "main", message: "No active run" }));
 		const message: AgentMessage =
 			typeof input === "string"
 				? { role: "user", content: [{ type: "text", text: input }, ...(images ?? [])], timestamp: Date.now() }
 				: structuredClone(input);
 		const target: ProvisionedEntry = { type: "message", id: this.durableSession.idGenerator.next(), message };
-		return this.withLifecycleLock(async () => {
-			if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-			const openRun = (await this.durableSession.findOpenOperations("main", { limit: 1 })).find(
-				(operation) => operation.intent.kind === "run",
-			);
-			const localRun = this.activeOperation?.kind === "run" ? this.activeOperation : undefined;
-			const runId = openRun?.id ?? localRun?.id;
-			const aborting = runId
-				? (await this.durableSession.findRecords({ type: "abort_requested", lane: "main" })).some(
-						(record) => record.runId === runId,
-					)
-				: false;
-			if (requiresRun && (!runId || aborting)) return ResultValue.err(new NoActiveRun({ lane: "main", message: "No active run" }));
-			const record: NewRecord<QueueEnqueuedRecord> =
-				queue === "nextRun"
-					? { type: "queue_enqueued", id: this.durableSession.idGenerator.next(), lane: "main", queue, target }
-					: {
-							type: "queue_enqueued",
-							id: this.durableSession.idGenerator.next(),
-							lane: "main",
-							queue,
-							runId: runId!,
-							target,
-						};
-			await this.durableSession.appendRecord(record);
-			return ResultValue.ok({ entryId: target.id });
-		});
+		const record: NewRecord<QueueEnqueuedRecord> =
+			queue === "nextRun"
+				? { type: "queue_enqueued", id: this.durableSession.idGenerator.next(), lane: "main", queue, target }
+				: {
+						type: "queue_enqueued",
+						id: this.durableSession.idGenerator.next(),
+						lane: "main",
+						queue,
+						runId: openRun!.id,
+						target,
+					};
+		await this.durableSession.appendRecord(record);
+		return ResultValue.ok({ entryId: target.id });
 	}
 	async recordUsage(usage: Usage, options?: { entryId?: string; details?: JsonValue }): Promise<RecordUsageResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
@@ -1779,10 +1747,6 @@ export class AgentHarness implements AgentLane {
 	async waitForIdle(): Promise<void> {
 		while (true) {
 			if (this.closed) throw new HarnessClosed();
-			if (this.activeOperation) {
-				await this.activeOperation.done;
-				continue;
-			}
 			const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
 			if (open.length === 0) return;
 			await new Promise<void>((resolve) => setTimeout(resolve, 5));
@@ -1828,21 +1792,15 @@ export class AgentHarness implements AgentLane {
 	}
 	async setModel(model: Model<Api>): Promise<void> {
 		if (this.closed) throw new HarnessClosed();
-		await this.appendConfigurationEntry(
-			{ type: "model_change", id: this.durableSession.idGenerator.next(), provider: model.provider, modelId: model.id },
-			(committed) => {
-				if (committed.type !== "model_change") return;
-				const committedModel = this.models.getModel(committed.provider, committed.modelId);
-				if (committedModel) {
-					this.model = committedModel;
-					this.missingModels = [];
-				} else if (committed.provider === model.provider && committed.modelId === model.id) {
-					this.model = model;
-					this.missingModels = [];
-				} else {
-					this.missingModels = [`${committed.provider}/${committed.modelId}`];
-				}
+		this.model = model;
+		await this.durableSession.appendEntry(
+			{
+				type: "model_change",
+				id: this.durableSession.idGenerator.next(),
+				provider: model.provider,
+				modelId: model.id,
 			},
+			"main",
 		);
 	}
 	async getThinkingLevel(): Promise<ThinkingLevel> {
@@ -1850,12 +1808,10 @@ export class AgentHarness implements AgentLane {
 	}
 	async setThinkingLevel(level: ThinkingLevel): Promise<void> {
 		if (this.closed) throw new HarnessClosed();
-		await this.appendConfigurationEntry(
+		this.thinkingLevel = level;
+		await this.durableSession.appendEntry(
 			{ type: "thinking_level_change", id: this.durableSession.idGenerator.next(), thinkingLevel: level },
-			(committed) => {
-				if (committed.type !== "thinking_level_change") return;
-				this.thinkingLevel = committed.thinkingLevel as ThinkingLevel;
-			},
+			"main",
 		);
 	}
 	async getActiveTools(): Promise<string[]> {
@@ -1863,15 +1819,10 @@ export class AgentHarness implements AgentLane {
 	}
 	async setActiveTools(names: string[]): Promise<void> {
 		if (this.closed) throw new HarnessClosed();
-		const activeToolNames = [...names];
-		await this.appendConfigurationEntry(
-			{ type: "active_tools_change", id: this.durableSession.idGenerator.next(), activeToolNames },
-			(committed) => {
-				if (committed.type !== "active_tools_change") return;
-				this.activeToolNames = [...committed.activeToolNames];
-				const availableTools = new Set(this.tools.map((tool) => tool.name));
-				this.missingTools = this.activeToolNames.filter((name) => !availableTools.has(name));
-			},
+		this.activeToolNames = [...names];
+		await this.durableSession.appendEntry(
+			{ type: "active_tools_change", id: this.durableSession.idGenerator.next(), activeToolNames: [...names] },
+			"main",
 		);
 	}
 	async watch(): Promise<WatchHandle<LaneSnapshot>> {
@@ -1892,17 +1843,15 @@ export class AgentHarness implements AgentLane {
 	}
 	async setTools(tools: HarnessTool[], activeNames?: string[]): Promise<void> {
 		if (this.closed) throw new HarnessClosed();
-		const nextTools = [...tools];
-		const nextActiveNames = [...(activeNames ?? tools.map((tool) => tool.name))];
-		await this.appendConfigurationEntry(
-			{ type: "active_tools_change", id: this.durableSession.idGenerator.next(), activeToolNames: nextActiveNames },
-			(committed) => {
-				if (committed.type !== "active_tools_change") return;
-				this.tools = nextTools;
-				this.activeToolNames = [...committed.activeToolNames];
-				const availableTools = new Set(nextTools.map((tool) => tool.name));
-				this.missingTools = this.activeToolNames.filter((name) => !availableTools.has(name));
+		this.tools = [...tools];
+		this.activeToolNames = [...(activeNames ?? tools.map((tool) => tool.name))];
+		await this.durableSession.appendEntry(
+			{
+				type: "active_tools_change",
+				id: this.durableSession.idGenerator.next(),
+				activeToolNames: [...this.activeToolNames],
 			},
+			"main",
 		);
 	}
 	async getResources(): Promise<Resources> {
