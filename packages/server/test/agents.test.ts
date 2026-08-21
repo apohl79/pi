@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { InMemoryV2AgentRegistry } from "../src/agents.ts";
+import { InMemoryV2AgentRegistry, type AgentSummary } from "../src/agents.ts";
 
 describe("InMemoryV2AgentRegistry", () => {
 	test("maintains stable child paths and explicit lifecycle transitions", async () => {
@@ -41,5 +41,45 @@ describe("InMemoryV2AgentRegistry", () => {
 		expect(await registry.wait(child.id)).toMatchObject({ state: "complete" });
 		await registry.followUp(child.id, "fix failures");
 		expect(await registry.wait(child.id)).toMatchObject({ state: "running" });
+	});
+
+	test("waits for completion, preserves role, and scopes paths to a session", async () => {
+		const registry = new InMemoryV2AgentRegistry();
+		const first = await registry.spawn({
+			sessionId: "session-1",
+			parentPath: "/root",
+			taskName: "same",
+			taskMessage: "start",
+			role: "worker",
+			model: { provider: "test", id: "small" },
+		});
+		const pending = registry.wait(first.id, 20);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		await registry.complete(first.id);
+		expect(await pending).toMatchObject({ state: "complete", role: "worker" });
+		const other = await registry.spawn({
+			sessionId: "session-2",
+			parentPath: "/root",
+			taskName: "same",
+			taskMessage: "start",
+			model: { provider: "test", id: "small" },
+		});
+		expect(other.path).toBe(first.path);
+	});
+
+	test("bounds message retention and permits follow-up from awaiting input", async () => {
+		const registry = new InMemoryV2AgentRegistry({ maxMessages: 2, maxMessageLength: 4 });
+		const child = await registry.spawn({
+			sessionId: "session-1",
+			parentPath: "/root",
+			taskName: "input",
+			taskMessage: "init",
+			model: { provider: "test", id: "small" },
+		});
+		await registry.message(child.id, "more");
+		await expect(registry.message(child.id, "too long")).rejects.toThrow("maximum length");
+		const internal = registry as unknown as { agents: Map<string, { state: AgentSummary["state"] }> };
+		internal.agents.get(child.id)!.state = "awaitingInput";
+		expect(await registry.followUp(child.id, "next")).toMatchObject({ state: "running" });
 	});
 });
