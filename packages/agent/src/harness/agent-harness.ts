@@ -349,6 +349,7 @@ export class AgentHarness implements AgentLane {
 	private compactionSettings: CompactionSettings;
 	private steeringMode: QueueMode;
 	private followUpMode: QueueMode;
+	private suspendedOperations: SuspendedOperation[] = [];
 	private closed = false;
 
 	private constructor(options: AgentHarnessOptions) {
@@ -416,6 +417,7 @@ export class AgentHarness implements AgentLane {
 				});
 			}
 		}
+		harness.suspendedOperations = structuredClone(suspended);
 		return { harness, suspended };
 	}
 
@@ -824,7 +826,70 @@ export class AgentHarness implements AgentLane {
 		return ResultValue.ok({ targetId: target, removedTurns: turns });
 	}
 	async resume(): Promise<ResumeResult> {
-		return this.unavailable("resume");
+		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+		const operation = open[0];
+		if (!operation) return ResultValue.err(new NothingToResume({ lane: "main", message: "Nothing to resume" }));
+		const suspended = this.suspendedOperations.find((candidate) => candidate.id === operation.id);
+		if (suspended && (suspended.missing.models.length > 0 || suspended.missing.tools.length > 0)) {
+			return ResultValue.err(
+				new MissingIdentities({
+					lane: "main",
+					tools: [...suspended.missing.tools],
+					models: [...suspended.missing.models],
+					message: "Resume requires missing tools or models",
+				}),
+			);
+		}
+		await this.durableSession.appendRecord({
+			type: "operation_finished",
+			id: this.durableSession.idGenerator.next(),
+			lane: "main",
+			runId: operation.id,
+			outcome: "failed",
+			error: { code: "recovered_by_resume", message: "Suspended operation was reopened by resume" },
+		});
+		if (operation.intent.kind === "run") {
+			const result = await this.prompt(operation.intent.originalPrompt);
+			if (!result.ok)
+				return ResultValue.ok({
+					operation: "run",
+					runId: operation.id,
+					kind: "failed",
+					leafId: (await this.durableSession.getLeafId()) ?? "",
+					error: { code: result.error.name, message: result.error.message },
+				});
+			const { runId, ...outcome } = result.value;
+			return ResultValue.ok({ operation: "run", runId, ...outcome });
+		}
+		if (operation.intent.kind === "compaction") {
+			const result = await this.compact({ customInstructions: operation.intent.customInstructions });
+			if (!result.ok)
+				return ResultValue.ok({
+					operation: "compaction",
+					runId: operation.id,
+					kind: "failed",
+					leafId: (await this.durableSession.getLeafId()) ?? "",
+					error: { code: result.error.name, message: result.error.message },
+				});
+			const { runId, ...outcome } = result.value;
+			return ResultValue.ok({ operation: "compaction", runId, ...outcome });
+		}
+		const result = await this.navigateTree(operation.intent.targetId, {
+			summarize: operation.intent.summarize,
+			customInstructions: operation.intent.customInstructions,
+			label: operation.intent.label,
+		});
+		if (!result.ok)
+			return ResultValue.ok({
+				operation: "navigation",
+				runId: operation.id,
+				kind: "failed",
+				leafId: await this.durableSession.getLeafId(),
+				error: { code: result.error.name, message: result.error.message },
+			});
+		const { runId, ...outcome } = result.value;
+		return ResultValue.ok({ operation: "navigation", runId, ...outcome });
 	}
 	async abort(): Promise<AbortResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
