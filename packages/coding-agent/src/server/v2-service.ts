@@ -5,7 +5,7 @@ import type {
 	GoalContinuationScheduler,
 	GoalManager,
 } from "@earendil-works/pi-agent-core";
-import type { ImageContent, Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
+import type { Api, ImageContent, Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
 import type {
 	CommandNameV2,
 	CommandV2,
@@ -138,6 +138,14 @@ function commandPayload(command: CommandV2): Record<string, unknown> {
 	return typeof command.payload === "object" && command.payload !== null && !Array.isArray(command.payload)
 		? (command.payload as Record<string, unknown>)
 		: {};
+}
+
+function assertPromptCapabilities(model: Model<Api>, input: AgentMessage): void {
+	if (input.role !== "user") return;
+	if (!Array.isArray(input.content)) return;
+	const hasImage = input.content.some((part) => part.type === "image");
+	if (hasImage && !model.input.includes("image"))
+		throw new Error(`Model ${model.provider}/${model.id} does not support image input`);
 }
 
 function transcriptItem(entry: Entry): TranscriptItem | undefined {
@@ -462,6 +470,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		};
 		await extensionHost?.onOperationAccepted({ id: _operationId, type: runCommand });
 		try {
+			assertPromptCapabilities(await harness.getModel(), input);
 			if (runCommand === "turn/start") {
 				await harness.prompt(input);
 				await this.recordUsageLedger(_operationId, beforeEntryIds);
