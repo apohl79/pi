@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ByteTransport, ByteTransportHandlers } from "@earendil-works/pi-client";
@@ -78,6 +78,18 @@ function clientFactory() {
 							id: message.id,
 							ok: true,
 							result: { command: "diagnostics/status", eventCount: 2 },
+						}),
+					);
+				} else if (message.request.command === "diagnostics/export") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: {
+								command: "diagnostics/export",
+								bundle: { manifest: { schemaVersion: 1 }, events: [] },
+							},
 						}),
 					);
 				} else if (message.request.command === "session/attach") {
@@ -181,6 +193,26 @@ describe("experimental CLI runtime", () => {
 		});
 		await runtime.runDiagnostics({ command: "diagnostics", action: "status" });
 		expect(output).toEqual([{ command: "diagnostics/status", eventCount: 2 }]);
+		runtime.close();
+	});
+
+	test("writes the exported bundle rather than the RPC envelope", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-cli-diagnostics-export-"));
+		const outputPath = join(directory, "bundle.json");
+		const server = clientFactory();
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: (value) => output.push(value),
+		});
+		await runtime.runDiagnostics({ command: "diagnostics", action: "export", output: outputPath });
+		expect(JSON.parse(await readFile(outputPath, "utf8"))).toEqual({
+			manifest: { schemaVersion: 1 },
+			events: [],
+		});
+		expect(output).toMatchObject([{ command: "diagnostics/export" }]);
 		runtime.close();
 	});
 
