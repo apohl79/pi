@@ -18,6 +18,8 @@ import {
 	type ClientMessageV2,
 	isClientMessageV2,
 	isServerMessageV2,
+	MAX_V2_ARRAY_ITEMS,
+	MAX_V2_JSON_DEPTH,
 	PROTOCOL_V2_VERSION,
 	type ServerMessageV2,
 } from "./v2.ts";
@@ -120,12 +122,19 @@ class ValidatedMessageDecoder<T> {
 	private readonly frames: FrameDecoder;
 	private readonly kind: string;
 	private readonly maxFrameLength: number;
+	private readonly cborLimits: { maxContainerLength?: number; maxDepth?: number };
 	private readonly parse: (candidate: unknown) => T;
 
-	constructor(kind: string, parse: (candidate: unknown) => T, options?: FrameDecoderOptions) {
+	constructor(
+		kind: string,
+		parse: (candidate: unknown) => T,
+		options?: FrameDecoderOptions,
+		cborLimits: { maxContainerLength?: number; maxDepth?: number } = {},
+	) {
 		this.frames = new FrameDecoder(options);
 		this.kind = kind;
 		this.maxFrameLength = options?.maxFrameLength ?? DEFAULT_MAX_FRAME_LENGTH;
+		this.cborLimits = cborLimits;
 		this.parse = parse;
 	}
 
@@ -134,7 +143,14 @@ class ValidatedMessageDecoder<T> {
 		try {
 			const messages: T[] = [];
 			for (const frame of this.frames.push(chunk)) {
-				messages.push(this.parse(decodeCbor(frame, { maxByteLength: this.maxFrameLength })));
+				messages.push(
+					this.parse(
+						decodeCbor(frame, {
+							maxByteLength: this.maxFrameLength,
+							...this.cborLimits,
+						}),
+					),
+				);
 			}
 			return messages;
 		} catch (error) {
@@ -194,7 +210,10 @@ export class ClientMessageV2Decoder {
 	private readonly decoder: ValidatedMessageDecoder<ClientMessageV2>;
 
 	constructor(options?: FrameDecoderOptions) {
-		this.decoder = new ValidatedMessageDecoder("client v2", parseClientMessageV2, options);
+		this.decoder = new ValidatedMessageDecoder("client v2", parseClientMessageV2, options, {
+			maxContainerLength: MAX_V2_ARRAY_ITEMS,
+			maxDepth: MAX_V2_JSON_DEPTH + 3,
+		});
 	}
 
 	push(chunk: Uint8Array): ClientMessageV2[] {
@@ -211,7 +230,10 @@ export class ServerMessageV2Decoder {
 	private readonly decoder: ValidatedMessageDecoder<ServerMessageV2>;
 
 	constructor(options?: FrameDecoderOptions) {
-		this.decoder = new ValidatedMessageDecoder("server v2", parseServerMessageV2, options);
+		this.decoder = new ValidatedMessageDecoder("server v2", parseServerMessageV2, options, {
+			maxContainerLength: MAX_V2_ARRAY_ITEMS,
+			maxDepth: MAX_V2_JSON_DEPTH + 3,
+		});
 	}
 
 	push(chunk: Uint8Array): ServerMessageV2[] {
