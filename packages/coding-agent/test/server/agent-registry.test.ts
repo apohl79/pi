@@ -42,6 +42,8 @@ describe("CodingAgentV2AgentRegistry", () => {
 			model: { provider: "inherit", id: "inherit" },
 		});
 		expect((await registry.wait(agent.id)).state).toBe("complete");
+		expect(await registry.list("parent-session")).toHaveLength(1);
+		expect(await registry.list("child-session")).toHaveLength(0);
 		expect((await registry.getSnapshot(agent.id)).model).toEqual({
 			provider: "parent-provider",
 			id: "parent-model",
