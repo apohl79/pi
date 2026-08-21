@@ -11,6 +11,7 @@ import {
 	JsonlV2InputRegistry,
 	JsonlV2OperationStore,
 	JsonlV2PlanRegistry,
+	JsonlV2UsageLedger,
 	JsonV2PluginRegistry,
 	LocalDiagnosticCapsuleStore,
 	LocalV2FileReferenceService,
@@ -25,6 +26,7 @@ import {
 	type V2OperationStore,
 	type V2PluginRegistry,
 	type V2ProcessRegistry,
+	type V2UsageLedger,
 	type V2WebService,
 } from "@earendil-works/pi-server";
 import { createNodeSqliteFactory, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
@@ -48,6 +50,8 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	agents?: ServerDaemonOptions["agents"];
 	inputs?: V2InputRegistry;
 	inputStorePath?: string;
+	usageStorePath?: string;
+	usage?: V2UsageLedger;
 	processes?: V2ProcessRegistry;
 	web?: V2WebService;
 	images?: V2ImageService;
@@ -123,6 +127,7 @@ export async function createCodingAgentDaemonRuntime(
 		socketPath: options.socketPath,
 		...(options.serverId === undefined ? {} : { serverId: options.serverId }),
 		...(options.runtimeManifest === undefined ? {} : { runtimeManifest: options.runtimeManifest }),
+		...(options.usage === undefined ? {} : { usage: options.usage }),
 		...(agents === undefined ? {} : { agents }),
 		inputs,
 		processes,
@@ -185,6 +190,8 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			inputs:
 				options.inputs ??
 				new JsonlV2InputRegistry(options.inputStorePath ?? join(options.agentDir, "inputs.jsonl")),
+			usage:
+				options.usage ?? new JsonlV2UsageLedger(options.usageStorePath ?? join(options.agentDir, "usage.jsonl")),
 			files:
 				options.files ??
 				new LocalV2FileReferenceService({ projectRoot: options.cwd, cwd: options.cwd, allowAbsolute: true }),

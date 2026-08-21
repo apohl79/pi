@@ -102,6 +102,7 @@ describe("coding-agent daemon runtime", () => {
 						}
 					).session;
 					if (
+						session.phase === "idle" &&
 						session.transcript.some((item) => item.content?.some((content) => content.text === "daemon response"))
 					) {
 						expect(session.phase).toBe("idle");
@@ -114,6 +115,99 @@ describe("coding-agent daemon runtime", () => {
 		} finally {
 			client.dispose();
 			await runtime.close();
+		}
+	});
+
+	test("persists provider usage through a production daemon restart", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-usage-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-usage-faux",
+			models: [
+				{
+					id: "coding-agent-daemon-usage-model",
+					reasoning: false,
+					contextWindow: 32_000,
+					maxTokens: 1_000,
+					cost: { input: 0, output: 0.25, cacheRead: 0, cacheWrite: 0 },
+				},
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			{
+				...fauxAssistantMessage("x"),
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.25 },
+				},
+			},
+		]);
+		const createRuntime = () =>
+			createConfiguredCodingAgentDaemonRuntime({
+				agentDir: directory,
+				cwd: directory,
+				models,
+				model: faux.getModel(),
+				socketPath: join(directory, "server.sock"),
+				harness: { tools: [], activeToolNames: [] },
+				write: () => {},
+			});
+		const first = await createRuntime();
+		const firstClient = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		let sessionId = "";
+		try {
+			await first.daemon.start();
+			await firstClient.connect();
+			const created = await firstClient.request({ command: "session/create", payload: { cwd: directory } });
+			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
+			sessionId = (created.result as { session: { id: string } }).session.id;
+			await firstClient.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			await firstClient.request({ command: "turn/start", sessionId, payload: { text: "measure usage" } });
+			for (let attempt = 0; attempt < 50; attempt++) {
+				const usage = await firstClient.request({ command: "usage/read", payload: { sessionId } });
+				if (
+					usage.ok &&
+					"result" in usage &&
+					(usage.result as { aggregate: { responses: number } }).aggregate.responses > 0
+				) {
+					expect(usage).toMatchObject({
+						result: { aggregate: { responses: 1, costUsd: 0, pricingState: "known" } },
+					});
+					const read = await firstClient.request({ command: "session/read", sessionId });
+					if (
+						read.ok &&
+						"result" in read &&
+						(read.result as { session: { phase: string } }).session.phase === "idle"
+					)
+						break;
+				}
+				if (attempt === 49) throw new Error("Timed out waiting for usage ledger entry");
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+		} finally {
+			firstClient.dispose();
+			await first.close();
+		}
+		const second = await createRuntime();
+		const secondClient = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await second.daemon.start();
+			await secondClient.connect();
+			const usage = await secondClient.request({ command: "usage/read", payload: { sessionId } });
+			expect(usage).toMatchObject({ result: { aggregate: { responses: 1, costUsd: 0, pricingState: "known" } } });
+		} finally {
+			secondClient.dispose();
+			await second.close();
 		}
 	});
 
@@ -679,6 +773,13 @@ describe("coding-agent daemon runtime", () => {
 				payload: { requestId, answers: { choice: "Yes" } },
 			});
 			expect(response).toMatchObject({ ok: true, result: { request: { status: "responded" } } });
+			for (let attempt = 0; attempt < 50; attempt++) {
+				const read = await client.request({ command: "session/read", sessionId });
+				if (read.ok && "result" in read && (read.result as { session: { phase: string } }).session.phase === "idle")
+					break;
+				if (attempt === 49) throw new Error("Timed out waiting for structured input turn completion");
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
 		} finally {
 			client.dispose();
 			await runtime.close();

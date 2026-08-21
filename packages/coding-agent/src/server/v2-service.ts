@@ -17,7 +17,7 @@ import type {
 	SessionSnapshotV2,
 	TranscriptItem,
 } from "@earendil-works/pi-protocol";
-import type { V2InputRegistry } from "@earendil-works/pi-server";
+import type { V2InputRegistry, V2UsageLedger } from "@earendil-works/pi-server";
 import type { ServerRuntimeExtensionHost } from "./extension-host.ts";
 
 export interface CodingAgentV2SessionDefinition {
@@ -27,6 +27,7 @@ export interface CodingAgentV2SessionDefinition {
 	goalContinuation?: GoalContinuationScheduler;
 	extensionHost?: ServerRuntimeExtensionHost;
 	inputs?: V2InputRegistry;
+	usage?: V2UsageLedger;
 }
 
 export interface CodingAgentV2Service {
@@ -303,6 +304,40 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		if (delta > 0) await this.definition.goals.recordUsage(delta);
 	}
 
+	private async recordUsageLedger(operationId: string, beforeEntryIds: ReadonlySet<string>): Promise<void> {
+		const ledger = this.definition.usage;
+		if (!ledger) return;
+		const entries = await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" });
+		for (const entry of entries) {
+			if (
+				entry.type !== "message" ||
+				beforeEntryIds.has(entry.id) ||
+				entry.message.role !== "assistant" ||
+				entry.message.usage === undefined
+			)
+				continue;
+			const usage = entry.message.usage;
+			await ledger.record({
+				responseId: entry.message.responseId ?? entry.id,
+				sessionId: this.definition.metadata.id,
+				agentId: this.definition.metadata.id,
+				operationId,
+				turnId: operationId,
+				purpose: "agent",
+				provider: entry.message.provider,
+				model: entry.message.model,
+				input: usage.input,
+				output: usage.output,
+				cacheRead: usage.cacheRead,
+				cacheWrite: usage.cacheWrite,
+				...(usage.reasoning === undefined ? {} : { reasoning: usage.reasoning }),
+				pricing: "providerReported",
+				costUsd: usage.cost.total,
+				createdAt: entry.message.timestamp ?? entry.timestamp,
+			});
+		}
+	}
+
 	async snapshot(): Promise<SessionSnapshotV2> {
 		const [leafId, thinkingLevel, stats, compaction, entries, pendingInputRequestId] = await Promise.all([
 			this.definition.harness.getLeafId(),
@@ -393,6 +428,9 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
 		const usageBefore = (await harness.session.getStats()).totalTokens;
+		const beforeEntryIds = new Set(
+			(await harness.session.findEntriesOnBranch({ order: "oldestFirst" })).map((entry) => entry.id),
+		);
 		let goalUsageRecorded = false;
 		const extensionHost = this.definition.extensionHost;
 		this.phase = "turn";
@@ -406,6 +444,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		try {
 			if (runCommand === "turn/start") {
 				await harness.prompt(input);
+				await this.recordUsageLedger(_operationId, beforeEntryIds);
 				await this.recordGoalUsage(usageBefore);
 				goalUsageRecorded = true;
 				if (this.autoName) await this.generateName();
@@ -413,14 +452,17 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				const result = await harness.resume();
 				if (!result.ok) throw new Error(result.error.message);
 				if (result.value.kind === "failed") throw new Error(result.value.error.message);
+				await this.recordUsageLedger(_operationId, beforeEntryIds);
 				await this.recordGoalUsage(usageBefore);
 				goalUsageRecorded = true;
 			} else if (runCommand === "turn/steer") {
 				await harness.steer(input);
+				await this.recordUsageLedger(_operationId, beforeEntryIds);
 				await this.recordGoalUsage(usageBefore);
 				goalUsageRecorded = true;
 			} else if (runCommand === "turn/followUp") {
 				await harness.followUp(input);
+				await this.recordUsageLedger(_operationId, beforeEntryIds);
 				await this.recordGoalUsage(usageBefore);
 				goalUsageRecorded = true;
 			} else if (runCommand === "turn/abort") await harness.abort();

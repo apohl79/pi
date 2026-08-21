@@ -14,6 +14,7 @@ import type {
 	V2InputRegistry,
 	V2PlanRegistry,
 	V2PluginRegistry,
+	V2UsageLedger,
 	V2WebService,
 } from "@earendil-works/pi-server";
 import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
@@ -38,6 +39,7 @@ export interface CodingAgentV2SqliteServiceOptions {
 	compaction?: (model: Model<Api>) => CompactionSettings | undefined;
 	pluginRegistry?: V2PluginRegistry;
 	inputs?: V2InputRegistry;
+	usage?: V2UsageLedger;
 	web?: V2WebService;
 	images?: V2ImageService;
 	plans?: V2PlanRegistry;
@@ -70,6 +72,7 @@ export async function createCodingAgentV2SqliteService(
 		const goals = new GoalManager(session);
 		const compaction = options.compaction?.(model);
 		const inputRegistry = options.inputs;
+		const usageLedger = options.usage;
 		const webService = options.web;
 		const imageService = options.images;
 		const planRegistry = options.plans;
@@ -152,6 +155,7 @@ export async function createCodingAgentV2SqliteService(
 			harness: created.harness,
 			goals,
 			...(inputRegistry === undefined ? {} : { inputs: inputRegistry }),
+			...(usageLedger === undefined ? {} : { usage: usageLedger }),
 		};
 	};
 	const store: CodingAgentV2SessionStore = {
