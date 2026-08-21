@@ -68,4 +68,20 @@ describe("StatuslineRunner", () => {
 		expect(received).toEqual(["statusline", "--json"]);
 		expect(result.output).toBe("first line");
 	});
+
+	test("bounds default child stdout and stderr collection by bytes", async () => {
+		const runner = new StatuslineRunner({
+			command: [
+				process.execPath,
+				"-e",
+				"process.stdout.write('x'.repeat(100000)); process.stderr.write('e'.repeat(10000)); process.exit(2)",
+			],
+			maxOutputBytes: 32,
+			maxErrorBytes: 16,
+		});
+		const result = await runner.update({ session: "bounded" });
+
+		expect(result.output).toBeUndefined();
+		expect(result.error).toHaveLength(16);
+	});
 });
