@@ -26,6 +26,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private readonly agents = new Map<string, ChildAgent>();
 	private readonly service: CodingAgentV2Service;
 	private disposed = false;
+	private readonly hydratedParents = new Set<string>();
 
 	constructor(service: CodingAgentV2Service, options: CodingAgentV2AgentRegistryOptions = {}) {
 		this.service = service;
@@ -42,13 +43,15 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		const path = `${request.parentPath.replace(/\/$/, "")}/${request.taskName}`;
 		if ([...this.agents.values()].some((agent) => agent.summary.path === path))
 			throw new Error(`Agent path ${path} already exists`);
+		const agentId = randomUUID();
 		const created = await this.service.createSession({
 			parentSessionId: request.sessionId,
 			name: request.taskName,
 			model,
+			id: agentId,
 		});
 		const summary: AgentSummary = {
-			id: randomUUID(),
+			id: agentId,
 			path,
 			taskName: request.taskName,
 			state: "running",
@@ -70,6 +73,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	async list(sessionId: string): Promise<readonly AgentSummary[]> {
+		await this.hydrate(sessionId);
 		return [...this.agents.values()]
 			.filter((agent) => agent.parentSessionId === sessionId)
 			.map((agent) => this.snapshot(agent));
@@ -179,6 +183,35 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 
 	private activeCount(): number {
 		return [...this.agents.values()].filter((agent) => agent.state === "running").length;
+	}
+
+	private async hydrate(parentSessionId: string): Promise<void> {
+		if (this.hydratedParents.has(parentSessionId)) return;
+		this.hydratedParents.add(parentSessionId);
+		const sessions = await this.service.listSessions();
+		for (const metadata of sessions) {
+			if (metadata.parentSessionId !== parentSessionId || this.agents.has(metadata.id)) continue;
+			const runtime = await this.service.openSession(metadata.id);
+			const snapshot = await runtime.snapshot();
+			const taskName = metadata.sessionName ?? metadata.id;
+			const summary: AgentSummary = {
+				id: metadata.id,
+				path: `${parentSessionId}/${taskName}`,
+				taskName,
+				state: snapshot.phase === "idle" ? "complete" : "running",
+				model: snapshot.model,
+			};
+			this.agents.set(metadata.id, {
+				summary,
+				parentSessionId,
+				childSessionId: metadata.id,
+				runtime,
+				state: summary.state,
+				messages: [],
+				followUps: [],
+				waiters: [],
+			});
+		}
 	}
 
 	private resolveWaiters(agent: ChildAgent): void {
