@@ -60,6 +60,8 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 		for (const item of snapshot.plan.items.slice(0, options.maxPlanItems ?? 12))
 			lines.push(`Plan ${item.status} · ${item.step}`);
 	}
+	if (snapshot.queues.pendingInputRequestId !== undefined)
+		lines.push(`Input request pending · ${snapshot.queues.pendingInputRequestId}`);
 	let characters = 0;
 	for (const item of snapshot.transcript.slice(-maxItems)) {
 		const text = transcriptText(item);
