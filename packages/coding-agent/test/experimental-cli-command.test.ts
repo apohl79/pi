@@ -73,7 +73,7 @@ describe("experimental CLI commands", () => {
 			ok: true,
 			command: { command: "diagnostics", action: "status" },
 		});
-		expect(experimentalCli.parse(["diagnostics", "--operation", "op-1", "timeline", "session-1"])).toEqual({
+		expect(experimentalCli.parse(["diagnostics", "timeline", "--operation", "op-1", "session-1"])).toEqual({
 			ok: true,
 			command: { command: "diagnostics", action: "timeline", sessionId: "session-1", operationId: "op-1" },
 		});
