@@ -473,8 +473,6 @@ describe("AgentHarness v2 scaffold", () => {
 				operation,
 			});
 		}
-		expect(() => harness.hooks.on("before_run", () => {})).toThrow(HarnessNotImplemented);
-		expect(() => harness.events.on("event", () => {})).toThrow(HarnessNotImplemented);
 	});
 
 	it("supports prompt lifecycle, queues, usage recording, and idle waiting", async () => {

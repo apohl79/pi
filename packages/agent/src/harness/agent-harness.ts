@@ -664,6 +664,7 @@ export class AgentHarness implements AgentLane {
 		try {
 			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 			await this.durableSession.appendRecord(started);
+			this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
 		} catch (error) {
 			const raced = await this.durableSession.findOpenOperations("main", { limit: 1 }).catch(() => []);
 			if (raced.length > 0 && raced[0]!.id === runId) {
@@ -687,6 +688,7 @@ export class AgentHarness implements AgentLane {
 			}
 		}
 		try {
+			await this.lifecycle.runHook("before_run", { operationId: runId, prompts: durableClone(prompts) });
 			const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
 			const persisted = buildSessionContext(entries);
 			const systemPrompt =
@@ -747,6 +749,7 @@ export class AgentHarness implements AgentLane {
 			const finalMessage = transcriptMessages.at(-1);
 			if (!finalEntryId || !finalMessage || finalMessage.role !== "assistant")
 				throw new Error("Agent loop produced no assistant message");
+			await this.lifecycle.runHook("after_response", { operationId: runId, message: durableClone(finalMessage) });
 			if (finalMessage.stopReason === "aborted") {
 				await this.finishOperation(runId, "aborted", { code: "aborted", message: "Run aborted" });
 				return ResultValue.ok({ runId, kind: "aborted", leafId: (await this.durableSession.getLeafId()) ?? "", finalEntryId, finalMessage });
@@ -757,6 +760,8 @@ export class AgentHarness implements AgentLane {
 				return ResultValue.ok({ runId, kind: "failed", leafId: (await this.durableSession.getLeafId()) ?? "", error, finalEntryId, finalMessage });
 			}
 			await this.finishOperation(runId, "completed");
+			await this.lifecycle.runHook("before_run_end", { operationId: runId, outcome: "completed" });
+			this.lifecycle.emit("operation_finished", { operationId: runId, outcome: "completed" });
 			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 			return ResultValue.ok({
 				runId,
@@ -1089,6 +1094,7 @@ export class AgentHarness implements AgentLane {
 		let startedPersisted = false;
 		try {
 			try {
+				await this.lifecycle.runHook("before_compaction", { operationId: runId, model: this.model });
 				await this.durableSession.appendRecord({
 					type: "operation_started",
 					id: runId,
@@ -1239,6 +1245,7 @@ export class AgentHarness implements AgentLane {
 			this.activeOperation = { id: runId, kind: "navigation", controller, done, resolveDone };
 			let started = false;
 			try {
+				await this.lifecycle.runHook("before_navigation", { operationId: runId, targetId, summarize });
 				await this.durableSession.appendRecord({
 					type: "operation_started",
 					id: runId,
