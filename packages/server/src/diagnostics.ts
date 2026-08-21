@@ -18,10 +18,25 @@ export interface ForensicRecorder {
 	read(afterSeq?: number): Promise<ForensicEvent[]>;
 }
 
-const SENSITIVE_KEYS = new Set(["apiKey", "authorization", "credential", "password", "secret", "token"]);
+const SENSITIVE_KEYS = new Set([
+	"apikey",
+	"authorization",
+	"auth",
+	"credential",
+	"password",
+	"secret",
+	"token",
+	"accesstoken",
+	"refreshtoken",
+	"clientsecret",
+	"bearertoken",
+	"xapikey",
+]);
+
+const normalizeKey = (key: string): string => key.replace(/[^a-z0-9]/gi, "").toLowerCase();
 
 function redact(value: unknown, key?: string): DiagnosticValue {
-	if (key !== undefined && SENSITIVE_KEYS.has(key)) return "[REDACTED]";
+	if (key !== undefined && SENSITIVE_KEYS.has(normalizeKey(key))) return "[REDACTED]";
 	if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string")
 		return value;
 	if (Array.isArray(value)) return value.map((item) => redact(item));

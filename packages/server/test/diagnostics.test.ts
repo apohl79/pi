@@ -30,4 +30,26 @@ describe("InMemoryForensicRecorder", () => {
 		await recorder.record({ kind: "three" });
 		expect((await recorder.read()).map((event) => event.kind)).toEqual(["two", "three"]);
 	});
+
+	test("redacts common credential key casing and separators", async () => {
+		const recorder = new InMemoryForensicRecorder();
+		const event = await recorder.record({
+			kind: "credentials",
+			payload: {
+				API_KEY: "one",
+				"api-key": "two",
+				access_token: "three",
+				"client-secret": "four",
+				"x-api-key": "five",
+			},
+		});
+
+		expect(event.payload).toEqual({
+			API_KEY: "[REDACTED]",
+			"api-key": "[REDACTED]",
+			access_token: "[REDACTED]",
+			"client-secret": "[REDACTED]",
+			"x-api-key": "[REDACTED]",
+		});
+	});
 });

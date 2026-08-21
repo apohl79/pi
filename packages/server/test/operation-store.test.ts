@@ -1,9 +1,8 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { EventEnvelopeV2, OperationRecordV2 } from "@earendil-works/pi-protocol";
 import { afterEach, describe, expect, test } from "vitest";
-import { JsonlV2OperationStore } from "../src/operation-store.ts";
+import { JsonlV2OperationStore, type EventEnvelopeV2, type OperationRecordV2 } from "../src/operation-store.ts";
 
 const directories: string[] = [];
 

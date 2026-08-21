@@ -1,5 +1,25 @@
 import { open, readFile } from "node:fs/promises";
-import type { EventEnvelopeV2, OperationRecordV2 } from "@earendil-works/pi-protocol";
+
+type JsonValue = null | boolean | number | string | JsonValue[] | { readonly [key: string]: JsonValue };
+
+export type OperationRecordV2 = Readonly<{
+	operationId: string;
+	sessionId: string;
+	state: "accepted" | "running" | "complete" | "failed" | "aborted" | "suspended";
+	accepted: Readonly<{ operationId: string; sessionRevision: number; eventSeq: number }>;
+	terminalSeq?: number;
+	error?: string;
+}>;
+
+export type EventEnvelopeV2 = Readonly<{
+	type: "event";
+	sessionId: string;
+	seq: number;
+	revision: number;
+	operationId?: string;
+	event: string;
+	payload: JsonValue;
+}>;
 
 export interface V2OperationStore {
 	load(): Promise<{ operations: readonly OperationRecordV2[]; events: readonly EventEnvelopeV2[] }>;
