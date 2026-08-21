@@ -72,6 +72,9 @@ export class RemoteV2Session {
 	get phase(): ProtocolSnapshot["phase"] | undefined {
 		return this.#snapshot?.phase;
 	}
+	get mode(): V2SessionLeaseMode | undefined {
+		return this.#handle?.mode;
+	}
 
 	subscribe(listener: Listener): () => void {
 		this.#assertNotDisposed();
@@ -131,6 +134,21 @@ export class RemoteV2Session {
 		return this.#accept(command, { text: normalized });
 	}
 
+	async followUp(text: string): Promise<string> {
+		const normalized = text.trim();
+		if (!normalized) throw new Error("Session follow-up cannot be empty");
+		return this.#accept("turn/followUp", { text: normalized });
+	}
+
+	async resume(): Promise<string> {
+		return this.#accept("turn/resume");
+	}
+
+	async rollback(turns = 1): Promise<string> {
+		if (!Number.isInteger(turns) || turns < 1) throw new Error("Rollback turns must be a positive integer");
+		return this.#accept("turn/rollback", { turns });
+	}
+
 	async abort(): Promise<string> {
 		return this.#accept("turn/abort", undefined, true);
 	}
@@ -140,6 +158,20 @@ export class RemoteV2Session {
 	}
 	async setThinking(thinkingLevel: ProtocolThinkingLevel): Promise<string> {
 		return this.#accept("session/thinking/set", { thinkingLevel });
+	}
+
+	async relinquishControl(): Promise<void> {
+		this.#assertNotDisposed();
+		const handle = this.#requireHandle();
+		await handle.relinquishControl();
+		this.#emit();
+	}
+
+	async acquireControl(): Promise<void> {
+		this.#assertNotDisposed();
+		const handle = this.#requireHandle();
+		await handle.acquireControl();
+		this.#emit();
 	}
 
 	async detach(): Promise<void> {
