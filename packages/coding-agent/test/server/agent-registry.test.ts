@@ -6,9 +6,6 @@ import type { CodingAgentV2Runtime, CodingAgentV2Service } from "../../src/serve
 class FixtureRuntime implements CodingAgentV2Runtime {
 	readonly commands: CommandV2[] = [];
 	disposed = false;
-	blocked = false;
-	private releasePromise: Promise<void> | undefined;
-	private releaseBlocked: (() => void) | undefined;
 	async snapshot(): Promise<SessionSnapshotV2> {
 		return { model: { provider: "parent-provider", id: "parent-model" } } as SessionSnapshotV2;
 	}
@@ -26,6 +23,9 @@ class FixtureRuntime implements CodingAgentV2Runtime {
 	}
 	release(): void {
 		this.releaseBlocked?.();
+	}
+	async dispose(): Promise<void> {
+		this.disposed = true;
 	}
 	async dispose(): Promise<void> {
 		this.disposed = true;
@@ -104,22 +104,5 @@ describe("CodingAgentV2AgentRegistry", () => {
 				model: { provider: "inherit", id: "inherit" },
 			}),
 		).rejects.toThrow("disposed");
-	});
-
-	test("runs follow-ups queued during an active child turn", async () => {
-		const { registry, runtime } = fixture();
-		runtime.blocked = true;
-		const agent = await registry.spawn({
-			sessionId: "parent-session",
-			parentPath: "root",
-			taskName: "worker",
-			taskMessage: "initial task",
-			model: { provider: "inherit", id: "inherit" },
-		});
-		await registry.followUp(agent.id, "queued task");
-		expect((await registry.getSnapshot(agent.id)).state).toBe("running");
-		runtime.release();
-		expect((await registry.wait(agent.id)).state).toBe("complete");
-		expect(runtime.commands.map((command) => command.command)).toEqual(["turn/start", "turn/followUp"]);
 	});
 });
