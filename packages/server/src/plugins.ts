@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { MAX_V2_ARRAY_ITEMS, MAX_V2_JSON_DEPTH, MAX_V2_STRING_LENGTH } from "@earendil-works/pi-protocol";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 
 export type V2PluginScope = "user" | "project";
 
@@ -25,6 +27,11 @@ export type V2Plugin = Readonly<{
 		apps: number;
 		hooks: number;
 	}>;
+}>;
+
+export type V2PluginRegistryState = Readonly<{
+	marketplaces: readonly V2Marketplace[];
+	plugins: readonly V2Plugin[];
 }>;
 
 export interface V2PluginRegistry {
@@ -96,6 +103,24 @@ function resourceCount(value: unknown): number {
 export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 	private readonly marketplaces = new Map<string, V2Marketplace>();
 	private readonly plugins = new Map<string, V2Plugin>();
+
+	constructor(state?: V2PluginRegistryState) {
+		for (const marketplace of state?.marketplaces ?? [])
+			this.marketplaces.set(marketplace.name, structuredClone(marketplace));
+		for (const plugin of state?.plugins ?? []) this.plugins.set(plugin.id, structuredClone(plugin));
+	}
+
+	toState(): V2PluginRegistryState {
+		return { marketplaces: [...this.marketplaces.values()], plugins: [...this.plugins.values()] };
+	}
+
+	replace(state: V2PluginRegistryState): void {
+		this.marketplaces.clear();
+		this.plugins.clear();
+		for (const marketplace of state.marketplaces)
+			this.marketplaces.set(marketplace.name, structuredClone(marketplace));
+		for (const plugin of state.plugins ?? []) this.plugins.set(plugin.id, structuredClone(plugin));
+	}
 
 	async listMarketplaces(): Promise<readonly V2Marketplace[]> {
 		return [...this.marketplaces.values()].map((marketplace) => structuredClone(marketplace));
@@ -192,5 +217,101 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		const updated = { ...existing, enabled, ...(scope === undefined ? {} : { scope }) };
 		this.plugins.set(id, updated);
 		return structuredClone(updated);
+	}
+}
+
+/** JSON-backed registry with atomic replacement and restart recovery. */
+export class JsonV2PluginRegistry implements V2PluginRegistry {
+	private readonly memory: InMemoryV2PluginRegistry;
+	private readonly filePath: string;
+	private loaded = false;
+
+	constructor(filePath: string) {
+		this.filePath = filePath;
+		this.memory = new InMemoryV2PluginRegistry();
+	}
+
+	private async ensureLoaded(): Promise<void> {
+		if (this.loaded) return;
+		this.loaded = true;
+		try {
+			const value: unknown = JSON.parse(await readFile(this.filePath, "utf8"));
+			if (!value || typeof value !== "object" || !Array.isArray((value as { marketplaces?: unknown }).marketplaces))
+				throw new Error("Plugin registry file is invalid");
+			const state = value as V2PluginRegistryState;
+			for (const marketplace of state.marketplaces) {
+				if (!marketplace || typeof marketplace.name !== "string" || typeof marketplace.source !== "string")
+					throw new Error("Plugin registry marketplace record is invalid");
+			}
+			for (const plugin of state.plugins ?? []) {
+				if (!plugin || typeof plugin.id !== "string" || typeof plugin.name !== "string")
+					throw new Error("Plugin registry plugin record is invalid");
+			}
+			this.memory.replace(state);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
+
+	private async persist(): Promise<void> {
+		await mkdir(dirname(this.filePath), { recursive: true });
+		const temporary = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
+		await writeFile(temporary, `${JSON.stringify(this.memory.toState())}\n`, { mode: 0o600 });
+		await rename(temporary, this.filePath);
+	}
+
+	async listMarketplaces(): Promise<readonly V2Marketplace[]> {
+		await this.ensureLoaded();
+		return this.memory.listMarketplaces();
+	}
+
+	async addMarketplace(name: string, source: string): Promise<V2Marketplace> {
+		await this.ensureLoaded();
+		const value = await this.memory.addMarketplace(name, source);
+		await this.persist();
+		return value;
+	}
+
+	async removeMarketplace(name: string): Promise<void> {
+		await this.ensureLoaded();
+		await this.memory.removeMarketplace(name);
+		await this.persist();
+	}
+
+	async upgradeMarketplace(name: string): Promise<V2Marketplace> {
+		await this.ensureLoaded();
+		const value = await this.memory.upgradeMarketplace(name);
+		await this.persist();
+		return value;
+	}
+
+	async listPlugins(installedOnly = false): Promise<readonly V2Plugin[]> {
+		await this.ensureLoaded();
+		return this.memory.listPlugins(installedOnly);
+	}
+
+	async readPlugin(id: string): Promise<V2Plugin | undefined> {
+		await this.ensureLoaded();
+		return this.memory.readPlugin(id);
+	}
+
+	async installPlugin(input: Parameters<V2PluginRegistry["installPlugin"]>[0]): Promise<V2Plugin> {
+		await this.ensureLoaded();
+		const value = await this.memory.installPlugin(input);
+		await this.persist();
+		return value;
+	}
+
+	async uninstallPlugin(id: string): Promise<void> {
+		await this.ensureLoaded();
+		await this.memory.uninstallPlugin(id);
+		await this.persist();
+	}
+
+	async setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin> {
+		await this.ensureLoaded();
+		const value = await this.memory.setEnabled(id, enabled, scope);
+		await this.persist();
+		return value;
 	}
 }
