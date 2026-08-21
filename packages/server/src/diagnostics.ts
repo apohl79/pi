@@ -21,12 +21,25 @@ export interface ForensicRecorder {
 	read(afterSeq?: number): Promise<ForensicEvent[]>;
 }
 
-const SENSITIVE_KEYS = new Set(["apiKey", "authorization", "credential", "password", "secret", "token"]);
+const SENSITIVE_KEY_PARTS = ["apikey", "authorization", "credential", "password", "secret", "token", "privatekey"];
+
+function isSensitiveKey(key: string): boolean {
+	const normalized = key.toLowerCase().replace(/[-_]/g, "");
+	return SENSITIVE_KEY_PARTS.some((part) => normalized.includes(part));
+}
+
+function isCredentialShaped(value: string): boolean {
+	return (
+		/\bbearer\s+[a-z0-9._~+/=-]{8,}\b/i.test(value) ||
+		/\b(?:api[_-]?key|token|secret|password)\s*[:=]\s*\S+/i.test(value) ||
+		/\b(?:sk|pk|rk)-[a-z0-9_-]{8,}\b/i.test(value)
+	);
+}
 
 function redact(value: unknown, key?: string): DiagnosticValue {
-	if (key !== undefined && SENSITIVE_KEYS.has(key)) return "[REDACTED]";
-	if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string")
-		return value;
+	if (key !== undefined && isSensitiveKey(key)) return "[REDACTED]";
+	if (value === null || typeof value === "boolean" || typeof value === "number") return value;
+	if (typeof value === "string") return isCredentialShaped(value) ? "[REDACTED]" : value;
 	if (Array.isArray(value)) return value.map((item) => redact(item));
 	if (typeof value === "object") {
 		const output: Record<string, DiagnosticValue> = {};

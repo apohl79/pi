@@ -33,6 +33,27 @@ describe("InMemoryForensicRecorder", () => {
 		await recorder.record({ kind: "three" });
 		expect((await recorder.read()).map((event) => event.kind)).toEqual(["two", "three"]);
 	});
+
+	test("redacts normalized credential keys and credential-shaped strings", async () => {
+		const recorder = new InMemoryForensicRecorder();
+		const event = await recorder.record({
+			kind: "credential-shape",
+			payload: {
+				API_KEY: "secret-value",
+				nested: { access_token: "another-secret" },
+				message: "Authorization: Bearer abcdefghijklmnop",
+				providerKey: "sk-example_12345678",
+				safe: "ordinary diagnostic text",
+			},
+		});
+		expect(event.payload).toEqual({
+			API_KEY: "[REDACTED]",
+			nested: { access_token: "[REDACTED]" },
+			message: "[REDACTED]",
+			providerKey: "[REDACTED]",
+			safe: "ordinary diagnostic text",
+		});
+	});
 });
 
 describe("JsonlForensicRecorder", () => {
