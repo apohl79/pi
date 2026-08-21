@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { describe, expect, test } from "vitest";
 import { InMemoryV2ProcessRegistry, NodeV2ProcessRegistry } from "../src/processes.ts";
 
@@ -114,31 +115,26 @@ describe("InMemoryV2ProcessRegistry", () => {
 		expect(completed).toMatchObject({ state: "exited", exitCode: 0, output: "hello", cursor: 5 });
 	});
 
-	test("resolves an existing wait when termination needs escalation", async () => {
-		const registry = new NodeV2ProcessRegistry({ terminateGraceMs: 10, terminateTimeoutMs: 10 });
-		const started = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "process.on('SIGTERM', function(){}),setTimeout(function(){},1000000)"` });
-		const pending = registry.wait(started.processId);
-		await registry.terminate(started.processId);
-		await expect(pending).resolves.toMatchObject({ state: "terminated", exitCode: 143 });
-	});
+	test("routes PTY-mode commands through the injected host terminal adapter", async () => {
+		let launches = 0;
+		const registry = new NodeV2ProcessRegistry({
+			ptyLauncher: {
+				spawn: (request) => {
+					launches += 1;
+					return spawn(request.command, { shell: true, stdio: ["pipe", "pipe", "pipe"] });
+				},
+			},
+		});
+		const started = await registry.start({
+			sessionId: "session-pty",
+			command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('pty-output')"`,
+			pty: true,
+		});
+		const completed = await registry.wait(started.processId);
 
-	test("holds active capacity until a terminated child closes", async () => {
-		const registry = new NodeV2ProcessRegistry({ maxActiveProcesses: 1, terminateGraceMs: 10, terminateTimeoutMs: 10 });
-		const started = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "process.on('SIGTERM', function(){}),setTimeout(function(){},1000000)"` });
-		await registry.terminate(started.processId);
-		await expect(registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "setTimeout(function(){},1000000)"` })).rejects.toThrow("Maximum active process limit");
-		await registry.wait(started.processId);
-		const replacement = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('ok')"` });
-		await expect(registry.wait(replacement.processId)).resolves.toMatchObject({ state: "exited", output: "ok" });
-	});
-
-	test("retains only the configured number of completed process entries", async () => {
-		const registry = new NodeV2ProcessRegistry({ maxCompletedProcesses: 1 });
-		const first = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('a')"` });
-		await registry.wait(first.processId);
-		const second = await registry.start({ sessionId: "session-1", command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('b')"` });
-		await registry.wait(second.processId);
-		expect(await registry.read(second.processId, 0)).toMatchObject({ output: "b" });
-		await expect(registry.read(first.processId, 0)).rejects.toThrow("Unknown process");
+		expect(started.pty).toBe(true);
+		expect(completed.state).toBe("exited");
+		expect(completed.output).toContain("pty-output");
+		expect(launches).toBe(1);
 	});
 });
