@@ -32,6 +32,11 @@ const service: PiServerServiceV2 = {
 	},
 };
 
+const replayService: PiServerServiceV2 = {
+	...service,
+	listSessions: async () => [{ id: "session-1", createdAt: 0, updatedAt: 0 }],
+};
+
 test("stops replay encoding after the byte cap", async () => {
 	const oversizedPayload = Array.from({ length: 17 }, () => "x".repeat(1_000_000));
 	const unsupportedPayload = Symbol("must not be encoded");
@@ -55,7 +60,11 @@ test("stops replay encoding after the byte cap", async () => {
 	];
 	const store = new InMemoryV2OperationStore();
 	for (const event of events) await store.appendEvent(event);
-	const server = new PiServerV2(service, { listeners: [], operationStore: store, maxFrameLength: 32 * 1024 * 1024 });
+	const server = new PiServerV2(replayService, {
+		listeners: [],
+		operationStore: store,
+		maxFrameLength: 32 * 1024 * 1024,
+	});
 	const connection = new RecordingConnection();
 	const handler = server.accept(connection);
 
@@ -76,4 +85,63 @@ test("stops replay encoding after the byte cap", async () => {
 	expect(finalMessages).toEqual([
 		{ type: "hello_error", error: { code: "invalid_request", message: "Replay exceeds configured limit" } },
 	]);
+});
+
+test("validates bounded v2 options", () => {
+	expect(() => new PiServerV2(service, { listeners: [], maxFrameLength: 0 })).toThrow(/maxFrameLength/);
+	expect(() => new PiServerV2(service, { listeners: [], maxFrameLength: Number.POSITIVE_INFINITY })).toThrow(
+		/maxFrameLength/,
+	);
+	expect(() => new PiServerV2(service, { listeners: [], handshakeTimeoutMs: 2_147_483_648 })).toThrow(
+		/handshakeTimeoutMs/,
+	);
+});
+
+test("authorizes replay sessions against the handshake snapshot", async () => {
+	const store = new InMemoryV2OperationStore();
+	await store.appendEvent({
+		type: "event",
+		sessionId: "private",
+		seq: 1,
+		revision: 1,
+		event: "session_delta",
+		payload: {},
+	});
+	const server = new PiServerV2(service, { listeners: [], operationStore: store });
+	const connection = new RecordingConnection();
+	const handler = server.accept(connection);
+	handler.onData(
+		encodeClientMessageV2({
+			type: "hello",
+			version: PROTOCOL_V2_VERSION,
+			lastEvent: { sessionId: "private", eventSeq: 0 },
+		}),
+	);
+	await vi.waitFor(() => expect(connection.closed).toBe(true));
+	const decoder = new ServerMessageV2Decoder();
+	const messages = decoder.push(connection.chunks[0]!);
+	const finalMessages = connection.finalChunk ? decoder.push(connection.finalChunk) : [];
+	await server.close();
+	expect(messages).toHaveLength(1);
+	expect(finalMessages).toEqual([
+		{ type: "hello_error", error: { code: "invalid_request", message: "Replay session is not available" } },
+	]);
+});
+
+test("shares concurrent start calls", async () => {
+	let resolveStart: (() => void) | undefined;
+	const listener = {
+		start: () =>
+			new Promise<void>((resolve) => {
+				resolveStart = resolve;
+			}),
+		close: async () => {},
+	};
+	const server = new PiServerV2(service, { listeners: [listener] });
+	const first = server.start();
+	const second = server.start();
+	expect(second).toBe(first);
+	resolveStart?.();
+	await first;
+	await server.close();
 });
