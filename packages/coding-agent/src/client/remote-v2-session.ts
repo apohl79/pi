@@ -127,6 +127,25 @@ export class RemoteV2Session {
 		return this.#accept(command, { text: normalized });
 	}
 
+	async waitForOperation(operationId: string): Promise<ProtocolSnapshot> {
+		this.#assertNotDisposed();
+		if (this.#lifecycle.status === "ready" && this.#lastEvent?.operationId === operationId && this.#snapshot)
+			return structuredClone(this.#snapshot);
+		return new Promise<ProtocolSnapshot>((resolve) => {
+			let unsubscribe = () => {};
+			unsubscribe = this.subscribe((state) => {
+				if (
+					state.lifecycle.status !== "ready" ||
+					state.lastEvent?.operationId !== operationId ||
+					state.snapshot === undefined
+				)
+					return;
+				unsubscribe();
+				resolve(structuredClone(state.snapshot));
+			});
+		});
+	}
+
 	async followUp(text: string): Promise<string> {
 		const normalized = text.trim();
 		if (!normalized) throw new Error("Session follow-up cannot be empty");
