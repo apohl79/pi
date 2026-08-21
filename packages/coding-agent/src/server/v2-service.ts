@@ -491,9 +491,10 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		} else if (runCommand === "turn/steer") unwrap(await harness.steer(requireText(command, requirePayload(command))));
 		else if (runCommand === "turn/followUp") unwrap(await harness.followUp(requireText(command, requirePayload(command))));
 		else if (runCommand === "turn/abort") unwrap(await harness.abort());
-		else if (runCommand === "turn/rollback")
-			throw new Error("Conversation rollback is not available in this adapter");
-		else if (runCommand === "goal/create") {
+		else if (runCommand === "turn/rollback") {
+			const turns = typeof payload.turns === "number" ? payload.turns : 1;
+			unwrap(await harness.rollback(turns));
+		} else if (runCommand === "goal/create") {
 			if (!this.definition.goals || typeof payload.objective !== "string")
 				throw new Error("goal/create requires an objective");
 			await this.definition.goals.create(
