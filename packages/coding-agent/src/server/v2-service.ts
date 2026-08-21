@@ -18,7 +18,6 @@ export interface CodingAgentV2SessionDefinition {
 	metadata: SessionMetadataV2;
 	harness: AgentHarness;
 	goals?: GoalManager;
-	goalContinuation?: GoalContinuationScheduler;
 	extensionHost?: ServerRuntimeExtensionHost;
 }
 
@@ -399,6 +398,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
+		const extensionHost = this.definition.extensionHost;
+		await extensionHost?.onOperationAccepted({ id: _operationId, type: runCommand });
 		if (runCommand === "turn/start") {
 			await harness.prompt(text);
 			if (this.autoName) await this.generateName();
