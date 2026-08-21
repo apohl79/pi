@@ -7,6 +7,7 @@ import type { V2OperationStore } from "../../operation-store.ts";
 import type { V2PlanRegistry } from "../../plans.ts";
 import type { V2ProcessRegistry } from "../../processes.ts";
 import type { PiServerOptions } from "../../types.ts";
+import type { V2WebService } from "../../web.ts";
 
 export interface UnixListenerOptions {
 	path: string;
@@ -29,4 +30,5 @@ export interface UnixServerOptions extends Omit<PiServerOptions, "listeners">, U
 	plans?: V2PlanRegistry;
 	inputs?: V2InputRegistry;
 	files?: V2FileReferenceService;
+	web?: V2WebService;
 }
