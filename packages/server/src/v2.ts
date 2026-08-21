@@ -252,3 +252,269 @@ export class PiServerV2 {
 			await this.failProtocol(state, "internal_error", error instanceof Error ? error.message : String(error));
 		}
 	}
+
+	private async handleRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		try {
+			if (command.command === "session/list")
+				return void (await this.sendResponse(state, id, {
+					command: command.command,
+					sessions: await this.service.listSessions(),
+				}));
+			if (command.command === "model/list")
+				return void (await this.sendResponse(state, id, {
+					command: command.command,
+					models: await this.service.listModels(),
+				}));
+			if (command.command === "operation/read") return void (await this.readOperation(state, id, command));
+			if (command.command === "session/attach") return void (await this.attach(state, id, command));
+			if (command.command === "session/read") return void (await this.readSession(state, id, command));
+			if (command.command === "goal/read") return void (await this.readGoal(state, id, command));
+			if (command.command === "process/start") return void (await this.startProcess(state, id, command));
+			if (command.command === "process/write") return void (await this.writeProcess(state, id, command));
+			if (command.command === "process/read") return void (await this.readProcess(state, id, command));
+			if (command.command === "process/wait") return void (await this.waitProcess(state, id, command));
+			if (command.command === "process/terminate") return void (await this.terminateProcess(state, id, command));
+			if (command.command === "blob/put") return void (await this.putBlob(state, id, command));
+			if (command.command === "blob/read") return void (await this.readBlob(state, id, command));
+			if (command.command === "blob/stat") return void (await this.statBlob(state, id, command));
+			if (command.command === "agent/spawn") return void (await this.spawnAgent(state, id, command));
+			if (command.command === "agent/list") return void (await this.listAgents(state, id, command));
+			if (command.command === "agent/wait") return void (await this.waitAgent(state, id, command));
+			if (command.command === "agent/message") return void (await this.messageAgent(state, id, command));
+			if (command.command === "agent/followUp") return void (await this.followUpAgent(state, id, command));
+			if (command.command === "agent/interrupt") return void (await this.interruptAgent(state, id, command));
+			if (command.command === "plan/read") return void (await this.readPlan(state, id, command));
+			if (command.command === "plan/update") return void (await this.updatePlan(state, id, command));
+			if (command.command === "input/request/read") return void (await this.readInputRequest(state, id, command));
+			if (command.command === "input/request/respond")
+				return void (await this.respondInputRequest(state, id, command));
+			if (command.command === "input/request/cancel")
+				return void (await this.cancelInputRequest(state, id, command));
+			if (command.command === "session/detach") return void (await this.detach(state, id, command));
+			if (
+				command.command === "turn/start" ||
+				command.command === "turn/steer" ||
+				command.command === "turn/followUp" ||
+				command.command === "turn/abort" ||
+				command.command === "turn/resume" ||
+				command.command === "turn/rollback" ||
+				command.command === "goal/create" ||
+				command.command === "goal/update" ||
+				command.command === "goal/pause" ||
+				command.command === "goal/resume" ||
+				command.command === "session/model/set" ||
+				command.command === "session/thinking/set" ||
+				command.command === "session/name/set" ||
+				command.command === "session/name/generate" ||
+				command.command === "session/name/auto/set"
+			)
+				return void (await this.startTurn(state, id, command));
+			await this.sendError(
+				state,
+				id,
+				"not_implemented",
+				`Command ${command.command} is not implemented in the v2 seam`,
+			);
+		} catch (error) {
+			await this.sendError(state, id, "request_failed", error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	private async attach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("session/attach requires sessionId");
+		const runtime = await this.service.openSession(command.sessionId);
+		state.sessions.set(command.sessionId, runtime);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			session: toProtocolJsonValue(await this.snapshotForSession(command.sessionId, runtime)),
+		});
+	}
+
+	private async readSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("session/read requires sessionId");
+		const runtime = state.sessions.get(command.sessionId) ?? (await this.service.openSession(command.sessionId));
+		state.sessions.set(command.sessionId, runtime);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			session: toProtocolJsonValue(await this.snapshotForSession(command.sessionId, runtime)),
+		});
+	}
+
+	private async readGoal(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("goal/read requires sessionId");
+		const runtime = state.sessions.get(command.sessionId) ?? (await this.service.openSession(command.sessionId));
+		state.sessions.set(command.sessionId, runtime);
+		const snapshot = await runtime.snapshot();
+		await this.sendResponse(
+			state,
+			id,
+			snapshot.goal === undefined ? { command: command.command } : { command: command.command, goal: snapshot.goal },
+		);
+	}
+
+	private async startProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("process/start requires sessionId");
+		const payload = objectPayload(command);
+		if (typeof payload.command !== "string") throw new Error("process/start requires command");
+		const process = await this.processes.start({
+			sessionId: command.sessionId,
+			command: payload.command,
+			...(typeof payload.cwd === "string" ? { cwd: payload.cwd } : {}),
+			...(typeof payload.pty === "boolean" ? { pty: payload.pty } : {}),
+		});
+		await this.sendResponse(state, id, {
+			command: command.command,
+			process: process as unknown as Record<string, unknown>,
+		});
+	}
+
+	private async writeProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		const processId = processIdFrom(command, payload);
+		if (typeof payload.input !== "string") throw new Error("process/write requires input");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			output: await this.processes.write(processId, payload.input),
+		});
+	}
+
+	private async readProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		const processId = processIdFrom(command, payload);
+		const cursor = typeof payload.cursor === "number" ? payload.cursor : 0;
+		await this.sendResponse(state, id, {
+			command: command.command,
+			output: await this.processes.read(processId, cursor),
+		});
+	}
+
+	private async waitProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			process: await this.processes.wait(processIdFrom(command, payload)),
+		});
+	}
+
+	private async terminateProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			process: await this.processes.terminate(processIdFrom(command, payload)),
+		});
+	}
+
+	private async putBlob(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.data !== "string" || typeof payload.mimeType !== "string")
+			throw new Error("blob/put requires data and mimeType");
+		const encoding = payload.encoding === "base64" ? "base64" : payload.encoding === "utf8" ? "utf8" : undefined;
+		if (!encoding) throw new Error("blob/put encoding must be utf8 or base64");
+		const data = encoding === "base64" ? Buffer.from(payload.data, "base64") : Buffer.from(payload.data, "utf8");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			blob: await this.blobs.put(data, payload.mimeType),
+		});
+	}
+
+	private async readBlob(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.digest !== "string") throw new Error("blob/read requires digest");
+		const data = await this.blobs.read(payload.digest);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			digest: payload.digest,
+			encoding: "base64",
+			data: Buffer.from(data).toString("base64"),
+		});
+	}
+
+	private async statBlob(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.digest !== "string") throw new Error("blob/stat requires digest");
+		await this.sendResponse(state, id, { command: command.command, blob: await this.blobs.stat(payload.digest) });
+	}
+
+	private async spawnAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("agent/spawn requires sessionId");
+		const payload = objectPayload(command);
+		if (typeof payload.taskName !== "string" || typeof payload.taskMessage !== "string")
+			throw new Error("agent/spawn requires taskName and taskMessage");
+		const modelPayload =
+			typeof payload.model === "object" && payload.model !== null && !Array.isArray(payload.model)
+				? (payload.model as Record<string, unknown>)
+				: {};
+		const agent = await this.agents.spawn({
+			sessionId: command.sessionId,
+			parentPath: typeof payload.parentPath === "string" ? payload.parentPath : "/root",
+			taskName: payload.taskName,
+			taskMessage: payload.taskMessage,
+			...(typeof payload.role === "string" ? { role: payload.role } : {}),
+			model: {
+				provider: typeof modelPayload.provider === "string" ? modelPayload.provider : "inherit",
+				id: typeof modelPayload.id === "string" ? modelPayload.id : "inherit",
+			},
+		});
+		await this.sendResponse(state, id, { command: command.command, agent });
+	}
+
+	private async listAgents(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("agent/list requires sessionId");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			agents: await this.agents.list(command.sessionId),
+		});
+	}
+
+	private async waitAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		const agentId = agentIdFrom(command, payload);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			agent: await this.agents.wait(agentId, typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined),
+		});
+	}
+
+	private async messageAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		const agentId = agentIdFrom(command, payload);
+		if (typeof payload.message !== "string") throw new Error("agent/message requires message");
+		await this.agents.message(agentId, payload.message);
+		await this.sendResponse(state, id, { command: command.command, agentId });
+	}
+
+	private async followUpAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		const agentId = agentIdFrom(command, payload);
+		if (typeof payload.message !== "string") throw new Error("agent/followUp requires message");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			agent: await this.agents.followUp(agentId, payload.message),
+		});
+	}
+
+	private async interruptAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			agent: await this.agents.interrupt(agentIdFrom(command, payload)),
+		});
+	}
+
+	private async snapshotForSession(sessionId: string, runtime: PiSessionRuntimeV2): Promise<SessionSnapshotV2> {
+		const snapshot = await runtime.snapshot();
+		const agents = await this.agents.list(sessionId);
+		const plan = await this.plans.read(sessionId);
+		const pendingInputRequestId = await this.inputs.pendingForSession(sessionId);
+		return {
+			...snapshot,
+			...(agents.length === 0 ? {} : { agents: [...agents] }),
+			...(plan === undefined ? {} : { plan }),
+			queues: {
+				...snapshot.queues,
+				...(pendingInputRequestId === undefined ? {} : { pendingInputRequestId }),
+			},
+		};
+	}
+
+	private async readPlan(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
