@@ -406,6 +406,10 @@ export class PiServerV2 {
 		}
 		try {
 			if (!runtime) throw new Error("Session runtime is unavailable");
+			if (state.closed || state.connection.closed) {
+				if (!existing) await this.disposeRuntime(runtime);
+				return;
+			}
 			state.sessions.set(command.sessionId, runtime);
 			await this.sendResponse(state, id, {
 				command: command.command,
