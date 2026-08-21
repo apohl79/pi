@@ -1430,13 +1430,6 @@ export class AgentHarness implements AgentLane {
 			outcome: "aborted",
 		};
 		await this.durableSession.appendRecord(finished);
-		this.watchBus.emit({
-			type: "run_end",
-			lane: "main",
-			runId: openRun.id,
-			outcome: "aborted",
-			leafId: (await this.durableSession.getLeafId()) ?? "",
-		});
 		return ResultValue.ok({ runId: openRun.id, ...recalled });
 	}
 	async steer(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
@@ -1518,8 +1511,8 @@ export class AgentHarness implements AgentLane {
 				lane: "main",
 				usage: structuredClone(usage),
 				cause: "adjustment",
-				...(options?.entryId === undefined ? {} : { entryId: options.entryId }),
-				...(options?.details === undefined ? {} : { details: options.details }),
+				entryId: options?.entryId,
+				details: options?.details,
 			};
 			await this.durableSession.appendRecord(record);
 			return ResultValue.ok(undefined);
