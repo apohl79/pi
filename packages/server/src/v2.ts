@@ -20,7 +20,7 @@ import { InMemoryV2AgentRegistry, type V2AgentRegistry } from "./agents.ts";
 import { InMemoryV2AppRegistry, type V2AppRegistry } from "./apps.ts";
 import { InMemoryV2BlobStore, type V2BlobStore } from "./blobs.ts";
 import type { ByteConnection, ByteConnectionHandler } from "./connection.ts";
-import { type ForensicRecorder, InMemoryForensicRecorder } from "./diagnostics.ts";
+import { type ForensicRecorder, InMemoryForensicRecorder, verifyDiagnosticBundle } from "./diagnostics.ts";
 import { LocalV2FileReferenceService, type V2FileReferenceService } from "./files.ts";
 import { BlobV2ImageService, type V2ImageService } from "./images.ts";
 import { InMemoryV2InputRegistry, type V2InputRegistry } from "./inputs.ts";
@@ -882,20 +882,12 @@ export class PiServerV2 {
 		const payload = objectPayload(command);
 		const bundle = payload.bundle;
 		if (typeof bundle === "object" && bundle !== null && !Array.isArray(bundle)) {
-			const candidate = bundle as Record<string, unknown>;
-			const events = candidate.events;
-			const manifest = candidate.manifest;
-			if (!Array.isArray(events) || typeof manifest !== "object" || manifest === null || Array.isArray(manifest))
-				throw new Error("diagnostics/verify bundle requires events and manifest");
-			const fields = manifest as Record<string, unknown>;
-			const serializedEvents = JSON.stringify(events);
-			const digest = createHash("sha256").update(serializedEvents).digest("hex");
-			const valid =
-				fields.schemaVersion === 1 && fields.eventCount === events.length && fields.eventsSha256 === digest;
+			const verification = verifyDiagnosticBundle(bundle);
+			if (verification.reason === "diagnostics/verify bundle requires events and manifest")
+				throw new Error(verification.reason);
 			await this.sendResponse(state, id, {
 				command: command.command,
-				valid,
-				...(valid ? {} : { reason: "Diagnostic bundle manifest does not match its events" }),
+				...verification,
 			});
 			return;
 		}
