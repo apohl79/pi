@@ -145,3 +145,63 @@ test("shares concurrent start calls", async () => {
 	await first;
 	await server.close();
 });
+
+test("does not open a session absent from the handshake snapshot", async () => {
+	const openSession = vi.fn(async () => {
+		throw new Error("must not open arbitrary session");
+	});
+	const server = new PiServerV2({ ...service, openSession }, { listeners: [] });
+	const connection = new RecordingConnection();
+	const handler = server.accept(connection);
+	handler.onData(encodeClientMessageV2({ type: "hello", version: PROTOCOL_V2_VERSION }));
+	await vi.waitFor(() => expect(connection.chunks).toHaveLength(1));
+	handler.onData(
+		encodeClientMessageV2({
+			type: "request",
+			id: "read-private",
+			request: { command: "session/read", sessionId: "private" },
+		}),
+	);
+	await vi.waitFor(() => expect(connection.chunks).toHaveLength(2));
+	expect(openSession).not.toHaveBeenCalled();
+	await server.close();
+});
+
+test("close waits for an in-flight start before closing listeners", async () => {
+	let resolveStart: (() => void) | undefined;
+	let closed = false;
+	const listener = {
+		start: () =>
+			new Promise<void>((resolve) => {
+				resolveStart = resolve;
+			}),
+		close: async () => {
+			closed = true;
+		},
+	};
+	const server = new PiServerV2(service, { listeners: [listener] });
+	const started = server.start();
+	const closing = server.close();
+	await Promise.resolve();
+	expect(closed).toBe(false);
+	resolveStart?.();
+	await closing;
+	expect(closed).toBe(true);
+	await started;
+});
+
+test("connection errors still disconnect when close rejects", async () => {
+	const server = new PiServerV2(service, { listeners: [] });
+	const connection: ByteConnection = {
+		closed: false,
+		send: async () => {},
+		close: async () => {
+			throw new Error("close failed");
+		},
+	};
+	const handler = server.accept(connection);
+	const error = new Error("transport failed");
+	handler.onError(error);
+	await vi.waitFor(() => expect((server as unknown as { connections: Set<unknown> }).connections.size).toBe(0));
+	await server.close();
+});
