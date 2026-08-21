@@ -1,9 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { type AgentSummary, InMemoryV2AgentRegistry } from "../src/agents.ts";
+import { type AgentSummary, type V2AgentRegistry, InMemoryV2AgentRegistry } from "../src/agents.ts";
 
 describe("InMemoryV2AgentRegistry", () => {
 	test("maintains stable child paths and explicit lifecycle transitions", async () => {
 		const registry = new InMemoryV2AgentRegistry({ maxDepth: 1, maxActive: 2 });
+		const typedRegistry: V2AgentRegistry = registry;
 		const child = await registry.spawn({
 			sessionId: "session-1",
 			parentPath: "/root",
@@ -14,8 +15,9 @@ describe("InMemoryV2AgentRegistry", () => {
 
 		expect(child).toMatchObject({ path: "/root/research", state: "running", taskName: "research" });
 		expect(await registry.list("session-1")).toEqual([child]);
-		await registry.interrupt(child.id);
-		expect(await registry.wait(child.id)).toMatchObject({ id: child.id, state: "interrupted" });
+		await typedRegistry.interrupt(child.id);
+		await typedRegistry.complete(child.id);
+		expect(await typedRegistry.wait(child.id)).toMatchObject({ id: child.id, state: "complete" });
 		await expect(
 			registry.spawn({
 				sessionId: "session-1",
@@ -27,7 +29,7 @@ describe("InMemoryV2AgentRegistry", () => {
 		).rejects.toThrow("maximum depth");
 	});
 
-	test("queues messages without starting idle children and follow-up starts them", async () => {
+	test("rejects direct messages to terminal children while follow-up starts them", async () => {
 		const registry = new InMemoryV2AgentRegistry();
 		const child = await registry.spawn({
 			sessionId: "session-1",
@@ -37,7 +39,7 @@ describe("InMemoryV2AgentRegistry", () => {
 			model: { provider: "test", id: "small" },
 		});
 		await registry.complete(child.id);
-		await registry.message(child.id, "review output");
+		await expect(registry.message(child.id, "review output")).rejects.toThrow("terminal agent");
 		expect(await registry.wait(child.id)).toMatchObject({ state: "complete" });
 		await registry.followUp(child.id, "fix failures");
 		expect(await registry.list("session-1")).toContainEqual(
@@ -110,6 +112,43 @@ describe("InMemoryV2AgentRegistry", () => {
 		);
 	});
 
+	test("cleans up oldest terminal agents before enforcing total retention", async () => {
+		const registry = new InMemoryV2AgentRegistry({ maxTotalAgents: 2 });
+		const first = await registry.spawn({
+			sessionId: "session-1",
+			parentPath: "/root",
+			taskName: "first",
+			taskMessage: "start",
+			model: { provider: "test", id: "small" },
+		});
+		await registry.complete(first.id);
+		const second = await registry.spawn({
+			sessionId: "session-1",
+			parentPath: "/root",
+			taskName: "second",
+			taskMessage: "start",
+			model: { provider: "test", id: "small" },
+		});
+		const third = await registry.spawn({
+			sessionId: "session-1",
+			parentPath: "/root",
+			taskName: "third",
+			taskMessage: "start",
+			model: { provider: "test", id: "small" },
+		});
+
+		expect(await registry.list("session-1")).toEqual([second, third]);
+		await expect(
+			registry.spawn({
+				sessionId: "session-1",
+				parentPath: "/root",
+				taskName: "fourth",
+				taskMessage: "start",
+				model: { provider: "test", id: "small" },
+			}),
+		).rejects.toThrow("total limit");
+	});
+
 	test.each([
 		["maxDepth", -1],
 		["maxDepth", Number.NaN],
@@ -119,6 +158,8 @@ describe("InMemoryV2AgentRegistry", () => {
 		["maxMessages", 1.5],
 		["maxMessageLength", 0],
 		["maxMessageLength", Number.NaN],
+		["maxTotalAgents", 0],
+		["maxTotalAgents", Number.POSITIVE_INFINITY],
 	] as const)("rejects invalid %s limit (%s)", (name, value) => {
 		expect(() => new InMemoryV2AgentRegistry({ [name]: value })).toThrow(name);
 	});
