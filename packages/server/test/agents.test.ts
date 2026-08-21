@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { InMemoryV2AgentRegistry, type AgentSummary } from "../src/agents.ts";
+import { type AgentSummary, InMemoryV2AgentRegistry } from "../src/agents.ts";
 
 describe("InMemoryV2AgentRegistry", () => {
 	test("maintains stable child paths and explicit lifecycle transitions", async () => {
@@ -40,7 +40,9 @@ describe("InMemoryV2AgentRegistry", () => {
 		await registry.message(child.id, "review output");
 		expect(await registry.wait(child.id)).toMatchObject({ state: "complete" });
 		await registry.followUp(child.id, "fix failures");
-		expect(await registry.wait(child.id)).toMatchObject({ state: "running" });
+		expect(await registry.list("session-1")).toContainEqual(
+			expect.objectContaining({ id: child.id, state: "running" }),
+		);
 	});
 
 	test("waits for completion, preserves role, and scopes paths to a session", async () => {
@@ -54,7 +56,7 @@ describe("InMemoryV2AgentRegistry", () => {
 			model: { provider: "test", id: "small" },
 		});
 		const pending = registry.wait(first.id, 20);
-		await new Promise((resolve) => setTimeout(resolve, 5));
+		await Promise.resolve();
 		await registry.complete(first.id);
 		expect(await pending).toMatchObject({ state: "complete", role: "worker" });
 		const other = await registry.spawn({
@@ -81,5 +83,43 @@ describe("InMemoryV2AgentRegistry", () => {
 		const internal = registry as unknown as { agents: Map<string, { state: AgentSummary["state"] }> };
 		internal.agents.get(child.id)!.state = "awaitingInput";
 		expect(await registry.followUp(child.id, "next")).toMatchObject({ state: "running" });
+	});
+
+	test("enforces the active limit when follow-up resumes an agent", async () => {
+		const registry = new InMemoryV2AgentRegistry({ maxActive: 1 });
+		const first = await registry.spawn({
+			sessionId: "session-1",
+			parentPath: "/root",
+			taskName: "first",
+			taskMessage: "start",
+			model: { provider: "test", id: "small" },
+		});
+		await registry.complete(first.id);
+		const second = await registry.spawn({
+			sessionId: "session-1",
+			parentPath: "/root",
+			taskName: "second",
+			taskMessage: "start",
+			model: { provider: "test", id: "small" },
+		});
+
+		await expect(registry.followUp(first.id, "resume")).rejects.toThrow("active limit");
+		expect(await registry.wait(first.id)).toMatchObject({ state: "complete" });
+		expect(await registry.list("session-1")).toContainEqual(
+			expect.objectContaining({ id: second.id, state: "running" }),
+		);
+	});
+
+	test.each([
+		["maxDepth", -1],
+		["maxDepth", Number.NaN],
+		["maxActive", -1],
+		["maxActive", Number.POSITIVE_INFINITY],
+		["maxMessages", 0],
+		["maxMessages", 1.5],
+		["maxMessageLength", 0],
+		["maxMessageLength", Number.NaN],
+	] as const)("rejects invalid %s limit (%s)", (name, value) => {
+		expect(() => new InMemoryV2AgentRegistry({ [name]: value })).toThrow(name);
 	});
 });
