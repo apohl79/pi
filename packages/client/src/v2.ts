@@ -46,6 +46,7 @@ export class PiClientV2 {
 	private connectedValue = false;
 	private disposed = false;
 	private requestSequence = 0;
+	private lastEventCursorValue?: EventCursor;
 	private handshake?: { resolve: (snapshot: ServerSnapshotV2) => void; reject: (error: Error) => void };
 
 	constructor(options: PiClientV2Options) {
@@ -57,9 +58,14 @@ export class PiClientV2 {
 		return this.connectedValue;
 	}
 
+	get lastEventCursor(): EventCursor | undefined {
+		return this.lastEventCursorValue === undefined ? undefined : { ...this.lastEventCursorValue };
+	}
+
 	async connect(lastEvent?: EventCursor): Promise<ServerSnapshotV2> {
 		if (this.disposed) throw new Error("PiClientV2 is disposed");
 		if (this.connectedValue || this.handshake) throw new Error("PiClientV2 is already connecting or connected");
+		const effectiveLastEvent = lastEvent ?? this.lastEventCursorValue;
 		this.decoder = new FrameDecoder({ maxFrameLength: this.options.maxFrameLength ?? DEFAULT_MAX_FRAME_LENGTH });
 		const snapshot = new Promise<ServerSnapshotV2>((resolve, reject) => {
 			this.handshake = { resolve, reject };
@@ -74,7 +80,7 @@ export class PiClientV2 {
 			await this.send({
 				type: "hello",
 				version: PROTOCOL_V2_VERSION,
-				...(lastEvent === undefined ? {} : { lastEvent }),
+				...(effectiveLastEvent === undefined ? {} : { lastEvent: effectiveLastEvent }),
 			});
 			return await snapshot;
 		} catch (error) {
@@ -161,6 +167,7 @@ export class PiClientV2 {
 			return;
 		}
 		if (message.type === "event") {
+			this.lastEventCursorValue = { sessionId: message.sessionId, eventSeq: message.seq };
 			for (const listener of this.listeners) listener(message);
 			return;
 		}
