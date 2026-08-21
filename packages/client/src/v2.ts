@@ -149,22 +149,17 @@ export class PiClientV2 {
 	}
 
 	async listSessions(): Promise<readonly SessionMetadataV2[]> {
-		const result = commandResult(await this.request({ command: "session/list" }));
+		const result = this.result(await this.request({ command: "session/list" }));
 		if (!Array.isArray(result.sessions)) throw new Error("Invalid session/list result");
 		return result.sessions as SessionMetadataV2[];
 	}
 
 	async attachSession(sessionId: string, mode: "control" | "observer" = "control"): Promise<void> {
-		commandResult(await this.request({ command: "session/attach", sessionId, payload: { mode } }));
-	}
-
-	async openSession(sessionId: string, mode: V2SessionLeaseMode = "control"): Promise<PiSessionV2Handle> {
-		await this.attachSession(sessionId, mode);
-		return new SessionHandle(this, sessionId, mode);
+		this.result(await this.request({ command: "session/attach", sessionId, payload: { mode } }));
 	}
 
 	async readSession(sessionId: string): Promise<SessionSnapshotV2> {
-		const result = commandResult(await this.request({ command: "session/read", sessionId }));
+		const result = this.result(await this.request({ command: "session/read", sessionId }));
 		if (typeof result.session !== "object" || result.session === null) throw new Error("Invalid session/read result");
 		return result.session as SessionSnapshotV2;
 	}
@@ -172,6 +167,14 @@ export class PiClientV2 {
 	private async send(message: ClientMessageV2): Promise<void> {
 		if (!this.transport) throw new Error("PiClientV2 has no transport");
 		await this.transport.send(encodeClientMessageV2(message, { maxFrameLength: this.options.maxFrameLength }));
+	}
+
+	private result(response: ResponseEnvelopeV2): Record<string, unknown> {
+		if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
+		if (!("result" in response) || typeof response.result !== "object" || response.result === null) {
+			throw new Error("Expected a command result");
+		}
+		return response.result as Record<string, unknown>;
 	}
 
 	private receive(chunk: Uint8Array): void {
