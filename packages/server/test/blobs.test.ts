@@ -39,7 +39,25 @@ describe("FileV2BlobStore", () => {
 		await expect(store.read(metadata.digest)).rejects.toThrow("digest mismatch");
 		await writeFile(join(root, `${metadata.digest}.blob`), "tampered");
 		await expect(store.stat(metadata.digest)).rejects.toThrow("size mismatch");
+		await writeFile(join(root, `${metadata.digest}.blob`), new Uint8Array(33));
+		await expect(store.stat(metadata.digest)).rejects.toThrow("maximum size");
 		await expect(store.put(new Uint8Array([1]), "text/\u007fplain")).rejects.toThrow("MIME");
+	});
+
+	test("enforces total byte and blob count quotas", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-blobs-"));
+		const store = new FileV2BlobStore(root, { maxBytes: 4, maxTotalBytes: 5, maxBlobCount: 1 });
+		await store.put(new Uint8Array([1, 2, 3]), "application/octet-stream");
+		await expect(store.put(new Uint8Array([4]), "application/octet-stream")).rejects.toThrow("count");
+		expect(() => new FileV2BlobStore(root, { maxBytes: 4, maxTotalBytes: 3 })).toThrow();
+
+		const byteStore = new FileV2BlobStore(await mkdtemp(join(tmpdir(), "pi-blobs-")), {
+			maxBytes: 3,
+			maxTotalBytes: 3,
+			maxBlobCount: 4,
+		});
+		await byteStore.put(new Uint8Array([1, 2]), "application/octet-stream");
+		await expect(byteStore.put(new Uint8Array([3, 4]), "application/octet-stream")).rejects.toThrow("store");
 	});
 
 	test("publishes complete metadata under concurrent writes", async () => {
