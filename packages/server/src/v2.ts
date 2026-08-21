@@ -22,7 +22,7 @@ import { InMemoryV2AgentRegistry, type V2AgentRegistry } from "./agents.ts";
 import { InMemoryV2AppRegistry, type V2AppRegistry } from "./apps.ts";
 import { InMemoryV2BlobStore, type V2BlobStore } from "./blobs.ts";
 import type { ByteConnection, ByteConnectionHandler } from "./connection.ts";
-import type { ForensicRecorder } from "./diagnostics.ts";
+import { type ForensicRecorder, InMemoryForensicRecorder } from "./diagnostics.ts";
 import { LocalV2FileReferenceService, type V2FileReferenceService } from "./files.ts";
 import { BlobV2ImageService, type V2ImageService } from "./images.ts";
 import { InMemoryV2InputRegistry, type V2InputRegistry } from "./inputs.ts";
@@ -896,7 +896,7 @@ export class PiServerV2 {
 		const events = await this.diagnosticEvents();
 		await this.sendResponse(state, id, {
 			command: command.command,
-			capture: this.diagnostics ? "metadata" : "unavailable",
+			capture: "metadata",
 			degraded: false,
 			lastCriticalEventSeq: events.at(-1)?.seq ?? 0,
 			eventCount: events.length,
@@ -938,9 +938,9 @@ export class PiServerV2 {
 		const sequenceOk = events.every((event, index) => index === 0 || event.seq === events[index - 1]!.seq + 1);
 		await this.sendResponse(state, id, {
 			command: command.command,
-			ok: this.diagnostics !== undefined && sequenceOk,
+			ok: sequenceOk,
 			checks: [
-				{ name: "recorder", ok: this.diagnostics !== undefined },
+				{ name: "recorder", ok: true },
 				{ name: "sequence", ok: sequenceOk },
 			],
 		});
@@ -1067,7 +1067,7 @@ export class PiServerV2 {
 	}
 
 	private async diagnosticEvents(afterSeq = 0): Promise<Awaited<ReturnType<ForensicRecorder["read"]>>> {
-		return this.diagnostics ? this.diagnostics.read(afterSeq) : [];
+		return this.diagnostics.read(afterSeq);
 	}
 
 	private async detach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
