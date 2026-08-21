@@ -15,6 +15,8 @@ import {
 	type ServerSnapshotV2,
 	type SessionMetadataV2,
 	type SessionSnapshotV2,
+	MAX_V2_ARRAY_ITEMS,
+	MAX_V2_STRING_LENGTH,
 } from "@earendil-works/pi-protocol";
 import { InMemoryV2AgentRegistry, type V2AgentRegistry } from "./agents.ts";
 import { InMemoryV2BlobStore, type V2BlobStore } from "./blobs.ts";
@@ -637,8 +639,20 @@ export class PiServerV2 {
 		if (!command.sessionId) throw new Error("plan/update requires sessionId");
 		this.requireAttached(state, command.sessionId);
 		const payload = objectPayload(command);
-		if (!Array.isArray(payload.items)) throw new Error("plan/update requires items");
-		const items = payload.items as Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
+		if (!Array.isArray(payload.items) || payload.items.length === 0 || payload.items.length > MAX_V2_ARRAY_ITEMS)
+			throw new Error("plan/update requires one to 10000 items");
+		const items = payload.items.map((item) => {
+			if (typeof item !== "object" || item === null || Array.isArray(item))
+				throw new Error("plan/update items must be objects");
+			const candidate = item as Record<string, unknown>;
+			if (typeof candidate.step !== "string" || candidate.step.trim().length === 0 || candidate.step.length > MAX_V2_STRING_LENGTH)
+				throw new Error("plan/update item step must be a non-empty string");
+			if (candidate.status !== "pending" && candidate.status !== "in_progress" && candidate.status !== "completed")
+				throw new Error("plan/update item status is invalid");
+			return { step: candidate.step, status: candidate.status };
+		});
+		if (payload.version !== undefined && (!Number.isSafeInteger(payload.version) || payload.version < 1))
+			throw new Error("plan/update version must be a positive safe integer");
 		const plan = await this.plans.update(command.sessionId, {
 			items,
 			...(typeof payload.version === "number" ? { version: payload.version } : {}),
@@ -749,59 +763,36 @@ export class PiServerV2 {
 	): Promise<void> {
 		try {
 			await runtime.run(operationId, command);
-			const record = this.operations.get(operationId);
-			if (record) {
-				const updated = { ...record, state: "complete" as const };
-				this.operations.set(operationId, updated);
-				await this.operationStore.putOperation(updated);
-			}
-			await this.broadcastEvent(
-				sessionId,
-				runtime,
-				{ state: "complete", snapshot: toProtocolJsonValue(await runtime.snapshot()) },
-				operationId,
-				"operation_terminal",
-			);
-			const completed = this.operations.get(operationId);
-			if (completed) {
-				const updated = { ...completed, terminalSeq: (await runtime.snapshot()).eventSeq };
-				this.operations.set(operationId, updated);
-				await this.operationStore.putOperation(updated);
-			}
-			await this.recordDiagnostic({
-				kind: "operation_terminal",
-				sessionId,
-				operationId,
-				payload: { state: "complete" },
-			});
+			await this.finalizeOperation(runtime, sessionId, operationId, "complete");
 		} catch (error) {
-			const message = safeOperationError(error);
-			const record = this.operations.get(operationId);
-			if (record) {
-				const updated = { ...record, state: "failed" as const, error: message };
-				this.operations.set(operationId, updated);
-				await this.operationStore.putOperation(updated);
-			}
-			await this.broadcastEvent(
-				sessionId,
-				runtime,
-				{ state: "failed", error: message },
-				operationId,
-				"operation_terminal",
-			);
-			const failed = this.operations.get(operationId);
-			if (failed) {
-				const updated = { ...failed, terminalSeq: (await runtime.snapshot()).eventSeq };
-				this.operations.set(failed.operationId, updated);
-				await this.operationStore.putOperation(updated);
-			}
-			await this.recordDiagnostic({
-				kind: "operation_terminal",
-				sessionId,
-				operationId,
-				payload: { state: "failed", error: message },
-			});
+			await this.finalizeOperation(runtime, sessionId, operationId, "failed", safeOperationError(error));
 		}
+	}
+
+	private async finalizeOperation(runtime: PiSessionRuntimeV2, sessionId: string, operationId: string, state: "complete" | "failed", error?: string): Promise<void> {
+		const record = this.operations.get(operationId);
+		if (!record) return;
+		const terminal = { ...record, state, ...(error === undefined ? {} : { error }) };
+		this.operations.set(operationId, terminal);
+		await this.tryOperationEffect(() => this.operationStore.putOperation(terminal));
+		let snapshot: SessionSnapshotV2 | undefined;
+		try { snapshot = await runtime.snapshot(); } catch (cause) { this.reportError(cause instanceof Error ? cause : new Error(String(cause))); }
+		try {
+			await this.broadcastEvent(sessionId, runtime, { state, ...(error === undefined ? {} : { error }), ...(snapshot === undefined ? {} : { snapshot: toProtocolJsonValue(snapshot) }) }, operationId, "operation_terminal");
+		} catch (cause) { this.reportError(cause instanceof Error ? cause : new Error(String(cause))); }
+		if (snapshot !== undefined) {
+			const current = this.operations.get(operationId);
+			if (current) {
+				const withCursor = { ...current, terminalSeq: snapshot.eventSeq };
+				this.operations.set(operationId, withCursor);
+				await this.tryOperationEffect(() => this.operationStore.putOperation(withCursor));
+			}
+		}
+		await this.recordDiagnostic({ kind: "operation_terminal", sessionId, operationId, payload: { state, ...(error === undefined ? {} : { error }) } });
+	}
+
+	private async tryOperationEffect(effect: () => Promise<void>): Promise<void> {
+		try { await effect(); } catch (cause) { this.reportError(cause instanceof Error ? cause : new Error(String(cause))); }
 	}
 
 	private async readOperation(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
