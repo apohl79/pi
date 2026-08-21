@@ -155,7 +155,6 @@ export class PiServerV2 {
 	private readonly plugins: V2PluginRegistry;
 	private readonly usage: V2UsageLedger;
 	private readonly connections = new Set<V2ConnectionState>();
-	private readonly controls = new Map<string, string>();
 	private readonly runtimes = new Set<PiSessionRuntimeV2>();
 	private readonly eventHistory = new Map<string, EventEnvelopeV2[]>();
 	/** Serializes event reservation per session so concurrent broadcasts cannot reuse cursors. */
@@ -282,36 +281,11 @@ export class PiServerV2 {
 	async close(): Promise<void> {
 		if (this.closePromise) return this.closePromise;
 		this.closing = true;
-		this.closePromise = (async () => {
-			try {
-				await this.startPromise?.catch(() => undefined);
-				const listenerResults = await Promise.allSettled(this.listeners.map((listener) => listener.close()));
-				for (const result of listenerResults)
-					if (result.status === "rejected")
-						this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
-				const connectionResults = await Promise.allSettled(
-					Array.from(this.connections, (state) => this.closeConnection(state, undefined, true)),
-				);
-				for (const result of connectionResults)
-					if (result.status === "rejected")
-						this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
-				await this.disposeActiveOperationRuntimes();
-				const runtimeResults = await Promise.allSettled(Array.from(this.runtimes, (runtime) => this.disposeRuntime(runtime)));
-				for (const result of runtimeResults)
-					if (result.status === "rejected")
-						this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
-				this.runtimes.clear();
-				if (this.ownsAgents) {
-					const agentResult = await Promise.allSettled([this.agents.dispose?.()]);
-					for (const result of agentResult)
-						if (result.status === "rejected")
-							this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
-				}
-			} finally {
-				this.started = false;
-			}
-		})();
-		return this.closePromise;
+		await Promise.all(this.listeners.map((listener) => listener.close()));
+		await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state)));
+		await Promise.all(Array.from(this.runtimes, (runtime) => this.disposeRuntime(runtime)));
+		this.runtimes.clear();
+		this.started = false;
 	}
 
 	private createConnectionState(connection: ByteConnection): V2ConnectionState {
@@ -498,6 +472,7 @@ export class PiServerV2 {
 		}
 		const created = await this.service.createSession(payload);
 		if (state.sessions.has(created.sessionId)) throw new Error(`Session ${created.sessionId} is already attached`);
+		this.trackRuntime(created.runtime);
 		state.sessions.set(created.sessionId, created.runtime);
 		await this.sendResponse(state, id, {
 			command: command.command,
@@ -517,76 +492,21 @@ export class PiServerV2 {
 
 	private async attach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("session/attach requires sessionId");
-		const payload = objectPayload(command);
-		const mode = payload.mode === undefined ? "control" : payload.mode;
-		if (mode !== "control" && mode !== "observer") throw new Error("session/attach mode must be control or observer");
-		let runtime: PiSessionRuntimeV2 | undefined;
-		let existing: PiSessionRuntimeV2 | undefined;
-		let claimedControl = false;
-		try {
-			this.requireVisibleSession(state, command.sessionId);
-			if (this.deletingSessions.has(command.sessionId) || this.deletedSessions.has(command.sessionId)) throw new Error("Session is unavailable");
-			existing = state.sessions.get(command.sessionId);
-			runtime = existing;
-			if (!runtime) {
-				let opening = state.attachingSessions.get(command.sessionId);
-				if (!opening) {
-					opening = this.service.openSession(command.sessionId);
-					state.attachingSessions.set(command.sessionId, opening);
-					void opening.finally(() => state.attachingSessions.delete(command.sessionId)).catch(() => undefined);
-				}
-				runtime = await opening;
-			}
-			if (!runtime) throw new Error("Session runtime is unavailable");
-			this.trackRuntime(runtime);
-			if (mode === "control") { this.claimControl(state, command.sessionId); claimedControl = true; }
-			if (this.deletingSessions.has(command.sessionId) || this.deletedSessions.has(command.sessionId)) throw new Error("Session is unavailable");
-			this.retainAttach(state, command.sessionId, runtime);
-			if (state.closed || state.connection.closed) return;
-			state.sessions.set(command.sessionId, runtime);
-			const isCurrentAttachment = (): boolean =>
-				!state.closed &&
-				!state.connection.closed &&
-				state.sessions.get(command.sessionId) === runtime;
-			const snapshot = await this.snapshotForSession(command.sessionId, runtime);
-			if (!isCurrentAttachment()) throw new PiServerError("invalid_request", "Session attachment was released");
-			await this.sendResponse(state, id, {
-				command: command.command,
-				lease: mode,
-				session: toProtocolJsonValue(snapshot),
-			});
-			// Detach may run while the transport send is pending. Do not restore
-			// the map entry or otherwise claim the session after that detach.
-			if (!isCurrentAttachment()) return;
-			// The connection now has a committed attachment. A concurrent attach
-			// request must not let its failure remove this shared runtime reference.
-			state.attachedSessions.add(command.sessionId);
-			if (mode === "observer") this.releaseControlFor(state, command.sessionId);
-		} catch (error) {
-			if (claimedControl && !state.attachedSessions.has(command.sessionId)) {
-				this.releaseControlFor(state, command.sessionId);
-				state.controlSessions.delete(command.sessionId);
-			}
-			if (
-				runtime !== undefined &&
-				existing === undefined &&
-				state.sessions.get(command.sessionId) === runtime &&
-				!state.attachedSessions.has(command.sessionId) &&
-				!this.hasOtherPendingAttach(state, command.sessionId)
-			) {
-				state.sessions.delete(command.sessionId);
-			}
-			throw error;
-		} finally {
-			if (runtime !== undefined) await this.releaseAttach(state, command.sessionId, runtime);
-		}
+		const runtime = await this.service.openSession(command.sessionId);
+		this.trackRuntime(runtime);
+		state.sessions.set(command.sessionId, runtime);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			session: toProtocolJsonValue(await this.snapshotForSession(command.sessionId, runtime)),
+		});
 	}
 
 	private async readSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("session/read requires sessionId");
-		const runtime = this.requireAttached(state, command.sessionId);
+		const runtime = state.sessions.get(command.sessionId) ?? (await this.service.openSession(command.sessionId));
 		this.trackRuntime(runtime);
-		await this.sendBoundedPluginResponse(state, id, {
+		state.sessions.set(command.sessionId, runtime);
+		await this.sendResponse(state, id, {
 			command: command.command,
 			session: toProtocolJsonValue(await this.snapshotForSession(command.sessionId, runtime)),
 		});
@@ -594,8 +514,9 @@ export class PiServerV2 {
 
 	private async readGoal(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("goal/read requires sessionId");
-		const runtime = this.requireAttached(state, command.sessionId);
+		const runtime = state.sessions.get(command.sessionId) ?? (await this.service.openSession(command.sessionId));
 		this.trackRuntime(runtime);
+		state.sessions.set(command.sessionId, runtime);
 		const snapshot = await runtime.snapshot();
 		await this.sendResponse(
 			state,
@@ -1529,73 +1450,6 @@ export class PiServerV2 {
 		return Array.from(this.connections).some((connection) =>
 			Array.from(connection.sessions.values()).some((candidate) => candidate === runtime),
 		);
-	}
-
-	private retainOperation(runtime: PiSessionRuntimeV2, sessionId: string): void {
-		this.activeOperations.set(runtime, (this.activeOperations.get(runtime) ?? 0) + 1);
-		this.activeOperationSessions.set(sessionId, (this.activeOperationSessions.get(sessionId) ?? 0) + 1);
-	}
-
-	private releaseOperation(runtime: PiSessionRuntimeV2, sessionId: string): void {
-		const count = this.activeOperations.get(runtime);
-		if (count === undefined || count <= 1) this.activeOperations.delete(runtime);
-		else this.activeOperations.set(runtime, count - 1);
-		const sessionCount = this.activeOperationSessions.get(sessionId) ?? 0;
-		if (sessionCount <= 1) this.activeOperationSessions.delete(sessionId);
-		else this.activeOperationSessions.set(sessionId, sessionCount - 1);
-	}
-
-	private hasActiveOperation(runtime: PiSessionRuntimeV2): boolean {
-		return (this.activeOperations.get(runtime) ?? 0) > 0;
-	}
-
-	private hasActiveOperationForSession(sessionId: string): boolean {
-		return (this.activeOperationSessions.get(sessionId) ?? 0) > 0;
-	}
-
-	private retainAttach(state: V2ConnectionState, sessionId: string, runtime: PiSessionRuntimeV2): void {
-		this.pendingAttaches.set(runtime, (this.pendingAttaches.get(runtime) ?? 0) + 1);
-		state.pendingAttachCounts.set(sessionId, (state.pendingAttachCounts.get(sessionId) ?? 0) + 1);
-	}
-
-	private async releaseAttach(state: V2ConnectionState, sessionId: string, runtime: PiSessionRuntimeV2): Promise<void> {
-		const sessionCount = state.pendingAttachCounts.get(sessionId);
-		if (sessionCount === undefined || sessionCount <= 1) state.pendingAttachCounts.delete(sessionId);
-		else state.pendingAttachCounts.set(sessionId, sessionCount - 1);
-		const count = this.pendingAttaches.get(runtime);
-		if (count === undefined) return;
-		if (count <= 1) this.pendingAttaches.delete(runtime);
-		else this.pendingAttaches.set(runtime, count - 1);
-		// A concurrent attach may have observed the runtime after another
-		// request installed it in the connection map, while every attach
-		// request ultimately failed before committing ownership. Remove that
-		// provisional map entry when the final pending lease is released so a
-		// disposed runtime can never remain addressable on this connection.
-		if (
-			!this.hasPendingAttach(runtime) &&
-			!state.attachedSessions.has(sessionId) &&
-			state.sessions.get(sessionId) === runtime
-		) {
-			state.sessions.delete(sessionId);
-		}
-		if (this.hasRuntimeReference(runtime) || this.hasActiveOperation(runtime) || this.hasPendingAttach(runtime)) return;
-		try {
-			await this.disposeRuntime(runtime);
-		} catch (error) {
-			this.reportError(error instanceof Error ? error : new Error(String(error)));
-		}
-	}
-
-	private hasPendingAttach(runtime: PiSessionRuntimeV2): boolean {
-		return (this.pendingAttaches.get(runtime) ?? 0) > 0;
-	}
-
-	private hasPendingAttachSession(sessionId: string): boolean {
-		return Array.from(this.connections).some((connection) => (connection.pendingAttachCounts.get(sessionId) ?? 0) > 0);
-	}
-
-	private hasOtherPendingAttach(state: V2ConnectionState, sessionId: string): boolean {
-		return (state.pendingAttachCounts.get(sessionId) ?? 0) > 1;
 	}
 
 	private trackRuntime(runtime: PiSessionRuntimeV2): void {
