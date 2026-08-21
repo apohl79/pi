@@ -75,6 +75,25 @@ function modelMetadata(model: Model<string>): ModelMetadata {
 
 type PromptPart = { type: "text"; text: string } | ImageContent;
 
+export function normalizeGeneratedName(value: string): string | undefined {
+	const cleaned = value
+		.replace(/[\u0000-\u001f\u007f]/g, " ")
+		.replace(/^(?:title|session\s+name)\s*[:-]\s*/i, "")
+		.replace(/^here(?:'s| is)\s+(?:a|the)?\s*(?:title|session\s+name)\s*[:-]?\s*/i, "")
+		.replace(/\s+/g, " ")
+		.replace(/^['"`]+|['"`]+$/g, "")
+		.trim();
+	if (/^(?:answer|sure|okay|ok|here you go)\b[.!]?$/i.test(cleaned)) return undefined;
+	if (/(?:sk|pk|api[_-]?key|bearer)\s*[:=]\s*\S+/i.test(cleaned)) return undefined;
+	const words = cleaned.split(" ").filter(Boolean).slice(0, 7);
+	if (words.length < 2) return undefined;
+	const joined = words.join(" ");
+	let name = joined.slice(0, 32);
+	if (joined.length > 32) name = name.replace(/\s+\S*$/, "").trimEnd();
+	if (name.split(" ").length < 2) return undefined;
+	return name;
+}
+
 function commandInput(command: CommandV2): AgentMessage {
 	const payload = command.payload;
 	if (typeof payload !== "object" || payload === null || Array.isArray(payload))
@@ -211,6 +230,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const entries = await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" });
 		const transcript = entries
 			.filter((entry): entry is Extract<typeof entry, { type: "message" }> => entry.type === "message")
+			.slice(-48)
 			.map((entry) => {
 				if (!("content" in entry.message) || !Array.isArray(entry.message.content)) return undefined;
 				const text = entry.message.content
@@ -228,7 +248,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			})
 			.filter((line): line is string => line !== undefined)
 			.join("\n")
-			.slice(-4000);
+			.slice(-6000);
 		if (transcript.length === 0) return;
 		const response = await this.models.completeSimple(this.fastModel, {
 			messages: [
@@ -239,15 +259,13 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				},
 			] satisfies Message[],
 		});
-		const generated = response.content
-			.filter((content): content is { type: "text"; text: string } => content.type === "text")
-			.map((content) => content.text)
-			.join(" ")
-			.replace(/[\r\n]+/g, " ")
-			.replace(/^["'`]+|["'`]+$/g, "")
-			.trim()
-			.slice(0, 120);
-		if (generated.length === 0 || this.nameRevision !== initialRevision || this.nameSource !== initialSource) return;
+		const generated = normalizeGeneratedName(
+			response.content
+				.filter((content): content is { type: "text"; text: string } => content.type === "text")
+				.map((content) => content.text)
+				.join(" "),
+		);
+		if (!generated || this.nameRevision !== initialRevision || this.nameSource !== initialSource) return;
 		if ((await this.definition.harness.session.getName()) !== initialName) return;
 		await this.definition.harness.session.setName(generated);
 		await this.definition.harness.recordUsage(
