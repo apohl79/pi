@@ -61,8 +61,10 @@ type V2ConnectionState = {
 	connection: ByteConnection;
 	decoder: FrameDecoder;
 	sessions: Map<string, PiSessionRuntimeV2>;
+	visibleSessions: Set<string>;
 	ready: boolean;
 	closed: boolean;
+	disconnectPromise?: Promise<void>;
 	handshakeTimeout: NodeJS.Timeout;
 };
 
@@ -109,6 +111,9 @@ export class PiServerV2 {
 	private readonly connections = new Set<V2ConnectionState>();
 	private readonly eventHistory = new Map<string, EventEnvelopeV2[]>();
 	private readonly operations = new Map<string, OperationRecordV2>();
+	private readonly processSessions = new Map<string, string>();
+	private readonly agentSessions = new Map<string, string>();
+	private readonly inputSessions = new Map<string, string>();
 	private readonly disposedRuntimes = new WeakSet<PiSessionRuntimeV2>();
 	private closing = false;
 	private started = false;
@@ -160,6 +165,7 @@ export class PiServerV2 {
 			history.push(event);
 			this.eventHistory.set(event.sessionId, history);
 		}
+		for (const events of this.eventHistory.values()) events.sort((a, b) => a.seq - b.seq);
 		this.restored = true;
 	}
 
@@ -194,6 +200,7 @@ export class PiServerV2 {
 			connection,
 			decoder: new FrameDecoder({ maxFrameLength: this.maxFrameLength }),
 			sessions: new Map<string, PiSessionRuntimeV2>(),
+			visibleSessions: new Set(),
 			ready: false,
 			closed: false,
 			handshakeTimeout: undefined as unknown as NodeJS.Timeout,
@@ -237,6 +244,7 @@ export class PiServerV2 {
 				sessions: await this.service.listSessions(),
 				models: await this.service.listModels(),
 			};
+			for (const session of snapshot.sessions) state.visibleSessions.add(session.id);
 			await this.send(state, { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: state.id, snapshot });
 			state.ready = true;
 			clearTimeout(state.handshakeTimeout);
@@ -316,12 +324,14 @@ export class PiServerV2 {
 				`Command ${command.command} is not implemented in the v2 seam`,
 			);
 		} catch (error) {
-			await this.sendError(state, id, "request_failed", error instanceof Error ? error.message : String(error));
+			this.reportError(error instanceof Error ? error : new Error(String(error)));
+			await this.sendError(state, id, "request_failed", "Request failed");
 		}
 	}
 
 	private async attach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("session/attach requires sessionId");
+		this.requireVisibleSession(state, command.sessionId);
 		const runtime = await this.service.openSession(command.sessionId);
 		state.sessions.set(command.sessionId, runtime);
 		await this.sendResponse(state, id, {
@@ -332,8 +342,7 @@ export class PiServerV2 {
 
 	private async readSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("session/read requires sessionId");
-		const runtime = state.sessions.get(command.sessionId) ?? (await this.service.openSession(command.sessionId));
-		state.sessions.set(command.sessionId, runtime);
+		const runtime = this.requireAttached(state, command.sessionId);
 		await this.sendResponse(state, id, {
 			command: command.command,
 			session: toProtocolJsonValue(await this.snapshotForSession(command.sessionId, runtime)),
@@ -342,8 +351,7 @@ export class PiServerV2 {
 
 	private async readGoal(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("goal/read requires sessionId");
-		const runtime = state.sessions.get(command.sessionId) ?? (await this.service.openSession(command.sessionId));
-		state.sessions.set(command.sessionId, runtime);
+		const runtime = this.requireAttached(state, command.sessionId);
 		const snapshot = await runtime.snapshot();
 		await this.sendResponse(
 			state,
@@ -354,6 +362,7 @@ export class PiServerV2 {
 
 	private async startProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("process/start requires sessionId");
+		this.requireAttached(state, command.sessionId);
 		const payload = objectPayload(command);
 		if (typeof payload.command !== "string") throw new Error("process/start requires command");
 		const process = await this.processes.start({
@@ -362,6 +371,7 @@ export class PiServerV2 {
 			...(typeof payload.cwd === "string" ? { cwd: payload.cwd } : {}),
 			...(typeof payload.pty === "boolean" ? { pty: payload.pty } : {}),
 		});
+		this.processSessions.set(process.processId, command.sessionId);
 		await this.sendResponse(state, id, {
 			command: command.command,
 			process: process as unknown as Record<string, unknown>,
@@ -371,6 +381,7 @@ export class PiServerV2 {
 	private async writeProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const processId = processIdFrom(command, payload);
+		this.requireResource(state, this.processSessions, processId, "process");
 		if (typeof payload.input !== "string") throw new Error("process/write requires input");
 		await this.sendResponse(state, id, {
 			command: command.command,
@@ -381,6 +392,7 @@ export class PiServerV2 {
 	private async readProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const processId = processIdFrom(command, payload);
+		this.requireResource(state, this.processSessions, processId, "process");
 		const cursor = typeof payload.cursor === "number" ? payload.cursor : 0;
 		await this.sendResponse(state, id, {
 			command: command.command,
@@ -390,6 +402,7 @@ export class PiServerV2 {
 
 	private async waitProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
+		this.requireResource(state, this.processSessions, processIdFrom(command, payload), "process");
 		await this.sendResponse(state, id, {
 			command: command.command,
 			process: await this.processes.wait(processIdFrom(command, payload)),
@@ -398,6 +411,7 @@ export class PiServerV2 {
 
 	private async terminateProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
+		this.requireResource(state, this.processSessions, processIdFrom(command, payload), "process");
 		await this.sendResponse(state, id, {
 			command: command.command,
 			process: await this.processes.terminate(processIdFrom(command, payload)),
@@ -437,6 +451,7 @@ export class PiServerV2 {
 
 	private async spawnAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("agent/spawn requires sessionId");
+		this.requireAttached(state, command.sessionId);
 		const payload = objectPayload(command);
 		if (typeof payload.taskName !== "string" || typeof payload.taskMessage !== "string")
 			throw new Error("agent/spawn requires taskName and taskMessage");
@@ -455,11 +470,13 @@ export class PiServerV2 {
 				id: typeof modelPayload.id === "string" ? modelPayload.id : "inherit",
 			},
 		});
+		this.agentSessions.set(agent.id, command.sessionId);
 		await this.sendResponse(state, id, { command: command.command, agent });
 	}
 
 	private async listAgents(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("agent/list requires sessionId");
+		this.requireAttached(state, command.sessionId);
 		await this.sendResponse(state, id, {
 			command: command.command,
 			agents: await this.agents.list(command.sessionId),
@@ -469,6 +486,7 @@ export class PiServerV2 {
 	private async waitAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const agentId = agentIdFrom(command, payload);
+		this.requireResource(state, this.agentSessions, agentId, "agent");
 		await this.sendResponse(state, id, {
 			command: command.command,
 			agent: await this.agents.wait(agentId, typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined),
@@ -478,6 +496,7 @@ export class PiServerV2 {
 	private async messageAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const agentId = agentIdFrom(command, payload);
+		this.requireResource(state, this.agentSessions, agentId, "agent");
 		if (typeof payload.message !== "string") throw new Error("agent/message requires message");
 		await this.agents.message(agentId, payload.message);
 		await this.sendResponse(state, id, { command: command.command, agentId });
@@ -486,6 +505,7 @@ export class PiServerV2 {
 	private async followUpAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const agentId = agentIdFrom(command, payload);
+		this.requireResource(state, this.agentSessions, agentId, "agent");
 		if (typeof payload.message !== "string") throw new Error("agent/followUp requires message");
 		await this.sendResponse(state, id, {
 			command: command.command,
@@ -495,6 +515,7 @@ export class PiServerV2 {
 
 	private async interruptAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
+		this.requireResource(state, this.agentSessions, agentIdFrom(command, payload), "agent");
 		await this.sendResponse(state, id, {
 			command: command.command,
 			agent: await this.agents.interrupt(agentIdFrom(command, payload)),
@@ -541,12 +562,16 @@ export class PiServerV2 {
 
 	private async readInputRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const requestId = requestIdFrom(command, objectPayload(command));
-		await this.sendResponse(state, id, { command: command.command, request: await this.inputs.read(requestId) });
+		const request = await this.inputs.read(requestId);
+		this.requireAttached(state, request.sessionId);
+		this.inputSessions.set(request.id, request.sessionId);
+		await this.sendResponse(state, id, { command: command.command, request });
 	}
 
 	private async respondInputRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const requestId = requestIdFrom(command, payload);
+		this.requireResource(state, this.inputSessions, requestId, "input request");
 		if (typeof payload.answers !== "object" || payload.answers === null || Array.isArray(payload.answers))
 			throw new Error("input/request/respond requires answers");
 		const answers = Object.fromEntries(
@@ -563,6 +588,7 @@ export class PiServerV2 {
 
 	private async cancelInputRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const requestId = requestIdFrom(command, objectPayload(command));
+		this.requireResource(state, this.inputSessions, requestId, "input request");
 		await this.sendResponse(state, id, { command: command.command, request: await this.inputs.cancel(requestId) });
 	}
 
@@ -574,10 +600,26 @@ export class PiServerV2 {
 		await this.sendResponse(state, id, { command: command.command, sessionId: command.sessionId });
 	}
 
+	private requireVisibleSession(state: V2ConnectionState, sessionId: string): void {
+		if (!state.visibleSessions?.has(sessionId)) throw new Error("Session is not available to this connection");
+	}
+
+	private requireAttached(state: V2ConnectionState, sessionId: string): PiSessionRuntimeV2 {
+		this.requireVisibleSession(state, sessionId);
+		const runtime = state.sessions.get(sessionId);
+		if (!runtime) throw new Error("Session is not attached to this connection");
+		return runtime;
+	}
+
+	private requireResource(state: V2ConnectionState, owners: Map<string, string>, resourceId: string, label: string): void {
+		const sessionId = owners.get(resourceId);
+		if (sessionId === undefined) throw new Error(`${label} is not available`);
+		this.requireAttached(state, sessionId);
+	}
+
 	private async startTurn(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("turn/start requires sessionId");
-		const runtime = state.sessions.get(command.sessionId);
-		if (!runtime) throw new Error(`Session ${command.sessionId} is not attached`);
+		const runtime = this.requireAttached(state, command.sessionId);
 		const operationId = randomUUID();
 		const accepted = await runtime.accept(operationId);
 		this.operations.set(operationId, {
@@ -672,6 +714,7 @@ export class PiServerV2 {
 		if (!command.operationId) throw new Error("operation/read requires operationId");
 		const operation = this.operations.get(command.operationId);
 		if (!operation) throw new Error(`Unknown operation ${command.operationId}`);
+		this.requireAttached(state, operation.sessionId);
 		await this.sendResponse(state, id, { command: command.command, operation });
 	}
 
@@ -714,29 +757,35 @@ export class PiServerV2 {
 	}
 
 	private send(state: V2ConnectionState, message: ServerMessageV2): Promise<void> {
-		return state.connection.send(encodeServerMessageV2(message));
+		return state.connection.send(encodeServerMessageV2(message, { maxFrameLength: this.maxFrameLength }));
 	}
 
 	private async failProtocol(state: V2ConnectionState, code: string, message: string): Promise<void> {
 		if (state.closed) return;
-		await state.connection.close(encodeServerMessageV2({ type: "hello_error", error: { code, message } }));
-		this.disconnect(state);
+		const safeMessage = code === "unsupported_version" ? "Unsupported protocol version" : "Invalid protocol request";
+		await this.closeConnection(state, encodeServerMessageV2({ type: "hello_error", error: { code, message: safeMessage } }, { maxFrameLength: this.maxFrameLength }));
 	}
 
-	private async closeConnection(state: V2ConnectionState): Promise<void> {
-		if (state.closed) return;
+	private async closeConnection(state: V2ConnectionState, finalChunk?: Uint8Array): Promise<void> {
+		if (state.disconnectPromise) return state.disconnectPromise;
 		state.closed = true;
 		clearTimeout(state.handshakeTimeout);
-		await Promise.allSettled(Array.from(state.sessions.values(), (runtime) => this.disposeRuntime(runtime)));
-		await state.connection.close();
-		this.connections.delete(state);
+		state.disconnectPromise = (async () => {
+			await Promise.allSettled(Array.from(state.sessions.values(), (runtime) => this.disposeRuntime(runtime)));
+			state.sessions.clear();
+			try {
+				await state.connection.close(finalChunk);
+			} catch (error) {
+				this.reportError(error instanceof Error ? error : new Error(String(error)));
+			} finally {
+				this.connections.delete(state);
+			}
+		})();
+		return state.disconnectPromise;
 	}
 
-	private disconnect(state: V2ConnectionState): void {
-		if (state.closed) return;
-		state.closed = true;
-		clearTimeout(state.handshakeTimeout);
-		this.connections.delete(state);
+	private disconnect(state: V2ConnectionState): Promise<void> {
+		return this.closeConnection(state);
 	}
 
 	private hasRuntimeReference(runtime: PiSessionRuntimeV2): boolean {
