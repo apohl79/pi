@@ -247,6 +247,42 @@ describe("coding-agent Harness construction", () => {
 		}
 	});
 
+	test("exposes update_plan through the injected server-owned plan boundary", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "plan-tool-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: "/workspace" });
+		const updates: unknown[] = [];
+		const created = await createCodingAgentHarness({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+			plans: {
+				update: async (input) => {
+					updates.push(input);
+					return { version: 1, items: input.items };
+				},
+			},
+		});
+		try {
+			const tool = (await created.harness.getTools()).find((candidate) => candidate.name === "update_plan");
+			if (!tool) throw new Error("Expected update_plan tool");
+			const result = await tool.execute("plan-call", {
+				items: [{ step: "implement", status: "in_progress" }],
+				version: 1,
+			});
+			expect(updates).toEqual([{ items: [{ step: "implement", status: "in_progress" }], version: 1 }]);
+			expect(result.content).toEqual([
+				{
+					type: "text",
+					text: JSON.stringify({ version: 1, items: [{ step: "implement", status: "in_progress" }] }),
+				},
+			]);
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("preserves coding-agent prompt snippets and guideline order", () => {
 		const prompt = buildCodingAgentHarnessSystemPrompt({
 			cwd: "/workspace",

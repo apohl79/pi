@@ -3,6 +3,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import {
+	InMemoryV2PlanRegistry,
 	ServerDaemon,
 	type ServerDaemonOptions,
 	type V2ImageService,
@@ -54,8 +55,15 @@ export async function createCodingAgentDaemonRuntime(
 	options: CodingAgentDaemonRuntimeOptions,
 ): Promise<CodingAgentDaemonRuntime> {
 	let createdAgents: ServerDaemonOptions["agents"];
+	const plans = options.plans ?? new InMemoryV2PlanRegistry();
 	const service = await createCodingAgentV2SqliteService(
-		options.agentRegistry === undefined ? { ...options, agentRegistry: () => createdAgents } : options,
+		options.agentRegistry === undefined
+			? {
+					...options,
+					plans,
+					agentRegistry: () => createdAgents,
+				}
+			: { ...options, plans },
 	);
 	const agents = options.agents ?? (service.createSession ? createCodingAgentV2AgentRegistry(service) : undefined);
 	createdAgents = agents;
@@ -67,6 +75,7 @@ export async function createCodingAgentDaemonRuntime(
 		...(options.inputs === undefined ? {} : { inputs: options.inputs }),
 		...(options.web === undefined ? {} : { web: options.web }),
 		...(options.images === undefined ? {} : { images: options.images }),
+		plans,
 		...(options.createServer === undefined ? {} : { createServer: options.createServer }),
 	});
 	const defaultConnect: TransportAddress = { transport: "unix", path: options.socketPath };

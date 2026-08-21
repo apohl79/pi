@@ -11,6 +11,7 @@ import type {
 	V2AgentRegistry,
 	V2ImageService,
 	V2InputRegistry,
+	V2PlanRegistry,
 	V2PluginRegistry,
 	V2WebService,
 } from "@earendil-works/pi-server";
@@ -37,6 +38,7 @@ export interface CodingAgentV2SqliteServiceOptions {
 	inputs?: V2InputRegistry;
 	web?: V2WebService;
 	images?: V2ImageService;
+	plans?: V2PlanRegistry;
 	agentRegistry?: V2AgentRegistry | (() => V2AgentRegistry | undefined);
 	harness?: Omit<CreateCodingAgentHarnessOptions, "session" | "models" | "model" | "env" | "sessionFile">;
 }
@@ -67,6 +69,7 @@ export async function createCodingAgentV2SqliteService(
 		const inputRegistry = options.inputs;
 		const webService = options.web;
 		const imageService = options.images;
+		const planRegistry = options.plans;
 		const agentRegistry =
 			typeof options.agentRegistry === "function" ? options.agentRegistry() : options.agentRegistry;
 		const samplingInputFactory = async (): Promise<SamplingInput> => {
@@ -131,6 +134,13 @@ export async function createCodingAgentV2SqliteService(
 			...(imageService === undefined
 				? {}
 				: { viewImage: async (reference) => imageService.view(metadata.id, reference) }),
+			...(planRegistry === undefined
+				? {}
+				: {
+						plans: {
+							update: async (input) => planRegistry.update(metadata.id, input),
+						},
+					}),
 			...(agentRegistry === undefined ? {} : { agents: createAgentTools(agentRegistry, metadata.id, model) }),
 		});
 		return {
