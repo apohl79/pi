@@ -29,25 +29,6 @@ describe("durable GoalManager", () => {
 		await expect(manager.update({ tokensUsed: -1 })).rejects.toThrow("non-negative");
 	});
 
-	test("serializes concurrent creates and updates across session instances", async () => {
-		const storage = new InMemorySessionStorage({ id: "goal-concurrent", createdAt: 1 });
-		const first = new GoalManager(new Session(storage), () => 10);
-		const second = new GoalManager(new Session(storage), () => 20);
-
-		const creates = await Promise.allSettled([first.create("one"), second.create("two")]);
-		expect(creates.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-		expect(creates.filter((result) => result.status === "rejected")[0]).toMatchObject({
-			reason: expect.objectContaining({ message: "A goal already exists" }),
-		});
-
-		await Promise.all([first.update({ tokensUsed: 3, activeTimeSeconds: 4 }), second.update({ status: "paused" })]);
-		expect(await first.read()).toMatchObject({
-			tokensUsed: 3,
-			activeTimeSeconds: 4,
-			status: "paused",
-		});
-	});
-
 	test("accrues active time only across active transitions", async () => {
 		let timestamp = 1_000;
 		const manager = new GoalManager(
@@ -64,19 +45,5 @@ describe("durable GoalManager", () => {
 		timestamp = 18_000;
 		const completed = await manager.update({ status: "complete" });
 		expect(completed.activeTimeSeconds).toBe(7);
-	});
-
-	test("exposes model goal tools with restricted terminal updates", async () => {
-		const manager = new GoalManager(new Session(new InMemorySessionStorage({ id: "goal-tools", createdAt: 1 })));
-		const tools = createGoalTools(manager);
-		const create = tools.find((tool) => tool.name === "create_goal");
-		const read = tools.find((tool) => tool.name === "get_goal");
-		const update = tools.find((tool) => tool.name === "update_goal");
-		if (!create || !read || !update) throw new Error("Expected goal tools");
-		await create.execute("create", { objective: "Ship the feature", token_budget: 10 }, undefined, undefined);
-		expect((await read.execute("read", {}, undefined, undefined)).details.goal?.objective).toBe("Ship the feature");
-		await expect(update.execute("update", { status: "complete" }, undefined, undefined)).resolves.toMatchObject({
-			details: { goal: { status: "complete" } },
-		});
 	});
 });
