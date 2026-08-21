@@ -345,15 +345,19 @@ export class PiServerV2 {
 			state.ready = true;
 			clearTimeout(state.handshakeTimeout);
 			if (message.lastEvent) {
-				const events = (this.eventHistory.get(message.lastEvent.sessionId) ?? []).filter(
-					(event) => event.seq > message.lastEvent!.eventSeq,
-				);
-				if (events.length > MAX_REPLAY_EVENTS) return void (await this.failProtocol(state, "invalid_request", "Replay exceeds configured limit"));
-				const replayBytes = events.reduce(
-					(total, event) => total + encodeServerMessageV2(event, { maxFrameLength: this.maxFrameLength }).byteLength,
-					0,
-				);
-				if (replayBytes > MAX_REPLAY_BYTES) return void (await this.failProtocol(state, "invalid_request", "Replay exceeds configured limit"));
+				const history = this.eventHistory.get(message.lastEvent.sessionId) ?? [];
+				const events: EventEnvelopeV2[] = [];
+				let replayBytes = 0;
+				for (const event of history) {
+					if (event.seq <= message.lastEvent.eventSeq) continue;
+					if (events.length >= MAX_REPLAY_EVENTS)
+						return void (await this.failProtocol(state, "invalid_request", "Replay exceeds configured limit"));
+					const encoded = encodeServerMessageV2(event, { maxFrameLength: this.maxFrameLength });
+					replayBytes += encoded.byteLength;
+					if (replayBytes > MAX_REPLAY_BYTES)
+						return void (await this.failProtocol(state, "invalid_request", "Replay exceeds configured limit"));
+					events.push(event);
+				}
 				for (const event of events) if (!(await this.send(state, event))) return;
 			}
 		} catch (error) {
