@@ -123,6 +123,34 @@ describe("coding-agent Harness construction", () => {
 		}
 	});
 
+	test("exposes request_user_input only when the server provides its boundary", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "input-tool-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: "/workspace" });
+		const requests: unknown[] = [];
+		const created = await createCodingAgentHarness({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+			requestUserInput: async (request) => {
+				requests.push(request);
+				return { mode: "safe" };
+			},
+		});
+		try {
+			const tool = (await created.harness.getTools()).find((candidate) => candidate.name === "request_user_input");
+			if (!tool) throw new Error("Expected request_user_input tool");
+			const result = await tool.execute("input-call", {
+				questions: [{ id: "mode", prompt: "Mode?", options: [{ label: "Safe", value: "safe" }] }],
+			});
+			expect(requests).toHaveLength(1);
+			expect(result.content).toEqual([{ type: "text", text: JSON.stringify({ mode: "safe" }) }]);
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("preserves coding-agent prompt snippets and guideline order", () => {
 		const prompt = buildCodingAgentHarnessSystemPrompt({
 			cwd: "/workspace",

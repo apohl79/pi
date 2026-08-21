@@ -19,4 +19,13 @@ describe("InMemoryV2InputRegistry", () => {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(await registry.read(request.id)).toMatchObject({ status: "expired", answers: {} });
 	});
+
+	test("waits for a response and resolves waiters exactly once", async () => {
+		const registry = new InMemoryV2InputRegistry();
+		const request = await registry.create("session-1", [{ id: "name", prompt: "Your name?" }]);
+		const waiting = registry.wait(request.id);
+		await registry.respond(request.id, { name: "Ada" });
+		expect(await waiting).toMatchObject({ status: "responded", answers: { name: "Ada" } });
+		expect(await registry.wait(request.id)).toMatchObject({ status: "responded" });
+	});
 });

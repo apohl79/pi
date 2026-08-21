@@ -26,6 +26,7 @@ export interface V2InputRequest {
 interface InputState {
 	request: V2InputRequest;
 	timer?: NodeJS.Timeout;
+	waiters: Array<(request: V2InputRequest) => void>;
 }
 
 export interface V2InputRegistry {
@@ -33,6 +34,7 @@ export interface V2InputRegistry {
 	read(requestId: string): Promise<V2InputRequest>;
 	respond(requestId: string, answers: Readonly<Record<string, string>>): Promise<V2InputRequest>;
 	cancel(requestId: string): Promise<V2InputRequest>;
+	wait(requestId: string): Promise<V2InputRequest>;
 	pendingForSession(sessionId: string): Promise<string | undefined>;
 }
 
@@ -70,11 +72,13 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 			status: "pending",
 			...(autoResolutionMs === undefined ? {} : { deadlineAt: Date.now() + autoResolutionMs }),
 		};
-		const state: InputState = { request };
+		const state: InputState = { request, waiters: [] };
 		if (autoResolutionMs !== undefined) {
 			state.timer = setTimeout(() => {
-				if (state.request.status === "pending")
+				if (state.request.status === "pending") {
 					state.request = { ...state.request, status: "expired", answers: {} };
+					this.resolveWaiters(state);
+				}
 			}, autoResolutionMs);
 			state.timer.unref();
 		}
@@ -99,6 +103,7 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 		}
 		state.request = { ...state.request, status: "responded", answers: { ...answers } };
 		if (state.timer) clearTimeout(state.timer);
+		this.resolveWaiters(state);
 		return structuredClone(state.request);
 	}
 
@@ -107,7 +112,14 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 		if (state.request.status !== "pending") throw new Error(`Input request ${requestId} is not pending`);
 		state.request = { ...state.request, status: "cancelled" };
 		if (state.timer) clearTimeout(state.timer);
+		this.resolveWaiters(state);
 		return structuredClone(state.request);
+	}
+
+	async wait(requestId: string): Promise<V2InputRequest> {
+		const state = this.get(requestId);
+		if (state.request.status !== "pending") return structuredClone(state.request);
+		return new Promise((resolve) => state.waiters.push((request) => resolve(structuredClone(request))));
 	}
 
 	async pendingForSession(sessionId: string): Promise<string | undefined> {
@@ -120,5 +132,10 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 		const state = this.requests.get(requestId);
 		if (!state) throw new Error(`Unknown input request ${requestId}`);
 		return state;
+	}
+
+	private resolveWaiters(state: InputState): void {
+		const waiters = state.waiters.splice(0);
+		for (const resolve of waiters) resolve(state.request);
 	}
 }
