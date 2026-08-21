@@ -38,6 +38,10 @@ export default mergeConfig(
 					find: /^@earendil-works\/pi-session-backend-sqlite-node$/,
 					replacement: fileURLToPath(new URL("../session-backends/sqlite-node/src/index.ts", import.meta.url)),
 				},
+				{
+					find: /^@earendil-works\/pi-server$/,
+					replacement: fileURLToPath(new URL("../server/src/index.ts", import.meta.url)),
+				},
 				{ find: /^@mariozechner\/pi-ai$/, replacement: workspaceSourcePaths.aiIndex },
 				{ find: /^@mariozechner\/pi-ai\/oauth$/, replacement: workspaceSourcePaths.aiOAuth },
 				{ find: /^@mariozechner\/pi-agent-core$/, replacement: workspaceSourcePaths.agentIndex },
