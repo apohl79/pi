@@ -218,6 +218,41 @@ describe("AgentHarness v2 scaffold", () => {
 		await reopened.harness.close();
 	});
 
+	it("invokes configured skills and prompt templates through durable prompts", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-resource-faux",
+			models: [{ id: "harness-resource-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("skill response"), fauxAssistantMessage("template response")]);
+		const session = createSession("resources");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			resources: {
+				skills: [
+					{ name: "review", description: "Review code", content: "Inspect carefully", filePath: "/tmp/SKILL.md" },
+				],
+				promptTemplates: [{ name: "greet", content: "Hello $1, inspect $ARGUMENTS" }],
+			},
+		});
+
+		const skillResult = await harness.skill("review", "focus on tests");
+		const templateResult = await harness.promptFromTemplate("greet", ["Ada", "the diff"]);
+
+		expect(skillResult).toMatchObject({ ok: true, value: { kind: "completed" } });
+		expect(templateResult).toMatchObject({ ok: true, value: { kind: "completed" } });
+		const prompts = (await session.findEntriesOnBranch({ order: "oldestFirst" })).flatMap((entry) =>
+			entry.type === "message" && entry.message.role === "user" ? [entry.message.content] : [],
+		);
+		expect(prompts[0]).toContainEqual({ type: "text", text: expect.stringContaining('<skill name="review"') });
+		expect(prompts[0]).toContainEqual({ type: "text", text: expect.stringContaining("focus on tests") });
+		expect(prompts[1]).toEqual([{ type: "text", text: "Hello Ada, inspect Ada the diff" }]);
+		await harness.close();
+	});
+
 	it("persists queued steering, follow-up, next-run input, and cancellation", async () => {
 		const session = createSession("queues");
 		const harness = await createHarness(session);
@@ -739,8 +774,6 @@ describe("AgentHarness v2 scaffold", () => {
 	it("rejects every unfinished public operation explicitly", async () => {
 		const harness = await createHarness();
 		const unfinished: [string, () => unknown | Promise<unknown>][] = [
-			["skill", () => harness.skill("skill")],
-			["promptFromTemplate", () => harness.promptFromTemplate("template")],
 			["navigateTree", () => harness.navigateTree(null)],
 			["resume", () => harness.resume()],
 			["peekAction", () => harness.peekAction()],
