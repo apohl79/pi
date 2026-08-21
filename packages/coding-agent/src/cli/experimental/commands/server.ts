@@ -52,12 +52,14 @@ const serverAction = (action: "status" | "stop") =>
 		.action((command, context) => context.runServer(command));
 
 const serverStartCommand = new Command<ServerCommand, ServerCommandContext>("start")
+	.option(listenOption)
 	.option(foregroundOption)
 	.option(socketOption)
 	.option(authTokenOption)
 	.option(authTokenFileOption)
 	.build((input) => {
 		const { auth, errors: authErrors } = parseAuth(input);
+		const listen = input.values(listenOption);
 		const { errors: optionErrors } = parseLegacyOptions(input);
 		const errors = [...authErrors, ...optionErrors, ...unsupportedLegacyOptions("server", input)];
 		if (errors.length > 0) return { ok: false, errors };
@@ -69,6 +71,7 @@ const serverStartCommand = new Command<ServerCommand, ServerCommandContext>("sta
 				...(auth === undefined ? {} : { auth }),
 				...(input.value(foregroundOption) === true ? { foreground: true } : {}),
 				...(input.value(socketOption) === undefined ? {} : { socket: input.value(socketOption) }),
+				...(listen.length === 0 ? {} : { listen }),
 			},
 		};
 	})
