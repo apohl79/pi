@@ -1,6 +1,15 @@
-import type { SessionSnapshotV2 } from "@earendil-works/pi-protocol";
+import type { ByteTransport, ByteTransportHandlers } from "@earendil-works/pi-client";
+import { PiClientV2 } from "@earendil-works/pi-client";
+import {
+	decodeCbor,
+	encodeServerMessageV2,
+	type JsonValue,
+	PROTOCOL_V2_VERSION,
+	parseClientMessageV2,
+	type SessionSnapshotV2,
+} from "@earendil-works/pi-protocol";
 import { describe, expect, test } from "vitest";
-import { sessionStatus } from "../../src/client/remote-v2-selector.ts";
+import { RemoteV2SessionSelector, sessionStatus } from "../../src/client/remote-v2-selector.ts";
 
 function snapshot(overrides: Partial<SessionSnapshotV2> = {}): SessionSnapshotV2 {
 	return {
@@ -33,6 +42,45 @@ function snapshot(overrides: Partial<SessionSnapshotV2> = {}): SessionSnapshotV2
 	};
 }
 
+function attachmentClient(current: SessionSnapshotV2): PiClientV2 {
+	let handlers: ByteTransportHandlers | undefined;
+	const transport: ByteTransport = {
+		send: async (chunk) => {
+			const message = parseClientMessageV2(decodeCbor(chunk.subarray(4)));
+			if (message.type === "hello") {
+				handlers?.onData(
+					encodeServerMessageV2({
+						type: "hello",
+						version: PROTOCOL_V2_VERSION,
+						connectionId: "connection-1",
+						snapshot: {
+							serverId: "server-1",
+							protocolVersion: 2,
+							revision: 1,
+							eventSeq: 1,
+							sessions: [],
+							models: [],
+						},
+					}),
+				);
+				return;
+			}
+			const result: JsonValue =
+				message.request.command === "session/read"
+					? ({ session: current } as JsonValue)
+					: { command: message.request.command };
+			handlers?.onData(encodeServerMessageV2({ type: "response", id: message.id, ok: true, result }));
+		},
+		close: () => {},
+	};
+	return new PiClientV2({
+		transportFactory: async (next) => {
+			handlers = next;
+			return transport;
+		},
+	});
+}
+
 describe("sessionStatus", () => {
 	test.each([
 		["idle", "idle"],
@@ -61,5 +109,14 @@ describe("sessionStatus", () => {
 				}),
 			),
 		).toBe("goal-active");
+	});
+
+	test("composes an observer attachment with a view and shared disposal", async () => {
+		const client = attachmentClient(snapshot());
+		await client.connect();
+		const attachment = await new RemoteV2SessionSelector(client).attachView("session-1");
+		expect(attachment.view.render(120).join("\n")).toContain("session-1");
+		await attachment.dispose();
+		client.dispose();
 	});
 });
