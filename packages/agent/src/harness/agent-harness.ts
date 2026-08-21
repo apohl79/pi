@@ -492,8 +492,6 @@ export class AgentHarness implements AgentLane {
 	private steeringMode: QueueMode;
 	private followUpMode: QueueMode;
 	private suspendedOperations: SuspendedOperation[] = [];
-	private readonly lifecycle: LifecycleRegistry;
-	private readonly watchBus = new HarnessEventBus();
 	private closed = false;
 	private activeOperation:
 		| {
