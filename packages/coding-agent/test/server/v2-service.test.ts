@@ -6,6 +6,52 @@ import { createCodingAgentHarness } from "../../src/server/create-harness.ts";
 import { createCodingAgentV2Service } from "../../src/server/v2-service.ts";
 
 describe("coding-agent v2 service adapter", () => {
+	test("generates a bounded provider-backed name without overwriting an explicit name", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-naming-faux",
+			models: [{ id: "coding-agent-v2-naming-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("turn response"), fauxAssistantMessage("Fix durable session resume")]);
+		const session = new Session(new InMemorySessionStorage({ id: "naming-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+			systemPrompt: "naming",
+		});
+		try {
+			const service = createCodingAgentV2Service(
+				models,
+				[{ metadata: { id: "naming-session", createdAt: 1, updatedAt: 1 }, harness: created.harness }],
+				{ fastModel: faux.getModel() },
+			);
+			const runtime = await service.openSession("naming-session");
+			await runtime.run("name-turn", {
+				command: "turn/start",
+				sessionId: "naming-session",
+				payload: { text: "resume work" },
+			});
+			expect((await runtime.snapshot()).name).toBe("Fix durable session resume");
+			expect((await runtime.snapshot()).nameSource).toBe("generated");
+			await runtime.run("explicit", {
+				command: "session/name/set",
+				sessionId: "naming-session",
+				payload: { name: "Manual title" },
+			});
+			await runtime.run("ignored", { command: "session/name/generate", sessionId: "naming-session", payload: {} });
+			expect((await runtime.snapshot()).name).toBe("Manual title");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("maps a durable harness to an accepted and executable turn runtime", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
