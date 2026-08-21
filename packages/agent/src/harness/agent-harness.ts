@@ -12,6 +12,11 @@ import type {
 } from "@earendil-works/pi-ai";
 import { runAgentLoop } from "../agent-loop.ts";
 import type { AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../types.ts";
+import {
+	type BranchSummaryResult,
+	collectEntriesForBranchSummary,
+	generateBranchSummary,
+} from "./compaction/branch-summarization.ts";
 import { type CompactionSettings, compact, prepareCompaction } from "./compaction/compaction.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
 import { Result as ResultValue, TaggedError } from "./result.ts";
@@ -1198,172 +1203,9 @@ export class AgentHarness implements AgentLane {
 			release();
 		}
 	}
-	async navigateTree(targetId: string | null, options?: NavigateOptions): Promise<NavigationResult> {
+	async navigateTree(_targetId: string | null, _options?: NavigateOptions): Promise<NavigationResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		return this.withLifecycleLock(async () => {
-			if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-			if (this.activeOperation) {
-				return ResultValue.err(
-					new LaneBusy({
-						lane: "main",
-						operationId: this.activeOperation.id,
-						operationKind: this.activeOperation.kind,
-						message: "Lane is busy",
-					}),
-				);
-			}
-			const open = await this.openOperationsAcrossLanes();
-			if (open.length > 0) {
-				return ResultValue.err(
-					new LaneBusy({
-						lane: "main",
-						operationId: open[0]!.id,
-						operationKind: open[0]!.intent.kind,
-						message: "Lane is busy",
-					}),
-				);
-			}
-			if (targetId !== null && !(await this.durableSession.getEntry(targetId)))
-				return ResultValue.err(new UnknownTarget({ targetId, message: `Unknown navigation target: ${targetId}` }));
-			const oldLeafId = await this.durableSession.getLeafId();
-			if (oldLeafId === targetId)
-				return ResultValue.ok({ runId: this.durableSession.idGenerator.next(), kind: "completed", newLeafId: targetId });
-			const customInstructions =
-				options?.customInstructions === undefined
-					? undefined
-					: sanitizeErrorMessage(options.customInstructions, "", MAX_DURABLE_COMPACTION_TEXT_LENGTH, true);
-			const label = options?.label === undefined ? undefined : sanitizeErrorMessage(options.label, "", 256, true);
-			const summarize = options?.summarize === true;
-			const runId = this.durableSession.idGenerator.next();
-			const summaryEntryId = summarize ? this.durableSession.idGenerator.next() : undefined;
-			const controller = new AbortController();
-			let resolveDone!: () => void;
-			const done = new Promise<void>((resolve) => {
-				resolveDone = resolve;
-			});
-			this.activeOperation = { id: runId, kind: "navigation", controller, done, resolveDone };
-			let started = false;
-			let startedEventEmitted = false;
-			try {
-				await this.lifecycle.runHook("before_navigation", { operationId: runId, targetId, summarize });
-				await this.durableSession.appendRecord({
-					type: "operation_started",
-					id: runId,
-					lane: "main",
-					sourceLeafId: oldLeafId,
-					intent: {
-						kind: "navigation",
-						targetId,
-						summarize,
-						...(customInstructions === undefined ? {} : { customInstructions }),
-						...(label === undefined ? {} : { label }),
-						...(summaryEntryId ? { summaryEntryId } : {}),
-					},
-				});
-				started = true;
-				this.lifecycle.emit("operation_started", { operationId: runId, kind: "navigation" });
-				startedEventEmitted = true;
-				let summary: BranchSummaryResult | undefined;
-				if (summarize && oldLeafId) {
-					const collected = await collectEntriesForBranchSummary(this.durableSession, oldLeafId, targetId ?? oldLeafId);
-					const generated = await generateBranchSummary(collected.entries, {
-						models: this.models,
-						model: this.model,
-						signal: controller.signal,
-						customInstructions,
-						retry: this.retryPolicy,
-					});
-					if (!generated.ok) {
-						const message = sanitizeErrorMessage(generated.error.message, "Navigation summary failed");
-						await this.finishOperation(
-							runId,
-							generated.error.code === "aborted" ? "aborted" : "failed",
-							{ code: generated.error.code, message },
-							true,
-						);
-						return ResultValue.ok(
-							generated.error.code === "aborted"
-								? { runId, kind: "aborted" as const, leafId: oldLeafId }
-								: { runId, kind: "failed" as const, leafId: oldLeafId, error: { code: generated.error.code, message } },
-						);
-					}
-					summary = generated.value;
-				}
-				if (controller.signal.aborted || this.closed) throw new HarnessClosed();
-				await this.durableSession.moveLane("main", targetId);
-				let summaryEntry: BranchSummaryEntry | undefined;
-				if (summary && summaryEntryId) {
-					summaryEntry = await this.durableSession.appendEntry<BranchSummaryEntry>(
-						{
-							type: "branch_summary",
-							id: summaryEntryId,
-							fromId: oldLeafId ?? "",
-							summary: sanitizeErrorMessage(summary.summary, "Navigation summary unavailable", MAX_DURABLE_COMPACTION_TEXT_LENGTH, true),
-							details: {
-								readFiles: summary.readFiles.slice(0, 256).map((file) => sanitizeErrorMessage(file, "", 512, true)),
-								modifiedFiles: summary.modifiedFiles.slice(0, 256).map((file) => sanitizeErrorMessage(file, "", 512, true)),
-							},
-							...(summary.usage === undefined ? {} : { usage: structuredClone(summary.usage) }),
-						},
-						"main",
-					);
-				}
-				if (label !== undefined && targetId !== null) await this.durableSession.setLabel(targetId, label);
-				await this.finishOperation(runId, "completed", undefined, true);
-				return ResultValue.ok({ runId, kind: "completed", newLeafId: summaryEntry?.id ?? targetId, summaryEntry });
-			} catch (error) {
-				const message = sanitizeErrorMessage(error, "Navigation failed");
-				if (!started) {
-					const committed = await this.durableSession.findOpenOperations("main", { limit: 1 }).catch(() => []);
-					started = committed.some((operation) => operation.id === runId);
-				}
-				if (started && !startedEventEmitted) {
-					this.lifecycle.emit("operation_started", { operationId: runId, kind: "navigation" });
-					startedEventEmitted = true;
-				}
-				let restored = true;
-				try {
-					if (started && (await this.durableSession.getLeafId()) !== oldLeafId) await this.durableSession.moveLane("main", oldLeafId);
-				} catch {
-					restored = false;
-				}
-				const failure = restored ? message : "Navigation failed: lane restoration was not confirmed";
-				const terminal = started
-					? await this.durableSession.findRecords({ type: "operation_finished", runId, limit: 1 }).catch(() => [])
-					: [];
-				if (started && terminal.length === 0)
-					await this.finishOperation(
-						runId,
-						controller.signal.aborted ? "aborted" : "failed",
-						{ code: controller.signal.aborted ? "aborted" : "navigation_failed", message: failure },
-						true,
-					);
-				if (controller.signal.aborted) throw new HarnessClosed();
-				return ResultValue.ok({ runId, kind: "failed", leafId: oldLeafId, error: { code: "navigation_failed", message: failure } });
-			} finally {
-				if (this.activeOperation?.id === runId) this.activeOperation = undefined;
-				resolveDone();
-			}
-		});
-	}
-	async rollback(turns: number): Promise<RollbackResult> {
-		return this.withLifecycleLock(async () => {
-		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		if (!Number.isInteger(turns) || turns < 1) {
-			return ResultValue.err(
-				new InvalidRollback({ lane: "main", message: "Rollback requires a positive turn count" }),
-			);
-		}
-		if (this.activeOperation)
-			return ResultValue.err(
-				new LaneBusy({
-					lane: "main",
-					operationId: this.activeOperation.id,
-					operationKind: this.activeOperation.kind,
-					message: "Lane is busy",
-				}),
-			);
-		const open = await this.openOperationsAcrossLanes();
+		const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
 		if (open.length > 0) {
 			return ResultValue.err(
 				new LaneBusy({
@@ -1374,45 +1216,114 @@ export class AgentHarness implements AgentLane {
 				}),
 			);
 		}
-		const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
-		const userEntries = entries.filter(
-			(entry): entry is Extract<Entry, { type: "message" }> =>
-				entry.type === "message" && entry.message.role === "user",
-		);
-		if (turns > userEntries.length) {
-			return ResultValue.err(
-				new InvalidRollback({ lane: "main", message: "Rollback exceeds surviving user turns" }),
-			);
+		const targetId = _targetId;
+		if (targetId !== null && !(await this.durableSession.getEntry(targetId))) {
+			return ResultValue.err(new UnknownTarget({ targetId, message: `Unknown navigation target: ${targetId}` }));
 		}
-		const target = turns === userEntries.length ? null : userEntries[userEntries.length - turns]!.parentId;
-		const previousTarget = await this.durableSession.getLeafId();
-		const rollbackId = this.durableSession.idGenerator.next();
-		await this.durableSession.moveLane("main", target);
-		try {
-			await this.durableSession.appendCustomEntry("conversation_rollback", {
-				rollbackId,
-				removedTurns: turns,
-				targetId: target,
+		const oldLeafId = await this.durableSession.getLeafId();
+		if (oldLeafId === targetId) {
+			return ResultValue.ok({
+				runId: this.durableSession.idGenerator.next(),
+				kind: "completed",
+				newLeafId: targetId,
 			});
-		} catch (error) {
-			const committed = (await this.durableSession.findEntriesOnBranch({ order: "newestFirst", limit: 1 })).some(
-				(entry) =>
-					entry.type === "custom" &&
-					entry.customType === "conversation_rollback" &&
-					typeof entry.data === "object" &&
-					entry.data !== null &&
-					(entry.data as { rollbackId?: unknown }).rollbackId === rollbackId,
-			);
-			if (committed) return ResultValue.ok({ targetId: target, removedTurns: turns });
-			try {
-				await this.durableSession.moveLane("main", previousTarget);
-			} catch (restoreError) {
-				throw new Error("Rollback reconciliation failed: lane restoration was not confirmed", { cause: restoreError });
-			}
-			throw error;
 		}
-		return ResultValue.ok({ targetId: target, removedTurns: turns });
+		const summarize = _options?.summarize === true;
+		const runId = this.durableSession.idGenerator.next();
+		const summaryEntryId = summarize ? this.durableSession.idGenerator.next() : undefined;
+		await this.durableSession.appendRecord({
+			type: "operation_started",
+			id: runId,
+			lane: "main",
+			sourceLeafId: oldLeafId,
+			intent: {
+				kind: "navigation",
+				targetId,
+				summarize,
+				...(_options?.customInstructions === undefined ? {} : { customInstructions: _options.customInstructions }),
+				...(_options?.label === undefined ? {} : { label: _options.label }),
+				...(summaryEntryId ? { summaryEntryId } : {}),
+			},
 		});
+		try {
+			let summary: BranchSummaryResult | undefined;
+			if (summarize && oldLeafId) {
+				const collected = await collectEntriesForBranchSummary(
+					this.durableSession,
+					oldLeafId,
+					targetId ?? oldLeafId,
+				);
+				const generated = await generateBranchSummary(collected.entries, {
+					models: this.models,
+					model: this.model,
+					signal: new AbortController().signal,
+					customInstructions: _options?.customInstructions,
+					retry: this.retryPolicy,
+				});
+				if (!generated.ok) {
+					await this.durableSession.appendRecord({
+						type: "operation_finished",
+						id: this.durableSession.idGenerator.next(),
+						lane: "main",
+						runId,
+						outcome: generated.error.code === "aborted" ? "aborted" : "failed",
+						error: { code: generated.error.code, message: generated.error.message },
+					});
+					return ResultValue.ok({
+						runId,
+						...(generated.error.code === "aborted"
+							? { kind: "aborted" as const, leafId: oldLeafId }
+							: {
+									kind: "failed" as const,
+									leafId: oldLeafId,
+									error: { code: generated.error.code, message: generated.error.message },
+								}),
+					});
+				}
+				summary = generated.value;
+			}
+			await this.durableSession.moveLane("main", targetId);
+			let summaryEntry: BranchSummaryEntry | undefined;
+			if (summary && summaryEntryId) {
+				summaryEntry = await this.durableSession.appendEntry<BranchSummaryEntry>(
+					{
+						type: "branch_summary",
+						id: summaryEntryId,
+						fromId: oldLeafId ?? "",
+						summary: summary.summary,
+						details: { readFiles: summary.readFiles, modifiedFiles: summary.modifiedFiles },
+						...(summary.usage === undefined ? {} : { usage: structuredClone(summary.usage) }),
+					},
+					"main",
+				);
+			}
+			if (_options?.label !== undefined && targetId !== null)
+				await this.durableSession.setLabel(targetId, _options.label);
+			await this.durableSession.appendRecord({
+				type: "operation_finished",
+				id: this.durableSession.idGenerator.next(),
+				lane: "main",
+				runId,
+				outcome: "completed",
+			});
+			return ResultValue.ok({ runId, kind: "completed", newLeafId: summaryEntry?.id ?? targetId, summaryEntry });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			await this.durableSession.appendRecord({
+				type: "operation_finished",
+				id: this.durableSession.idGenerator.next(),
+				lane: "main",
+				runId,
+				outcome: "failed",
+				error: { code: "navigation_failed", message },
+			});
+			return ResultValue.ok({
+				kind: "failed",
+				runId,
+				leafId: oldLeafId,
+				error: { code: "navigation_failed", message },
+			});
+		}
 	}
 	async rollback(turns: number): Promise<RollbackResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
