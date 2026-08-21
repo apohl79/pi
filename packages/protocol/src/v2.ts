@@ -1,17 +1,19 @@
 import Type, { type Static } from "typebox";
 import { Check } from "typebox/value";
-import {
-	type JsonValue,
-	JsonValueSchema,
-	ModelMetadataSchema,
-	ModelRefSchema,
-	ThinkingLevelSchema,
-	TranscriptItemSchema,
-} from "./schemas.ts";
+import { ModelMetadataSchema, ModelRefSchema, ThinkingLevelSchema, TranscriptItemSchema } from "./schemas.ts";
 
 export const PROTOCOL_V2_VERSION = 2 as const;
 
-const IdSchema = Type.String({ minLength: 1 });
+export const MAX_V2_STRING_LENGTH = 1_048_576;
+export const MAX_V2_ARRAY_ITEMS = 10_000;
+
+const BoundedStringSchema = Type.String({ maxLength: MAX_V2_STRING_LENGTH });
+const IdSchema = Type.String({ minLength: 1, maxLength: 256 });
+const DigestSchema = Type.String({ pattern: "^[0-9a-f]{64}$" });
+const MimeTypeSchema = Type.String({
+	pattern: "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$",
+	maxLength: 127,
+});
 const TimestampSchema = Type.Integer({ minimum: 0 });
 const NonNegativeIntegerSchema = Type.Integer({ minimum: 0 });
 const StrictObject = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
@@ -37,13 +39,25 @@ export const OperationStateSchema = Type.Union([
 ]);
 export type OperationState = Static<typeof OperationStateSchema>;
 
-export const OperationSummarySchema = StrictObject({
+const NonTerminalOperationSummarySchema = StrictObject({
 	operationId: IdSchema,
-	kind: Type.String({ minLength: 1 }),
-	state: OperationStateSchema,
+	kind: Type.String({ minLength: 1, maxLength: 256 }),
+	state: Type.Union([Type.Literal("accepted"), Type.Literal("running")]),
 	acceptedSeq: NonNegativeIntegerSchema,
-	terminalSeq: Type.Optional(NonNegativeIntegerSchema),
 });
+const TerminalOperationSummarySchema = StrictObject({
+	operationId: IdSchema,
+	kind: Type.String({ minLength: 1, maxLength: 256 }),
+	state: Type.Union([
+		Type.Literal("complete"),
+		Type.Literal("failed"),
+		Type.Literal("aborted"),
+		Type.Literal("suspended"),
+	]),
+	acceptedSeq: NonNegativeIntegerSchema,
+	terminalSeq: NonNegativeIntegerSchema,
+});
+export const OperationSummarySchema = Type.Union([NonTerminalOperationSummarySchema, TerminalOperationSummarySchema]);
 export type OperationSummary = Static<typeof OperationSummarySchema>;
 
 export const OperationAcceptedSchema = StrictObject({
@@ -53,14 +67,26 @@ export const OperationAcceptedSchema = StrictObject({
 });
 export type OperationAccepted = Static<typeof OperationAcceptedSchema>;
 
-export const OperationRecordV2Schema = StrictObject({
+const NonTerminalOperationRecordSchema = StrictObject({
 	operationId: IdSchema,
 	sessionId: IdSchema,
-	state: OperationStateSchema,
+	state: Type.Union([Type.Literal("accepted"), Type.Literal("running")]),
 	accepted: OperationAcceptedSchema,
-	terminalSeq: Type.Optional(NonNegativeIntegerSchema),
-	error: Type.Optional(Type.String()),
 });
+const TerminalOperationRecordSchema = StrictObject({
+	operationId: IdSchema,
+	sessionId: IdSchema,
+	state: Type.Union([
+		Type.Literal("complete"),
+		Type.Literal("failed"),
+		Type.Literal("aborted"),
+		Type.Literal("suspended"),
+	]),
+	accepted: OperationAcceptedSchema,
+	terminalSeq: NonNegativeIntegerSchema,
+	error: Type.Optional(BoundedStringSchema),
+});
+export const OperationRecordV2Schema = Type.Union([NonTerminalOperationRecordSchema, TerminalOperationRecordSchema]);
 export type OperationRecordV2 = Static<typeof OperationRecordV2Schema>;
 
 export const EventCursorSchema = StrictObject({
@@ -70,32 +96,32 @@ export const EventCursorSchema = StrictObject({
 export type EventCursor = Static<typeof EventCursorSchema>;
 
 export const PromptContentSchema = Type.Union([
-	StrictObject({ type: Type.Literal("text"), text: Type.String() }),
-	StrictObject({ type: Type.Literal("image"), digest: IdSchema, mimeType: Type.String({ minLength: 1 }) }),
-	StrictObject({ type: Type.Literal("blob"), digest: IdSchema, mimeType: Type.String({ minLength: 1 }) }),
+	StrictObject({ type: Type.Literal("text"), text: BoundedStringSchema }),
+	StrictObject({ type: Type.Literal("image"), digest: DigestSchema, mimeType: MimeTypeSchema }),
+	StrictObject({ type: Type.Literal("blob"), digest: DigestSchema, mimeType: MimeTypeSchema }),
 ]);
 
 export const QueuedInputSchema = StrictObject({
 	id: IdSchema,
-	content: Type.Array(PromptContentSchema, { minItems: 1 }),
+	content: Type.Array(PromptContentSchema, { minItems: 1, maxItems: MAX_V2_ARRAY_ITEMS }),
 	createdAt: TimestampSchema,
 });
 
 export const QueueSnapshotSchema = StrictObject({
-	steer: Type.Array(QueuedInputSchema),
-	followUp: Type.Array(QueuedInputSchema),
+	steer: Type.Array(QueuedInputSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
+	followUp: Type.Array(QueuedInputSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
 	pendingInputRequestId: Type.Optional(IdSchema),
 });
 
 export const PlanItemSchema = StrictObject({
-	step: Type.String({ minLength: 1 }),
+	step: Type.String({ minLength: 1, maxLength: MAX_V2_STRING_LENGTH }),
 	status: Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed")]),
 });
 export type PlanItem = Static<typeof PlanItemSchema>;
 
 export const PlanSnapshotSchema = StrictObject({
 	version: NonNegativeIntegerSchema,
-	items: Type.Array(PlanItemSchema),
+	items: Type.Array(PlanItemSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
 });
 export type PlanSnapshot = Static<typeof PlanSnapshotSchema>;
 
@@ -110,7 +136,7 @@ export const GoalStatusSchema = Type.Union([
 
 export const GoalSnapshotSchema = StrictObject({
 	id: IdSchema,
-	objective: Type.String({ minLength: 1 }),
+	objective: Type.String({ minLength: 1, maxLength: MAX_V2_STRING_LENGTH }),
 	status: GoalStatusSchema,
 	tokenBudget: Type.Optional(NonNegativeIntegerSchema),
 	tokensUsed: NonNegativeIntegerSchema,
@@ -123,7 +149,7 @@ export type GoalSnapshot = Static<typeof GoalSnapshotSchema>;
 export const AgentSummarySchema = StrictObject({
 	id: IdSchema,
 	path: IdSchema,
-	taskName: Type.String({ minLength: 1 }),
+	taskName: Type.String({ minLength: 1, maxLength: 256 }),
 	state: Type.Union([
 		Type.Literal("idle"),
 		Type.Literal("running"),
@@ -191,7 +217,7 @@ export const SessionNameSourceSchema = Type.Union([
 
 export const SessionSnapshotV2Schema = StrictObject({
 	id: IdSchema,
-	name: Type.Optional(Type.String()),
+	name: Type.Optional(BoundedStringSchema),
 	nameSource: Type.Optional(SessionNameSourceSchema),
 	nameRevision: NonNegativeIntegerSchema,
 	revision: NonNegativeIntegerSchema,
@@ -200,11 +226,11 @@ export const SessionSnapshotV2Schema = StrictObject({
 	activeOperation: Type.Optional(OperationSummarySchema),
 	model: ModelRefSchema,
 	thinkingLevel: ThinkingLevelSchema,
-	transcript: Type.Array(TranscriptItemSchema),
+	transcript: Type.Array(TranscriptItemSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
 	queues: QueueSnapshotSchema,
 	plan: Type.Optional(PlanSnapshotSchema),
 	goal: Type.Optional(GoalSnapshotSchema),
-	agents: Type.Array(AgentSummarySchema),
+	agents: Type.Array(AgentSummarySchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
 	usage: UsageAggregateSchema,
 	context: ContextUsageSchema,
 	instructionProfile: Type.Optional(InstructionProfileSummarySchema),
@@ -222,9 +248,9 @@ export const SessionMetadataV2Schema = StrictObject({
 	createdAt: TimestampSchema,
 	updatedAt: TimestampSchema,
 	parentSessionId: Type.Optional(IdSchema),
-	sessionName: Type.Optional(Type.String()),
+	sessionName: Type.Optional(BoundedStringSchema),
 	nameSource: Type.Optional(SessionNameSourceSchema),
-	cwd: Type.Optional(Type.String({ minLength: 1 })),
+	cwd: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_V2_STRING_LENGTH })),
 });
 export type SessionMetadataV2 = Static<typeof SessionMetadataV2Schema>;
 
@@ -233,7 +259,14 @@ export const ServerSnapshotV2Schema = StrictObject({
 	protocolVersion: Type.Literal(PROTOCOL_V2_VERSION),
 	revision: NonNegativeIntegerSchema,
 	eventSeq: NonNegativeIntegerSchema,
-	sessions: Type.Array(SessionMetadataV2Schema),
-	models: Type.Array(ModelMetadataSchema),
+	sessions: Type.Array(SessionMetadataV2Schema, { maxItems: MAX_V2_ARRAY_ITEMS }),
+	models: Type.Array(ModelMetadataSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
 });
 export type ServerSnapshotV2 = Static<typeof ServerSnapshotV2Schema>;
+
+export const isOperationSummary = (value: unknown): value is OperationSummary => Check(OperationSummarySchema, value);
+
+export const isOperationRecordV2 = (value: unknown): value is OperationRecordV2 => {
+	const record = value as { operationId?: unknown; accepted?: { operationId?: unknown } };
+	return Check(OperationRecordV2Schema, value) && record.operationId === record.accepted?.operationId;
+};
