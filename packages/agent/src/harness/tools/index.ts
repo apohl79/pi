@@ -1,3 +1,4 @@
+export { type ApplyPatchToolInput, createApplyPatchTool } from "./apply-patch.ts";
 export {
 	type BashExecution,
 	type BashPrepare,
