@@ -1,4 +1,10 @@
-import type { AgentHarness, AgentMessage, Entry, GoalManager } from "@earendil-works/pi-agent-core";
+import type {
+	AgentHarness,
+	AgentMessage,
+	Entry,
+	GoalContinuationScheduler,
+	GoalManager,
+} from "@earendil-works/pi-agent-core";
 import type { ImageContent, Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
 import type {
 	CommandNameV2,
@@ -18,6 +24,7 @@ export interface CodingAgentV2SessionDefinition {
 	metadata: SessionMetadataV2;
 	harness: AgentHarness;
 	goals?: GoalManager;
+	goalContinuation?: GoalContinuationScheduler;
 	extensionHost?: ServerRuntimeExtensionHost;
 }
 
@@ -499,11 +506,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			state: "complete",
 			terminalSeq: this.eventSeq,
 		};
+		if (runCommand === "turn/start" || runCommand === "turn/resume" || runCommand === "turn/followUp")
+			void this.definition.goalContinuation?.schedule().catch(() => undefined);
 	}
 
 	async dispose(): Promise<void> {
-		if (this.disposed) return;
-		this.disposed = true;
+		this.definition.goalContinuation?.close();
 		await this.definition.harness.close();
 		this.onDispose?.();
 	}
