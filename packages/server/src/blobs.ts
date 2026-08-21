@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, readdir, readFile, rename, stat as statFile, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readdir, readFile, rename, stat as statFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export interface V2BlobStat {
@@ -126,7 +126,9 @@ export class FileV2BlobStore implements V2BlobStore {
 	async read(digest: string): Promise<Uint8Array> {
 		assertDigest(digest);
 		const metadata = await this.stat(digest);
-		const data = await readFile(join(this.root, `${digest}.blob`));
+		const dataPath = join(this.root, `${digest}.blob`);
+		await this.assertRegularFile(dataPath);
+		const data = await readFile(dataPath);
 		if (data.byteLength > this.maxBytes) throw new Error(`Blob exceeds maximum size of ${this.maxBytes} bytes`);
 		if (data.byteLength !== metadata.size) throw new Error(`Blob metadata size mismatch for ${digest}`);
 		if (digestOf(data) !== digest) throw new Error(`Blob digest mismatch for ${digest}`);
@@ -135,7 +137,9 @@ export class FileV2BlobStore implements V2BlobStore {
 
 	async stat(digest: string): Promise<V2BlobStat> {
 		assertDigest(digest);
-		const metadata = JSON.parse(await readFile(join(this.root, `${digest}.json`), "utf8")) as V2BlobStat;
+		const metadataPath = join(this.root, `${digest}.json`);
+		await this.assertRegularFile(metadataPath);
+		const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as V2BlobStat;
 		if (
 			metadata.digest !== digest ||
 			!Number.isSafeInteger(metadata.size) ||
@@ -145,10 +149,13 @@ export class FileV2BlobStore implements V2BlobStore {
 		)
 			throw new Error(`Blob metadata is invalid for ${digest}`);
 		assertMimeType(metadata.mimeType);
-		const file = await statFile(join(this.root, `${digest}.blob`));
+		const dataPath = join(this.root, `${digest}.blob`);
+		await this.assertRegularFile(dataPath);
+		const file = await statFile(dataPath);
 		if (file.size > this.maxBytes) throw new Error(`Blob exceeds maximum size of ${this.maxBytes} bytes`);
 		if (file.size !== metadata.size) throw new Error(`Blob metadata size mismatch for ${digest}`);
-		if (digestOf(await readFile(join(this.root, `${digest}.blob`))) !== digest)
+		await this.assertRegularFile(dataPath);
+		if (digestOf(await readFile(dataPath)) !== digest)
 			throw new Error(`Blob digest mismatch for ${digest}`);
 		return metadata;
 	}
@@ -178,7 +185,18 @@ export class FileV2BlobStore implements V2BlobStore {
 
 	private async getUsage(): Promise<{ readonly totalBytes: number; readonly blobCount: number }> {
 		const blobNames = (await readdir(this.root)).filter((name) => name.endsWith(".blob"));
-		const sizes = await Promise.all(blobNames.map(async (name) => (await statFile(join(this.root, name))).size));
+		const sizes = await Promise.all(
+			blobNames.map(async (name) => {
+				const path = join(this.root, name);
+				await this.assertRegularFile(path);
+				return (await statFile(path)).size;
+			}),
+		);
 		return { totalBytes: sizes.reduce((total, size) => total + size, 0), blobCount: sizes.length };
+	}
+
+	private async assertRegularFile(path: string): Promise<void> {
+		const file = await lstat(path);
+		if (!file.isFile()) throw new Error(`Blob path is not a regular file: ${path}`);
 	}
 }
