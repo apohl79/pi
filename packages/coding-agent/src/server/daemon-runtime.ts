@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { PiClientV2 } from "@earendil-works/pi-client";
+import { ClientDiagnosticSpool } from "@earendil-works/pi-client/diagnostics";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import {
 	type DiagnosticIntegrityCheck,
@@ -48,6 +49,8 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	planStorePath?: string;
 	diagnosticStorePath?: string;
 	diagnosticKeyPath?: string;
+	clientDiagnosticSpoolPath?: string;
+	clientInstanceId?: string;
 	integrity?: ServerDaemonOptions["integrity"];
 	serverId?: string;
 	runtimeManifest?: ServerDaemonOptions["runtimeManifest"];
@@ -148,6 +151,14 @@ export async function createCodingAgentDaemonRuntime(
 		...(diagnosticContent === undefined ? {} : { diagnosticContent }),
 		...(options.createServer === undefined ? {} : { createServer: options.createServer }),
 	});
+	const clientRuntimeManifest = options.runtimeManifest ?? createRuntimeManifest();
+	const clientSpool =
+		options.clientDiagnosticSpoolPath === undefined
+			? undefined
+			: new ClientDiagnosticSpool({
+					path: options.clientDiagnosticSpoolPath,
+					clientInstanceId: options.clientInstanceId ?? `client-${process.pid}`,
+				});
 	const defaultConnect: TransportAddress = { transport: "unix", path: options.socketPath };
 	const cli = createExperimentalCliRuntime({
 		daemon: {
@@ -161,7 +172,33 @@ export async function createCodingAgentDaemonRuntime(
 		},
 		defaultConnect,
 		createClient: (address) =>
-			new PiClientV2({ transportFactory: createUnixTransportFactory({ path: address.path }) }),
+			new PiClientV2({
+				transportFactory: createUnixTransportFactory({ path: address.path }),
+				...(clientSpool === undefined
+					? {}
+					: {
+							diagnostics: {
+								manifest: {
+									runtime: clientRuntimeManifest.runtime,
+									platform: clientRuntimeManifest.platform,
+									arch: clientRuntimeManifest.arch,
+									...(clientRuntimeManifest.buildVersion === undefined
+										? {}
+										: { buildVersion: clientRuntimeManifest.buildVersion }),
+									...(clientRuntimeManifest.forkCommit === undefined
+										? {}
+										: { forkCommit: clientRuntimeManifest.forkCommit }),
+									...(clientRuntimeManifest.upstreamBaseCommit === undefined
+										? {}
+										: { upstreamBaseCommit: clientRuntimeManifest.upstreamBaseCommit }),
+									...(clientRuntimeManifest.configHash === undefined
+										? {}
+										: { configHash: clientRuntimeManifest.configHash }),
+								},
+								spool: clientSpool,
+							},
+						}),
+			}),
 		write: options.write,
 		...(options.writeText === undefined ? {} : { writeText: options.writeText }),
 		...(options.runInteractive === undefined ? {} : { runInteractive: options.runInteractive }),
@@ -315,6 +352,8 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			planStorePath: options.planStorePath ?? join(options.agentDir, "plans.jsonl"),
 			diagnosticStorePath: options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"),
 			diagnosticKeyPath: options.diagnosticKeyPath ?? join(options.agentDir, "diagnostic-keys.json"),
+			clientDiagnosticSpoolPath:
+				options.clientDiagnosticSpoolPath ?? join(options.agentDir, "client-diagnostics.jsonl"),
 		});
 		return {
 			...runtime,
