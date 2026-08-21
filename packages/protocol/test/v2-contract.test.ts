@@ -52,6 +52,7 @@ const commandNames = [
 	"input/request/cancel",
 	"plan/read",
 	"plan/update",
+	"plan/clear",
 	"goal/read",
 	"goal/create",
 	"goal/update",
