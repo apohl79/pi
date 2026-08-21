@@ -329,6 +329,41 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
 	});
 
+	test("exposes usage ledger aggregates and entries through v2", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-usage-wire-"));
+		directories.push(directory);
+		const usage = new InMemoryV2UsageLedger();
+		await usage.record({
+			responseId: "response-1",
+			sessionId: "session-1",
+			agentId: "agent-1",
+			operationId: "operation-1",
+			purpose: "agent",
+			provider: "test",
+			model: "small",
+			input: 3,
+			output: 2,
+			cacheRead: 0,
+			cacheWrite: 0,
+			pricing: "catalog",
+			costUsd: 0.1,
+			createdAt: 1,
+		});
+		const server = createUnixServerV2(new TestService(), { path: join(directory, "server.sock"), usage });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const response = await client.request({ command: "usage/read", payload: { sessionId: "session-1" } });
+		expect(response).toMatchObject({
+			ok: true,
+			result: {
+				aggregate: { responses: 1, input: 3, output: 2, costUsd: 0.1 },
+				entries: [{ responseId: "response-1" }],
+			},
+		});
+	});
+
 	test("routes image view and generation through blob references", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-images-"));
 		directories.push(directory);
