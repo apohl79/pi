@@ -53,8 +53,12 @@ export type ConfiguredCodingAgentDaemonRuntime = CodingAgentDaemonRuntime & {
 export async function createCodingAgentDaemonRuntime(
 	options: CodingAgentDaemonRuntimeOptions,
 ): Promise<CodingAgentDaemonRuntime> {
-	const service = await createCodingAgentV2SqliteService(options);
+	let createdAgents: ServerDaemonOptions["agents"];
+	const service = await createCodingAgentV2SqliteService(
+		options.agentRegistry === undefined ? { ...options, agentRegistry: () => createdAgents } : options,
+	);
 	const agents = options.agents ?? (service.createSession ? createCodingAgentV2AgentRegistry(service) : undefined);
+	createdAgents = agents;
 	const daemon = new ServerDaemon({
 		service,
 		socketPath: options.socketPath,
