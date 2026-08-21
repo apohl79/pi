@@ -55,7 +55,7 @@ const TerminalOperationSummarySchema = StrictObject({
 		Type.Literal("suspended"),
 	]),
 	acceptedSeq: NonNegativeIntegerSchema,
-	terminalSeq: NonNegativeIntegerSchema,
+	terminalSeq: Type.Optional(NonNegativeIntegerSchema),
 });
 export const OperationSummarySchema = Type.Union([NonTerminalOperationSummarySchema, TerminalOperationSummarySchema]);
 export type OperationSummary = Static<typeof OperationSummarySchema>;
@@ -83,7 +83,7 @@ const TerminalOperationRecordSchema = StrictObject({
 		Type.Literal("suspended"),
 	]),
 	accepted: OperationAcceptedSchema,
-	terminalSeq: NonNegativeIntegerSchema,
+	terminalSeq: Type.Optional(NonNegativeIntegerSchema),
 	error: Type.Optional(BoundedStringSchema),
 });
 export const OperationRecordV2Schema = Type.Union([NonTerminalOperationRecordSchema, TerminalOperationRecordSchema]);

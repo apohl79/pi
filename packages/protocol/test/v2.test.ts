@@ -44,7 +44,7 @@ describe("protocol v2 contract schemas", () => {
 		expect(Check(OperationRecordV2Schema, accepted)).toBe(true);
 		expect(Check(OperationRecordV2Schema, { ...accepted, terminalSeq: 2 })).toBe(false);
 		expect(Check(OperationRecordV2Schema, { ...accepted, state: "complete", terminalSeq: 2 })).toBe(true);
-		expect(Check(OperationRecordV2Schema, { ...accepted, state: "complete" })).toBe(false);
+		expect(Check(OperationRecordV2Schema, { ...accepted, state: "complete" })).toBe(true);
 	});
 
 	test("requires operation IDs to match between record and accepted entry", () => {
@@ -79,6 +79,9 @@ describe("protocol v2 contract schemas", () => {
 				acceptedSeq: 1,
 				terminalSeq: 2,
 			}),
+		).toBe(true);
+		expect(
+			Check(OperationSummarySchema, { operationId: "op-1", kind: "prompt", state: "failed", acceptedSeq: 1 }),
 		).toBe(true);
 	});
 });
