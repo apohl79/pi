@@ -182,6 +182,12 @@ describe("coding-agent v2 service adapter", () => {
 			]);
 			const runtime = await service.openSession("adapter-session");
 			const accepted = await runtime.accept("operation-1");
+			expect((await runtime.snapshot()).activeOperation).toMatchObject({
+				operationId: "operation-1",
+				kind: "pending",
+				state: "accepted",
+				acceptedSeq: 2,
+			});
 			await runtime.run("operation-1", {
 				command: "turn/start",
 				sessionId: "adapter-session",
@@ -189,6 +195,10 @@ describe("coding-agent v2 service adapter", () => {
 			});
 			const turnSnapshot = await runtime.snapshot();
 			const usageSnapshot = turnSnapshot.usage;
+			expect(turnSnapshot).toMatchObject({
+				phase: "idle",
+				activeOperation: { operationId: "operation-1", kind: "turn/start", state: "complete", terminalSeq: 3 },
+			});
 			expect(usageSnapshot.input).toBeGreaterThan(0);
 			expect(usageSnapshot.output).toBeGreaterThan(0);
 			expect(turnSnapshot.transcript.map((item) => item.role)).toEqual(["user", "assistant"]);
@@ -201,6 +211,12 @@ describe("coding-agent v2 service adapter", () => {
 				}),
 			).rejects.toThrow("requires level");
 			expect(lifecycle.at(-1)).toBe("terminal:session/thinking/set:failed");
+			expect((await runtime.snapshot()).activeOperation).toMatchObject({
+				operationId: "bad-operation",
+				kind: "session/thinking/set",
+				state: "failed",
+				terminalSeq: 4,
+			});
 			await runtime.run("operation-2", {
 				command: "goal/create",
 				sessionId: "adapter-session",
