@@ -85,9 +85,10 @@ const retainOutput = (output: Buffer, maxBytes: number): Buffer => {
 const outputView = (process: ProcessState, cursor: number): V2ProcessOutput => {
 	if (!Number.isInteger(cursor) || cursor < 0) throw new Error("Process cursor must be a non-negative integer");
 	const baseCursor = process.totalBytes - process.output.length;
-	const start = Math.max(cursor, baseCursor);
+	let outputOffset = Math.max(cursor, baseCursor) - baseCursor;
+	while (outputOffset < process.output.length && (process.output[outputOffset] & 0xc0) === 0x80) outputOffset += 1;
 	return {
-		output: process.output.subarray(start - baseCursor).toString("utf8"),
+		output: process.output.subarray(outputOffset).toString("utf8"),
 		cursor: process.totalBytes,
 		truncated: cursor < baseCursor,
 	};
@@ -162,6 +163,7 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 type NodeProcessState = ProcessState & Readonly<{ child: ChildProcess }> & {
 	waiters: Array<(value: V2ProcessSnapshot) => void>;
 	decoder: StringDecoder;
+	decoderFlushed: boolean;
 	terminationTimer?: ReturnType<typeof setTimeout>;
 	killTimer?: ReturnType<typeof setTimeout>;
 };
@@ -191,16 +193,16 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		if (request.pty === true) return Promise.reject(new Error("PTY process execution is unsupported"));
 		const [file, ...args] = parseCommand(request.command);
 		const child = spawn(file, args, { shell: false, detached: process.platform !== "win32", cwd: request.cwd, env: { ...process.env, ...request.env }, stdio: ["pipe", "pipe", "pipe"] });
-		const state: NodeProcessState = { processId: randomUUID(), sessionId: request.sessionId, command: request.command, state: "running", output: Buffer.alloc(0), totalBytes: 0, child, waiters: [], decoder: new StringDecoder("utf8") };
+		const state: NodeProcessState = { processId: randomUUID(), sessionId: request.sessionId, command: request.command, state: "running", output: Buffer.alloc(0), totalBytes: 0, child, waiters: [], decoder: new StringDecoder("utf8"), decoderFlushed: false };
 		this.processes.set(state.processId, state);
 		const append = (chunk: Buffer): void => {
-			state.totalBytes += chunk.length;
 			const decoded = Buffer.from(state.decoder.write(chunk));
 			state.output = retainOutput(Buffer.concat([state.output, decoded]), this.maxOutputBytes);
+			state.totalBytes += decoded.length;
 		};
 		child.stdout?.on("data", append);
 		child.stderr?.on("data", append);
-		child.once("error", (error) => { append(Buffer.from(error.message)); this.finish(state, "exited", 1); });
+		child.once("error", (error) => { this.finish(state, "exited", 1, Buffer.from(error.message)); });
 		child.once("close", (code) => this.finish(state, state.state === "terminated" ? "terminated" : "exited", code ?? 0));
 		return Promise.resolve(snapshot(state));
 	}
@@ -242,8 +244,18 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		return snapshot(state);
 	}
 
-	private finish(process: NodeProcessState, state: V2ProcessState, exitCode: number): void {
+	private finish(process: NodeProcessState, state: V2ProcessState, exitCode: number, errorOutput?: Buffer): void {
 		if (process.state !== "running" && state !== "terminated") return;
+		if (!process.decoderFlushed) {
+			process.decoderFlushed = true;
+			const tail = Buffer.from(process.decoder.end());
+			process.output = retainOutput(Buffer.concat([process.output, tail]), this.maxOutputBytes);
+			process.totalBytes += tail.length;
+		}
+		if (errorOutput) {
+			process.output = retainOutput(Buffer.concat([process.output, errorOutput]), this.maxOutputBytes);
+			process.totalBytes += errorOutput.length;
+		}
 		if (process.terminationTimer) clearTimeout(process.terminationTimer);
 		if (process.killTimer) clearTimeout(process.killTimer);
 		process.state = state;
