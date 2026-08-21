@@ -41,6 +41,9 @@ describe("production daemon migration", () => {
 			const safePath = `--${directory.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 			await access(join(directory, "sessions", safePath, "legacy-session.jsonl"));
 			await expect(readFile(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
+			expect(await runtime.service.listSessions()).toEqual([
+				expect.objectContaining({ id: "legacy-session", cwd: directory }),
+			]);
 		} finally {
 			await runtime.close();
 		}
