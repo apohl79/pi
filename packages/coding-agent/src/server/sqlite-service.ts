@@ -7,9 +7,19 @@ import {
 } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { SessionMetadataV2 } from "@earendil-works/pi-protocol";
-import type { V2ImageService, V2InputRegistry, V2PluginRegistry, V2WebService } from "@earendil-works/pi-server";
+import type {
+	V2AgentRegistry,
+	V2ImageService,
+	V2InputRegistry,
+	V2PluginRegistry,
+	V2WebService,
+} from "@earendil-works/pi-server";
 import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
-import { type CreateCodingAgentHarnessOptions, createCodingAgentHarness } from "./create-harness.ts";
+import {
+	type CodingAgentAgentTools,
+	type CreateCodingAgentHarnessOptions,
+	createCodingAgentHarness,
+} from "./create-harness.ts";
 import { createPluginSamplingInput } from "./plugin-sampling.ts";
 import {
 	type CodingAgentV2Service,
@@ -27,6 +37,7 @@ export interface CodingAgentV2SqliteServiceOptions {
 	inputs?: V2InputRegistry;
 	web?: V2WebService;
 	images?: V2ImageService;
+	agentRegistry?: V2AgentRegistry | (() => V2AgentRegistry | undefined);
 	harness?: Omit<CreateCodingAgentHarnessOptions, "session" | "models" | "model" | "env" | "sessionFile">;
 }
 
@@ -56,6 +67,8 @@ export async function createCodingAgentV2SqliteService(
 		const inputRegistry = options.inputs;
 		const webService = options.web;
 		const imageService = options.images;
+		const agentRegistry =
+			typeof options.agentRegistry === "function" ? options.agentRegistry() : options.agentRegistry;
 		const samplingInputFactory = async (): Promise<SamplingInput> => {
 			const configuredSamplingInput = options.harness?.samplingInputFactory
 				? await options.harness.samplingInputFactory()
@@ -118,6 +131,7 @@ export async function createCodingAgentV2SqliteService(
 			...(imageService === undefined
 				? {}
 				: { viewImage: async (reference) => imageService.view(metadata.id, reference) }),
+			...(agentRegistry === undefined ? {} : { agents: createAgentTools(agentRegistry, metadata.id, model) }),
 		});
 		return {
 			metadata: sessionMetadata(metadata),
@@ -177,4 +191,23 @@ export async function createCodingAgentV2SqliteService(
 		},
 	};
 	return createCodingAgentV2ServiceFromStore(options.models, store);
+}
+
+function createAgentTools(registry: V2AgentRegistry, sessionId: string, model: Model<Api>): CodingAgentAgentTools {
+	return {
+		spawn: (request) =>
+			registry.spawn({
+				sessionId,
+				parentPath: `/${sessionId}`,
+				taskName: request.taskName,
+				taskMessage: request.taskMessage,
+				...(request.role === undefined ? {} : { role: request.role }),
+				model: request.model ?? { provider: model.provider, id: model.id },
+			}),
+		list: () => registry.list(sessionId),
+		wait: (agentId, timeoutMs) => registry.wait(agentId, timeoutMs),
+		message: (agentId, message) => registry.message(agentId, message),
+		followUp: (agentId, message) => registry.followUp(agentId, message),
+		interrupt: (agentId) => registry.interrupt(agentId),
+	};
 }
