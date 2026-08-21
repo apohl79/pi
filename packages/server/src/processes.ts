@@ -158,13 +158,32 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 	}
 }
 
-type NodeProcessState = ProcessState & Readonly<{ child: ChildProcess }> & { waiters: Array<(value: V2ProcessSnapshot) => void> };
+type NodeProcessState = ProcessState & Readonly<{ child: ChildProcess }> & {
+	waiters: Array<(value: V2ProcessSnapshot) => void>;
+	terminationTimer?: ReturnType<typeof setTimeout>;
+	killTimer?: ReturnType<typeof setTimeout>;
+};
+
+type NodeV2ProcessRegistryOptions = Readonly<{
+	maxOutputBytes?: number;
+	maxCompletedProcesses?: number;
+	terminateGraceMs?: number;
+	terminateTimeoutMs?: number;
+}>;
 
 export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 	private readonly maxOutputBytes: number;
+	private readonly maxCompletedProcesses: number;
+	private readonly terminateGraceMs: number;
+	private readonly terminateTimeoutMs: number;
 	private readonly processes = new Map<string, NodeProcessState>();
 
-	constructor(options: { maxOutputBytes?: number } = {}) { this.maxOutputBytes = options.maxOutputBytes ?? 64 * 1024; }
+	constructor(options: NodeV2ProcessRegistryOptions = {}) {
+		this.maxOutputBytes = options.maxOutputBytes ?? 64 * 1024;
+		this.maxCompletedProcesses = options.maxCompletedProcesses ?? 256;
+		this.terminateGraceMs = options.terminateGraceMs ?? 1_000;
+		this.terminateTimeoutMs = options.terminateTimeoutMs ?? 1_000;
+	}
 
 	start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
 		if (request.pty === true) return Promise.reject(new Error("PTY process execution is unsupported"));
@@ -204,17 +223,35 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 			if (state.child.pid !== null && process.platform !== "win32") {
 				try { process.kill(-state.child.pid, "SIGTERM"); } catch { state.child.kill("SIGTERM"); }
 			} else state.child.kill("SIGTERM");
+			state.terminationTimer = setTimeout(() => {
+				if (state.state !== "terminated" || state.child.exitCode !== null) return;
+				try { state.child.kill("SIGKILL"); } catch { }
+				state.killTimer = setTimeout(() => {
+					if (state.state === "terminated") this.finish(state, "terminated", 143);
+				}, this.terminateTimeoutMs);
+				state.killTimer.unref?.();
+			}, this.terminateGraceMs);
+			state.terminationTimer.unref?.();
 		}
 		return snapshot(state);
 	}
 
 	private finish(process: NodeProcessState, state: V2ProcessState, exitCode: number): void {
 		if (process.state !== "running" && state !== "terminated") return;
+		if (process.terminationTimer) clearTimeout(process.terminationTimer);
+		if (process.killTimer) clearTimeout(process.killTimer);
 		process.state = state;
 		process.exitCode = process.exitCode ?? exitCode;
 		const result = snapshot(process);
 		for (const resolve of process.waiters) resolve(result);
 		process.waiters = [];
+		this.pruneCompleted();
+	}
+
+	private pruneCompleted(): void {
+		const completed = [...this.processes.values()].filter((process) => process.state !== "running");
+		const excess = completed.length - this.maxCompletedProcesses;
+		completed.slice(0, Math.max(0, excess)).forEach((process) => this.processes.delete(process.processId));
 	}
 
 	private get(processId: string): NodeProcessState {
