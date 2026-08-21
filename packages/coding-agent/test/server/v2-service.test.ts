@@ -246,4 +246,54 @@ describe("coding-agent v2 service adapter", () => {
 			await env.cleanup();
 		}
 	});
+
+	test("preserves ordered text and image content in a remote turn", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-content-faux",
+			models: [{ id: "coding-agent-v2-content-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("content response")]);
+		const session = new Session(new InMemorySessionStorage({ id: "content-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		try {
+			const service = createCodingAgentV2Service(models, [
+				{ metadata: { id: "content-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+			]);
+			const runtime = await service.openSession("content-session");
+			await runtime.run("content-operation", {
+				command: "turn/start",
+				sessionId: "content-session",
+				payload: {
+					content: [
+						{ type: "text", text: "inspect this" },
+						{ type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+					],
+				},
+			});
+			const user = (await session.findEntriesOnBranch({ order: "oldestFirst" })).find(
+				(entry) => entry.type === "message" && entry.message.role === "user",
+			);
+			expect(user).toMatchObject({
+				message: {
+					content: [
+						{ type: "text", text: "inspect this" },
+						{ type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+					],
+				},
+			});
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
 });
