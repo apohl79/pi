@@ -375,6 +375,13 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
 		const extensionHost = this.definition.extensionHost;
+		this.phase = "turn";
+		this.activeOperation = {
+			operationId: _operationId,
+			kind: runCommand,
+			state: "running",
+			acceptedSeq: this.activeOperation?.acceptedSeq ?? this.eventSeq,
+		};
 		await extensionHost?.onOperationAccepted({ id: _operationId, type: runCommand });
 		try {
 			if (runCommand === "turn/start") {
@@ -445,6 +452,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				this.autoName = payload.enabled;
 			}
 		} catch (error) {
+			this.phase = "failed";
+			this.activeOperation = {
+				...this.activeOperation!,
+				state: "failed",
+				terminalSeq: this.eventSeq + 1,
+			};
 			await extensionHost?.onOperationTerminal({ id: _operationId, type: runCommand }, "failed");
 			throw error;
 		}
@@ -458,8 +471,6 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			state: "complete",
 			terminalSeq: this.eventSeq,
 		};
-		if (runCommand === "turn/start" || runCommand === "turn/resume" || runCommand === "turn/followUp")
-			void this.definition.goalContinuation?.schedule().catch(() => undefined);
 	}
 
 	async dispose(): Promise<void> {
