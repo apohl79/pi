@@ -17,6 +17,7 @@ import { InMemoryV2AppRegistry } from "../src/apps.ts";
 import { InMemoryV2BlobStore } from "../src/blobs.ts";
 import { InMemoryForensicRecorder } from "../src/diagnostics.ts";
 import { LocalV2FileReferenceService } from "../src/files.ts";
+import { BlobV2ImageService } from "../src/images.ts";
 import { InMemoryV2InputRegistry } from "../src/inputs.ts";
 import { InMemoryV2OperationStore } from "../src/operation-store.ts";
 import { InMemoryV2ProcessRegistry, NodeV2ProcessRegistry } from "../src/processes.ts";
@@ -326,6 +327,48 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(exported).toMatchObject({ ok: true, result: { format: "json", events: [{ seq: 1 }] } });
 		expect(verified).toMatchObject({ ok: true, result: { valid: true, gaps: [] } });
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
+	});
+
+	test("routes image view and generation through blob references", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-images-"));
+		directories.push(directory);
+		await writeFile(join(directory, "image.png"), new Uint8Array([137, 80, 78, 71]));
+		const imageService = new BlobV2ImageService(
+			new LocalV2FileReferenceService({ projectRoot: directory, homeDirectory: directory }),
+			new InMemoryV2BlobStore(),
+			{
+				generate: async () => ({
+					data: new Uint8Array([1]),
+					mimeType: "image/png",
+					provider: "fake",
+					model: "image-fast",
+				}),
+			},
+		);
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			images: imageService,
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const viewed = await client.request({
+			command: "image/view",
+			sessionId: "session-1",
+			payload: { reference: "image.png" },
+		});
+		const generated = await client.request({
+			command: "image/generate",
+			sessionId: "session-1",
+			payload: { prompt: "a tree" },
+		});
+		expect(viewed).toMatchObject({ ok: true, result: { image: { mimeType: "image/png", size: 4 } } });
+		expect(generated).toMatchObject({
+			ok: true,
+			result: { image: { provider: "fake", model: "image-fast", mimeType: "image/png" } },
+		});
 	});
 
 	test("acknowledges a turn before starting runtime execution", async () => {
