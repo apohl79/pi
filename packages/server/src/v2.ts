@@ -918,14 +918,44 @@ export class PiServerV2 {
 	}
 
 	private async diagnosticsExport(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const events = await this.diagnosticEvents();
+		const serializedEvents = JSON.stringify(events);
+		const manifest = {
+			schemaVersion: 1,
+			eventCount: events.length,
+			firstSeq: events[0]?.seq ?? 0,
+			lastSeq: events.at(-1)?.seq ?? 0,
+			eventsSha256: createHash("sha256").update(serializedEvents).digest("hex"),
+		};
 		await this.sendResponse(state, id, {
 			command: command.command,
 			format: "json",
-			events: await this.diagnosticEvents(),
+			events,
+			bundle: { manifest, events },
 		});
 	}
 
 	private async diagnosticsVerify(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		const bundle = payload.bundle;
+		if (typeof bundle === "object" && bundle !== null && !Array.isArray(bundle)) {
+			const candidate = bundle as Record<string, unknown>;
+			const events = candidate.events;
+			const manifest = candidate.manifest;
+			if (!Array.isArray(events) || typeof manifest !== "object" || manifest === null || Array.isArray(manifest))
+				throw new Error("diagnostics/verify bundle requires events and manifest");
+			const fields = manifest as Record<string, unknown>;
+			const serializedEvents = JSON.stringify(events);
+			const digest = createHash("sha256").update(serializedEvents).digest("hex");
+			const valid =
+				fields.schemaVersion === 1 && fields.eventCount === events.length && fields.eventsSha256 === digest;
+			await this.sendResponse(state, id, {
+				command: command.command,
+				valid,
+				...(valid ? {} : { reason: "Diagnostic bundle manifest does not match its events" }),
+			});
+			return;
+		}
 		const events = await this.diagnosticEvents();
 		const gaps = events.slice(1).flatMap((event, index) => {
 			const previous = events[index];
