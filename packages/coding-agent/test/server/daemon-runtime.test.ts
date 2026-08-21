@@ -483,4 +483,83 @@ describe("coding-agent daemon runtime", () => {
 			await runtime.close();
 		}
 	});
+
+	test("restores completed operations after a production daemon restart", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-recovery-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-recovery-faux",
+			models: [
+				{ id: "coding-agent-daemon-recovery-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("recovered response")]);
+		const first = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const firstClient = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		let operationId: string;
+		let completed = false;
+		try {
+			await first.daemon.start();
+			await firstClient.connect();
+			const created = await firstClient.request({ command: "session/create", payload: { cwd: directory } });
+			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
+			const sessionId = (created.result as { session: { id: string } }).session.id;
+			await firstClient.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			const accepted = await firstClient.request({
+				command: "turn/start",
+				sessionId,
+				payload: { text: "persist this" },
+			});
+			if (!accepted.ok || !("accepted" in accepted)) throw new Error("Turn acceptance failed");
+			operationId = accepted.accepted.operationId;
+			for (let attempt = 0; attempt < 50; attempt++) {
+				const read = await firstClient.request({ command: "operation/read", operationId });
+				const result =
+					read.ok && "result" in read ? (read.result as { operation?: { state?: string } } | null) : null;
+				if (result?.operation?.state === "complete") {
+					completed = true;
+					break;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			expect(completed).toBe(true);
+		} finally {
+			firstClient.dispose();
+			await first.close();
+		}
+
+		const second = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const secondClient = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await second.daemon.start();
+			await secondClient.connect();
+			const restored = await secondClient.request({ command: "operation/read", operationId });
+			expect(restored).toMatchObject({ ok: true, result: { operation: { operationId, state: "complete" } } });
+		} finally {
+			secondClient.dispose();
+			await second.close();
+		}
+	});
 });
