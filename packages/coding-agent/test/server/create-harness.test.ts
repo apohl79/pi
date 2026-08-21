@@ -151,6 +151,32 @@ describe("coding-agent Harness construction", () => {
 		}
 	});
 
+	test("exposes the provider-neutral web tool only when configured", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "web-tool-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: "/workspace" });
+		const created = await createCodingAgentHarness({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+			web: async (request) => [{ id: "result-1", title: request.operation, source: "fixture", retrievedAt: 1 }],
+		});
+		try {
+			const tool = (await created.harness.getTools()).find((candidate) => candidate.name === "web");
+			if (!tool) throw new Error("Expected web tool");
+			const result = await tool.execute("web-call", { operation: "search_query", query: "pi" });
+			expect(result.content).toEqual([
+				{
+					type: "text",
+					text: JSON.stringify([{ id: "result-1", title: "search_query", source: "fixture", retrievedAt: 1 }]),
+				},
+			]);
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("preserves coding-agent prompt snippets and guideline order", () => {
 		const prompt = buildCodingAgentHarnessSystemPrompt({
 			cwd: "/workspace",
