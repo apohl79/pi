@@ -74,7 +74,8 @@ function clientWithRequests(): { client: PiClientV2; commands: string[] } {
 			const isOperation =
 				message.request.command.startsWith("turn/") ||
 				message.request.command === "session/model/set" ||
-				message.request.command === "session/thinking/set";
+				message.request.command === "session/thinking/set" ||
+				message.request.command.startsWith("goal/");
 			const response = isOperation
 				? {
 						type: "response" as const,
@@ -112,6 +113,8 @@ describe("remote v2 interactive command boundary", () => {
 		expect(parseRemoteV2Command("/model faux/model-2")).toEqual({ name: "model", provider: "faux", id: "model-2" });
 		expect(parseRemoteV2Command("/rollback")).toEqual({ name: "rollback", turns: 1 });
 		expect(parseRemoteV2Command("/thinking high")).toEqual({ name: "thinking", level: "high" });
+		expect(parseRemoteV2Command("/goal ship the feature")).toEqual({ name: "goal", objective: "ship the feature" });
+		expect(parseRemoteV2Command("/goal-pause")).toEqual({ name: "goal-pause" });
 		expect(() => parseRemoteV2Command("/rollback 0")).toThrow("positive integer");
 	});
 
@@ -124,6 +127,10 @@ describe("remote v2 interactive command boundary", () => {
 		expect(await adapter.execute("/release-control")).toEqual({ kind: "control", mode: "observer" });
 		await adapter.execute("/take-control");
 		expect(await adapter.execute("/thinking high")).toEqual({ kind: "operation", operationId: "operation-1" });
+		expect(await adapter.execute("/goal ship the feature")).toEqual({
+			kind: "operation",
+			operationId: "operation-1",
+		});
 		expect(await adapter.execute("/detach")).toEqual({ kind: "detached" });
 		expect(commands).toEqual([
 			"session/attach",
@@ -132,6 +139,7 @@ describe("remote v2 interactive command boundary", () => {
 			"session/attach",
 			"session/attach",
 			"session/thinking/set",
+			"goal/create",
 			"session/detach",
 		]);
 		await adapter.dispose();
