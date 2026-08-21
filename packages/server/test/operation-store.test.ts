@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -35,8 +35,28 @@ describe("JsonlV2OperationStore", () => {
 		await Promise.all([store.putOperation(operation), store.appendEvent(event)]);
 		await store.putOperation({ ...operation, state: "complete", terminalSeq: 3 });
 		const restored = await new JsonlV2OperationStore(join(directory, "operations.jsonl")).load();
+		const permissions = (await stat(join(directory, "operations.jsonl"))).mode & 0o777;
 
 		expect(restored.operations).toEqual([{ ...operation, state: "complete", terminalSeq: 3 }]);
 		expect(restored.events).toEqual([event]);
+		expect(permissions).toBe(0o600);
+	});
+
+	test("preserves permissions on an existing JSONL file", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-operation-store-"));
+		directories.push(directory);
+		const path = join(directory, "operations.jsonl");
+		await writeFile(path, "", { mode: 0o640 });
+		await chmod(path, 0o640);
+		await new JsonlV2OperationStore(path).appendEvent({
+			type: "event",
+			sessionId: "session-1",
+			seq: 1,
+			revision: 1,
+			event: "operation_accepted",
+			payload: {},
+		});
+
+		expect((await stat(path)).mode & 0o777).toBe(0o640);
 	});
 });

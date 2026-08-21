@@ -52,4 +52,34 @@ describe("InMemoryForensicRecorder", () => {
 			"x-api-key": "[REDACTED]",
 		});
 	});
+
+	test("redacts sensitive key substrings and credential-shaped values", async () => {
+		const recorder = new InMemoryForensicRecorder();
+		const event = await recorder.record({
+			kind: "credentials",
+			payload: {
+				providerAuthorizationHeader: "Bearer abcdefghijklmnop",
+				nested: { databasePasswordHash: "hidden" },
+				bearer: "Bearer abcdefghijklmnop",
+				assignment: "token=abcdefghijk",
+				apiKeyValue: "sk-aaaaaaaa",
+				safe: "ordinary diagnostic text",
+			},
+		});
+
+		expect(event.payload).toEqual({
+			providerAuthorizationHeader: "[REDACTED]",
+			nested: { databasePasswordHash: "[REDACTED]" },
+			bearer: "[REDACTED]",
+			assignment: "[REDACTED]",
+			apiKeyValue: "[REDACTED]",
+			safe: "ordinary diagnostic text",
+		});
+	});
+
+	test.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])("rejects invalid maxEvents: %s", (maxEvents) => {
+		expect(() => new InMemoryForensicRecorder({ maxEvents })).toThrow(
+			"maxEvents must be a finite integer greater than or equal to 1",
+		);
+	});
 });

@@ -85,7 +85,7 @@ export class JsonlV2OperationStore implements V2OperationStore {
 
 	private append(record: StoreRecord): Promise<void> {
 		const write = this.pendingWrite.then(async () => {
-			const handle = await open(this.path, "a");
+			const handle = await open(this.path, "a", 0o600);
 			try {
 				await handle.write(`${JSON.stringify(record)}\n`, undefined, "utf8");
 				await handle.sync();

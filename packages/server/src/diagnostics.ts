@@ -18,7 +18,7 @@ export interface ForensicRecorder {
 	read(afterSeq?: number): Promise<ForensicEvent[]>;
 }
 
-const SENSITIVE_KEYS = new Set([
+const SENSITIVE_KEY_PARTS = [
 	"apikey",
 	"authorization",
 	"auth",
@@ -26,19 +26,25 @@ const SENSITIVE_KEYS = new Set([
 	"password",
 	"secret",
 	"token",
-	"accesstoken",
-	"refreshtoken",
-	"clientsecret",
-	"bearertoken",
-	"xapikey",
-]);
+	"privatekey",
+];
 
 const normalizeKey = (key: string): string => key.replace(/[^a-z0-9]/gi, "").toLowerCase();
 
+const isSensitiveKey = (key: string): boolean => {
+	const normalized = normalizeKey(key);
+	return SENSITIVE_KEY_PARTS.some((part) => normalized.includes(part));
+};
+
+const isCredentialShaped = (value: string): boolean =>
+	/\bbearer\s+[a-z0-9._~+/=-]{8,}\b/i.test(value) ||
+	/\b(?:api[_-]?key|token|secret|password)\s*[:=]\s*\S+/i.test(value) ||
+	/\b(?:sk|pk|rk)-[a-z0-9_-]{8,}\b/i.test(value);
+
 function redact(value: unknown, key?: string): DiagnosticValue {
-	if (key !== undefined && SENSITIVE_KEYS.has(normalizeKey(key))) return "[REDACTED]";
-	if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string")
-		return value;
+	if (key !== undefined && isSensitiveKey(key)) return "[REDACTED]";
+	if (value === null || typeof value === "boolean" || typeof value === "number") return value;
+	if (typeof value === "string") return isCredentialShaped(value) ? "[REDACTED]" : value;
 	if (Array.isArray(value)) return value.map((item) => redact(item));
 	if (typeof value === "object") {
 		const output: Record<string, DiagnosticValue> = {};
@@ -54,7 +60,10 @@ export class InMemoryForensicRecorder implements ForensicRecorder {
 	private nextSeq = 1;
 
 	constructor(options: { maxEvents?: number } = {}) {
-		this.maxEvents = options.maxEvents ?? 2_048;
+		const maxEvents = options.maxEvents ?? 2_048;
+		if (!Number.isFinite(maxEvents) || !Number.isInteger(maxEvents) || maxEvents < 1)
+			throw new Error("maxEvents must be a finite integer greater than or equal to 1");
+		this.maxEvents = maxEvents;
 	}
 
 	async record(input: ForensicEventInput): Promise<ForensicEvent> {
