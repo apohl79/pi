@@ -492,18 +492,13 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
-	it("rejects every unfinished public operation explicitly", async () => {
+	it("rejects duplicate lane creation explicitly", async () => {
 		const harness = await createHarness();
-		const unfinished: [string, () => unknown | Promise<unknown>][] = [
-			["createLane", () => harness.createLane("thread", null)],
-		];
-
-		for (const [operation, invoke] of unfinished) {
-			await expect(Promise.resolve().then(invoke), operation).rejects.toMatchObject({
-				name: "HarnessNotImplemented",
-				operation,
-			});
-		}
+		expect(await harness.createLane("main", null)).toMatchObject({
+			ok: false,
+			error: { name: "LaneExists", lane: "main" },
+		});
+		await harness.close();
 	});
 
 	it("parks one provider action for manual drive and releases it explicitly", async () => {
