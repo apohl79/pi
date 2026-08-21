@@ -103,4 +103,12 @@ describe("formatRemoteV2Session", () => {
 		expect(output).toContain("Plan v3");
 		expect(output).toContain("Plan in_progress · verify the daemon");
 	});
+
+	test("renders a pending structured input request", () => {
+		const output = formatRemoteV2Session({
+			lifecycle: { status: "ready" },
+			snapshot: { ...snapshot, queues: { ...snapshot.queues, pendingInputRequestId: "input-1" } },
+		});
+		expect(output).toContain("Input request pending · input-1");
+	});
 });
