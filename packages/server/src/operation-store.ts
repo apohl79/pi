@@ -36,7 +36,10 @@ export class InMemoryV2OperationStore implements V2OperationStore {
 	private readonly events: EventEnvelopeV2[] = [];
 
 	async load(): Promise<{ operations: readonly OperationRecordV2[]; events: readonly EventEnvelopeV2[] }> {
-		return { operations: [...this.operations.values()], events: this.events.slice() };
+		return {
+			operations: structuredClone([...this.operations.values()]),
+			events: structuredClone(this.events),
+		};
 	}
 
 	async putOperation(record: OperationRecordV2): Promise<void> {
@@ -84,10 +87,11 @@ export class JsonlV2OperationStore implements V2OperationStore {
 	}
 
 	private append(record: StoreRecord): Promise<void> {
+		const snapshot = structuredClone(record);
 		const write = this.pendingWrite.then(async () => {
 			const handle = await open(this.path, "a", 0o600);
 			try {
-				await handle.write(`${JSON.stringify(record)}\n`, undefined, "utf8");
+				await handle.write(`${JSON.stringify(snapshot)}\n`, undefined, "utf8");
 				await handle.sync();
 			} finally {
 				await handle.close();
