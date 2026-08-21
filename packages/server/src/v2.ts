@@ -1,15 +1,15 @@
 import { randomUUID } from "node:crypto";
 import {
 	type ClientHelloV2,
-	type CommandV2,
 	ClientMessageV2Decoder,
+	type CommandV2,
 	type EventEnvelopeV2,
 	encodeServerMessageV2,
 	type ModelMetadata,
 	type OperationAccepted,
 	type OperationRecordV2,
 	PROTOCOL_V2_VERSION,
-	parseClientMessageV2,
+	type parseClientMessageV2,
 	type ServerMessageV2,
 	type ServerSnapshotV2,
 	type SessionMetadataV2,
@@ -62,14 +62,18 @@ type V2ConnectionState = {
 	sessions: Map<string, PiSessionRuntimeV2>;
 	ready: boolean;
 	closed: boolean;
-	handshakeTimeout: NodeJS.Timeout;
+	handshakeTimeout?: NodeJS.Timeout;
 	handshake?: Promise<void>;
+	disconnectPromise?: Promise<void>;
+	closePromise?: Promise<void>;
 };
 
 const DEFAULT_MAX_FRAME_LENGTH = 4 * 1024 * 1024;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 const MAX_REPLAY_EVENTS = 1_024;
 const MAX_REPLAY_BYTES = 16 * 1024 * 1024;
+const MAX_UINT32 = 0xffff_ffff;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 function objectPayload(command: CommandV2): Record<string, unknown> {
 	if (typeof command.payload !== "object" || command.payload === null || Array.isArray(command.payload)) return {};
@@ -115,13 +119,14 @@ export class PiServerV2 {
 	private closing = false;
 	private started = false;
 	private restored = false;
+	private startPromise?: Promise<this>;
 
 	constructor(service: PiServerServiceV2, options: PiServerV2Options) {
 		this.service = service;
 		this.listeners = options.listeners;
 		this.id = options.serverId ?? randomUUID();
-		this.maxFrameLength = options.maxFrameLength ?? DEFAULT_MAX_FRAME_LENGTH;
-		this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
+		this.maxFrameLength = resolveMaxFrameLength(options.maxFrameLength);
+		this.handshakeTimeoutMs = resolveHandshakeTimeout(options.handshakeTimeoutMs);
 		this.onError = options.onError;
 		this.diagnostics = options.diagnostics;
 		this.operationStore = options.operationStore ?? new InMemoryV2OperationStore();
@@ -142,15 +147,21 @@ export class PiServerV2 {
 
 	private async handleRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		try {
-			const result = command.command === "session/list"
-				? await this.service.listSessions()
-				: command.command === "model/list"
-					? await this.service.listModels()
-					: command.command === "session/read" && command.sessionId
-						? await (await this.session(state, command.sessionId)).snapshot()
-						: undefined;
+			const result =
+				command.command === "session/list"
+					? await this.service.listSessions()
+					: command.command === "model/list"
+						? await this.service.listModels()
+						: command.command === "session/read" && command.sessionId
+							? await (await this.session(state, command.sessionId)).snapshot()
+							: undefined;
 			if (result === undefined) {
-				await this.send(state, { type: "response", id, ok: false, error: { code: "not_implemented", message: "Command not implemented" } });
+				await this.send(state, {
+					type: "response",
+					id,
+					ok: false,
+					error: { code: "not_implemented", message: "Command not implemented" },
+				});
 				return;
 			}
 			await this.send(state, { type: "response", id, ok: true, result: toProtocolJsonValue(result) });
@@ -185,7 +196,12 @@ export class PiServerV2 {
 		clearTimeout(state.handshakeTimeout);
 		state.closed = true;
 		try {
-			await state.connection.close(encodeServerMessageV2({ type: "hello_error", error: { code, message: this.sanitizeMessage(message) } }, { maxFrameLength: this.maxFrameLength }));
+			await state.connection.close(
+				encodeServerMessageV2(
+					{ type: "hello_error", error: { code, message: this.sanitizeMessage(message) } },
+					{ maxFrameLength: this.maxFrameLength },
+				),
+			);
 		} catch (closeError) {
 			this.reportError(closeError);
 		}
@@ -193,22 +209,40 @@ export class PiServerV2 {
 	}
 
 	private async disconnect(state: V2ConnectionState): Promise<void> {
-		clearTimeout(state.handshakeTimeout);
-		this.connections.delete(state);
-		await Promise.all([...state.sessions.values()].map((runtime) => runtime.dispose().catch((error) => this.reportError(error))));
-		state.sessions.clear();
-		state.closed = true;
+		if (state.disconnectPromise) return state.disconnectPromise;
+		state.disconnectPromise = (async () => {
+			clearTimeout(state.handshakeTimeout);
+			this.connections.delete(state);
+			await Promise.all([...state.sessions.values()].map((runtime) => this.disposeRuntime(runtime)));
+			state.sessions.clear();
+			state.closed = true;
+		})();
+		return state.disconnectPromise;
+	}
+
+	private async disposeRuntime(runtime: PiSessionRuntimeV2): Promise<void> {
+		if (this.disposedRuntimes.has(runtime)) return;
+		this.disposedRuntimes.add(runtime);
+		try {
+			await runtime.dispose();
+		} catch (error) {
+			this.reportError(error);
+		}
 	}
 
 	private async closeConnection(state: V2ConnectionState): Promise<void> {
-		if (!state.connection.closed) {
-			try {
-				await state.connection.close();
-			} catch (error) {
-				this.reportError(error);
+		if (state.closePromise) return state.closePromise;
+		state.closePromise = (async () => {
+			if (!state.connection.closed) {
+				try {
+					await state.connection.close();
+				} catch (error) {
+					this.reportError(error);
+				}
 			}
-		}
-		await this.disconnect(state);
+			await this.disconnect(state);
+		})();
+		return state.closePromise;
 	}
 
 	private protocolError(error: unknown): { code: string; message: string } {
@@ -236,7 +270,13 @@ export class PiServerV2 {
 	}
 
 	async start(): Promise<this> {
-		if (this.started || this.closing) throw new Error("PiServerV2 is already started or closing");
+		if (this.started || this.closing) return Promise.reject(new Error("PiServerV2 is already started or closing"));
+		if (this.startPromise) return this.startPromise;
+		this.startPromise = this.startInternal();
+		return this.startPromise;
+	}
+
+	private async startInternal(): Promise<this> {
 		const started: PiServerListener[] = [];
 		try {
 			await this.restoreStore();
@@ -249,6 +289,8 @@ export class PiServerV2 {
 		} catch (error) {
 			await Promise.allSettled(started.map((listener) => listener.close()));
 			throw error;
+		} finally {
+			this.startPromise = undefined;
 		}
 	}
 
@@ -341,10 +383,15 @@ export class PiServerV2 {
 				sessions: await this.service.listSessions(),
 				models: await this.service.listModels(),
 			};
-			if (!(await this.send(state, { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: state.id, snapshot }))) return;
-			state.ready = true;
+			if (
+				!(await this.send(state, { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: state.id, snapshot }))
+			)
+				return;
 			clearTimeout(state.handshakeTimeout);
 			if (message.lastEvent) {
+				if (!snapshot.sessions.some((session) => session.id === message.lastEvent?.sessionId)) {
+					return void (await this.failProtocol(state, "invalid_request", "Replay session is not available"));
+				}
 				const history = this.eventHistory.get(message.lastEvent.sessionId) ?? [];
 				const events: EventEnvelopeV2[] = [];
 				let replayBytes = 0;
@@ -360,8 +407,23 @@ export class PiServerV2 {
 				}
 				for (const event of events) if (!(await this.send(state, event))) return;
 			}
+			state.ready = true;
 		} catch (error) {
 			await this.failProtocol(state, "internal_error", "Internal server error", error);
 		}
 	}
+}
+
+function resolveMaxFrameLength(value: number | undefined): number {
+	const resolved = value ?? DEFAULT_MAX_FRAME_LENGTH;
+	if (!Number.isSafeInteger(resolved) || resolved <= 0 || resolved > MAX_UINT32)
+		throw new TypeError(`PiServerV2 maxFrameLength must be an integer between 1 and ${MAX_UINT32}`);
+	return resolved;
+}
+
+function resolveHandshakeTimeout(value: number | undefined): number {
+	const resolved = value ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
+	if (!Number.isSafeInteger(resolved) || resolved <= 0 || resolved > MAX_TIMER_DELAY_MS)
+		throw new TypeError(`PiServerV2 handshakeTimeoutMs must be an integer between 1 and ${MAX_TIMER_DELAY_MS}`);
+	return resolved;
 }
