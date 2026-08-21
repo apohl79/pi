@@ -229,6 +229,100 @@ describe("coding-agent daemon runtime", () => {
 		}
 	});
 
+	test("rolls back a durable production daemon conversation and reloads it", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-rollback-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-rollback-faux",
+			models: [
+				{ id: "coding-agent-daemon-rollback-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("first response"), fauxAssistantMessage("second response")]);
+		const createRuntime = () =>
+			createConfiguredCodingAgentDaemonRuntime({
+				agentDir: directory,
+				cwd: directory,
+				models,
+				model: faux.getModel(),
+				socketPath: join(directory, "server.sock"),
+				harness: { tools: [], activeToolNames: [] },
+				write: () => {},
+			});
+		const first = await createRuntime();
+		const firstClient = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		let sessionId = "";
+		try {
+			await first.daemon.start();
+			await firstClient.connect();
+			const created = await firstClient.request({ command: "session/create", payload: { cwd: directory } });
+			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
+			sessionId = (created.result as { session: { id: string } }).session.id;
+			await firstClient.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			const waitForIdle = async () => {
+				for (let attempt = 0; attempt < 50; attempt++) {
+					const read = await firstClient.request({ command: "session/read", sessionId });
+					if (
+						read.ok &&
+						"result" in read &&
+						(read.result as { session: { phase: string } }).session.phase === "idle"
+					)
+						return;
+					if (attempt === 49) throw new Error("Timed out waiting for rollback fixture operation");
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+			};
+			await firstClient.request({ command: "turn/start", sessionId, payload: { text: "first request" } });
+			await waitForIdle();
+			await firstClient.request({ command: "turn/start", sessionId, payload: { text: "second request" } });
+			await waitForIdle();
+			await firstClient.request({ command: "turn/rollback", sessionId, payload: { turns: 1 } });
+			await waitForIdle();
+			const rolledBack = await firstClient.request({ command: "session/read", sessionId });
+			expect(rolledBack).toMatchObject({ ok: true, result: { session: { phase: "idle" } } });
+			const transcript = (
+				rolledBack as unknown as {
+					result: { session: { transcript: Array<{ content: Array<{ text?: string }> }> } };
+				}
+			).result.session.transcript;
+			expect(
+				transcript
+					.flatMap((item) => item.content)
+					.map((item) => item.text)
+					.filter(Boolean),
+			).toEqual(["first request", "first response"]);
+		} finally {
+			firstClient.dispose();
+			await first.close();
+		}
+		const second = await createRuntime();
+		const secondClient = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await second.daemon.start();
+			await secondClient.connect();
+			const reloaded = await secondClient.request({ command: "session/read", sessionId });
+			expect(reloaded).toMatchObject({ ok: true, result: { session: { phase: "idle" } } });
+			const reloadedTranscript = (
+				reloaded as unknown as { result: { session: { transcript: Array<{ content: Array<{ text?: string }> }> } } }
+			).result.session.transcript;
+			expect(
+				reloadedTranscript
+					.flatMap((item) => item.content)
+					.map((item) => item.text)
+					.filter(Boolean),
+			).toEqual(["first request", "first response"]);
+		} finally {
+			secondClient.dispose();
+			await second.close();
+		}
+	});
+
 	test("runs a configured goal continuation after a production daemon turn", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-goal-continuation-"));
 		directories.push(directory);
