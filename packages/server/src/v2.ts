@@ -137,6 +137,7 @@ export class PiServerV2 {
 	private readonly controls = new Map<string, string>();
 	private readonly runtimes = new Set<PiSessionRuntimeV2>();
 	private readonly eventHistory = new Map<string, EventEnvelopeV2[]>();
+	private readonly agentWatches = new Set<string>();
 	private readonly operations = new Map<string, OperationRecordV2>();
 	private readonly disposedRuntimes = new WeakSet<PiSessionRuntimeV2>();
 	private closing = false;
@@ -577,7 +578,10 @@ export class PiServerV2 {
 		});
 		await this.sendResponse(state, id, { command: command.command, agent });
 		const runtime = state.sessions.get(command.sessionId);
-		if (runtime) await this.broadcastEvent(command.sessionId, runtime, { agent }, undefined, "agent_updated");
+		if (runtime) {
+			await this.broadcastEvent(command.sessionId, runtime, { agent }, undefined, "agent_updated");
+			this.watchAgent(command.sessionId, runtime, agent.id);
+		}
 	}
 
 	private async listAgents(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
@@ -635,7 +639,10 @@ export class PiServerV2 {
 		});
 		const sessionId = (await this.agents.getSnapshot(agent.id)).sessionId;
 		const runtime = state.sessions.get(sessionId);
-		if (runtime) await this.broadcastEvent(sessionId, runtime, { agent }, undefined, "agent_updated");
+		if (runtime) {
+			await this.broadcastEvent(sessionId, runtime, { agent }, undefined, "agent_updated");
+			this.watchAgent(sessionId, runtime, agent.id);
+		}
 	}
 
 	private async snapshotForSession(sessionId: string, runtime: PiSessionRuntimeV2): Promise<SessionSnapshotV2> {
@@ -652,6 +659,19 @@ export class PiServerV2 {
 				...(pendingInputRequestId === undefined ? {} : { pendingInputRequestId }),
 			},
 		};
+	}
+
+	private watchAgent(sessionId: string, runtime: PiSessionRuntimeV2, agentId: string): void {
+		const key = `${sessionId}:${agentId}`;
+		if (this.agentWatches.has(key)) return;
+		this.agentWatches.add(key);
+		void this.agents
+			.wait(agentId)
+			.then(async (agent) => {
+				if (!this.closing) await this.broadcastEvent(sessionId, runtime, { agent }, undefined, "agent_updated");
+			})
+			.catch((error) => this.reportError(error instanceof Error ? error : new Error(String(error))))
+			.finally(() => this.agentWatches.delete(key));
 	}
 
 	private async readPlan(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
