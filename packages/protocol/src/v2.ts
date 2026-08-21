@@ -1,6 +1,6 @@
 import Type, { type Static, type TSchema } from "typebox";
 import { Check } from "typebox/value";
-import { type JsonValue, JsonValueSchema, ThinkingLevelSchema } from "./schemas.ts";
+import { type JsonValue, ThinkingLevelSchema } from "./schemas.ts";
 
 export const PROTOCOL_V2_VERSION = 2 as const;
 
@@ -496,7 +496,7 @@ export const CommandV2Schema = StrictObject({
 	sessionId: Type.Optional(IdSchema),
 	operationId: Type.Optional(IdSchema),
 	requestId: Type.Optional(IdSchema),
-	payload: Type.Optional(JsonValueSchema),
+	payload: Type.Optional(BoundedJsonValueSchema),
 });
 export type CommandV2 = Static<typeof CommandV2Schema>;
 
@@ -541,7 +541,7 @@ export const EventEnvelopeV2Schema = StrictObject({
 	revision: NonNegativeIntegerSchema,
 	operationId: Type.Optional(IdSchema),
 	event: EventNameV2Schema,
-	payload: Type.Unsafe<JsonValue>(JsonValueSchema),
+	payload: Type.Unsafe<JsonValue>(BoundedJsonValueSchema),
 });
 export type EventEnvelopeV2 = Static<typeof EventEnvelopeV2Schema>;
 
@@ -562,7 +562,11 @@ export type ServerHelloV2 = Static<typeof ServerHelloV2Schema>;
 
 export const ServerHelloErrorV2Schema = StrictObject({
 	type: Type.Literal("hello_error"),
-	error: StrictObject({ code: IdSchema, message: Type.String(), details: Type.Optional(JsonValueSchema) }),
+	error: StrictObject({
+		code: IdSchema,
+		message: BoundedStringSchema,
+		details: Type.Optional(BoundedJsonValueSchema),
+	}),
 });
 export type ServerHelloErrorV2 = Static<typeof ServerHelloErrorV2Schema>;
 
@@ -584,13 +588,17 @@ export const ResponseEnvelopeV2Schema = Type.Union([
 		type: Type.Literal("response"),
 		id: IdSchema,
 		ok: Type.Literal(true),
-		result: JsonValueSchema,
+		result: BoundedJsonValueSchema,
 	}),
 	StrictObject({
 		type: Type.Literal("response"),
 		id: IdSchema,
 		ok: Type.Literal(false),
-		error: StrictObject({ code: IdSchema, message: Type.String(), details: Type.Optional(JsonValueSchema) }),
+		error: StrictObject({
+			code: IdSchema,
+			message: BoundedStringSchema,
+			details: Type.Optional(BoundedJsonValueSchema),
+		}),
 	}),
 ]);
 export type ResponseEnvelopeV2 = Static<typeof ResponseEnvelopeV2Schema>;
