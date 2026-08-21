@@ -1014,34 +1014,158 @@ export class AgentHarness implements AgentLane {
 		return this.unavailable("resume");
 	}
 	async abort(): Promise<AbortResult> {
-		return this.unavailable("abort");
+		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		const openRun = (await this.durableSession.findOpenOperations("main", { limit: 1 })).find(
+			(operation) => operation.intent.kind === "run",
+		);
+		if (!openRun) return ResultValue.err(new NoActiveOperation({ lane: "main", message: "No active operation" }));
+		const queued = await this.durableSession.findRecords({
+			type: "queue_enqueued",
+			lane: "main",
+			order: "oldestFirst",
+		});
+		const cancelled = new Set(
+			(await this.durableSession.findRecords({ type: "queue_cancelled", lane: "main" })).map(
+				(record) => record.entryId,
+			),
+		);
+		const recalled = { steer: [] as AgentMessage[], followUp: [] as AgentMessage[] };
+		for (const item of queued) {
+			if (
+				item.queue === "nextRun" ||
+				item.runId !== openRun.id ||
+				cancelled.has(item.target.id) ||
+				item.target.type !== "message"
+			)
+				continue;
+			recalled[item.queue].push(structuredClone(item.target.message));
+			cancelled.add(item.target.id);
+			const cancellation: NewRecord<QueueCancelledRecord> = {
+				type: "queue_cancelled",
+				id: this.durableSession.idGenerator.next(),
+				lane: "main",
+				runId: openRun.id,
+				entryId: item.target.id,
+			};
+			await this.durableSession.appendRecord(cancellation);
+		}
+		const requested: NewRecord<AbortRequestedRecord> = {
+			type: "abort_requested",
+			id: this.durableSession.idGenerator.next(),
+			lane: "main",
+			runId: openRun.id,
+		};
+		await this.durableSession.appendRecord(requested);
+		const finished: NewRecord<OperationFinishedRecord> = {
+			type: "operation_finished",
+			id: this.durableSession.idGenerator.next(),
+			lane: "main",
+			runId: openRun.id,
+			outcome: "aborted",
+		};
+		await this.durableSession.appendRecord(finished);
+		return ResultValue.ok({ runId: openRun.id, ...recalled });
 	}
 	async steer(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
 	async steer(_message: AgentMessage): Promise<QueueResult>;
-	async steer(_input: string | AgentMessage, _images?: ImageContent[]): Promise<QueueResult> {
-		return this.unavailable("steer");
+	async steer(input: string | AgentMessage, images?: ImageContent[]): Promise<QueueResult> {
+		return this.enqueue(input, images, "steer", true);
 	}
 	async followUp(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
 	async followUp(_message: AgentMessage): Promise<QueueResult>;
-	async followUp(_input: string | AgentMessage, _images?: ImageContent[]): Promise<QueueResult> {
-		return this.unavailable("followUp");
+	async followUp(input: string | AgentMessage, images?: ImageContent[]): Promise<QueueResult> {
+		return this.enqueue(input, images, "followUp", true);
 	}
 	async nextRun(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
 	async nextRun(_message: AgentMessage): Promise<QueueResult>;
-	async nextRun(_input: string | AgentMessage, _images?: ImageContent[]): Promise<QueueResult> {
-		return this.unavailable("nextRun");
+	async nextRun(input: string | AgentMessage, images?: ImageContent[]): Promise<QueueResult> {
+		return this.enqueue(input, images, "nextRun", false);
 	}
-	async cancelQueued(_entryId: string): Promise<CancelQueuedResult> {
-		return this.unavailable("cancelQueued");
+	async cancelQueued(entryId: string): Promise<CancelQueuedResult> {
+		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		const enqueued = (await this.durableSession.findRecords({ type: "queue_enqueued", lane: "main" })).find(
+			(record) => record.target.id === entryId,
+		);
+		if (!enqueued)
+			return ResultValue.err(new UnknownQueueItem({ lane: "main", entryId, message: "Queued item not found" }));
+		const cancelled = (await this.durableSession.findRecords({ type: "queue_cancelled", lane: "main" })).some(
+			(record) => record.entryId === entryId,
+		);
+		if (cancelled) return ResultValue.ok({ outcome: "already_cleared" });
+		const record: NewRecord<QueueCancelledRecord> =
+			enqueued.queue === "nextRun"
+				? { type: "queue_cancelled", id: this.durableSession.idGenerator.next(), lane: "main", entryId }
+				: {
+						type: "queue_cancelled",
+						id: this.durableSession.idGenerator.next(),
+						lane: "main",
+						runId: enqueued.runId,
+						entryId,
+					};
+		await this.durableSession.appendRecord(record);
+		return ResultValue.ok({ outcome: "cancelled" });
 	}
-	async recordUsage(_usage: Usage, _options?: { entryId?: string; details?: JsonValue }): Promise<RecordUsageResult> {
-		return this.unavailable("recordUsage");
+
+	private async enqueue(
+		input: string | AgentMessage,
+		images: ImageContent[] | undefined,
+		queue: QueueEnqueuedRecord["queue"],
+		requiresRun: boolean,
+	): Promise<QueueResult> {
+		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		const openRun = (await this.durableSession.findOpenOperations("main", { limit: 1 })).find(
+			(operation) => operation.intent.kind === "run",
+		);
+		if (requiresRun && !openRun) return ResultValue.err(new NoActiveRun({ lane: "main", message: "No active run" }));
+		const message: AgentMessage =
+			typeof input === "string"
+				? { role: "user", content: [{ type: "text", text: input }, ...(images ?? [])], timestamp: Date.now() }
+				: structuredClone(input);
+		const target: ProvisionedEntry = { type: "message", id: this.durableSession.idGenerator.next(), message };
+		const record: NewRecord<QueueEnqueuedRecord> =
+			queue === "nextRun"
+				? { type: "queue_enqueued", id: this.durableSession.idGenerator.next(), lane: "main", queue, target }
+				: {
+						type: "queue_enqueued",
+						id: this.durableSession.idGenerator.next(),
+						lane: "main",
+						queue,
+						runId: openRun!.id,
+						target,
+					};
+		await this.durableSession.appendRecord(record);
+		return ResultValue.ok({ entryId: target.id });
+	}
+	async recordUsage(usage: Usage, options?: { entryId?: string; details?: JsonValue }): Promise<RecordUsageResult> {
+		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		try {
+			const record: NewRecord<UsageRecord> = {
+				type: "usage",
+				id: this.durableSession.idGenerator.next(),
+				lane: "main",
+				usage: structuredClone(usage),
+				cause: "adjustment",
+				entryId: options?.entryId,
+				details: options?.details,
+			};
+			await this.durableSession.appendRecord(record);
+			return ResultValue.ok(undefined);
+		} catch (error) {
+			throw new HarnessFault("Unable to persist usage record", error);
+		}
 	}
 	async waitForIdle(): Promise<void> {
-		return this.unavailable("waitForIdle");
+		while (true) {
+			if (this.closed) throw new HarnessClosed();
+			const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+			if (open.length === 0) return;
+			await new Promise<void>((resolve) => setTimeout(resolve, 5));
+		}
 	}
-	async runWhenIdle(_callback: () => void | Promise<void>): Promise<void> {
-		return this.unavailable("runWhenIdle");
+	async runWhenIdle(callback: () => void | Promise<void>): Promise<void> {
+		await this.waitForIdle();
+		if (this.closed) throw new HarnessClosed();
+		await callback();
 	}
 	async peekAction(): Promise<ActionInfo | undefined> {
 		return this.unavailable("peekAction");
