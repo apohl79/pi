@@ -596,6 +596,7 @@ export class PiServerV2 {
 	private async messageAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const agentId = agentIdFrom(command, payload);
+		this.requireControl(state, (await this.agents.getSnapshot(agentId)).sessionId);
 		if (typeof payload.message !== "string") throw new Error("agent/message requires message");
 		await this.agents.message(agentId, payload.message);
 		await this.sendResponse(state, id, { command: command.command, agentId });
@@ -604,6 +605,7 @@ export class PiServerV2 {
 	private async followUpAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const agentId = agentIdFrom(command, payload);
+		this.requireControl(state, (await this.agents.getSnapshot(agentId)).sessionId);
 		if (typeof payload.message !== "string") throw new Error("agent/followUp requires message");
 		await this.sendResponse(state, id, {
 			command: command.command,
@@ -613,6 +615,7 @@ export class PiServerV2 {
 
 	private async interruptAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
+		this.requireControl(state, (await this.agents.getSnapshot(agentIdFrom(command, payload))).sessionId);
 		await this.sendResponse(state, id, {
 			command: command.command,
 			agent: await this.agents.interrupt(agentIdFrom(command, payload)),
