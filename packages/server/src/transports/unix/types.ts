@@ -10,6 +10,7 @@ import type { V2PlanRegistry } from "../../plans.ts";
 import type { V2PluginRegistry } from "../../plugins.ts";
 import type { V2ProcessRegistry } from "../../processes.ts";
 import type { PiServerOptions } from "../../types.ts";
+import type { V2UsageLedger } from "../../usage-ledger.ts";
 import type { V2WebService } from "../../web.ts";
 
 export interface UnixListenerOptions {
@@ -36,4 +37,6 @@ export interface UnixServerOptions extends Omit<PiServerOptions, "listeners">, U
 	files?: V2FileReferenceService;
 	web?: V2WebService;
 	images?: V2ImageService;
+	plugins?: V2PluginRegistry;
+	usage?: V2UsageLedger;
 }
