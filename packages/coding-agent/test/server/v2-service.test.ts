@@ -1,6 +1,8 @@
 import { GoalContinuationScheduler, GoalManager, InMemorySessionStorage, Session } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import { getModel } from "@earendil-works/pi-ai/compat";
+import { InMemoryV2InputRegistry } from "@earendil-works/pi-server";
 import { describe, expect, test } from "vitest";
 import { createCodingAgentHarness } from "../../src/server/create-harness.ts";
 import { ServerRuntimeExtensionHost } from "../../src/server/extension-host.ts";
@@ -19,6 +21,36 @@ describe("coding-agent v2 service adapter", () => {
 		expect(normalizeGeneratedName("A very long session title that exceeds the display limit")).toBe(
 			"A very long session title that",
 		);
+	});
+
+	test("projects a pending structured input request as awaitingInput", async () => {
+		const models = createModels();
+		const session = new Session(new InMemorySessionStorage({ id: "awaiting-input-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+		});
+		const inputs = new InMemoryV2InputRegistry();
+		const service = createCodingAgentV2Service(models, [
+			{
+				metadata: { id: "awaiting-input-session", createdAt: 1, updatedAt: 1 },
+				harness: created.harness,
+				inputs,
+			},
+		]);
+		const request = await inputs.create("awaiting-input-session", [{ id: "answer", prompt: "Answer?" }]);
+		try {
+			expect(await (await service.openSession("awaiting-input-session")).snapshot()).toMatchObject({
+				phase: "awaitingInput",
+			});
+		} finally {
+			await inputs.cancel(request.id);
+			await created.harness.close();
+			await env.cleanup();
+		}
 	});
 
 	test("schedules an active goal continuation after a completed turn", async () => {
