@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -43,5 +43,23 @@ describe("LocalV2FileReferenceService", () => {
 
 		await expect(service.resolve("session-1", "../secret.txt")).rejects.toThrow("escapes");
 		await expect(service.resolve("session-1", "link.txt")).rejects.toThrow("escapes");
+	});
+
+	test("allows explicit absolute references across the execution host when enabled", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-files-"));
+		const outside = await mkdtemp(join(tmpdir(), "pi-files-outside-"));
+		directories.push(root, outside);
+		await mkdir(join(outside, "nested"));
+		await writeFile(join(outside, "secret.txt"), "secret");
+		const service = new LocalV2FileReferenceService({ projectRoot: root, homeDirectory: root, allowAbsolute: true });
+
+		expect(await service.resolve("session-1", join(outside, "secret.txt"))).toMatchObject({
+			path: await realpath(join(outside, "secret.txt")),
+			kind: "file",
+		});
+		expect(await service.complete("session-1", join(outside, ""))).toEqual([
+			{ reference: join(outside, "nested"), path: join(outside, "nested"), kind: "directory" },
+			{ reference: join(outside, "secret.txt"), path: join(outside, "secret.txt"), kind: "file" },
+		]);
 	});
 });

@@ -124,7 +124,12 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 					kind: entry.isDirectory() ? "directory" : "file",
 				} satisfies V2FileCompletion;
 			})
-			.filter((entry) => this.allowedLexically(entry.path));
+			.filter((entry) => this.allowedLexically(entry.path, scope === "absolute"))
+			.sort(
+				(left, right) =>
+					Number(right.kind === "directory") - Number(left.kind === "directory") ||
+					left.reference.localeCompare(right.reference),
+			);
 	}
 
 	async resolve(sessionId: string, reference: string): Promise<V2FileReference> {
@@ -158,15 +163,16 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 		const base = scope === "project" ? this.projectRoot : scope === "home" ? this.homeDirectory : this.cwd;
 		if (scope === "absolute" && !this.allowAbsolute) throw new Error("Absolute file references are disabled");
 		const candidate = scope === "absolute" ? resolve(reference) : resolve(base, logical);
-		if (!this.allowedLexically(candidate))
+		if (!this.allowedLexically(candidate, scope === "absolute"))
 			throw new Error(`File reference escapes the accessible filesystem: ${reference}`);
 		const resolved = await realpath(candidate);
-		if (!(await this.allowed(resolved)))
+		if (!(await this.allowed(resolved, scope === "absolute")))
 			throw new Error(`File reference escapes the accessible filesystem: ${reference}`);
 		return resolved;
 	}
 
-	private allowedLexically(path: string): boolean {
+	private allowedLexically(path: string, absoluteScope = false): boolean {
+		if (absoluteScope && this.allowAbsolute) return true;
 		return (
 			isWithin(this.projectRoot, path) ||
 			isWithin(this.cwd, path) ||
@@ -174,7 +180,8 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 		);
 	}
 
-	private async allowed(path: string): Promise<boolean> {
+	private async allowed(path: string, absoluteScope = false): Promise<boolean> {
+		if (absoluteScope && this.allowAbsolute) return true;
 		const roots = await Promise.all([realpath(this.projectRoot), realpath(this.cwd), realpath(this.homeDirectory)]);
 		return roots.some((root) => isWithin(root, path));
 	}
