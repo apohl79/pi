@@ -543,7 +543,7 @@ export class AgentHarness implements AgentLane {
 					: (this.systemPromptSource ?? "");
 			const activeTools = this.tools.filter((tool) => this.activeToolNames.includes(tool.name));
 			const samplingInput = this.samplingInputFactory ? await this.samplingInputFactory() : this.samplingInput;
-			await this.park({ kind: "stream_assistant", step: "assistant", attempt: 1 });
+			let assistantAttempt = 0;
 			const newMessages = await runAgentLoop(
 				prompts,
 				{ systemPrompt, messages: persisted.messages, tools: activeTools },
@@ -552,6 +552,10 @@ export class AgentHarness implements AgentLane {
 					model: this.model,
 					samplingInput,
 					reasoning: this.thinkingLevel === "off" ? undefined : this.thinkingLevel,
+					beforeAssistantResponse: async () => {
+						assistantAttempt += 1;
+						await this.park({ kind: "stream_assistant", step: "assistant", attempt: assistantAttempt });
+					},
 					beforeToolCall: async ({ toolCall }) => {
 						await this.park({ kind: "execute_tool", toolCallId: toolCall.id, toolName: toolCall.name });
 						return undefined;

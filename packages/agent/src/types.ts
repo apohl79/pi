@@ -150,6 +150,12 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model<any>;
 
 	/**
+	 * Runs immediately before each provider stream request, including requests
+	 * after tool execution or a queued steering message.
+	 */
+	beforeAssistantResponse?: (signal?: AbortSignal) => Promise<void>;
+
+	/**
 	 * Produces request-only messages immediately before each provider request.
 	 * Returned messages are converted for that request and are never appended to
 	 * the durable context or emitted as conversation events.

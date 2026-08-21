@@ -313,6 +313,7 @@ async function streamAssistantResponse(
 		messages: llmMessages,
 		tools: context.tools,
 	};
+	await config.beforeAssistantResponse?.(signal);
 
 	// Resolve API key (important for expiring tokens)
 	const resolvedApiKey =
