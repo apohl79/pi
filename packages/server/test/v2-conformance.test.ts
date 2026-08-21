@@ -446,6 +446,39 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(service.sessions.has("created-session")).toBe(false);
 	});
 
+	test("serves app metadata and starts auth through the injected app registry", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-app-"));
+		directories.push(directory);
+		const apps = new InMemoryV2AppRegistry({
+			apps: [
+				{
+					id: "calendar",
+					name: "Calendar",
+					description: "Calendar connector",
+					auth: "unauthenticated",
+					enabled: true,
+				},
+			],
+		});
+		const server = createUnixServerV2(new TestService(), { path: join(directory, "server.sock"), apps });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const listed = await client.request({ command: "app/list" });
+		const read = await client.request({ command: "app/read", payload: { id: "calendar" } });
+		const auth = await client.request({
+			command: "app/auth/start",
+			payload: { id: "calendar", authorizationUrl: "https://auth.example.test/start" },
+		});
+		expect(listed).toMatchObject({ ok: true, result: { apps: [{ id: "calendar", auth: "unauthenticated" }] } });
+		expect(read).toMatchObject({ ok: true, result: { app: { id: "calendar", name: "Calendar" } } });
+		expect(auth).toMatchObject({
+			ok: true,
+			result: { auth: { appId: "calendar", state: "pending", authorizationUrl: "https://auth.example.test/start" } },
+		});
+	});
+
 	test("acknowledges a turn before starting runtime execution", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);

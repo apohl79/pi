@@ -416,7 +416,6 @@ export class PiServerV2 {
 			if (command.command === "app/list") return void (await this.listApps(state, id, command));
 			if (command.command === "app/read") return void (await this.readApp(state, id, command));
 			if (command.command === "app/auth/start") return void (await this.startAppAuth(state, id, command));
-			if (command.command === "app/auth/complete") return void (await this.completeAppAuth(state, id, command));
 			if (command.command === "plan/read") return void (await this.readPlan(state, id, command));
 			if (command.command === "plan/update") return void (await this.updatePlan(state, id, command));
 			if (command.command === "input/request/read") return void (await this.readInputRequest(state, id, command));
@@ -1174,6 +1173,27 @@ export class PiServerV2 {
 				enabled,
 				payload.scope === "user" || payload.scope === "project" ? payload.scope : undefined,
 			),
+		});
+	}
+
+	private async listApps(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		await this.sendResponse(state, id, { command: command.command, apps: await this.apps.list() });
+	}
+
+	private async readApp(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.id !== "string") throw new Error("app/read requires id");
+		const app = await this.apps.read(payload.id);
+		if (!app) throw new Error(`Unknown app: ${payload.id}`);
+		await this.sendResponse(state, id, { command: command.command, app });
+	}
+
+	private async startAppAuth(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.id !== "string") throw new Error("app/auth/start requires id");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			auth: await this.apps.startAuth(payload.id, payload),
 		});
 	}
 
