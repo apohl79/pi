@@ -6,7 +6,9 @@ import type {
 	JsonValue,
 	ModelMetadata,
 	OperationAccepted,
+	OperationSummary,
 	SessionMetadataV2,
+	SessionPhaseV2,
 	SessionSnapshotV2,
 	TranscriptItem,
 } from "@earendil-works/pi-protocol";
@@ -198,13 +200,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	private autoName = true;
 	private sessionName: string | undefined;
 	private nameSource: "explicit" | "generated" | "derived" | undefined;
-	private disposed = false;
-	private readonly operations = new Map<string, PersistedOperation>();
-	private operationId?: string;
-	private freshOperationId?: string;
-	private mutationTail: Promise<void> = Promise.resolve();
-	private executionTail: Promise<void> = Promise.resolve();
-	private readonly onDispose?: () => void;
+	private phase: SessionPhaseV2 = "idle";
+	private activeOperation: OperationSummary | undefined;
 
 	private readonly fastModel: Model<string> | undefined;
 
@@ -322,9 +319,9 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			nameRevision: this.nameRevision,
 			revision: this.revision,
 			eventSeq: this.eventSeq,
-			phase,
-			...(active === undefined ? {} : { activeOperation: active }),
-			model: { provider: boundedString(this.model.provider), id: boundedString(this.model.id) },
+			phase: this.phase,
+			...(this.activeOperation === undefined ? {} : { activeOperation: { ...this.activeOperation } }),
+			model: { provider: this.model.provider, id: this.model.id },
 			thinkingLevel,
 			transcript,
 			queues: { steer: [], followUp: [] },
@@ -359,21 +356,17 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		};
 	}
 
-	private restoreOperationState(entries: readonly Entry[]): void {
-		for (const entry of entries) {
-			this.revision = Math.max(this.revision, finiteTimestamp(entry.seq));
-			if (entry.type !== "custom" || entry.customType !== OPERATION_ENTRY || typeof entry.data !== "object" || entry.data === null) continue;
-			const data = entry.data as Partial<PersistedOperation>;
-			const states = ["accepted", "running", "complete", "failed", "aborted", "suspended"];
-			if (
-				typeof data.operationId !== "string" || data.operationId.length === 0 || data.operationId.length > 256 ||
-				!states.includes(data.state as string) || typeof data.kind !== "string" || data.kind.length === 0 || data.kind.length > 256 ||
-				![data.revision, data.eventSeq, data.acceptedSeq].every((value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
-			) continue;
-			this.operations.set(data.operationId, data as PersistedOperation);
-			this.revision = Math.max(this.revision, data.revision);
-			this.eventSeq = Math.max(this.eventSeq, data.eventSeq);
-		}
+	async accept(_operationId: string): Promise<OperationAccepted> {
+		this.revision += 1;
+		this.eventSeq += 1;
+		this.phase = "turn";
+		this.activeOperation = {
+			operationId: _operationId,
+			kind: "pending",
+			state: "accepted",
+			acceptedSeq: this.eventSeq,
+		};
+		return { operationId: _operationId, sessionRevision: this.revision, eventSeq: this.eventSeq };
 	}
 
 	async run(_operationId: string, command: CommandV2): Promise<void> {
@@ -382,6 +375,13 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
 		const extensionHost = this.definition.extensionHost;
+		this.phase = "turn";
+		this.activeOperation = {
+			operationId: _operationId,
+			kind: runCommand,
+			state: "running",
+			acceptedSeq: this.activeOperation?.acceptedSeq ?? this.eventSeq,
+		};
 		await extensionHost?.onOperationAccepted({ id: _operationId, type: runCommand });
 		try {
 			if (runCommand === "turn/start") {
@@ -452,6 +452,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				this.autoName = payload.enabled;
 			}
 		} catch (error) {
+			this.phase = "failed";
+			this.activeOperation = {
+				...this.activeOperation!,
+				state: "failed",
+				terminalSeq: this.eventSeq + 1,
+			};
 			await extensionHost?.onOperationTerminal({ id: _operationId, type: runCommand }, "failed");
 			throw error;
 		}
@@ -469,6 +475,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		await extensionHost?.onOperationTerminal({ id: _operationId, type: runCommand }, "completed");
 		this.revision += 1;
 		this.eventSeq += 1;
+		this.phase = "idle";
+		this.activeOperation = {
+			...this.activeOperation!,
+			state: "complete",
+			terminalSeq: this.eventSeq,
+		};
 	}
 
 	async dispose(): Promise<void> {
