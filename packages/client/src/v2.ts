@@ -13,10 +13,13 @@ import {
 	type ServerSnapshotV2,
 } from "@earendil-works/pi-protocol";
 import type { ByteTransport, ByteTransportFactory, ByteTransportHandlers } from "./transport.ts";
+import type { ListenerErrorHandler } from "./types.ts";
 
 export interface PiClientV2Options {
 	readonly transportFactory: ByteTransportFactory;
 	readonly maxFrameLength?: number;
+	/** Reports subscriber failures without allowing them to corrupt client state. */
+	readonly onListenerError?: ListenerErrorHandler;
 }
 
 type PendingResponse = { resolve: (message: ResponseEnvelopeV2) => void; reject: (error: Error) => void };
@@ -24,7 +27,7 @@ type PendingResponse = { resolve: (message: ResponseEnvelopeV2) => void; reject:
 /** Minimal transport-neutral v2 client used by remote daemon callers and the TUI adapter. */
 export class PiClientV2 {
 	private readonly options: PiClientV2Options;
-	private readonly decoder: FrameDecoder;
+	private decoder: FrameDecoder;
 	private readonly pending = new Map<string, PendingResponse>();
 	private readonly listeners = new Set<(event: EventEnvelopeV2) => void>();
 	private transport?: ByteTransport;
@@ -32,6 +35,7 @@ export class PiClientV2 {
 	private disposed = false;
 	private requestSequence = 0;
 	private handshake?: { resolve: (snapshot: ServerSnapshotV2) => void; reject: (error: Error) => void };
+	private transportGeneration = 0;
 
 	constructor(options: PiClientV2Options) {
 		this.options = options;
@@ -48,13 +52,21 @@ export class PiClientV2 {
 		const snapshot = new Promise<ServerSnapshotV2>((resolve, reject) => {
 			this.handshake = { resolve, reject };
 		});
+		const generation = ++this.transportGeneration;
 		const handlers: ByteTransportHandlers = {
-			onData: (chunk) => this.receive(chunk),
-			onClose: () => this.fail(new Error("PiClientV2 transport closed")),
-			onError: (error) => this.fail(error),
+			onData: (chunk) => {
+				if (generation === this.transportGeneration) this.receive(chunk, generation);
+			},
+			onClose: () => this.fail(new Error("PiClientV2 transport closed"), generation),
+			onError: (error) => this.fail(error, generation),
 		};
 		try {
-			this.transport = await this.options.transportFactory(handlers);
+			const transport = await this.options.transportFactory(handlers);
+			if (generation !== this.transportGeneration || this.disposed) {
+				transport.close();
+				throw new Error("PiClientV2 transport closed");
+			}
+			this.transport = transport;
 			await this.send({ type: "hello", version: PROTOCOL_V2_VERSION });
 			return await snapshot;
 		} catch (error) {
@@ -94,7 +106,8 @@ export class PiClientV2 {
 		await this.transport.send(encodeClientMessageV2(message, { maxFrameLength: this.options.maxFrameLength }));
 	}
 
-	private receive(chunk: Uint8Array): void {
+	private receive(chunk: Uint8Array, generation: number): void {
+		if (generation !== this.transportGeneration) return;
 		try {
 			for (const frame of this.decoder.push(chunk)) this.handle(parseServerMessageV2(decodeCbor(frame)));
 		} catch (error) {
@@ -115,7 +128,17 @@ export class PiClientV2 {
 			return;
 		}
 		if (message.type === "event") {
-			for (const listener of this.listeners) listener(message);
+			for (const listener of this.listeners) {
+				try {
+					listener(message);
+				} catch (error) {
+					try {
+						this.options.onListenerError?.(error instanceof Error ? error : new Error(String(error)));
+					} catch {
+						// Listener diagnostics cannot affect client state.
+					}
+				}
+			}
 			return;
 		}
 		const pending = this.pending.get(message.id);
@@ -124,11 +147,17 @@ export class PiClientV2 {
 		pending.resolve(message);
 	}
 
-	private fail(error: Error): void {
+	private fail(error: Error, generation = this.transportGeneration): void {
+		if (generation !== this.transportGeneration) return;
 		this.connectedValue = false;
+		this.transportGeneration += 1;
+		const transport = this.transport;
+		this.transport = undefined;
+		this.decoder = new FrameDecoder({ maxFrameLength: this.options.maxFrameLength ?? DEFAULT_MAX_FRAME_LENGTH });
 		this.handshake?.reject(error);
 		this.handshake = undefined;
 		for (const pending of this.pending.values()) pending.reject(error);
 		this.pending.clear();
+		transport?.close();
 	}
 }
