@@ -14,6 +14,12 @@ export const PROTOCOL_V2_VERSION = 2 as const;
 const IdSchema = Type.String({ minLength: 1 });
 const TimestampSchema = Type.Integer({ minimum: 0 });
 const NonNegativeIntegerSchema = Type.Integer({ minimum: 0 });
+const MimeTypeSchema = Type.String({
+	pattern: "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$",
+});
+const ImageMimeTypeSchema = Type.String({
+	pattern: "^image/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$",
+});
 const StrictObject = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
 	Type.Object(properties, { additionalProperties: false });
 
@@ -83,8 +89,8 @@ export type EventCursor = Static<typeof EventCursorSchema>;
 
 export const PromptContentSchema = Type.Union([
 	StrictObject({ type: Type.Literal("text"), text: Type.String() }),
-	StrictObject({ type: Type.Literal("image"), digest: IdSchema, mimeType: Type.String({ minLength: 1 }) }),
-	StrictObject({ type: Type.Literal("blob"), digest: IdSchema, mimeType: Type.String({ minLength: 1 }) }),
+	StrictObject({ type: Type.Literal("image"), digest: IdSchema, mimeType: ImageMimeTypeSchema }),
+	StrictObject({ type: Type.Literal("blob"), digest: IdSchema, mimeType: MimeTypeSchema }),
 	StrictObject({ type: Type.Literal("mention"), name: IdSchema, path: IdSchema }),
 ]);
 export type PromptContent = Static<typeof PromptContentSchema>;
