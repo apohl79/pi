@@ -206,6 +206,18 @@ class TestService implements PiServerServiceV2 {
 		runtimes.push(runtime);
 		return Promise.resolve(runtime);
 	}
+
+	async createSession(options: Record<string, unknown>): Promise<{ sessionId: string; runtime: PiSessionRuntimeV2 }> {
+		const sessionId = typeof options.id === "string" ? options.id : "created-session";
+		if (this.sessions.has(sessionId)) throw new Error(`Session ${sessionId} already exists`);
+		const runtime = new TestRuntime(sessionId);
+		this.sessions.set(sessionId, runtime);
+		return { sessionId, runtime };
+	}
+
+	async deleteSession(sessionId: string): Promise<void> {
+		if (!this.sessions.delete(sessionId)) throw new Error(`Unknown session ${sessionId}`);
+	}
 }
 
 afterEach(async () => {
@@ -330,6 +342,28 @@ describe("PiServer v2 operation acceptance", () => {
 		const doctor = await client.request({ command: "diagnostics/doctor", sessionId: "session-1" });
 		expect(status).toMatchObject({ ok: true, result: { capture: "metadata", eventCount: 0 } });
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
+	});
+
+	test("delegates session creation and deletion through the v2 service boundary", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-session-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const created = await client.request({
+			command: "session/create",
+			payload: { id: "created-session", cwd: "/tmp" },
+		});
+		expect(created).toMatchObject({
+			ok: true,
+			result: { command: "session/create", session: { id: "created-session" } },
+		});
+		const deleted = await client.request({ command: "session/delete", sessionId: "created-session" });
+		expect(deleted).toMatchObject({ ok: true, result: { command: "session/delete", sessionId: "created-session" } });
+		expect(service.sessions.has("created-session")).toBe(false);
 	});
 
 	test("acknowledges a turn before starting runtime execution", async () => {

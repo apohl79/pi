@@ -43,6 +43,8 @@ export interface PiServerServiceV2 {
 	listSessions(): Promise<SessionMetadataV2[]>;
 	listModels(): Promise<ModelMetadata[]>;
 	openSession(sessionId: string): Promise<PiSessionRuntimeV2>;
+	createSession?(options: Record<string, unknown>): Promise<{ sessionId: string; runtime: PiSessionRuntimeV2 }>;
+	deleteSession?(sessionId: string): Promise<void>;
 }
 
 export interface PiServerV2Options {
@@ -352,6 +354,8 @@ export class PiServerV2 {
 
 	private async handleRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		try {
+			if (command.command === "session/create") return void (await this.createSession(state, id, command));
+			if (command.command === "session/delete") return void (await this.deleteSession(state, id, command));
 			if (command.command === "session/list")
 				return void (await this.sendResponse(state, id, {
 					command: command.command,
@@ -436,6 +440,32 @@ export class PiServerV2 {
 			this.reportError(error instanceof Error ? error : new Error(String(error)));
 			await this.sendError(state, id, "request_failed", "Request failed");
 		}
+	}
+
+	private async createSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!this.service.createSession) throw new Error("session/create is not supported by this service");
+		const payload = objectPayload(command);
+		for (const field of ["id", "name", "cwd"]) {
+			if (payload[field] !== undefined && typeof payload[field] !== "string")
+				throw new Error(`session/create ${field} must be a string`);
+		}
+		const created = await this.service.createSession(payload);
+		if (state.sessions.has(created.sessionId)) throw new Error(`Session ${created.sessionId} is already attached`);
+		state.sessions.set(created.sessionId, created.runtime);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			session: toProtocolJsonValue(await this.snapshotForSession(created.sessionId, created.runtime)),
+		});
+	}
+
+	private async deleteSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("session/delete requires sessionId");
+		if (!this.service.deleteSession) throw new Error("session/delete is not supported by this service");
+		await this.service.deleteSession(command.sessionId);
+		const runtime = state.sessions.get(command.sessionId);
+		state.sessions.delete(command.sessionId);
+		if (runtime && !this.hasRuntimeReference(runtime)) await this.disposeRuntime(runtime);
+		await this.sendResponse(state, id, { command: command.command, sessionId: command.sessionId });
 	}
 
 	private async attach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
