@@ -9,6 +9,7 @@ const AGENT_REGISTRY_STATE = "agent_registry_state";
 
 interface PersistedAgentState {
 	readonly version: 1;
+	readonly state?: AgentSummary["state"];
 	readonly inbox: readonly string[];
 	readonly followUps: readonly string[];
 }
@@ -17,6 +18,13 @@ function isPersistedAgentState(value: unknown): value is PersistedAgentState {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 	const state = value as Record<string, unknown>;
 	if (state.version !== 1 || !Array.isArray(state.inbox) || !Array.isArray(state.followUps)) return false;
+	if (
+		state.state !== undefined &&
+		!(["idle", "running", "awaitingInput", "complete", "failed", "interrupted"] as const).includes(
+			state.state as AgentSummary["state"],
+		)
+	)
+		return false;
 	if (![...state.inbox, ...state.followUps].every((item) => typeof item === "string" && item.length > 0)) return false;
 	const characters = [...state.inbox, ...state.followUps].reduce((total, item) => total + item.length, 0);
 	return (
@@ -172,6 +180,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				});
 			} finally {
 				agent.state = "interrupted";
+				await this.persist(agent);
 				this.resolveWaiters(agent);
 			}
 		}
@@ -209,6 +218,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			}
 		} catch {
 			agent.state = "failed";
+			await this.persist(agent);
 		} finally {
 			if (agent.state !== "running") this.resolveWaiters(agent);
 		}
@@ -261,7 +271,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				id: metadata.id,
 				path: `${parentPath}/${taskName}`,
 				taskName,
-				state: snapshot.phase === "idle" ? "complete" : "running",
+				state: persisted?.state ?? (snapshot.phase === "idle" ? "complete" : "running"),
 				model: snapshot.model,
 			};
 			this.agents.set(metadata.id, {
@@ -283,6 +293,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		if (!append) return;
 		const state: PersistedAgentState = {
 			version: 1,
+			state: agent.state,
 			inbox: agent.inbox.slice(),
 			followUps: agent.followUps.slice(),
 		};
