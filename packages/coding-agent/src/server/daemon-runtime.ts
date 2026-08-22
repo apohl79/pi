@@ -235,9 +235,14 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			createNodeSqliteFactory(),
 			options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.sqlite"),
 		);
+	const migrationSpool =
+		options.diagnostics === undefined
+			? new JsonlForensicRecorder(options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"))
+			: undefined;
 	const recordMigrationDiagnostic = async (event: Parameters<ForensicRecorder["record"]>[0]): Promise<void> => {
 		try {
 			await diagnostics.record(event);
+			await migrationSpool?.record(event);
 		} catch {
 			// Diagnostic persistence must not mask startup or migration outcomes.
 		}
