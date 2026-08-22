@@ -128,6 +128,8 @@ export interface CodingAgentV2Service {
 export interface CodingAgentV2ServiceOptions {
 	/** Provider-local fast model used only for side-band automatic naming. */
 	fastModel?: Model<string>;
+	/** Resolve a provider-local role without changing the session's active model. */
+	fastModelResolver?: (model: Model<string>) => Model<string> | undefined;
 	/** Durable owner creates a fully initialized session definition. */
 	createSession?: (options: Record<string, unknown>) => Promise<CodingAgentV2SessionDefinition>;
 	/** Durable owner forks a session and returns its initialized definition. */
@@ -328,6 +330,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	private recoveryState: "clean" | "recovered" | "needsResolution" | "degraded";
 
 	private readonly fastModel: Model<string> | undefined;
+	private readonly fastModelResolver: ((model: Model<string>) => Model<string> | undefined) | undefined;
 	private autoNameLoaded = false;
 	private nameStateLoaded = false;
 	private nameGeneration: Promise<void> | undefined;
@@ -345,10 +348,11 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		this.nameSource = definition.metadata.nameSource;
 		this.recoveryState = definition.recoveryState ?? "clean";
 		this.fastModel = options?.fastModel;
+		this.fastModelResolver = options?.fastModelResolver;
 	}
 
 	private async generateName(operationId: string): Promise<void> {
-		const namingModel = this.fastModel ?? this.model;
+		const namingModel = this.fastModelResolver?.(this.model) ?? this.fastModel ?? this.model;
 		const initialSource = this.nameSource;
 		if (initialSource === "explicit") return;
 		const initialRevision = this.nameRevision;
@@ -1025,7 +1029,7 @@ export function createCodingAgentV2Service(
 export async function createCodingAgentV2ServiceFromStore(
 	models: Models,
 	store: CodingAgentV2SessionStore,
-	options?: Pick<CodingAgentV2ServiceOptions, "fastModel">,
+	options?: Pick<CodingAgentV2ServiceOptions, "fastModel" | "fastModelResolver">,
 ): Promise<CodingAgentV2Service> {
 	const initialSessions = await store.list();
 	return createCodingAgentV2Service(models, [], {

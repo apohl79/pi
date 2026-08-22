@@ -5,6 +5,25 @@ import { describe, expect, test } from "vitest";
 import { ModelConfig } from "../src/core/model-config.ts";
 
 describe("ModelConfig compaction overrides", () => {
+	test("resolves provider-local model roles", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-model-roles-"));
+		const path = join(directory, "models.json");
+		try {
+			await writeFile(
+				path,
+				JSON.stringify({
+					providers: { faux: {} },
+					modelRoles: { faux: { fast: "fast-model" } },
+				}),
+			);
+			const config = await ModelConfig.load(path);
+			expect(config.getModelRole("faux", "fast")).toBe("fast-model");
+			expect(config.getModelRole("other", "fast")).toBeUndefined();
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("merges model and provider/model override fields", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-model-config-"));
 		const path = join(directory, "models.json");

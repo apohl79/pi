@@ -402,6 +402,11 @@ export class ModelRuntime implements Models {
 		return this.config.getCompactionOverride(providerId, modelId);
 	}
 
+	getModelRole(providerId: string, role: "fast"): Model<Api> | undefined {
+		const modelId = this.config.getModelRole(providerId, role);
+		return modelId === undefined ? undefined : this.getModel(providerId, modelId);
+	}
+
 	async checkAuth(providerId: string, options?: AuthOperationOptions): Promise<AuthCheck | undefined> {
 		return this.models.checkAuth(providerId, options);
 	}

@@ -384,6 +384,60 @@ describe("coding-agent v2 service adapter", () => {
 		}
 	});
 
+	test("resolves the provider-local fast role without changing the session model", async () => {
+		const models = createModels();
+		const observedModels: string[] = [];
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-naming-role-faux",
+			models: [
+				{ id: "session-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+				{ id: "fast-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			(_context, _options, _state, model) => {
+				observedModels.push(model.id);
+				return fauxAssistantMessage("turn response");
+			},
+			(_context, _options, _state, model) => {
+				observedModels.push(model.id);
+				return fauxAssistantMessage("Role-selected title");
+			},
+		]);
+		const session = new Session(new InMemorySessionStorage({ id: "naming-role-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: models.getModel(faux.provider.id, "session-model")!,
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		try {
+			const runtime = await createCodingAgentV2Service(
+				models,
+				[{ metadata: { id: "naming-role-session", createdAt: 1, updatedAt: 1 }, harness: created.harness }],
+				{
+					fastModelResolver: (model) =>
+						model.provider === faux.provider.id ? models.getModel(faux.provider.id, "fast-model") : undefined,
+				},
+			).openSession("naming-role-session");
+			await runtime.run("role-name", {
+				command: "turn/start",
+				sessionId: "naming-role-session",
+				payload: { text: "recover" },
+			});
+			expect(observedModels).toEqual(["session-model", "fast-model"]);
+			expect((await runtime.snapshot()).model.id).toBe("session-model");
+			expect((await runtime.snapshot()).name).toBe("Role-selected title");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("does not fail a completed turn when side-band naming fails", async () => {
 		const models = createModels();
 		const faux = fauxProvider({

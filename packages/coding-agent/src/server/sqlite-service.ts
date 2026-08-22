@@ -51,6 +51,7 @@ export interface CodingAgentV2SqliteServiceOptions {
 	env: ExecutionEnv | ((metadata: SqliteSessionMetadata) => ExecutionEnv | Promise<ExecutionEnv>);
 	model: Model<Api> | ((metadata: SqliteSessionMetadata) => Model<Api> | Promise<Model<Api>>);
 	fastModel?: Model<Api>;
+	fastModelResolver?: (model: Model<Api>) => Model<Api> | undefined;
 	agentRoles?: Readonly<Record<string, CodingAgentRoleDefinition>>;
 	goalContinuation?: (context: {
 		goals: GoalManager;
@@ -559,6 +560,7 @@ export async function createCodingAgentV2SqliteService(
 	};
 	return createCodingAgentV2ServiceFromStore(options.models, store, {
 		...(options.fastModel === undefined ? {} : { fastModel: options.fastModel }),
+		...(options.fastModelResolver === undefined ? {} : { fastModelResolver: options.fastModelResolver }),
 	});
 }
 
