@@ -806,7 +806,12 @@ export class PiServerV2 {
 			request: responded,
 		});
 		const runtime = state.sessions.get(request.sessionId);
-		if (runtime !== undefined && (await runtime.snapshot()).phase === "idle") {
+		const snapshot = runtime === undefined ? undefined : await runtime.snapshot();
+		if (
+			runtime !== undefined &&
+			snapshot !== undefined &&
+			(snapshot.phase === "awaitingInput" || snapshot.persistence.recoveryState === "needsResolution")
+		) {
 			const operationId = randomUUID();
 			await runtime.accept(operationId);
 			void runtime
