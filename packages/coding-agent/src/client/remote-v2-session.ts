@@ -80,12 +80,33 @@ export class RemoteV2Session {
 	async attach(sessionId: string): Promise<void> {
 		this.#assertNotDisposed();
 		if (this.#handle?.sessionId === sessionId && this.#lifecycle.status === "ready") return;
-		this.#unsubscribe?.();
-		this.#handle = await this.#client.openSession(sessionId, "control");
-		this.#unsubscribe = this.#handle.onEvent((event) => this.#receiveEvent(event));
-		await this.refresh();
-		this.#lifecycle = { status: "ready" };
-		this.#emit();
+		const previous = this.#handle;
+		if (previous) {
+			await previous.detach();
+			this.#unsubscribe?.();
+			this.#unsubscribe = undefined;
+			this.#handle = undefined;
+		}
+		let next: PiSessionV2Handle | undefined;
+		let unsubscribe: (() => void) | undefined;
+		try {
+			next = await this.#client.openSession(sessionId, "control");
+			unsubscribe = next.onEvent((event) => this.#receiveEvent(event));
+			this.#handle = next;
+			this.#unsubscribe = unsubscribe;
+			await this.refresh();
+			this.#lifecycle = { status: "ready" };
+			this.#emit();
+		} catch (error) {
+			unsubscribe?.();
+			if (next) await next.detach().catch(() => {});
+			this.#unsubscribe = undefined;
+			this.#handle = undefined;
+			this.#snapshot = undefined;
+			this.#lastEvent = undefined;
+			this.#lifecycle = { status: "detached" };
+			throw error;
+		}
 	}
 
 	async refresh(): Promise<ProtocolSnapshot> {
@@ -167,6 +188,11 @@ export class RemoteV2Session {
 				};
 			void payload;
 		} else if (event.event === "operation_terminal") {
+			if (
+				this.#lifecycle.status !== "busy" ||
+				(event.operationId !== undefined && event.operationId !== this.#lifecycle.operationId)
+			)
+				return;
 			const snapshot = asRecord(event.payload)?.snapshot;
 			if (isSnapshot(snapshot)) this.#snapshot = structuredClone(snapshot);
 			this.#lifecycle = { status: "ready" };
