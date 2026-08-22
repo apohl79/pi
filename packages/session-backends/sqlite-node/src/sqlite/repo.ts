@@ -782,6 +782,26 @@ export class SqliteSessionRepository
 		return this.operations.enqueue(async () => inspectSqliteDatabase(await this.getDatabase()));
 	}
 
+	/** Rebuilds only the derived branch caches after integrity checks identify stale cache state. */
+	async repairDerivedIndexes(): Promise<readonly string[]> {
+		return this.operations.enqueue(async () => {
+			for (const storage of [...this.activeStorages]) await storage.release();
+			const db = await this.getDatabase();
+			const sessionIds = db
+				.prepare("SELECT id FROM sessions ORDER BY id")
+				.all<{ id: string }>()
+				.map((row) => row.id);
+			db.transaction(() => {
+				for (const sessionId of sessionIds) {
+					const lease = claimWriterLease(db, sessionId, this.leaseOptions);
+					rebuildBranchCache(db, sessionId);
+					releaseWriterLease(db, sessionId, lease);
+				}
+			});
+			return sessionIds;
+		});
+	}
+
 	/** Creates and verifies a consistent online snapshot using SQLite's backup primitive. */
 	async backup(destinationPath: string): Promise<SqliteBackupReport> {
 		return this.operations.enqueue(async () => {

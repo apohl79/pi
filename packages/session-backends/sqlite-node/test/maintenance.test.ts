@@ -17,6 +17,7 @@ describe("SQLite maintenance", () => {
 				appliedMigrations: ["001_initial.sql"],
 				schemaVersion: "001_initial.sql",
 				quickCheck: ["ok"],
+				foreignKeyErrors: [],
 				healthy: true,
 			});
 		} finally {
@@ -47,6 +48,51 @@ describe("SQLite maintenance", () => {
 			});
 		} finally {
 			backup.close();
+		}
+	});
+
+	it("repairs only derived branch caches after they are removed", async () => {
+		const root = createTempDir();
+		const databasePath = join(root, "sessions.sqlite");
+		const sqlite = createNodeSqliteFactory();
+		const env = new NodeExecutionEnv({ cwd: root });
+		const repository = new SqliteSessionRepository({ env, sqlite, databasePath });
+		const session = await repository.create({ cwd: root, id: "repair-session" });
+		await session.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "canonical" }],
+			timestamp: Date.now(),
+		});
+		await repository.close();
+
+		const corrupt = await sqlite.open(databasePath);
+		try {
+			corrupt.prepare("DELETE FROM branch_entries WHERE session_id = ?").run("repair-session");
+			corrupt.prepare("DELETE FROM branch_tips WHERE session_id = ?").run("repair-session");
+		} finally {
+			corrupt.close();
+		}
+
+		const repaired = new SqliteSessionRepository({ env, sqlite, databasePath });
+		try {
+			expect(await repaired.repairDerivedIndexes()).toEqual(["repair-session"]);
+			const inspection = await sqlite.open(databasePath);
+			try {
+				expect(
+					inspection
+						.prepare("SELECT COUNT(*) AS count FROM entries WHERE session_id = ?")
+						.get<{ count: number }>("repair-session"),
+				).toEqual({ count: 1 });
+				expect(
+					inspection
+						.prepare("SELECT COUNT(*) AS count FROM branch_entries WHERE session_id = ?")
+						.get<{ count: number }>("repair-session"),
+				).toEqual({ count: 1 });
+			} finally {
+				inspection.close();
+			}
+		} finally {
+			await repaired.close();
 		}
 	});
 });
