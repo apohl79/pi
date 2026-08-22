@@ -139,6 +139,27 @@ function persistedRetryPolicy(entry: Entry): RetryPolicy | undefined {
 	};
 }
 
+function persistedCompactionSettings(entry: Entry): CompactionSettings | undefined {
+	if (entry.type !== "custom" || entry.customType !== "compaction_settings_change") return undefined;
+	if (typeof entry.data !== "object" || entry.data === null || Array.isArray(entry.data)) return undefined;
+	const data = entry.data as Record<string, unknown>;
+	if (
+		typeof data.enabled !== "boolean" ||
+		typeof data.reserveTokens !== "number" ||
+		!Number.isFinite(data.reserveTokens) ||
+		data.reserveTokens < 0 ||
+		typeof data.keepRecentTokens !== "number" ||
+		!Number.isFinite(data.keepRecentTokens) ||
+		data.keepRecentTokens < 0
+	)
+		return undefined;
+	return {
+		enabled: data.enabled,
+		reserveTokens: data.reserveTokens,
+		keepRecentTokens: data.keepRecentTokens,
+	};
+}
+
 export interface OperationError {
 	code: string;
 	message: string;
@@ -500,6 +521,9 @@ export class AgentHarness implements AgentLane {
 		if (persistedTools?.type === "active_tools_change") harness.activeToolNames = [...persistedTools.activeToolNames];
 		const persistedRetry = branchEntries.find((entry) => persistedRetryPolicy(entry) !== undefined);
 		if (persistedRetry !== undefined) harness.retryPolicy = persistedRetryPolicy(persistedRetry)!;
+		const persistedCompaction = branchEntries.find((entry) => persistedCompactionSettings(entry) !== undefined);
+		if (persistedCompaction !== undefined)
+			harness.compactionSettings = persistedCompactionSettings(persistedCompaction)!;
 		const lanes = await options.session.getLanes();
 		const suspended: SuspendedOperation[] = [];
 		for (const lane of lanes.filter((candidate) => candidate.lane === harness.name)) {
@@ -1405,6 +1429,15 @@ export class AgentHarness implements AgentLane {
 	}
 	async setCompactionSettings(settings: CompactionSettings): Promise<void> {
 		this.compactionSettings = { ...settings };
+		await this.durableSession.appendEntry(
+			{
+				type: "custom",
+				customType: "compaction_settings_change",
+				id: this.durableSession.idGenerator.next(),
+				data: durableClone(settings),
+			},
+			this.name,
+		);
 	}
 	async getSteeringMode(): Promise<QueueMode> {
 		return this.steeringMode;
