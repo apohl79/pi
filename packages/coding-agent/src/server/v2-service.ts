@@ -99,7 +99,7 @@ function usage(value: Usage | undefined): {
 	};
 }
 
-function aggregateUsage(records: readonly LaneRecord[]): {
+function aggregateUsage(records: readonly LaneRecord[], branchEntryIds: ReadonlySet<string>): {
 	input: number;
 	output: number;
 	cacheRead: number;
@@ -108,18 +108,32 @@ function aggregateUsage(records: readonly LaneRecord[]): {
 } {
 	const add = (left: number, right: number): number => {
 		const sum = left + right;
-		return Number.isFinite(sum) ? Math.min(Number.MAX_SAFE_INTEGER, sum) : Number.MAX_SAFE_INTEGER;
+		if (!Number.isFinite(sum)) return right < 0 ? -Number.MAX_SAFE_INTEGER : Number.MAX_SAFE_INTEGER;
+		return Math.max(-Number.MAX_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, sum));
 	};
-	return records.filter((record): record is Extract<LaneRecord, { type: "usage" }> => record.type === "usage").reduce(
-		(total, record) => ({
-			input: add(total.input, finiteNonNegative(record.usage.input)),
-			output: add(total.output, finiteNonNegative(record.usage.output)),
-			cacheRead: add(total.cacheRead, finiteNonNegative(record.usage.cacheRead)),
-			cacheWrite: add(total.cacheWrite, finiteNonNegative(record.usage.cacheWrite)),
-			costUsd: add(total.costUsd, finiteNonNegative(record.usage.cost.total)),
-		}),
-		{ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 },
-	);
+	const signed = (value: number): number => (Number.isFinite(value) ? value : 0);
+	const totals = records
+		.filter(
+			(record): record is Extract<LaneRecord, { type: "usage" }> =>
+				record.type === "usage" && (record.entryId === undefined || branchEntryIds.has(record.entryId)),
+		)
+		.reduce(
+			(total, record) => ({
+				input: add(total.input, signed(record.usage.input)),
+				output: add(total.output, signed(record.usage.output)),
+				cacheRead: add(total.cacheRead, signed(record.usage.cacheRead)),
+				cacheWrite: add(total.cacheWrite, signed(record.usage.cacheWrite)),
+				costUsd: add(total.costUsd, signed(record.usage.cost.total)),
+			}),
+			{ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 },
+		);
+	return {
+		input: Math.max(0, Math.floor(totals.input)),
+		output: Math.max(0, Math.floor(totals.output)),
+		cacheRead: Math.max(0, Math.floor(totals.cacheRead)),
+		cacheWrite: Math.max(0, Math.floor(totals.cacheWrite)),
+		costUsd: Math.max(0, totals.costUsd),
+	};
 }
 
 function contentParts(message: AgentMessage): Array<Record<string, unknown>> {
@@ -371,13 +385,19 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 					: "suspended";
 		const goal = await this.definition.goals?.read();
 		const sessionName = persistedName ?? this.sessionName;
-		const totals = aggregateUsage(queueRecords);
+		const branchEntryIds = new Set(entries.map((entry) => entry.id));
+		const totals = aggregateUsage(queueRecords, branchEntryIds);
 		const contextWindow = Math.max(1, this.model.contextWindow);
 		const reserveTokens = Math.max(0, compaction.reserveTokens);
 		const latestUsage = queueRecords
-			.filter((record): record is Extract<LaneRecord, { type: "usage" }> => record.type === "usage" && record.cause === "assistant")
+			.filter(
+				(record): record is Extract<LaneRecord, { type: "usage" }> =>
+					record.type === "usage" &&
+					record.cause === "assistant" &&
+					(record.entryId === undefined || branchEntryIds.has(record.entryId)),
+			)
 			.at(-1)?.usage;
-		const currentTokens = Math.min(contextWindow, finiteNonNegative(latestUsage?.totalTokens));
+		const currentTokens = Math.min(contextWindow, Math.floor(finiteNonNegative(latestUsage?.totalTokens)));
 		return {
 			id: this.definition.metadata.id,
 			...(sessionName === undefined
