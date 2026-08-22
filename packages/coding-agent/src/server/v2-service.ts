@@ -28,7 +28,7 @@ function finiteTimestamp(value: unknown, fallback = 0): number {
 }
 
 function boundedString(value: unknown): string {
-	return typeof value === "string" ? value.slice(0, MAX_V2_STRING_LENGTH) : "";
+	return typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, " ").slice(0, MAX_V2_STRING_LENGTH) : "";
 }
 
 function boundedRequired(value: unknown, max = MAX_V2_STRING_LENGTH): string | undefined {
@@ -46,7 +46,7 @@ function redactText(value: string): string {
 		.replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "[redacted]")
 		.replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, "[redacted]")
 		.replace(/([\"']?(?:api[_ -]?key|access[_ -]?token|token|secret|password|authorization|credential)[\"']?)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)/gi, "$1=[redacted]")
-		.replace(/[\u0000-\u001f\u007f]/g, " ")
+		.replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, " ")
 		.replace(/\s+/g, " ")
 		.trim()
 		.slice(0, MAX_V2_STRING_LENGTH);

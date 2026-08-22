@@ -353,7 +353,7 @@ describe("coding-agent v2 service adapter", () => {
 			await session.appendMessage(
 				fauxAssistantMessage("password=super-secret", {
 					stopReason: "error",
-					errorMessage: "authorization: Bearer error-secret",
+					errorMessage: "authorization: Bearer error-secret\u009f",
 					timestamp: 2,
 				}),
 			);
