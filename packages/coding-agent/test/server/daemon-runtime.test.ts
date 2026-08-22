@@ -333,6 +333,7 @@ describe("coding-agent daemon runtime", () => {
 			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
 			sessionId = (created.result as { session: { id: string } }).session.id;
 			await firstClient.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			await firstClient.request({ command: "session/name/auto/set", sessionId, payload: { enabled: false } });
 			const waitForIdle = async () => {
 				for (let attempt = 0; attempt < 50; attempt++) {
 					const read = await firstClient.request({ command: "session/read", sessionId });
