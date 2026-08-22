@@ -1054,7 +1054,7 @@ export class PiServerV2 {
 			this.usage.read(sessionId === undefined ? {} : { sessionId }),
 			this.plugins.listMarketplaces(),
 			this.plugins.listPlugins(),
-			this.blobs.list(),
+			this.blobs.list?.() ?? Promise.resolve([]),
 		]);
 		const sessions =
 			sessionId === undefined ? allSessions : allSessions.filter((session) => session.id === sessionId);

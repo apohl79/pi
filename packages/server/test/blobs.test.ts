@@ -2,9 +2,20 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { FileV2BlobStore, InMemoryV2BlobStore } from "../src/blobs.ts";
+import { FileV2BlobStore, InMemoryV2BlobStore, type V2BlobStore } from "../src/blobs.ts";
+
+const legacyBlobStore: V2BlobStore = {
+	put: async () => ({ digest: "a".repeat(64), mimeType: "text/plain", size: 0 }),
+	read: async () => new Uint8Array(),
+	stat: async () => ({ digest: "a".repeat(64), mimeType: "text/plain", size: 0 }),
+};
 
 describe("InMemoryV2BlobStore", () => {
+	test("keeps inventory optional for protocol-compatible custom stores", async () => {
+		expect(legacyBlobStore.list).toBeUndefined();
+		expect(await legacyBlobStore.stat("a".repeat(64))).toMatchObject({ mimeType: "text/plain" });
+	});
+
 	test("deduplicates content by sha256 digest and returns bounded metadata", async () => {
 		const store = new InMemoryV2BlobStore({ maxBytes: 32, maxTotalBytes: 5, maxBlobs: 1 });
 		const first = await store.put(new TextEncoder().encode("hello"), "text/plain");
