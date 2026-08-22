@@ -333,6 +333,43 @@ export class SessionState {
 		return this.stats;
 	}
 
+	/**
+	 * Copy the projection before applying an externally sourced suffix. The
+	 * collections are intentionally copied so a failed speculative mutation
+	 * cannot leak into the live session state.
+	 */
+	clone(): SessionState {
+		const copy = new SessionState();
+		copy.sequence = this.sequence;
+		for (const id of this.usedIds) copy.usedIds.add(id);
+
+		for (const source of this.entries) {
+			const entry = structuredClone(source);
+			copy.entries.push(entry);
+			copy.entriesById.set(entry.id, entry);
+		}
+		for (const source of this.records) copy.records.push(structuredClone(source));
+		const recordsById = new Map(copy.records.map((record) => [record.id, record]));
+		for (const [lane, operations] of this.openOperationsByLane) {
+			const copiedOperations = new Map<string, OperationStartedRecord>();
+			for (const [id] of operations) {
+				const record = recordsById.get(id);
+				if (record?.type === "operation_started") copiedOperations.set(id, record);
+			}
+			copy.openOperationsByLane.set(lane, copiedOperations);
+		}
+		for (const [lane, leafId] of this.lanes) copy.lanes.set(lane, leafId);
+		copy.log.push(...structuredClone(this.log));
+		copy.stats.messageCount = this.stats.messageCount;
+		copy.stats.cachedTokens = this.stats.cachedTokens;
+		copy.stats.uncachedTokens = this.stats.uncachedTokens;
+		copy.stats.totalTokens = this.stats.totalTokens;
+		copy.stats.costTotal = this.stats.costTotal;
+		copy.name = this.name;
+		for (const [id, label] of this.labels) copy.labels.set(id, label);
+		return copy;
+	}
+
 	createForkMutations(options: ForkOptions): SessionMutation[] {
 		let copiedEntries: Entry[];
 		let forkLanes: LanePointer[];

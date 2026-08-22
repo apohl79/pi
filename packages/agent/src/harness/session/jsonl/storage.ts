@@ -428,13 +428,12 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 			}
 			suffix.push(mutationResult.value);
 		}
-		const originalState = this.state;
-		try {
-			for (const mutation of suffix) this.applyMutation(mutation);
-		} catch (error) {
-			this.state = originalState;
-			throw error;
-		}
+		// Apply the external suffix to a staged projection. SessionState mutates
+		// its collections in place, so retaining the original reference would not
+		// roll back mutations that precede a later validation failure.
+		const stagedState = this.state.clone();
+		for (const mutation of suffix) stagedState.applyMutation(mutation);
+		this.state = stagedState;
 		this.persistedLineCount = physicalLines.length;
 		this.persistedSize = fileInfo.size;
 		this.persistedModifiedAt = fileInfo.mtimeMs;
