@@ -13,6 +13,7 @@ import {
 	JsonlForensicRecorder,
 	JsonlV2InputRegistry,
 	JsonlV2PlanRegistry,
+	JsonlV2ProcessRegistry,
 	JsonV2PluginRegistry,
 	LocalDiagnosticCapsuleStore,
 	LocalV2FileReferenceService,
@@ -399,6 +400,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			clientDiagnosticSpoolPath:
 				options.clientDiagnosticSpoolPath ?? join(options.agentDir, "client-diagnostics.jsonl"),
 			lifecycleMarkerPath: options.lifecycleMarkerPath ?? join(options.agentDir, "daemon-state.json"),
+			processes: options.processes ?? new JsonlV2ProcessRegistry(join(options.agentDir, "processes.jsonl")),
 		});
 		return {
 			...runtime,

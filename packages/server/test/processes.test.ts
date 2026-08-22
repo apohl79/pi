@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { InMemoryV2ProcessRegistry, NodeV2ProcessRegistry } from "../src/processes.ts";
+import { InMemoryV2ProcessRegistry, JsonlV2ProcessRegistry, NodeV2ProcessRegistry } from "../src/processes.ts";
 
 describe("InMemoryV2ProcessRegistry", () => {
 	test("keeps bounded cursor-based output and explicit terminal state", async () => {
@@ -82,6 +84,22 @@ describe("InMemoryV2ProcessRegistry", () => {
 		expect(await registry.markLost()).toBe(1);
 		expect(await waiting).toMatchObject({ state: "lost" });
 		expect(await registry.getSnapshot(started.processId)).toMatchObject({ state: "lost" });
+	});
+
+	test("reloads running process metadata and marks it lost in a new registry", async () => {
+		const directory = await mkdtemp(join(process.env.TMPDIR ?? "/tmp", "pi-process-journal-"));
+		try {
+			const path = join(directory, "processes.jsonl");
+			const first = new JsonlV2ProcessRegistry(path, new InMemoryV2ProcessRegistry());
+			const started = await first.start({ sessionId: "session-persistent", command: "demo" });
+
+			const second = new JsonlV2ProcessRegistry(path, new InMemoryV2ProcessRegistry());
+			expect(await second.markLost()).toBe(1);
+			expect(await second.getSnapshot(started.processId)).toMatchObject({ state: "lost", command: "demo" });
+			expect(await second.wait(started.processId)).toMatchObject({ state: "lost" });
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	test("parses quoted argv without shell expansion and rejects shell syntax", async () => {

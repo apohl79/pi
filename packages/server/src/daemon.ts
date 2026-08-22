@@ -189,7 +189,8 @@ export class ServerDaemon {
 	}
 
 	private async stopInternal(server: ServerDaemonServer): Promise<void> {
-		await this.recordDiagnostic("daemon_stopping", { serverId: server.id }, "started");
+		const lostProcesses = (await this.options.processes?.markLost()) ?? 0;
+		await this.recordDiagnostic("daemon_stopping", { serverId: server.id, lostProcesses }, "started");
 		try {
 			await server.close();
 		} finally {
