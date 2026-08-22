@@ -784,6 +784,12 @@ export class TeeForensicRecorder implements ForensicRecorder {
 					await this.primary.record({
 						kind: "diagnostics_degraded",
 						severity: "error",
+						...(input.traceId === undefined ? {} : { traceId: input.traceId }),
+						...(input.spanId === undefined ? {} : { spanId: input.spanId }),
+						...(input.parentSpanId === undefined ? {} : { parentSpanId: input.parentSpanId }),
+						...(input.daemonInstanceId === undefined ? {} : { daemonInstanceId: input.daemonInstanceId }),
+						...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
+						...(input.operationId === undefined ? {} : { operationId: input.operationId }),
 						outcome: "error",
 						payload: { sink: "operational-log", failureCount: this.secondaryFailures },
 					});
