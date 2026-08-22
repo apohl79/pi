@@ -130,6 +130,7 @@ export class StatuslineRunner {
 	}
 
 	async dispose(): Promise<void> {
+		this.generation += 1;
 		this.abortController?.abort();
 		await this.inFlight?.catch(() => undefined);
 		this.snapshotValue = { pending: false };
