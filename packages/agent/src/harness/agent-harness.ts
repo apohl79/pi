@@ -606,6 +606,19 @@ export class AgentHarness implements AgentLane {
 			throw error;
 		}
 		const runId = localRunId;
+		const nextRunItems = await this.pendingQueueItems("nextRun");
+		const claimedQueueIds = new Set(nextRunItems.map((item) => item.id));
+		const initialMessages = [
+			...nextRunItems,
+			...prompts.map((message) => ({
+				type: "message" as const,
+				id: this.durableSession.idGenerator.next(),
+				message: durableClone(message),
+			})),
+		];
+		const messageTargets = new Map<AgentMessage, ProvisionedEntry>();
+		for (const item of nextRunItems) messageTargets.set(item.message, item);
+		prompts.forEach((message, index) => messageTargets.set(message, initialMessages[nextRunItems.length + index]!));
 		let started: NewRecord<OperationStartedRecord>;
 		try {
 			started = {
@@ -616,11 +629,7 @@ export class AgentHarness implements AgentLane {
 				intent: {
 					kind: "run",
 					originalPrompt: durableClone(prompts),
-					initialMessages: prompts.map((message) => ({
-						type: "message",
-						id: this.durableSession.idGenerator.next(),
-						message: durableClone(message),
-					})),
+					initialMessages,
 				},
 			};
 		} catch (error) {
@@ -659,7 +668,7 @@ export class AgentHarness implements AgentLane {
 					: (this.systemPromptSource ?? "");
 			const activeTools = this.tools.filter((tool) => this.activeToolNames.includes(tool.name));
 			const newMessages = await runAgentLoop(
-				prompts,
+				[...nextRunItems.map((item) => item.message), ...prompts],
 				{ systemPrompt, messages: persisted.messages, tools: activeTools },
 				{
 					...this.streamOptions,
@@ -671,7 +680,21 @@ export class AgentHarness implements AgentLane {
 							messages.filter(
 								(message): message is Message =>
 									message.role === "user" || message.role === "assistant" || message.role === "toolResult",
-							)),
+								)),
+					getSteeringMessages: async () => {
+						const items = (await this.pendingQueueItems("steer", runId)).filter((item) => !claimedQueueIds.has(item.id));
+						const selected = this.steeringMode === "all" ? items : items.slice(0, 1);
+						selected.forEach((item) => claimedQueueIds.add(item.id));
+						for (const item of selected) messageTargets.set(item.message, item);
+						return selected.map((item) => item.message);
+					},
+					getFollowUpMessages: async () => {
+						const items = (await this.pendingQueueItems("followUp", runId)).filter((item) => !claimedQueueIds.has(item.id));
+						const selected = this.followUpMode === "all" ? items : items.slice(0, 1);
+						selected.forEach((item) => claimedQueueIds.add(item.id));
+						for (const item of selected) messageTargets.set(item.message, item);
+						return selected.map((item) => item.message);
+					},
 				},
 				async () => {},
 					controller.signal,
@@ -679,8 +702,12 @@ export class AgentHarness implements AgentLane {
 			);
 			let finalEntryId: string | undefined;
 			const transcriptMessages = newMessages.map(sanitizeTranscriptMessage);
-			for (const message of transcriptMessages) {
-				finalEntryId = await this.durableSession.appendMessage(durableClone(message));
+			for (const [index, message] of transcriptMessages.entries()) {
+				const sourceMessage = newMessages[index];
+				const target = messageTargets.get(sourceMessage);
+				finalEntryId = target
+					? (await this.durableSession.appendEntry({ ...target, message: durableClone(message) }, "main")).id
+					: await this.durableSession.appendMessage(durableClone(message));
 			}
 			const finalMessage = transcriptMessages.at(-1);
 			if (!finalEntryId || !finalMessage || finalMessage.role !== "assistant")
@@ -798,6 +825,28 @@ export class AgentHarness implements AgentLane {
 		if (this.finishedOperations.size <= AgentHarness.finishedOperationCacheLimit) return;
 		const oldest = this.finishedOperations.values().next().value as string | undefined;
 		if (oldest !== undefined) this.finishedOperations.delete(oldest);
+	}
+
+	private async pendingQueueItems(
+		queue: QueueEnqueuedRecord["queue"],
+		runId?: string,
+	): Promise<ProvisionedEntry[]> {
+		const records = await this.durableSession.findRecords({ type: "queue_enqueued", lane: "main", order: "oldestFirst" });
+		const cancelled = new Set(
+			(await this.durableSession.findRecords({ type: "queue_cancelled", lane: "main" })).map((record) => record.entryId),
+		);
+		const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
+		const existing = new Set(entries.map((entry) => entry.id));
+		return records
+			.filter(
+				(record): record is QueueEnqueuedRecord =>
+					record.queue === queue &&
+					(queue === "nextRun" || record.runId === runId) &&
+					!cancelled.has(record.target.id) &&
+					!existing.has(record.target.id) &&
+					record.target.type === "message",
+			)
+			.map((record) => ({ ...record.target, message: structuredClone(record.target.message) }));
 	}
 
 	private normalizePromptInput(
