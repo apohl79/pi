@@ -9,7 +9,7 @@ import {
 	type ServerMessageV2,
 	type ServerSnapshotV2,
 } from "@earendil-works/pi-protocol";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { ClientDiagnosticSpool } from "../src/diagnostics.ts";
 import type { ByteTransport, ByteTransportHandlers } from "../src/transport.ts";
 import { PiClientV2 } from "../src/v2.ts";
@@ -181,6 +181,32 @@ describe("PiClientV2", () => {
 		expect(() => handle.read()).toThrow("detached");
 	});
 
+	test("commits a session handle detach only after server acknowledgement", async () => {
+		const pair = transportPair();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		const connecting = client.connect();
+		await Promise.resolve();
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
+		await connecting;
+		const handlePromise = client.openSession("session-1");
+		pair.deliver({ type: "response", id: "v2-request-1", ok: true, result: { command: "session/attach" } });
+		const handle = await handlePromise;
+
+		const failedDetach = handle.detach();
+		pair.deliver({
+			type: "response",
+			id: "v2-request-2",
+			ok: false,
+			error: { code: "busy", message: "still running" },
+		});
+		await expect(failedDetach).rejects.toThrow("busy: still running");
+
+		const retry = handle.detach();
+		pair.deliver({ type: "response", id: "v2-request-3", ok: true, result: { command: "session/detach" } });
+		await retry;
+		expect(() => handle.read()).toThrow("detached");
+	});
+
 	test("reconnects with the last acknowledged event cursor", async () => {
 		const pair = transportPair();
 		const client = new PiClientV2({ transportFactory: pair.factory });
@@ -237,7 +263,7 @@ describe("PiClientV2", () => {
 			},
 		});
 		const connection = client.connect();
-		await new Promise<void>((resolve) => setTimeout(resolve, 20));
+		await vi.waitFor(() => expect(pair.sent).toHaveLength(1));
 		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
 		await connection;
 		client.disconnect();
