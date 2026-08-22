@@ -10,6 +10,7 @@ import {
 	createWriteTool,
 	type ExecutionEnv,
 	type ExecutionToolContext,
+	executeShellWithCapture,
 	type GoalManager,
 	type HarnessTool,
 } from "@earendil-works/pi-agent-core";
@@ -85,6 +86,16 @@ export interface CodingAgentLifecycleHook {
 	event: "turn/accepted" | "turn/completed";
 	command: string;
 }
+
+export type CodingAgentLifecycleHookOutcome = Readonly<{
+	id: string;
+	event: CodingAgentLifecycleHook["event"];
+	outcome: "ok" | "error";
+	durationMs: number;
+	outputBytes: number;
+	truncated: boolean;
+	exitCode?: number;
+}>;
 
 export interface CodingAgentAgentTools {
 	spawn(request: {
@@ -206,6 +217,7 @@ export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOption
 	viewImage?: (reference: string) => Promise<CodingAgentImageView>;
 	generateImage?: (request: CodingAgentImageGenerationRequest) => Promise<CodingAgentImageGenerationResult>;
 	lifecycleHooks?: readonly CodingAgentLifecycleHook[];
+	lifecycleHookOutcome?: (outcome: CodingAgentLifecycleHookOutcome) => Promise<void>;
 	agents?: CodingAgentAgentTools;
 	plans?: CodingAgentPlanTools;
 }
@@ -510,7 +522,31 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 		harness.hooks.on(
 			lifecycleName,
 			async () => {
-				await env.exec(hook.command, { timeout: 5 });
+				const startedAt = Date.now();
+				const result = await executeShellWithCapture(env, hook.command, {
+					timeout: 5,
+					returnExecutionErrors: true,
+				});
+				const details = result.ok ? result.value : undefined;
+				if (details?.fullOutputPath !== undefined)
+					await env.remove(details.fullOutputPath, { force: true }).catch(() => {});
+				await options
+					.lifecycleHookOutcome?.({
+						id: hook.id,
+						event: hook.event,
+						outcome:
+							result.ok &&
+							details !== undefined &&
+							details.executionError === undefined &&
+							details.exitCode === 0
+								? "ok"
+								: "error",
+						durationMs: Math.max(0, Date.now() - startedAt),
+						outputBytes: details?.truncation.totalBytes ?? 0,
+						truncated: details?.truncated ?? false,
+						...(details?.exitCode === undefined ? {} : { exitCode: details.exitCode }),
+					})
+					.catch(() => {});
 			},
 			{ id: hook.id },
 		);

@@ -10,6 +10,25 @@ import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemo
 
 const directories: string[] = [];
 
+async function expectHookDiagnostic(client: PiClientV2, sessionId: string): Promise<void> {
+	const diagnostics = await client.request({
+		command: "diagnostics/timeline",
+		payload: { sessionId },
+	});
+	expect(diagnostics).toMatchObject({
+		ok: true,
+		result: {
+			events: expect.arrayContaining([
+				expect.objectContaining({
+					kind: "plugin_hook",
+					outcome: "ok",
+					payload: expect.objectContaining({ hookId: "hook-plugin@local:hook-0", outputBytes: 0 }),
+				}),
+			]),
+		},
+	});
+}
+
 afterEach(async () => {
 	await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -65,9 +84,12 @@ describe("production daemon plugin hook execution", () => {
 			});
 			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
 			try {
+				const sessionId = session.id as string;
 				const operationId = await session.submit("run the hook");
-				await session.waitForOperation(operationId);
+				const snapshot = await session.waitForOperation(operationId);
 				await expect(access(join(directory, "hook-fired"))).resolves.toBeUndefined();
+				await expectHookDiagnostic(client, sessionId);
+				expect(snapshot.phase).toBe("idle");
 			} finally {
 				await session.dispose();
 			}

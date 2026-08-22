@@ -13,6 +13,7 @@ import {
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { SessionMetadataV2 } from "@earendil-works/pi-protocol";
 import type {
+	ForensicRecorder,
 	V2AgentRegistry,
 	V2ImageService,
 	V2InputRegistry,
@@ -26,6 +27,7 @@ import { loadSkillsFromDir } from "../core/skills.ts";
 import {
 	type CodingAgentAgentTools,
 	type CodingAgentLifecycleHook,
+	type CodingAgentLifecycleHookOutcome,
 	type CreateCodingAgentHarnessOptions,
 	createCodingAgentHarness,
 } from "./create-harness.ts";
@@ -52,6 +54,7 @@ export interface CodingAgentV2SqliteServiceOptions {
 	}) => GoalContinuationScheduler | undefined;
 	compaction?: (model: Model<Api>) => CompactionSettings | undefined;
 	pluginRegistry?: V2PluginRegistry;
+	diagnostics?: ForensicRecorder;
 	inputs?: V2InputRegistry;
 	usage?: V2UsageLedger;
 	web?: V2WebService;
@@ -213,6 +216,25 @@ export async function createCodingAgentV2SqliteService(
 				...(await pluginSamplingInput(context)),
 			];
 		};
+		const lifecycleHookOutcome =
+			options.diagnostics === undefined
+				? undefined
+				: async (outcome: CodingAgentLifecycleHookOutcome) => {
+						await options.diagnostics!.record({
+							kind: "plugin_hook",
+							severity: outcome.outcome === "ok" ? "info" : "warn",
+							outcome: outcome.outcome,
+							sessionId: metadata.id,
+							durationMs: outcome.durationMs,
+							payload: {
+								hookId: outcome.id,
+								event: outcome.event,
+								outputBytes: outcome.outputBytes,
+								truncated: outcome.truncated,
+								...(outcome.exitCode === undefined ? {} : { exitCode: outcome.exitCode }),
+							},
+						});
+					};
 		const created = await createCodingAgentHarness({
 			...options.harness,
 			...(systemPromptOptions === undefined ? {} : { systemPromptOptions }),
@@ -264,6 +286,7 @@ export async function createCodingAgentV2SqliteService(
 						generateImage: async (request) => imageService.generate(metadata.id, request),
 					}),
 			...(lifecycleHooks.length === 0 ? {} : { lifecycleHooks }),
+			...(lifecycleHookOutcome === undefined ? {} : { lifecycleHookOutcome }),
 			...(planRegistry === undefined
 				? {}
 				: {
