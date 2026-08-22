@@ -41,6 +41,11 @@ export {
 	type RemoteV2StatuslinePayloadOptions,
 	type RemoteV2StatuslineSource,
 } from "./client/remote-v2-view.ts";
+export {
+	type CreateServerAgentSessionOptions,
+	createServerAgentSession,
+	type ServerAgentSession,
+} from "./client/server-sdk.ts";
 // Config paths
 export {
 	CONFIG_DIR_NAME,

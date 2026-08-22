@@ -7,7 +7,6 @@ export type {
 } from "@earendil-works/pi-client";
 export { PiClientV2 } from "@earendil-works/pi-client";
 export { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
-
 export {
 	type CreateRemoteSessionOptions,
 	RemoteSession,
@@ -20,6 +19,11 @@ export * from "./remote-v2-interactive.ts";
 export * from "./remote-v2-selector.ts";
 export * from "./remote-v2-session.ts";
 export * from "./remote-v2-view.ts";
+export {
+	type CreateServerAgentSessionOptions,
+	createServerAgentSession,
+	type ServerAgentSession,
+} from "./server-sdk.ts";
 export {
 	applyTranscriptProgress,
 	applyTranscriptSnapshot,
