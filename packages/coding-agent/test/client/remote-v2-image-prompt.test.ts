@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
@@ -163,6 +163,76 @@ describe("remote v2 image prompts", () => {
 				).toBe(true);
 			} finally {
 				await session.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("preserves an absolute server file and client upload across reattach", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-remote-mixed-files-"));
+		directories.push(directory);
+		const externalDirectory = await mkdtemp(join(tmpdir(), "pi-remote-server-file-"));
+		directories.push(externalDirectory);
+		const externalPath = join(externalDirectory, "server-notes.txt");
+		await writeFile(externalPath, "server-side reference");
+		const runtime = await createImagePromptRuntime(
+			directory,
+			"coding-agent-remote-mixed-files-faux",
+			"coding-agent-remote-mixed-files-model",
+			["text", "image"],
+			"mixed file references received",
+		);
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
+			const localPath = join(directory, "local.png");
+			await writeFile(localPath, Buffer.from("fake-png"));
+			try {
+				const serverFile = await session.resolveFile(externalPath);
+				expect(serverFile).toMatchObject({
+					reference: externalPath,
+					path: await realpath(externalPath),
+					kind: "file",
+				});
+				const serverData = await session.readFile(serverFile.reference);
+				const localFile = await session.uploadLocalFileReference(localPath, "image/png");
+				const operationId = await session.submit([
+					{
+						type: "text",
+						text: `server file ${serverFile.reference}: ${Buffer.from(serverData.data, "base64").toString()}`,
+					},
+					{ type: "image", digest: localFile.blobDigest, mimeType: localFile.mimeType },
+				]);
+				await session.detach();
+				await session.dispose();
+				const reattached = await RemoteV2Session.open(client, session.snapshot?.id ?? "", { mode: "control" });
+				try {
+					const snapshot = await reattached.waitForOperation(operationId);
+					expect(snapshot.transcript).toEqual(
+						expect.arrayContaining([
+							expect.objectContaining({
+								role: "assistant",
+								content: expect.arrayContaining([{ type: "text", text: "mixed file references received" }]),
+							}),
+						]),
+					);
+					expect(
+						snapshot.transcript.some(
+							(item) => item.role === "user" && item.content.some((part) => part.type === "image"),
+						),
+					).toBe(true);
+				} finally {
+					await reattached.dispose();
+				}
+			} catch (error) {
+				await session.dispose();
+				throw error;
 			}
 		} finally {
 			client.dispose();
