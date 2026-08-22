@@ -147,6 +147,11 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 	}
 	if (name === "/name") {
 		if (arguments_.length === 0) return { name: "name" };
+		if (arguments_[0] === "--auto") {
+			if (arguments_.length !== 2 || (arguments_[1] !== "on" && arguments_[1] !== "off"))
+				throw new Error("/name --auto requires on or off");
+			return { name: "name-auto", enabled: arguments_[1] === "on" };
+		}
 		if (arguments_.length === 1 && arguments_[0] === "--clear") return { name: "name", clear: true };
 		if (arguments_.length === 1 && arguments_[0] === "--generate") return { name: "name", generate: true };
 		if (arguments_[0].startsWith("--")) throw new Error("/name accepts a title, --clear, or --generate");

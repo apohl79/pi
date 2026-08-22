@@ -177,6 +177,7 @@ describe("remote v2 interactive command boundary", () => {
 		expect(parseRemoteV2Command("/name --clear")).toEqual({ name: "name", clear: true });
 		expect(parseRemoteV2Command("/name --generate")).toEqual({ name: "name", generate: true });
 		expect(parseRemoteV2Command("/name-auto off")).toEqual({ name: "name-auto", enabled: false });
+		expect(parseRemoteV2Command("/name --auto on")).toEqual({ name: "name-auto", enabled: true });
 		expect(parseRemoteV2Command('/plan [{"step":"ship","status":"pending"}]')).toEqual({
 			name: "plan",
 			items: [{ step: "ship", status: "pending" }],
