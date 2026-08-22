@@ -126,7 +126,7 @@ describe("CodingAgentV2AgentRegistry", () => {
 		await expect(
 			registry.spawn({
 				sessionId: "parent-session",
-				parentPath: "root",
+				parentPath: "root/",
 				taskName: "second",
 				taskMessage: "continue",
 				model: { provider: "inherit", id: "inherit" },
