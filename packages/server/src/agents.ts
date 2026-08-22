@@ -18,9 +18,14 @@ export interface V2AgentRequest {
 	readonly model: { readonly provider: string; readonly id: string };
 }
 
+export interface V2AgentSnapshot extends AgentSummary {
+	readonly sessionId: string;
+}
+
 export interface V2AgentRegistry {
 	spawn(request: V2AgentRequest): Promise<AgentSummary>;
 	list(sessionId: string): Promise<readonly AgentSummary[]>;
+	getSnapshot(agentId: string): Promise<V2AgentSnapshot>;
 	wait(agentId: string, timeoutMs?: number): Promise<AgentSummary>;
 	message(agentId: string, message: string): Promise<void>;
 	followUp(agentId: string, message: string): Promise<AgentSummary>;
@@ -117,6 +122,11 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 		return [...this.agents.values()]
 			.filter((agent) => agent.sessionId === sessionId)
 			.map((agent) => this.snapshot(agent));
+	}
+
+	getSnapshot(agentId: string): Promise<V2AgentSnapshot> {
+		const agent = this.get(agentId);
+		return Promise.resolve(structuredClone({ ...this.snapshot(agent), sessionId: agent.sessionId }));
 	}
 
 	async wait(agentId: string, timeoutMs?: number): Promise<AgentSummary> {

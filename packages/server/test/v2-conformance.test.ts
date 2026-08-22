@@ -833,6 +833,37 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.close();
 	});
 
+	test("keeps agent mutations under the session controller", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-agent-leases-"));
+		directories.push(directory);
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			agents: new InMemoryV2AgentRegistry(),
+		});
+		servers.push(server);
+		await server.start();
+		const controller = await connectUnixTestClientV2(server.addresses[0]!);
+		const observer = await connectUnixTestClientV2(server.addresses[0]!);
+		await controller.hello();
+		await observer.hello();
+		await controller.request({ command: "session/attach", sessionId: "session-1" });
+		await observer.request({ command: "session/attach", sessionId: "session-1", payload: { mode: "observer" } });
+		const spawned = await controller.request({
+			command: "agent/spawn",
+			sessionId: "session-1",
+			payload: { taskName: "lease-test", taskMessage: "inspect ownership" },
+		});
+		const agentId = (spawned as unknown as { result: { agent: { id: string } } }).result.agent.id;
+		const responses = await Promise.all([
+			observer.request({ command: "agent/message", payload: { agentId, message: "blocked" } }),
+			observer.request({ command: "agent/followUp", payload: { agentId, message: "blocked" } }),
+			observer.request({ command: "agent/interrupt", payload: { agentId } }),
+		]);
+		for (const response of responses) expect(response).toMatchObject({ ok: false, error: { code: "request_failed" } });
+		await controller.close();
+		await observer.close();
+	});
+
 	test("serves versioned plan state through the session snapshot", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
