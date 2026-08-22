@@ -771,6 +771,28 @@ describe("experimental CLI runtime", () => {
 		runtime.close();
 	});
 
+	test("submits interactive initial messages exactly once before attaching the runner", async () => {
+		const requests: Array<{ command: string; payload?: unknown }> = [];
+		const server = clientFactory(requests);
+		const runInteractive = vi.fn(async (session) => {
+			expect(session.phase).toBe("idle");
+		});
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: () => {},
+			runInteractive,
+		});
+		await runtime.runPi({
+			command: "pi",
+			options: { messages: ["hello"], fileArgs: [], unknownFlags: new Map(), diagnostics: [] },
+		});
+		expect(requests.filter((request) => request.command === "turn/start")).toHaveLength(1);
+		expect(runInteractive).toHaveBeenCalledTimes(1);
+		runtime.close();
+	});
+
 	test("main constructs and closes the runtime for experimental commands", async () => {
 		const controller = daemon();
 		const server = clientFactory();
