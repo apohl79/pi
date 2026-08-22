@@ -944,6 +944,7 @@ export class PiServerV2 {
 		const payload = objectPayload(command);
 		const events = await this.diagnosticEvents();
 		const capsules = await this.diagnosticCapsulesForExport();
+		const integrity = this.integrity === undefined ? undefined : await this.integrity();
 		const decryptedCapsules =
 			payload.decryptContent === true ? await this.diagnosticCapsulesForDecryption(capsules) : undefined;
 		const serializedEvents = JSON.stringify(events);
@@ -965,12 +966,14 @@ export class PiServerV2 {
 			bundle: {
 				manifest,
 				runtimeManifest: this.runtimeManifest,
+				...(integrity === undefined ? {} : { integrity }),
 				...(state.clientDiagnostics === undefined ? {} : { clientDiagnostics: state.clientDiagnostics }),
 				events,
 				capsules,
 				...(decryptedCapsules === undefined ? {} : { decryptedCapsules }),
 			},
 			...(decryptedCapsules === undefined ? {} : { decryptedCapsules }),
+			...(integrity === undefined ? {} : { integrity }),
 		});
 	}
 
