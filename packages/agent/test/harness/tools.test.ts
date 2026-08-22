@@ -1,4 +1,5 @@
 import { symlink } from "node:fs/promises";
+import { applyPatch } from "diff";
 import { describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { type BashToolDetails, createBashTool } from "../../src/harness/tools/bash.ts";
