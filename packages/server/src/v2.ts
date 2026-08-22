@@ -387,7 +387,6 @@ export class PiServerV2 {
 			if (command.command === "filesystem/reference/resolve")
 				return void (await this.resolveFile(state, id, command));
 			if (command.command === "filesystem/reference/read") return void (await this.readFile(state, id, command));
-			if (command.command === "web") return void (await this.webRequest(state, id, command));
 			if (command.command === "diagnostics/status") return void (await this.diagnosticsStatus(state, id, command));
 			if (command.command === "diagnostics/timeline")
 				return void (await this.diagnosticsTimeline(state, id, command));
@@ -801,22 +800,40 @@ export class PiServerV2 {
 	private async diagnosticsTimeline(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const events = await this.diagnosticEvents(typeof payload.afterSeq === "number" ? payload.afterSeq : 0);
-		await this.sendResponse(state, id, {
+		await this.sendBoundedDiagnosticsResponse(state, id, {
 			command: command.command,
-			events: events.filter(
+			events: events
+			.filter(
 				(event) =>
 					(typeof payload.sessionId !== "string" || event.sessionId === payload.sessionId) &&
 					(typeof payload.operationId !== "string" || event.operationId === payload.operationId),
-			),
+			)
+			.slice(0, MAX_REPLAY_EVENTS),
 		});
 	}
 
 	private async diagnosticsExport(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		await this.sendResponse(state, id, {
+		await this.sendBoundedDiagnosticsResponse(state, id, {
 			command: command.command,
 			format: "json",
-			events: await this.diagnosticEvents(),
+			events: (await this.diagnosticEvents()).slice(0, MAX_REPLAY_EVENTS),
 		});
+	}
+
+	private async sendBoundedDiagnosticsResponse(
+		state: V2ConnectionState,
+		id: string,
+		result: Record<string, unknown>,
+	): Promise<void> {
+		try {
+			encodeServerMessageV2(
+				{ type: "response", id, ok: true, result: toProtocolJsonValue(result) },
+				{ maxFrameLength: this.maxFrameLength },
+			);
+		} catch {
+			throw new Error("Diagnostics response exceeds the maximum frame size");
+		}
+		await this.sendResponse(state, id, result);
 	}
 
 	private async diagnosticsVerify(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
