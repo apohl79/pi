@@ -443,8 +443,11 @@ export {
 export {
 	type CodingAgentV2Runtime,
 	type CodingAgentV2Service,
+	type CodingAgentV2ServiceOptions,
 	type CodingAgentV2SessionDefinition,
+	type CodingAgentV2SessionStore,
 	createCodingAgentV2Service,
+	createCodingAgentV2ServiceFromStore,
 } from "./server/v2-service.ts";
 // Clipboard utilities
 export { copyToClipboard } from "./utils/clipboard.ts";
