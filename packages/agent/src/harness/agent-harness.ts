@@ -458,6 +458,8 @@ export class AgentHarness implements AgentLane {
 	private readonly finishingOperations = new Map<string, Promise<void>>();
 	/** Serializes durable lifecycle mutations (abort, terminal records, queue admission). */
 	private lifecycleTail: Promise<void> = Promise.resolve();
+	/** Queue entries claimed by an in-flight run before their transcript entry is durable. */
+	private readonly claimedQueueItems = new Set<string>();
 	private missingModels: string[] = [];
 	private missingTools: string[] = [];
 	private static readonly finishedOperationCacheLimit = 1024;
@@ -606,8 +608,8 @@ export class AgentHarness implements AgentLane {
 			throw error;
 		}
 		const runId = localRunId;
-		const nextRunItems = await this.pendingQueueItems("nextRun");
-		const claimedQueueIds = new Set(nextRunItems.map((item) => item.id));
+		const claimedQueueIds = new Set<string>();
+		const nextRunItems = await this.claimQueueItems("nextRun", undefined, claimedQueueIds);
 		const initialMessages = [
 			...nextRunItems,
 			...prompts.map((message) => ({
@@ -633,6 +635,7 @@ export class AgentHarness implements AgentLane {
 				},
 			};
 		} catch (error) {
+			this.releaseQueueClaims(claimedQueueIds);
 			release();
 			throw error;
 		}
@@ -645,6 +648,7 @@ export class AgentHarness implements AgentLane {
 				// Some remote stores can commit before reporting a transport error.
 				// Continue the operation when our own start is durably visible.
 			} else if (raced.length > 0) {
+				this.releaseQueueClaims(claimedQueueIds);
 				release();
 				return ResultValue.err(
 					new LaneBusy({
@@ -655,6 +659,7 @@ export class AgentHarness implements AgentLane {
 					}),
 				);
 			} else {
+				this.releaseQueueClaims(claimedQueueIds);
 				release();
 				throw error;
 			}
@@ -682,16 +687,12 @@ export class AgentHarness implements AgentLane {
 									message.role === "user" || message.role === "assistant" || message.role === "toolResult",
 								)),
 					getSteeringMessages: async () => {
-						const items = (await this.pendingQueueItems("steer", runId)).filter((item) => !claimedQueueIds.has(item.id));
-						const selected = this.steeringMode === "all" ? items : items.slice(0, 1);
-						selected.forEach((item) => claimedQueueIds.add(item.id));
+						const selected = await this.claimQueueItems("steer", runId, claimedQueueIds, this.steeringMode);
 						for (const item of selected) messageTargets.set(item.message, item);
 						return selected.map((item) => item.message);
 					},
 					getFollowUpMessages: async () => {
-						const items = (await this.pendingQueueItems("followUp", runId)).filter((item) => !claimedQueueIds.has(item.id));
-						const selected = this.followUpMode === "all" ? items : items.slice(0, 1);
-						selected.forEach((item) => claimedQueueIds.add(item.id));
+						const selected = await this.claimQueueItems("followUp", runId, claimedQueueIds, this.followUpMode);
 						for (const item of selected) messageTargets.set(item.message, item);
 						return selected.map((item) => item.message);
 					},
@@ -745,6 +746,7 @@ export class AgentHarness implements AgentLane {
 				error: { code: "run_failed", message },
 			});
 		} finally {
+			this.releaseQueueClaims(claimedQueueIds);
 			release();
 		}
 	}
@@ -847,6 +849,29 @@ export class AgentHarness implements AgentLane {
 					record.target.type === "message",
 			)
 			.map((record) => ({ ...record.target, message: structuredClone(record.target.message) }));
+	}
+
+	private async claimQueueItems(
+		queue: QueueEnqueuedRecord["queue"],
+		runId: string | undefined,
+		localClaims: Set<string>,
+		mode?: QueueMode,
+	): Promise<ProvisionedEntry[]> {
+		return this.withLifecycleLock(async () => {
+			const items = (await this.pendingQueueItems(queue, runId)).filter(
+				(item) => !localClaims.has(item.id) && !this.claimedQueueItems.has(item.id),
+			);
+			const selected = mode === "all" ? items : mode === undefined ? items : items.slice(0, 1);
+			for (const item of selected) {
+				localClaims.add(item.id);
+				this.claimedQueueItems.add(item.id);
+			}
+			return selected;
+		});
+	}
+
+	private releaseQueueClaims(claims: Set<string>): void {
+		for (const entryId of claims) this.claimedQueueItems.delete(entryId);
 	}
 
 	private normalizePromptInput(
@@ -1160,6 +1185,7 @@ export class AgentHarness implements AgentLane {
 				(record) => record.entryId === entryId,
 			);
 			if (cancelled) return ResultValue.ok({ outcome: "already_cleared" });
+			if (this.claimedQueueItems.has(entryId)) return ResultValue.ok({ outcome: "already_consumed" });
 			const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
 			if (entries.some((entry) => entry.id === entryId)) return ResultValue.ok({ outcome: "already_consumed" });
 			await this.durableSession.appendRecord(
