@@ -38,6 +38,34 @@ export interface ForensicEvent extends ForensicEventInput {
 	payload: Record<string, DiagnosticValue>;
 }
 
+export interface DiagnosticClockDiscontinuity {
+	readonly previousSeq: number;
+	readonly seq: number;
+	readonly previousTimestamp: number;
+	readonly timestamp: number;
+	readonly deltaMs: number;
+}
+
+/** Identifies backwards wall-clock jumps without changing sequence ordering. */
+export function findDiagnosticClockDiscontinuities(
+	events: readonly Pick<ForensicEvent, "seq" | "timestamp">[],
+): readonly DiagnosticClockDiscontinuity[] {
+	const discontinuities: DiagnosticClockDiscontinuity[] = [];
+	for (let index = 1; index < events.length; index += 1) {
+		const previous = events[index - 1]!;
+		const current = events[index]!;
+		if (current.timestamp >= previous.timestamp) continue;
+		discontinuities.push({
+			previousSeq: previous.seq,
+			seq: current.seq,
+			previousTimestamp: previous.timestamp,
+			timestamp: current.timestamp,
+			deltaMs: current.timestamp - previous.timestamp,
+		});
+	}
+	return discontinuities;
+}
+
 export interface ForensicRecorder {
 	record(event: ForensicEventInput): Promise<ForensicEvent>;
 	read(afterSeq?: number): Promise<ForensicEvent[]>;
