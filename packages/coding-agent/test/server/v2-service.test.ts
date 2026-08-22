@@ -15,9 +15,14 @@ import {
 describe("coding-agent v2 service adapter", () => {
 	test("normalizes generated names to safe bounded titles", () => {
 		expect(normalizeGeneratedName("Title: Fix durable session resume now")).toBe("Fix durable session resume now");
+		expect(normalizeGeneratedName("Fix durable\u0085 session resume now")).toBe("Fix durable session resume now");
 		expect(normalizeGeneratedName("one word")).toBe("one word");
 		expect(normalizeGeneratedName("answer.")).toBeUndefined();
 		expect(normalizeGeneratedName("api_key=secret-value hidden title")).toBeUndefined();
+		expect(normalizeGeneratedName("token=secret-value hidden title")).toBeUndefined();
+		expect(normalizeGeneratedName("password: secret-value hidden title")).toBeUndefined();
+		expect(normalizeGeneratedName("secret=secret-value hidden title")).toBeUndefined();
+		expect(normalizeGeneratedName("authorization: Bearer secret-value hidden title")).toBeUndefined();
 		expect(normalizeGeneratedName("A very long session title that exceeds the display limit")).toBe(
 			"A very long session title that",
 		);
