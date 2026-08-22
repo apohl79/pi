@@ -165,6 +165,11 @@ describe("remote v2 interactive command boundary", () => {
 		expect(parseRemoteV2Command("/plan-clear")).toEqual({ name: "plan-clear" });
 		expect(parseRemoteV2Command("/plugins")).toEqual({ name: "plugins" });
 		expect(() => parseRemoteV2Command("/plugins demo")).toThrow("does not accept arguments");
+		expect(parseRemoteV2Command("/statusline /bin/statusline --json")).toEqual({
+			name: "statusline",
+			command: "/bin/statusline --json",
+		});
+		expect(parseRemoteV2Command("/statusline off")).toEqual({ name: "statusline" });
 		expect(() => parseRemoteV2Command("/rollback 0")).toThrow("positive integer");
 		expect(() => parseRemoteV2Command("/agent-interrupt")).toThrow("requires <agent-id>");
 		expect(() => parseRemoteV2Command('/input request-1 {"choice":true}')).toThrow("only strings");
@@ -174,7 +179,14 @@ describe("remote v2 interactive command boundary", () => {
 	test("dispatches remote actions through the attached controller and shares cleanup", async () => {
 		const { client, commands } = clientWithRequests();
 		await client.connect();
-		const attachment = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const statuslineCommands: (string | undefined)[] = [];
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const attachment = {
+			...attached,
+			setStatusline: (command: string | undefined) => {
+				statuslineCommands.push(command);
+			},
+		};
 		const adapter = new RemoteV2InteractiveAttachment(attachment);
 		expect(await adapter.execute("/follow-up continue")).toEqual({ kind: "operation", operationId: "operation-1" });
 		expect(await adapter.execute("/agent-follow-up agent-1 continue work")).toEqual({
@@ -214,6 +226,15 @@ describe("remote v2 interactive command boundary", () => {
 		});
 		expect(await adapter.execute("/plan-clear")).toEqual({ kind: "status", text: "plan cleared" });
 		expect(await adapter.execute("/plugins")).toEqual({ kind: "status", text: "demo" });
+		expect(await adapter.execute("/statusline /bin/statusline --json")).toEqual({
+			kind: "status",
+			text: "statusline updated",
+		});
+		expect(await adapter.execute("/statusline off")).toEqual({
+			kind: "status",
+			text: "statusline disabled",
+		});
+		expect(statuslineCommands).toEqual(["/bin/statusline --json", undefined]);
 		expect(await adapter.execute("/detach")).toEqual({ kind: "detached" });
 		expect(commands).toEqual([
 			"session/attach",
