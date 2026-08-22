@@ -70,53 +70,72 @@ function memoryTransport() {
 				return;
 			}
 			requests.push(message.request);
+			if (message.request.command === "operation/read") {
+				const response: ServerMessageV2 = {
+					type: "response",
+					id: message.id,
+					ok: true,
+					result: {
+						operation: {
+							operationId: "operation-1",
+							sessionId: "session-1",
+							state: "complete",
+							accepted: { operationId: "operation-1", sessionRevision: 2, eventSeq: 2 },
+							terminalSeq: 3,
+						},
+					},
+				};
+				sent.push(response);
+				handlers?.onData(encodeServerMessageV2(response));
+				return;
+			}
 			const result: JsonValue =
 				message.request.command === "session/read" || message.request.command === "session/create"
 					? ({ session: snapshot() } as JsonValue)
-					: message.request.command === "operation/read"
-						? ({
-								operation: {
-									operationId: "operation-1",
-									sessionId: "session-1",
-									state: "complete",
-									accepted: { operationId: "operation-1", sessionRevision: 2, eventSeq: 2 },
-									terminalSeq: 3,
-								},
-							} as JsonValue)
-						: message.request.command === "agent/list"
-							? ({ agents: [] } as JsonValue)
-							: message.request.command === "agent/spawn" || message.request.command === "agent/wait"
+					: message.request.command === "agent/list"
+						? ({ agents: [] } as JsonValue)
+						: message.request.command === "agent/spawn" || message.request.command === "agent/wait"
+							? ({
+									agent: {
+										id: "agent-1",
+										path: "/root/research",
+										taskName: "research",
+										state: "idle",
+										model: { provider: "faux", id: "model" },
+									},
+								} as JsonValue)
+							: message.request.command === "process/start" ||
+									message.request.command === "process/wait" ||
+									message.request.command === "process/terminate"
 								? ({
-										agent: {
-											id: "agent-1",
-											path: "/root/research",
-											taskName: "research",
-											state: "idle",
-											model: { provider: "faux", id: "model" },
+										process: {
+											processId: "process-1",
+											sessionId: "session-1",
+											command: "echo hi",
+											pty: false,
+											state: "running",
+											output: "",
+											cursor: 0,
+											truncated: false,
 										},
 									} as JsonValue)
-								: message.request.command === "process/start" ||
-										message.request.command === "process/wait" ||
-										message.request.command === "process/terminate"
-									? ({
-											process: {
-												processId: "process-1",
-												sessionId: "session-1",
-												command: "echo hi",
-												pty: false,
-												state: "running",
-												output: "",
-												cursor: 0,
-												truncated: false,
-											},
-										} as JsonValue)
-									: message.request.command === "process/read" || message.request.command === "process/write"
-										? ({ output: { output: "hi", cursor: 2, truncated: false } } as JsonValue)
-										: message.request.command === "filesystem/complete"
+								: message.request.command === "process/read" || message.request.command === "process/write"
+									? ({ output: { output: "hi", cursor: 2, truncated: false } } as JsonValue)
+									: message.request.command === "filesystem/complete"
+										? ({
+												items: [{ reference: "project:src", path: "/workspace/src", kind: "directory" }],
+											} as JsonValue)
+										: message.request.command === "filesystem/reference/resolve"
 											? ({
-													items: [{ reference: "project:src", path: "/workspace/src", kind: "directory" }],
+													file: {
+														reference: "project:README.md",
+														path: "/workspace/README.md",
+														kind: "file",
+														size: 2,
+														mimeType: "text/markdown",
+													},
 												} as JsonValue)
-											: message.request.command === "filesystem/reference/resolve"
+											: message.request.command === "filesystem/reference/read"
 												? ({
 														file: {
 															reference: "project:README.md",
@@ -125,261 +144,233 @@ function memoryTransport() {
 															size: 2,
 															mimeType: "text/markdown",
 														},
+														encoding: "base64",
+														data: "aGk=",
 													} as JsonValue)
-												: message.request.command === "filesystem/reference/read"
+												: message.request.command === "blob/put"
 													? ({
-															file: {
-																reference: "project:README.md",
-																path: "/workspace/README.md",
-																kind: "file",
-																size: 2,
-																mimeType: "text/markdown",
-															},
-															encoding: "base64",
-															data: "aGk=",
+															blob: { digest: "sha256:blob", mimeType: "text/plain", size: 2 },
 														} as JsonValue)
-													: message.request.command === "blob/put"
-														? ({
-																blob: { digest: "sha256:blob", mimeType: "text/plain", size: 2 },
-															} as JsonValue)
-														: message.request.command === "blob/read"
+													: message.request.command === "blob/read"
+														? ({ digest: "sha256:blob", encoding: "base64", data: "aGk=" } as JsonValue)
+														: message.request.command === "blob/stat"
 															? ({
-																	digest: "sha256:blob",
-																	encoding: "base64",
-																	data: "aGk=",
+																	blob: { digest: "sha256:blob", mimeType: "text/plain", size: 2 },
 																} as JsonValue)
-															: message.request.command === "blob/stat"
+															: message.request.command === "web"
 																? ({
-																		blob: { digest: "sha256:blob", mimeType: "text/plain", size: 2 },
+																		results: [
+																			{ id: "web-1", title: "Pi", source: "faux", retrievedAt: 1 },
+																		],
 																	} as JsonValue)
-																: message.request.command === "web"
+																: message.request.command === "image/view"
 																	? ({
-																			results: [
-																				{
-																					id: "web-1",
-																					title: "Pi",
-																					source: "faux",
-																					retrievedAt: 1,
-																				},
-																			],
+																			image: {
+																				digest: "sha256:image",
+																				mimeType: "image/png",
+																				size: 4,
+																				reference: "project:image.png",
+																			},
 																		} as JsonValue)
-																	: message.request.command === "image/view"
+																	: message.request.command === "image/generate"
 																		? ({
 																				image: {
-																					digest: "sha256:image",
+																					digest: "sha256:generated",
 																					mimeType: "image/png",
 																					size: 4,
-																					reference: "project:image.png",
+																					reference: "blob:sha256:generated",
+																					provider: "faux",
+																					model: "image-model",
+																					promptHash: "hash",
 																				},
 																			} as JsonValue)
-																		: message.request.command === "image/generate"
+																		: message.request.command === "marketplace/list"
 																			? ({
-																					image: {
-																						digest: "sha256:generated",
-																						mimeType: "image/png",
-																						size: 4,
-																						reference: "blob:sha256:generated",
-																						provider: "faux",
-																						model: "image-model",
-																						promptHash: "hash",
-																					},
+																					marketplaces: [
+																						{ name: "local", source: "file:///tmp/local" },
+																					],
 																				} as JsonValue)
-																			: message.request.command === "marketplace/list"
+																			: message.request.command === "marketplace/add" ||
+																					message.request.command === "marketplace/upgrade"
 																				? ({
-																						marketplaces: [
-																							{ name: "local", source: "file:///tmp/local" },
-																						],
+																						marketplace: {
+																							name: "local",
+																							source: "file:///tmp/local",
+																						},
 																					} as JsonValue)
-																				: message.request.command === "marketplace/add" ||
-																						message.request.command === "marketplace/upgrade"
-																					? ({
-																							marketplace: {
-																								name: "local",
-																								source: "file:///tmp/local",
-																							},
-																						} as JsonValue)
-																					: message.request.command === "marketplace/remove"
-																						? ({ name: "local" } as JsonValue)
-																						: message.request.command === "plugin/list"
+																				: message.request.command === "marketplace/remove"
+																					? ({ name: "local" } as JsonValue)
+																					: message.request.command === "plugin/list"
+																						? ({
+																								plugins: [
+																									{
+																										id: "plugin-1",
+																										name: "demo",
+																										enabled: true,
+																									},
+																								],
+																							} as JsonValue)
+																						: message.request.command === "plugin/read" ||
+																								message.request.command === "plugin/install" ||
+																								message.request.command === "plugin/enable" ||
+																								message.request.command === "plugin/disable"
 																							? ({
-																									plugins: [
-																										{
-																											id: "plugin-1",
-																											name: "demo",
-																											enabled: true,
-																										},
-																									],
+																									plugin: {
+																										id: "plugin-1",
+																										name: "demo",
+																										enabled: true,
+																									},
 																								} as JsonValue)
-																							: message.request.command === "plugin/read" ||
-																									message.request.command ===
-																										"plugin/install" ||
-																									message.request.command ===
-																										"plugin/enable" ||
-																									message.request.command === "plugin/disable"
-																								? ({
-																										plugin: {
-																											id: "plugin-1",
-																											name: "demo",
-																											enabled: true,
-																										},
-																									} as JsonValue)
-																								: message.request.command === "plugin/uninstall"
-																									? ({ id: "plugin-1" } as JsonValue)
-																									: message.request.command === "app/list"
+																							: message.request.command === "plugin/uninstall"
+																								? ({ id: "plugin-1" } as JsonValue)
+																								: message.request.command === "app/list"
+																									? ({
+																											apps: [{ id: "app-1", name: "Demo" }],
+																										} as JsonValue)
+																									: message.request.command === "app/read"
 																										? ({
-																												apps: [
-																													{ id: "app-1", name: "Demo" },
-																												],
+																												app: { id: "app-1", name: "Demo" },
 																											} as JsonValue)
-																										: message.request.command === "app/read"
+																										: message.request.command ===
+																													"app/auth/start" ||
+																												message.request.command ===
+																													"app/auth/complete"
 																											? ({
-																													app: {
-																														id: "app-1",
-																														name: "Demo",
+																													auth: {
+																														appId: "app-1",
+																														state: "authenticated",
 																													},
 																												} as JsonValue)
 																											: message.request.command ===
-																														"app/auth/start" ||
-																													message.request.command ===
-																														"app/auth/complete"
+																													"usage/read"
 																												? ({
-																														auth: {
-																															appId: "app-1",
-																															state: "authenticated",
+																														aggregate: {
+																															input: 3,
+																															output: 2,
 																														},
+																														entries: [
+																															{
+																																turnId: "turn-1",
+																																input: 3,
+																															},
+																														],
 																													} as JsonValue)
 																												: message.request.command ===
-																														"usage/read"
+																														"goal/read"
 																													? ({
-																															aggregate: {
-																																input: 3,
-																																output: 2,
+																															goal: {
+																																status: "active",
+																																objective: "Inspect",
 																															},
-																															entries: [
-																																{
-																																	turnId: "turn-1",
-																																	input: 3,
-																																},
-																															],
 																														} as JsonValue)
 																													: message.request.command ===
-																															"goal/read"
+																															"plan/read"
 																														? ({
-																																goal: {
-																																	status: "active",
-																																	objective: "Inspect",
+																																plan: {
+																																	version: 1,
+																																	items: [
+																																		{
+																																			step: "Inspect",
+																																			status:
+																																				"in_progress",
+																																		},
+																																	],
 																																},
 																															} as JsonValue)
 																														: message.request.command ===
-																																"plan/read"
+																																"input/request/read"
 																															? ({
-																																	plan: {
-																																		version: 1,
-																																		items: [
-																																			{
-																																				step: "Inspect",
-																																				status:
-																																					"in_progress",
-																																			},
-																																		],
+																																	request: {
+																																		requestId:
+																																			"request-1",
+																																		sessionId:
+																																			"session-1",
+																																		questions: [],
 																																	},
 																																} as JsonValue)
 																															: message.request
 																																		.command ===
-																																	"input/request/read"
+																																	"diagnostics/status"
 																																? ({
-																																		request: {
-																																			requestId:
-																																				"request-1",
-																																			sessionId:
-																																				"session-1",
-																																			questions: [],
-																																		},
+																																		capture:
+																																			"metadata",
+																																		degraded: false,
+																																		lastCriticalEventSeq: 3,
+																																		eventCount: 3,
 																																	} as JsonValue)
 																																: message.request
 																																			.command ===
-																																		"diagnostics/status"
+																																		"diagnostics/timeline"
 																																	? ({
-																																			capture:
-																																				"metadata",
-																																			degraded: false,
-																																			lastCriticalEventSeq: 3,
-																																			eventCount: 3,
+																																			events: [
+																																				{
+																																					seq: 3,
+																																					kind: "operation",
+																																					outcome:
+																																						"ok",
+																																				},
+																																			],
 																																		} as JsonValue)
 																																	: message.request
 																																				.command ===
-																																			"diagnostics/timeline"
+																																			"diagnostics/export"
 																																		? ({
-																																				events: [
-																																					{
-																																						seq: 3,
-																																						kind: "operation",
-																																						outcome:
-																																							"ok",
-																																					},
-																																				],
+																																				bundle: {
+																																					manifest:
+																																						{
+																																							schemaVersion: 1,
+																																							eventCount: 3,
+																																							firstSeq: 1,
+																																							lastSeq: 3,
+																																							eventsSha256:
+																																								"hash",
+																																						},
+																																					events:
+																																						[],
+																																				},
 																																			} as JsonValue)
 																																		: message.request
 																																					.command ===
-																																				"diagnostics/export"
+																																				"diagnostics/verify"
 																																			? ({
-																																					bundle: {
-																																						manifest:
-																																							{
-																																								schemaVersion: 1,
-																																								eventCount: 3,
-																																								firstSeq: 1,
-																																								lastSeq: 3,
-																																								eventsSha256:
-																																									"hash",
-																																							},
-																																						events:
-																																							[],
-																																					},
+																																					valid: true,
 																																				} as JsonValue)
 																																			: message
 																																						.request
 																																						.command ===
-																																					"diagnostics/verify"
+																																					"diagnostics/doctor"
 																																				? ({
-																																						valid: true,
+																																						ok: true,
+																																						checks:
+																																							[
+																																								{
+																																									name: "recorder",
+																																									ok: true,
+																																								},
+																																							],
 																																					} as JsonValue)
 																																				: message
 																																							.request
 																																							.command ===
-																																						"diagnostics/doctor"
+																																						"plan/update"
 																																					? ({
-																																							ok: true,
-																																							checks:
-																																								[
+																																							plan: {
+																																								version: 1,
+																																								items: [
 																																									{
-																																										name: "recorder",
-																																										ok: true,
+																																										step: "Inspect",
+																																										status:
+																																											"in_progress",
 																																									},
 																																								],
+																																							},
 																																						} as JsonValue)
-																																					: message
-																																								.request
-																																								.command ===
-																																							"plan/update"
-																																						? ({
-																																								plan: {
-																																									version: 1,
-																																									items: [
-																																										{
-																																											step: "Inspect",
-																																											status:
-																																												"in_progress",
-																																										},
-																																									],
-																																								},
-																																							} as JsonValue)
-																																						: {
-																																								command:
-																																									message
-																																										.request
-																																										.command,
-																																							};
+																																					: {
+																																							command:
+																																								message
+																																									.request
+																																									.command,
+																																						};
 			const response: ServerMessageV2 =
 				message.request.command.startsWith("turn/") ||
 				message.request.command === "goal/update" ||
