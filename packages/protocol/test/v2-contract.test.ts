@@ -3,17 +3,17 @@ import { describe, expect, test } from "vitest";
 import {
 	CommandNameV2Schema,
 	CommandV2Schema,
-	decodeCbor,
+	ClientMessageV2Decoder,
 	EventEnvelopeV2Schema,
 	EventNameV2Schema,
 	encodeClientMessageV2,
-	FrameDecoder,
+	encodeServerMessageV2,
 	isClientMessageV2,
 	isServerMessageV2,
 	PROTOCOL_V2_VERSION,
-	parseClientMessageV2,
 	type SessionSnapshotV2,
 	SessionSnapshotV2Schema,
+	ServerMessageV2Decoder,
 } from "../src/index.ts";
 
 const commandNames = [
@@ -116,6 +116,13 @@ const eventNames = [
 	"bundle_progress",
 ] as const;
 
+function literalSet(schema: { anyOf?: readonly { const?: unknown }[] }): string[] {
+	return (schema.anyOf ?? []).map((entry) => {
+		if (typeof entry.const !== "string") throw new Error("Expected a string literal schema");
+		return entry.const;
+	});
+}
+
 const snapshot: SessionSnapshotV2 = {
 	id: "session-1",
 	name: "Contract session",
@@ -171,8 +178,8 @@ describe("protocol v2 contract", () => {
 	});
 
 	test("freezes every command and authoritative event name in the v2 contract", () => {
-		expect(commandNames.every((command) => Check(CommandNameV2Schema, command))).toBe(true);
-		expect(eventNames.every((event) => Check(EventNameV2Schema, event))).toBe(true);
+		expect([...commandNames].sort()).toEqual(literalSet(CommandNameV2Schema).sort());
+		expect([...eventNames].sort()).toEqual(literalSet(EventNameV2Schema).sort());
 		expect(Check(CommandV2Schema, { command: "operation/read", sessionId: "session-1" })).toBe(true);
 		expect(
 			Check(EventEnvelopeV2Schema, {
@@ -186,17 +193,45 @@ describe("protocol v2 contract", () => {
 		).toBe(true);
 	});
 
-	test("round-trips v2 messages through framed CBOR", () => {
+	test("round-trips v2 messages through bounded decoders with fragmented and coalesced frames", () => {
 		const request = {
 			type: "request",
 			id: "request-2",
 			request: { command: "turn/start", sessionId: "session-1", payload: { text: "hello" } },
 		} as const;
-		const frame = encodeClientMessageV2(request);
-		const decoder = new FrameDecoder();
-		const [payload] = decoder.push(frame);
+		const secondRequest = {
+			type: "request",
+			id: "request-3",
+			request: { command: "session/list" },
+		} as const;
+		const clientFirst = encodeClientMessageV2(request);
+		const clientSecond = encodeClientMessageV2(secondRequest);
+		const clientCombined = new Uint8Array(clientFirst.byteLength + clientSecond.byteLength);
+		clientCombined.set(clientFirst);
+		clientCombined.set(clientSecond, clientFirst.byteLength);
+		const clientDecoder = new ClientMessageV2Decoder();
+		const clientSplit = clientFirst.byteLength - 1;
+		const clientMessages = [
+			...clientDecoder.push(clientCombined.subarray(0, clientSplit)),
+			...clientDecoder.push(clientCombined.subarray(clientSplit)),
+		];
+		clientDecoder.end();
+		expect(clientMessages).toEqual([request, secondRequest]);
 
-		expect(parseClientMessageV2(decodeCbor(payload))).toEqual(request);
+		const response = {
+			type: "response",
+			id: "request-1",
+			ok: true,
+			accepted: { operationId: "operation-1", sessionRevision: 5, eventSeq: 10 },
+		} as const;
+		const serverFrame = encodeServerMessageV2(response);
+		const serverDecoder = new ServerMessageV2Decoder();
+		const serverMessages = [
+			...serverDecoder.push(serverFrame.subarray(0, 3)),
+			...serverDecoder.push(serverFrame.subarray(3)),
+		];
+		serverDecoder.end();
+		expect(serverMessages).toEqual([response]);
 	});
 
 	test("rejects v1 messages and unknown v2 fields", () => {
