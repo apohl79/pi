@@ -19,7 +19,7 @@ describe("AcquiringV2PluginRegistry", () => {
 		expect(installed).toMatchObject({
 			id: "reviewer@local",
 			root: "/workspace/cache/reviewer",
-			provenance: "manifest",
+			provenance: "package",
 		});
 	});
 
