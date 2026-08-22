@@ -6,6 +6,8 @@ import {
 	type EventEnvelopeV2,
 	encodeClientMessageV2,
 	FrameDecoder,
+	isSessionMetadataV2,
+	isSessionSnapshotV2,
 	PROTOCOL_V2_VERSION,
 	parseServerMessageV2,
 	type ResponseEnvelopeV2,
@@ -105,8 +107,9 @@ export class PiClientV2 {
 
 	async listSessions(): Promise<readonly SessionMetadataV2[]> {
 		const result = this.result(await this.request({ command: "session/list" }));
-		if (!Array.isArray(result.sessions)) throw new Error("Invalid session/list result");
-		return result.sessions as SessionMetadataV2[];
+		if (!Array.isArray(result.sessions) || !result.sessions.every(isSessionMetadataV2))
+			throw new Error("Invalid session/list result");
+		return result.sessions;
 	}
 
 	async attachSession(sessionId: string, mode: "control" | "observer" = "control"): Promise<void> {
@@ -115,8 +118,8 @@ export class PiClientV2 {
 
 	async readSession(sessionId: string): Promise<SessionSnapshotV2> {
 		const result = this.result(await this.request({ command: "session/read", sessionId }));
-		if (typeof result.session !== "object" || result.session === null) throw new Error("Invalid session/read result");
-		return result.session as SessionSnapshotV2;
+		if (!isSessionSnapshotV2(result.session)) throw new Error("Invalid session/read result");
+		return result.session;
 	}
 
 	private async send(message: ClientMessageV2): Promise<void> {

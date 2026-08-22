@@ -110,6 +110,24 @@ describe("PiClientV2", () => {
 		client.disconnect();
 	});
 
+	test("rejects malformed typed session helper payloads", async () => {
+		const pair = transportPair();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		const connecting = client.connect();
+		await Promise.resolve();
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
+		await connecting;
+
+		const sessions = client.listSessions();
+		pair.deliver({ type: "response", id: "v2-request-1", ok: true, result: { sessions: [{ id: "" }] } });
+		await expect(sessions).rejects.toThrow("Invalid session/list result");
+
+		const read = client.readSession("session-1");
+		pair.deliver({ type: "response", id: "v2-request-2", ok: true, result: { session: { id: "session-1" } } });
+		await expect(read).rejects.toThrow("Invalid session/read result");
+		client.disconnect();
+	});
+
 	test("contains event listener failures", async () => {
 		const pair = transportPair();
 		const listenerErrors: Error[] = [];

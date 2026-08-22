@@ -392,6 +392,9 @@ export const SessionMetadataV2Schema = StrictObject({
 });
 export type SessionMetadataV2 = Static<typeof SessionMetadataV2Schema>;
 
+export const isSessionMetadataV2 = (value: unknown): value is SessionMetadataV2 => Check(SessionMetadataV2Schema, value);
+export const isSessionSnapshotV2 = (value: unknown): value is SessionSnapshotV2 => Check(SessionSnapshotV2Schema, value);
+
 export const ServerSnapshotV2Schema = StrictObject({
 	serverId: IdSchema,
 	protocolVersion: Type.Literal(PROTOCOL_V2_VERSION),
