@@ -133,6 +133,10 @@ describe("remote v2 interactive command boundary", () => {
 			name: "agent-interrupt",
 			agentId: "agent-1",
 		});
+		expect(parseRemoteV2Command("/interrupt-child agent-1")).toEqual({
+			name: "interrupt-child",
+			agentId: "agent-1",
+		});
 		expect(parseRemoteV2Command("/agent-message agent-1 inspect the logs")).toEqual({
 			name: "agent-message",
 			agentId: "agent-1",
@@ -170,6 +174,7 @@ describe("remote v2 interactive command boundary", () => {
 			command: "/bin/statusline --json",
 		});
 		expect(parseRemoteV2Command("/statusline off")).toEqual({ name: "statusline" });
+		expect(parseRemoteV2Command("/steer prioritize tests")).toEqual({ name: "steer", text: "prioritize tests" });
 		expect(() => parseRemoteV2Command("/rollback 0")).toThrow("positive integer");
 		expect(() => parseRemoteV2Command("/agent-interrupt")).toThrow("requires <agent-id>");
 		expect(() => parseRemoteV2Command('/input request-1 {"choice":true}')).toThrow("only strings");
@@ -194,6 +199,10 @@ describe("remote v2 interactive command boundary", () => {
 			text: "agent complete",
 		});
 		expect(await adapter.execute("/agent-interrupt agent-1")).toEqual({
+			kind: "status",
+			text: "agent interrupted",
+		});
+		expect(await adapter.execute("/interrupt-child agent-1")).toEqual({
 			kind: "status",
 			text: "agent interrupted",
 		});
@@ -235,12 +244,17 @@ describe("remote v2 interactive command boundary", () => {
 			text: "statusline disabled",
 		});
 		expect(statuslineCommands).toEqual(["/bin/statusline --json", undefined]);
+		expect(await adapter.execute("/steer prioritize tests")).toEqual({
+			kind: "operation",
+			operationId: "operation-1",
+		});
 		expect(await adapter.execute("/detach")).toEqual({ kind: "detached" });
 		expect(commands).toEqual([
 			"session/attach",
 			"session/read",
 			"turn/followUp",
 			"agent/followUp",
+			"agent/interrupt",
 			"agent/interrupt",
 			"agent/message",
 			"turn/compact",
@@ -253,6 +267,7 @@ describe("remote v2 interactive command boundary", () => {
 			"plan/update",
 			"plan/clear",
 			"plugin/list",
+			"turn/start",
 			"session/detach",
 		]);
 		await adapter.dispose();

@@ -15,6 +15,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/goal-resume",
 	"/input",
 	"/input-cancel",
+	"/interrupt-child",
 	"/model",
 	"/name",
 	"/name-auto",
@@ -25,6 +26,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/resume",
 	"/rollback",
 	"/statusline",
+	"/steer",
 	"/take-control",
 	"/thinking",
 ] as const;
@@ -33,6 +35,7 @@ export type RemoteV2Command =
 	| { readonly name: "abort" }
 	| { readonly name: "agent-follow-up"; readonly agentId: string; readonly text: string }
 	| { readonly name: "agent-interrupt"; readonly agentId: string }
+	| { readonly name: "interrupt-child"; readonly agentId: string }
 	| { readonly name: "agent-message"; readonly agentId: string; readonly text: string }
 	| { readonly name: "compact"; readonly instructions?: string }
 	| { readonly name: "detach" }
@@ -52,6 +55,7 @@ export type RemoteV2Command =
 	| { readonly name: "resume" }
 	| { readonly name: "rollback"; readonly turns: number }
 	| { readonly name: "statusline"; readonly command?: string }
+	| { readonly name: "steer"; readonly text: string }
 	| { readonly name: "take-control" }
 	| { readonly name: "thinking"; readonly level: ThinkingLevel };
 
@@ -84,9 +88,9 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		if (arguments_.length < 2 || !text) throw new Error("/agent-follow-up requires <agent-id> <text>");
 		return { name: "agent-follow-up", agentId: arguments_[0], text };
 	}
-	if (name === "/agent-interrupt") {
+	if (name === "/agent-interrupt" || name === "/interrupt-child") {
 		if (arguments_.length !== 1) throw new Error("/agent-interrupt requires <agent-id>");
-		return { name: "agent-interrupt", agentId: arguments_[0] };
+		return { name: name === "/interrupt-child" ? "interrupt-child" : "agent-interrupt", agentId: arguments_[0] };
 	}
 	if (name === "/agent-message") {
 		const text = arguments_.slice(1).join(" ").trim();
@@ -188,6 +192,11 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		const command = arguments_.join(" ").trim();
 		return { name: "statusline", ...(command === "off" ? {} : { command }) };
 	}
+	if (name === "/steer") {
+		const text = arguments_.join(" ").trim();
+		if (!text) throw new Error("/steer requires text");
+		return { name: "steer", text };
+	}
 	if (name === "/thinking") {
 		if (arguments_.length !== 1 || !isThinkingLevel(arguments_[0]))
 			throw new Error("/thinking requires a valid level");
@@ -233,6 +242,10 @@ export class RemoteV2InteractiveAttachment implements Component {
 				return { kind: "status", text: `agent ${agent.state}` };
 			}
 			case "agent-interrupt": {
+				const agent = await this.session.interruptAgent(command.agentId);
+				return { kind: "status", text: `agent ${agent.state}` };
+			}
+			case "interrupt-child": {
 				const agent = await this.session.interruptAgent(command.agentId);
 				return { kind: "status", text: `agent ${agent.state}` };
 			}
@@ -306,6 +319,8 @@ export class RemoteV2InteractiveAttachment implements Component {
 					kind: "status",
 					text: command.command === undefined ? "statusline disabled" : "statusline updated",
 				};
+			case "steer":
+				return operation(await this.session.submit(command.text));
 			case "take-control":
 				await this.session.acquireControl();
 				return { kind: "control", mode: "control" };
