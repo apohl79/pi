@@ -20,7 +20,9 @@ import type {
 	V2PlanRegistry,
 	V2PluginRegistry,
 	V2ProcessRegistry,
+	V2UsageAggregate,
 	V2UsageLedger,
+	V2UsageLedgerEntry,
 	V2WebService,
 } from "@earendil-works/pi-server";
 import { hashV2PluginSet } from "@earendil-works/pi-server";
@@ -85,6 +87,42 @@ export interface CodingAgentRoleDefinition {
 	readonly model?: { readonly provider: string; readonly id: string };
 }
 
+function aggregateUsageEntries(entries: readonly V2UsageLedgerEntry[]): V2UsageAggregate {
+	let input = 0;
+	let output = 0;
+	let cacheRead = 0;
+	let cacheWrite = 0;
+	let reasoning = 0;
+	let imageUnits = 0;
+	let costUsd = 0;
+	let hasCost = true;
+	let hasUnknown = false;
+	let hasSubscription = false;
+	for (const entry of entries) {
+		input += entry.input;
+		output += entry.output;
+		cacheRead += entry.cacheRead;
+		cacheWrite += entry.cacheWrite;
+		reasoning += entry.reasoning ?? 0;
+		imageUnits += entry.imageUnits ?? 0;
+		if (entry.costUsd === undefined) hasCost = false;
+		else costUsd += entry.costUsd;
+		if (entry.pricing === "unknown") hasUnknown = true;
+		if (entry.pricing === "subscription") hasSubscription = true;
+	}
+	return {
+		responses: entries.length,
+		input,
+		output,
+		cacheRead,
+		cacheWrite,
+		reasoning,
+		imageUnits,
+		...(hasCost ? { costUsd } : {}),
+		pricingState: hasUnknown ? "unknown" : hasSubscription ? "subscription" : "known",
+	};
+}
+
 export async function createCodingAgentV2SqliteService(
 	options: CodingAgentV2SqliteServiceOptions,
 ): Promise<CodingAgentV2Service> {
@@ -126,6 +164,31 @@ export async function createCodingAgentV2SqliteService(
 		const compaction = options.compaction?.(model);
 		const inputRegistry = options.inputs;
 		const usageLedger = options.usage;
+		const aggregateSessionUsage = async (): Promise<V2UsageAggregate> => {
+			if (usageLedger === undefined) return aggregateUsageEntries([]);
+			const sessions = await options.repository.list();
+			const ids = new Set([metadata.id]);
+			let changed = true;
+			while (changed) {
+				changed = false;
+				for (const item of sessions) {
+					if (item.parentSessionId !== undefined && ids.has(item.parentSessionId) && !ids.has(item.id)) {
+						ids.add(item.id);
+						changed = true;
+					}
+				}
+			}
+			const entries = (await Promise.all([...ids].map((id) => usageLedger.read({ sessionId: id })))).flat();
+			return aggregateUsageEntries(entries);
+		};
+		const scopedUsageLedger: V2UsageLedger | undefined =
+			usageLedger === undefined
+				? undefined
+				: {
+						record: (entry) => usageLedger.record(entry),
+						read: (filter) => usageLedger.read(filter),
+						aggregate: () => aggregateSessionUsage(),
+					};
 		const webService = options.web;
 		const imageService = options.images;
 		const planRegistry = options.plans;
@@ -389,7 +452,7 @@ export async function createCodingAgentV2SqliteService(
 			goals,
 			...(goalContinuation === undefined ? {} : { goalContinuation }),
 			...(inputRegistry === undefined ? {} : { inputs: inputRegistry }),
-			...(usageLedger === undefined ? {} : { usage: usageLedger }),
+			...(scopedUsageLedger === undefined ? {} : { usage: scopedUsageLedger }),
 			...(options.diagnostics === undefined ? {} : { forensicRecorder: options.diagnostics }),
 		};
 	};
