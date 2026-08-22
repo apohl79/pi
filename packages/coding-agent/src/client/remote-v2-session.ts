@@ -308,11 +308,31 @@ export class RemoteV2Session {
 			...(tokenBudget === undefined ? {} : { tokenBudget }),
 		});
 	}
+	async updateGoal(update: {
+		readonly status?: "complete" | "blocked";
+		readonly tokensUsed?: number;
+		readonly activeTimeSeconds?: number;
+		readonly tokenBudget?: number;
+	}): Promise<string> {
+		return this.#accept("goal/update", { ...update });
+	}
 	async pauseGoal(): Promise<string> {
 		return this.#accept("goal/pause");
 	}
 	async resumeGoal(): Promise<string> {
 		return this.#accept("goal/resume");
+	}
+
+	async setName(name: string | null): Promise<string> {
+		return this.#accept("session/name/set", { name });
+	}
+
+	async generateName(name?: string): Promise<string> {
+		return this.#accept("session/name/generate", name === undefined ? {} : { name });
+	}
+
+	async setAutoName(enabled: boolean): Promise<string> {
+		return this.#accept("session/name/auto/set", { enabled });
 	}
 
 	async readGoal(): Promise<Record<string, unknown> | undefined> {
