@@ -69,7 +69,7 @@ function usage(value: Usage | undefined): {
 
 function contentParts(message: AgentMessage): Array<Record<string, unknown>> {
 	if (typeof message !== "object" || message === null || !Array.isArray((message as { content?: unknown }).content)) {
-		return [{ type: "text", text: messageText(message) }];
+		return [{ type: "text", text: boundedString(messageText(message)) }];
 	}
 	return (message as { content: unknown[] }).content.slice(0, MAX_V2_ARRAY_ITEMS).flatMap((part) => {
 		if (typeof part !== "object" || part === null) return [];
@@ -86,7 +86,7 @@ function contentParts(message: AgentMessage): Array<Record<string, unknown>> {
 
 function queueContent(message: AgentMessage): Array<Record<string, unknown>> {
 	const parts = contentParts(message).filter((part) => part.type === "text" || part.type === "image");
-	return parts.length > 0 ? parts : [{ type: "text", text: messageText(message) }];
+	return parts.length > 0 ? parts : [{ type: "text", text: boundedString(messageText(message)) }];
 }
 
 function targetMessage(target: unknown): AgentMessage {
