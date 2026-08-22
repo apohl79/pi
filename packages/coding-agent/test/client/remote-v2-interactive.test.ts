@@ -115,6 +115,10 @@ describe("remote v2 interactive command boundary", () => {
 		expect(parseRemoteV2Command("/thinking high")).toEqual({ name: "thinking", level: "high" });
 		expect(parseRemoteV2Command("/goal ship the feature")).toEqual({ name: "goal", objective: "ship the feature" });
 		expect(parseRemoteV2Command("/goal-pause")).toEqual({ name: "goal-pause" });
+		expect(parseRemoteV2Command("/name Project work")).toEqual({ name: "name", value: "Project work" });
+		expect(parseRemoteV2Command("/name --clear")).toEqual({ name: "name", clear: true });
+		expect(parseRemoteV2Command("/name --generate")).toEqual({ name: "name", generate: true });
+		expect(parseRemoteV2Command("/name-auto off")).toEqual({ name: "name-auto", enabled: false });
 		expect(() => parseRemoteV2Command("/rollback 0")).toThrow("positive integer");
 	});
 
