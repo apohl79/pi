@@ -306,7 +306,8 @@ export interface LaneSnapshot {
 	leafId: string | null;
 	operation: LaneInfo["operation"];
 	queues: { steer: QueuedItem[]; followUp: QueuedItem[]; nextRun: QueuedItem[] };
-	pendingWrites: { id: string; entry: ProvisionedEntry }[];
+	/** Deferred writes are not exposed by this harness snapshot implementation. */
+	pendingWrites?: { id: string; entry: ProvisionedEntry }[];
 	faulted: boolean;
 }
 
@@ -1874,8 +1875,7 @@ export class AgentHarness implements AgentLane {
 		);
 	}
 	async watch(): Promise<WatchHandle<LaneSnapshot>> {
-		const snapshot = await this.laneSnapshot("main");
-		return this.watchBus.watch(() => snapshot);
+		return this.watchBus.watchAsync(() => this.laneSnapshot("main"));
 	}
 
 	async lane(_name: string): Promise<AgentLane | undefined> {
@@ -1948,8 +1948,7 @@ export class AgentHarness implements AgentLane {
 		this.followUpMode = mode;
 	}
 	async watchSession(): Promise<WatchHandle<SessionSnapshot>> {
-		const snapshot = await this.sessionSnapshot();
-		return this.watchBus.watch(() => snapshot);
+		return this.watchBus.watchAsync(() => this.sessionSnapshot());
 	}
 
 	private async laneSnapshot(lane: string): Promise<LaneSnapshot> {
@@ -1959,7 +1958,21 @@ export class AgentHarness implements AgentLane {
 			this.durableSession.findOpenOperations(lane, { limit: 1 }),
 		]);
 		const operation = open[0];
-		return { lane, transcript, leafId, operation: operation ? { id: operation.id, kind: operation.intent.kind, status: "running" } : null, queues: { steer: [], followUp: [], nextRun: [] }, pendingWrites: [], faulted: false };
+		const runId = operation?.intent.kind === "run" ? operation.id : undefined;
+		const [steer, followUp, nextRun] = await Promise.all([
+			this.pendingQueueItems("steer", runId),
+			this.pendingQueueItems("followUp", runId),
+			this.pendingQueueItems("nextRun"),
+		]);
+		const toQueuedItem = (entry: ProvisionedEntry): QueuedItem => ({ id: entry.id, message: structuredClone(entry.message) });
+		return {
+			lane,
+			transcript,
+			leafId,
+			operation: operation ? { id: operation.id, kind: operation.intent.kind, status: "running" } : null,
+			queues: { steer: steer.map(toQueuedItem), followUp: followUp.map(toQueuedItem), nextRun: nextRun.map(toQueuedItem) },
+			faulted: false,
+		};
 	}
 
 	private async sessionSnapshot(): Promise<SessionSnapshot> {
