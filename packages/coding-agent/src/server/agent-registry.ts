@@ -257,6 +257,23 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		return this.snapshot(agent);
 	}
 
+	async interruptSession(sessionId: string): Promise<void> {
+		const pending = [sessionId];
+		const descendants: ChildAgent[] = [];
+		while (pending.length > 0) {
+			const parentSessionId = pending.shift()!;
+			await this.hydrate(parentSessionId);
+			for (const agent of this.agents.values()) {
+				if (agent.parentSessionId !== parentSessionId || descendants.includes(agent)) continue;
+				descendants.push(agent);
+				pending.push(agent.childSessionId);
+			}
+		}
+		for (const agent of descendants) {
+			if (agent.state === "running" || agent.state === "awaitingInput") await this.interrupt(agent.summary.id);
+		}
+	}
+
 	async dispose(): Promise<void> {
 		if (this.disposed) return;
 		this.disposed = true;

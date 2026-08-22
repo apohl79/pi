@@ -430,6 +430,10 @@ export async function createCodingAgentV2SqliteService(
 				? undefined
 				: async () => hashV2PluginSet(await options.pluginRegistry!.listPlugins(true));
 		const agents = agentRegistry === undefined ? undefined : async () => agentRegistry.list(metadata.id);
+		const abortChildren =
+			agentRegistry?.interruptSession === undefined
+				? undefined
+				: async () => agentRegistry.interruptSession!(metadata.id);
 		const plan = planRegistry === undefined ? undefined : async () => planRegistry.read(metadata.id);
 		const diagnostics =
 			options.diagnostics === undefined
@@ -454,6 +458,7 @@ export async function createCodingAgentV2SqliteService(
 			...(instructionProfile === undefined ? {} : { instructionProfile }),
 			...(pluginSetHash === undefined ? {} : { pluginSetHash }),
 			...(agents === undefined ? {} : { agents }),
+			...(abortChildren === undefined ? {} : { abortChildren }),
 			...(plan === undefined ? {} : { plan }),
 			...(diagnostics === undefined ? {} : { diagnostics }),
 			queues,

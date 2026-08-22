@@ -25,6 +25,8 @@ export interface V2AgentRegistry {
 	message(agentId: string, message: string): Promise<void>;
 	followUp(agentId: string, message: string): Promise<AgentSummary>;
 	interrupt(agentId: string): Promise<AgentSummary>;
+	/** Interrupt active descendants owned by a parent session, when supported. */
+	interruptSession?(sessionId: string): Promise<void>;
 	/** Release child runtimes owned by the server lifecycle, when applicable. */
 	dispose?(): Promise<void>;
 }
@@ -128,6 +130,13 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 		const agent = this.get(agentId);
 		if (agent.state === "running" || agent.state === "awaitingInput") agent.state = "interrupted";
 		return this.snapshot(agent);
+	}
+
+	async interruptSession(sessionId: string): Promise<void> {
+		for (const agent of this.agents.values()) {
+			if (agent.sessionId === sessionId && (agent.state === "running" || agent.state === "awaitingInput"))
+				agent.state = "interrupted";
+		}
 	}
 
 	async dispose(): Promise<void> {
