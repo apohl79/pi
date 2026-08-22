@@ -43,14 +43,18 @@ async function createAgentRuntime(
 			? [
 					(context) => {
 						childControl?.onFirstStart?.();
-						childPrompts?.push(JSON.stringify(context.messages));
+						childPrompts?.push(
+							JSON.stringify({ systemPrompt: context.systemPrompt, messages: context.messages }),
+						);
 						return (
 							childControl?.waitBeforeFirstResponse?.then(() => fauxAssistantMessage("child completed")) ??
 							fauxAssistantMessage("child completed")
 						);
 					},
 					(context) => {
-						childPrompts?.push(JSON.stringify(context.messages));
+						childPrompts?.push(
+							JSON.stringify({ systemPrompt: context.systemPrompt, messages: context.messages }),
+						);
 						return fauxAssistantMessage("child follow-up completed");
 					},
 				]
@@ -269,7 +273,8 @@ describe("coding-agent daemon child agents", () => {
 	test("applies a role model pin when the child model is inherited", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-agents-role-model-"));
 		directories.push(directory);
-		const runtime = await createAgentRuntime(directory, true, undefined, undefined, {
+		const childPrompts: string[] = [];
+		const runtime = await createAgentRuntime(directory, true, childPrompts, undefined, {
 			provider: "coding-agent-daemon-child-faux",
 			id: "child-model",
 		});
@@ -291,6 +296,9 @@ describe("coding-agent daemon child agents", () => {
 				ok: true,
 				result: { agent: { model: { provider: "coding-agent-daemon-child-faux", id: "child-model" } } },
 			});
+			const agentId = (spawned as unknown as { result: { agent: { id: string } } }).result.agent.id;
+			await client.request({ command: "agent/wait", payload: { agentId } });
+			expect(childPrompts.some((prompt) => prompt.includes("Review the change."))).toBe(true);
 		} finally {
 			client.dispose();
 			await runtime.close();
