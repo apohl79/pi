@@ -76,4 +76,19 @@ describe("LocalV2FileReferenceService", () => {
 			{ reference: join(outside, "secret.txt"), path: join(outside, "secret.txt"), kind: "file" },
 		]);
 	});
+
+	test("bounds completion results after directory-first ordering", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-files-"));
+		directories.push(root);
+		await mkdir(join(root, "a-directory"));
+		await mkdir(join(root, "b-directory"));
+		await writeFile(join(root, "c-file.txt"), "c");
+		const service = new LocalV2FileReferenceService({ projectRoot: root, homeDirectory: root, maxCompletions: 2 });
+
+		expect(await service.complete("session-1", "@server:")).toEqual([
+			{ reference: "server:a-directory", path: join(root, "a-directory"), kind: "directory" },
+			{ reference: "server:b-directory", path: join(root, "b-directory"), kind: "directory" },
+		]);
+		expect(() => new LocalV2FileReferenceService({ projectRoot: root, maxCompletions: 0 })).toThrow("maxCompletions");
+	});
 });
