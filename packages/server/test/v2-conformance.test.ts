@@ -631,9 +631,32 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: { command: "session/create", session: { id: "created-session" } },
 		});
+		await client.request({ command: "session/attach", sessionId: "created-session", payload: { mode: "control" } });
 		const deleted = await client.request({ command: "session/delete", sessionId: "created-session" });
 		expect(deleted).toMatchObject({ ok: true, result: { command: "session/delete", sessionId: "created-session" } });
 		expect(service.sessions.has("created-session")).toBe(false);
+	});
+
+	test("keeps session deletion under the session controller", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-session-delete-lease-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const controller = await connectUnixTestClientV2(server.addresses[0]!);
+		const observer = await connectUnixTestClientV2(server.addresses[0]!);
+		await controller.hello();
+		await observer.hello();
+		await controller.request({ command: "session/attach", sessionId: "session-1" });
+		await observer.request({ command: "session/attach", sessionId: "session-1", payload: { mode: "observer" } });
+		const rejected = await observer.request({ command: "session/delete", sessionId: "session-1" });
+		expect(rejected).toMatchObject({
+			ok: false,
+			error: { code: "request_failed", message: "Session session-1 requires a control lease" },
+		});
+		await controller.close();
+		await observer.close();
 	});
 
 	test("serves app metadata and starts auth through the injected app registry", async () => {
