@@ -141,9 +141,11 @@ describe("coding-agent daemon combined goal flow", () => {
 			await runtime.daemon.start();
 			await client.connect();
 			await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
-			expect(await client.request({ command: "goal/read", sessionId })).toMatchObject({
+			const goal = await client.request({ command: "goal/read", sessionId });
+			expect(goal).toMatchObject({
 				result: { goal: { objective: "finish the flow", status: "active" } },
 			});
+			expect(resultOf<{ goal: { tokensUsed: number } }>(goal).goal.tokensUsed).toBeGreaterThan(0);
 			expect(await client.request({ command: "agent/list", sessionId })).toMatchObject({
 				result: { agents: [{ taskName: "specialist", state: "complete", startedAt: expect.any(Number) }] },
 			});

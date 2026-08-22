@@ -147,6 +147,8 @@ export interface CodingAgentV2Runtime {
 	snapshot(): Promise<SessionSnapshotV2>;
 	accept(operationId: string): Promise<OperationAccepted>;
 	run(operationId: string, command: CommandV2): Promise<void>;
+	/** Attribute descendant provider usage to this session's durable goal. */
+	recordGoalUsage?(tokens: number): Promise<void>;
 	/** Optional append-only state seam for server-owned registries. */
 	appendCustomEntry?(customType: string, data?: unknown): Promise<string>;
 	/** Optional read seam for reconstructing server-owned registry projections. */
@@ -511,7 +513,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			});
 	}
 
-	private async recordGoalUsage(beforeTokens: number): Promise<void> {
+	private async recordCurrentGoalUsage(beforeTokens: number): Promise<void> {
 		if (!this.definition.goals) return;
 		if (!(await this.definition.goals.read())) return;
 		const afterTokens = (await this.definition.harness.session.getStats()).totalTokens;
@@ -771,7 +773,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				if (!result.ok) throw new Error(result.error.message);
 				if (result.value.kind === "failed") throw new Error(result.value.error.message);
 				await this.recordUsageLedger(_operationId, beforeEntryIds);
-				await this.recordGoalUsage(usageBefore);
+				await this.recordCurrentGoalUsage(usageBefore);
 				await this.markAgentCompletionsConsumed(completions);
 				goalUsageRecorded = true;
 				generateNameAfterTurn = this.autoName;
@@ -781,17 +783,17 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				if (result.value.kind === "failed") throw new Error(result.value.error.message);
 				this.recoveryState = "recovered";
 				await this.recordUsageLedger(_operationId, beforeEntryIds);
-				await this.recordGoalUsage(usageBefore);
+				await this.recordCurrentGoalUsage(usageBefore);
 				goalUsageRecorded = true;
 			} else if (runCommand === "turn/steer") {
 				await harness.steer(input);
 				await this.recordUsageLedger(_operationId, beforeEntryIds);
-				await this.recordGoalUsage(usageBefore);
+				await this.recordCurrentGoalUsage(usageBefore);
 				goalUsageRecorded = true;
 			} else if (runCommand === "turn/followUp") {
 				await harness.followUp(promptInput);
 				await this.recordUsageLedger(_operationId, beforeEntryIds);
-				await this.recordGoalUsage(usageBefore);
+				await this.recordCurrentGoalUsage(usageBefore);
 				await this.markAgentCompletionsConsumed(completions);
 				goalUsageRecorded = true;
 			} else if (runCommand === "turn/abort") {
@@ -885,7 +887,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		} catch (error) {
 			if (!goalUsageRecorded) {
 				try {
-					await this.recordGoalUsage(usageBefore);
+					await this.recordCurrentGoalUsage(usageBefore);
 				} catch {
 					// Usage attribution must not hide the original operation failure.
 				}
@@ -918,6 +920,11 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		this.definition.onDispose?.();
 		this.definition.goalContinuation?.close();
 		await this.definition.harness.close();
+	}
+
+	async recordGoalUsage(tokens: number): Promise<void> {
+		if (this.definition.goals && (await this.definition.goals.read()))
+			await this.definition.goals.recordUsage(tokens);
 	}
 
 	async appendCustomEntry(customType: string, data?: unknown): Promise<string> {
