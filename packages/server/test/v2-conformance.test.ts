@@ -783,6 +783,10 @@ describe("PiServer v2 operation acceptance", () => {
 		await first.next((message) => message.type === "event" && message.event === "operation_terminal");
 		await first.close();
 		await firstServer.close();
+		const persisted = await store.load();
+		expect(
+			persisted.events.filter((event) => event.event === "operation_terminal" && event.operationId === operationId),
+		).toHaveLength(1);
 
 		const secondServer = createUnixServerV2(new TestService(), {
 			path: join(directory, "server.sock"),
