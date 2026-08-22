@@ -133,6 +133,33 @@ describe("coding-agent Harness construction", () => {
 		expect(prompt).toContain("- read: Read file contents");
 		expect(prompt).not.toContain("- edit: Edit files");
 	});
+
+	test("replaceDefault preserves tool, project-context, and role layers", () => {
+		const prompt = buildCodingAgentHarnessSystemPrompt({
+			cwd: "/workspace",
+			tools: defaultPromptTools,
+			activeToolNames: ["read"],
+			systemPromptOptions: {
+				contextFiles: [{ path: "AGENTS.md", content: "Keep changes focused." }],
+				appendSystemPrompt: "Role: reviewer.",
+			},
+			modelInstruction: {
+				id: "profile",
+				source: "text",
+				mode: "replaceDefault",
+				text: "You are a concise reviewer.",
+				contentHash: "hash",
+				byteLength: 28,
+			},
+		});
+
+		expect(prompt).toContain("You are a concise reviewer.");
+		expect(prompt).not.toContain("You are an expert coding assistant operating inside pi");
+		expect(prompt).toContain("- read: Read file contents");
+		expect(prompt).toContain('<project_instructions path="AGENTS.md">');
+		expect(prompt).toContain("Role: reviewer.");
+	});
+
 	test("adds coding-agent policy to explicit Harness options", async () => {
 		const session = new Session(new InMemorySessionStorage({ id: "harness-session", createdAt: 1 }));
 		const env = new NodeExecutionEnv({ cwd: "/workspace" });
