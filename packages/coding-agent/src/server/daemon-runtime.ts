@@ -39,6 +39,7 @@ import type { TransportAddress } from "../cli/experimental/transport-address.ts"
 import { runMigrations } from "../migrations.ts";
 import { createCodingAgentV2AgentRegistry } from "./agent-registry.ts";
 import { createRuntimeManifest } from "./runtime-manifest.ts";
+import { SqliteForensicRecorder } from "./sqlite-forensic-recorder.ts";
 import { SqliteV2InputRegistry } from "./sqlite-input-registry.ts";
 import { SqliteV2OperationStore } from "./sqlite-operation-store.ts";
 import { SqliteV2PlanRegistry } from "./sqlite-plan-registry.ts";
@@ -224,7 +225,10 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 ): Promise<ConfiguredCodingAgentDaemonRuntime> {
 	const diagnostics =
 		options.diagnostics ??
-		new JsonlForensicRecorder(options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"));
+		new SqliteForensicRecorder(
+			createNodeSqliteFactory(),
+			options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.sqlite"),
+		);
 	await diagnostics.record({ kind: "daemon_migration_started", outcome: "started" });
 	try {
 		runMigrations(options.cwd, options.agentDir);
@@ -387,6 +391,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 				if (usage instanceof SqliteV2UsageLedger) await usage.close();
 				if (plans instanceof SqliteV2PlanRegistry) await plans.close();
 				if (inputs instanceof SqliteV2InputRegistry) await inputs.close();
+				if (diagnostics instanceof SqliteForensicRecorder) await diagnostics.close();
 				await repository.close();
 				await env.cleanup();
 			},

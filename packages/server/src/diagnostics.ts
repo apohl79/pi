@@ -474,6 +474,14 @@ export class InMemoryForensicRecorder implements ForensicRecorder {
 	async read(afterSeq = 0): Promise<ForensicEvent[]> {
 		return structuredClone(this.events.filter((event) => event.seq > afterSeq));
 	}
+
+	/** Rehydrates a previously materialized event for a durable recorder adapter. */
+	restore(event: ForensicEvent): void {
+		if (!Number.isInteger(event.seq) || event.seq < 1) throw new Error("Invalid forensic sequence");
+		this.events.push(structuredClone(event));
+		this.nextSeq = Math.max(this.nextSeq, event.seq + 1);
+		if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
+	}
 }
 
 /** Append-only forensic recorder that recovers sequence state after daemon restart. */
