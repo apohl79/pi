@@ -143,6 +143,27 @@ describe("coding-agent SQLite v2 service", () => {
 				role: "reviewer",
 			});
 			expect((await child.runtime.snapshot()).model).toMatchObject({ id: "coding-agent-v2-sqlite-small-model" });
+			await usage.record({
+				responseId: "child-usage",
+				sessionId: child.sessionId,
+				agentId: child.sessionId,
+				operationId: "child-operation",
+				purpose: "agent",
+				provider: faux.getModel().provider,
+				model: "coding-agent-v2-sqlite-small-model",
+				input: 10,
+				output: 4,
+				cacheRead: 0,
+				cacheWrite: 0,
+				pricing: "catalog",
+				costUsd: 0.01,
+				createdAt: Date.now(),
+			});
+			expect((await created.runtime.snapshot()).usage).toMatchObject({
+				input: 11,
+				output: 5,
+				pricingState: "unknown",
+			});
 			const transcriptBeforeModelSwitch = (await created.runtime.snapshot()).transcript;
 			const enabledPluginSetHash = (await created.runtime.snapshot()).pluginSetHash;
 			await pluginRegistry.setEnabled("snapshot-plugin@local", false);
