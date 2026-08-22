@@ -24,6 +24,18 @@ describe("InMemoryV2ProcessRegistry", () => {
 		expect(completed).toMatchObject({ state: "exited", exitCode: 0, output: "hello", cursor: 5 });
 	});
 
+	test("parses quoted argv without shell expansion and rejects shell syntax", async () => {
+		const registry = new NodeV2ProcessRegistry();
+		const started = await registry.start({
+			sessionId: "session-argv",
+			command: `${JSON.stringify(process.execPath)} -e "process.stdout.write(process.argv[1])" "quoted value"`,
+		});
+		expect(await registry.wait(started.processId)).toMatchObject({ output: "quoted value", exitCode: 0 });
+		await expect(
+			registry.start({ sessionId: "session-argv", command: "printf safe; touch should-not-exist" }),
+		).rejects.toThrow("shell metacharacters");
+	});
+
 	test("routes PTY-mode commands through the injected host terminal adapter", async () => {
 		let launches = 0;
 		const registry = new NodeV2ProcessRegistry({
