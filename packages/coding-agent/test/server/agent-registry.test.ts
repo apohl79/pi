@@ -140,6 +140,11 @@ describe("CodingAgentV2AgentRegistry", () => {
 
 		expect(parent.path).toBe("/root/parent");
 		expect(nested.path).toBe("/root/parent/nested");
+		expect((await registry.list("root-session")).map((agent) => agent.path)).toEqual([
+			"/root/parent",
+			"/root/parent/nested",
+		]);
+		expect((await registry.list("child-session-1")).map((agent) => agent.path)).toEqual(["/root/parent/nested"]);
 	});
 
 	test("disposes child runtimes exactly once", async () => {
