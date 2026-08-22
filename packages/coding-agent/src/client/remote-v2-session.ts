@@ -9,6 +9,7 @@ import type {
 	CommandV2,
 	JsonValue,
 	ModelRef,
+	OperationRecordV2,
 	PlanItem,
 	PlanSnapshot,
 	EventEnvelopeV2 as ProtocolEvent,
@@ -275,6 +276,11 @@ export class RemoteV2Session {
 				resolve(structuredClone(state.snapshot));
 			});
 		});
+	}
+
+	async readOperation(operationId: string): Promise<OperationRecordV2> {
+		this.#assertNotDisposed();
+		return this.#client.readOperation(operationId);
 	}
 
 	async followUp(input: string | RemoteV2PromptContent): Promise<string> {
