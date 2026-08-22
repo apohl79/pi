@@ -10,6 +10,7 @@ import type {
 	AgentSummary,
 	CommandNameV2,
 	CommandV2,
+	DiagnosticsSnapshot,
 	InstructionProfileSummary,
 	ModelMetadata,
 	OperationAccepted,
@@ -36,6 +37,7 @@ export interface CodingAgentV2SessionDefinition {
 	pluginSetHash?: () => Promise<string>;
 	agents?: () => Promise<readonly AgentSummary[]>;
 	plan?: () => Promise<PlanSnapshot | undefined>;
+	diagnostics?: () => Promise<DiagnosticsSnapshot>;
 	queues?: () => Promise<{
 		steer: readonly { entryId: string; message: AgentMessage }[];
 		followUp: readonly { entryId: string; message: AgentMessage }[];
@@ -407,13 +409,14 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.definition.usage?.aggregate({ sessionId: this.definition.metadata.id }),
 		]);
 		void leafId;
-		const [goal, persistedName, instructionProfile, pluginSetHash, agents, plan] = await Promise.all([
+		const [goal, persistedName, instructionProfile, pluginSetHash, agents, plan, diagnostics] = await Promise.all([
 			this.definition.goals?.read(),
 			this.definition.harness.session.getName(),
 			this.definition.instructionProfile?.(),
 			this.definition.pluginSetHash?.(),
 			this.definition.agents?.(),
 			this.definition.plan?.(),
+			this.definition.diagnostics?.(),
 		]);
 		const queues = await this.definition.queues?.();
 		const effectiveName = persistedName ?? this.sessionName;
@@ -482,7 +485,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				source: compactionSource,
 			},
 			pluginSetHash: pluginSetHash ?? "plugins-empty",
-			diagnostics: { capture: "metadata", degraded: false, lastCriticalEventSeq: 0 },
+			diagnostics: diagnostics ?? { capture: "metadata", degraded: false, lastCriticalEventSeq: 0 },
 			persistence: { schemaVersion: 1, recoveryState: "clean" },
 			createdAt: this.definition.metadata.createdAt,
 			updatedAt: this.definition.metadata.updatedAt ?? this.definition.metadata.createdAt,

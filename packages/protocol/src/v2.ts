@@ -176,6 +176,7 @@ export const DiagnosticsSnapshotSchema = StrictObject({
 	degraded: Type.Boolean(),
 	lastCriticalEventSeq: NonNegativeIntegerSchema,
 });
+export type DiagnosticsSnapshot = Static<typeof DiagnosticsSnapshotSchema>;
 
 export const PersistenceSnapshotSchema = StrictObject({
 	schemaVersion: NonNegativeIntegerSchema,
