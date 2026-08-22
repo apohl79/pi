@@ -63,6 +63,8 @@ function fileReferencePayload(file: Awaited<ReturnType<V2FileReferenceService["r
 export interface PiSessionRuntimeV2 {
 	snapshot(): MaybePromise<SessionSnapshotV2>;
 	accept(operationId: string): Promise<OperationAccepted>;
+	/** Cancel an exact queued steer/follow-up item when the runtime exposes queue control. */
+	cancelQueued?(entryId: string): Promise<void>;
 	/** Mark an accepted operation failed when durable operation acceptance cannot be persisted. */
 	rejectAccepted?(operationId: string, error: string): Promise<void>;
 	run(operationId: string, command: CommandV2): Promise<void>;
@@ -944,6 +946,7 @@ export class PiServerV2 {
 		const runtime = state.sessions.get(command.sessionId) ?? (await this.service.openSession(command.sessionId));
 		this.trackRuntime(runtime);
 		state.sessions.set(command.sessionId, runtime);
+		if (runtime.cancelQueued === undefined) throw new Error("Queued message cancellation is not supported");
 		await runtime.cancelQueued(payload.entryId);
 		await this.sendResponse(state, id, { command: command.command, entryId: payload.entryId, cancelled: true });
 		await this.broadcastEvent(
