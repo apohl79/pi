@@ -1,5 +1,5 @@
-import { chmod, mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { chmod, lstat, mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { constants, randomUUID } from "node:fs";
 import { dirname } from "node:path";
 
 export type DiagnosticValue = null | boolean | number | string | DiagnosticValue[] | { [key: string]: DiagnosticValue };
@@ -37,6 +37,7 @@ const MAX_DIAGNOSTIC_DEPTH = 8;
 const MAX_DIAGNOSTIC_ITEMS = 10_000;
 const MAX_DIAGNOSTIC_STRING = 1_048_576;
 const MAX_DIAGNOSTIC_FILE_BYTES = 64 * 1024 * 1024;
+const MAX_DIAGNOSTIC_PAYLOAD_BYTES = 1 * 1024 * 1024;
 
 const normalizeKey = (key: string): string => key.replace(/[^a-z0-9]/gi, "").toLowerCase();
 
@@ -68,6 +69,20 @@ function redact(value: unknown, key?: string, depth = 0): DiagnosticValue {
 	return "[UNSERIALIZABLE]";
 }
 
+function boundedEvent(input: ForensicEventInput, seq: number): ForensicEvent {
+	let payload = redact(input.payload ?? {}) as Record<string, DiagnosticValue>;
+	if (Buffer.byteLength(JSON.stringify(payload), "utf8") > MAX_DIAGNOSTIC_PAYLOAD_BYTES)
+		payload = { _truncated: "Diagnostic payload exceeded the maximum size" };
+	return {
+		kind: input.kind.slice(0, MAX_DIAGNOSTIC_STRING),
+		...(input.sessionId === undefined ? {} : { sessionId: input.sessionId.slice(0, MAX_DIAGNOSTIC_STRING) }),
+		...(input.operationId === undefined ? {} : { operationId: input.operationId.slice(0, MAX_DIAGNOSTIC_STRING) }),
+		seq,
+		timestamp: Date.now(),
+		payload,
+	};
+}
+
 export class InMemoryForensicRecorder implements ForensicRecorder {
 	private readonly events: ForensicEvent[] = [];
 	private readonly maxEvents: number;
@@ -82,12 +97,7 @@ export class InMemoryForensicRecorder implements ForensicRecorder {
 	}
 
 	async record(input: ForensicEventInput): Promise<ForensicEvent> {
-		const event: ForensicEvent = {
-			...input,
-			seq: this.nextSeq++,
-			timestamp: Date.now(),
-			payload: redact(input.payload ?? {}) as Record<string, DiagnosticValue>,
-		};
+		const event = boundedEvent(input, this.nextSeq++);
 		this.events.push(event);
 		if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
 		return structuredClone(event);
@@ -141,30 +151,38 @@ export class JsonlForensicRecorder implements ForensicRecorder {
 	async record(input: ForensicEventInput): Promise<ForensicEvent> {
 		const write = this.pendingWrite.then(async () => {
 			await this.ensureLoaded();
-			const event: ForensicEvent = {
-				...input,
-				seq: this.nextSeq++,
-				timestamp: Date.now(),
-				payload: redact(input.payload ?? {}) as Record<string, DiagnosticValue>,
-			};
+			const event = boundedEvent(input, this.nextSeq++);
 			const wasFull = this.events.length >= this.maxEvents;
 			this.events.push(event);
 			if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
 			await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
 			await chmod(dirname(this.path), 0o700);
+			try {
+				if ((await lstat(this.path)).isSymbolicLink()) throw new Error("Diagnostic journal path must not be a symlink");
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
 			try { await chmod(this.path, 0o600); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-			try { if ((await stat(this.path)).size > MAX_DIAGNOSTIC_FILE_BYTES) throw new Error("Diagnostic journal exceeds maximum size"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+			const serializedEvent = `${JSON.stringify(event)}\n`;
+			try {
+				if ((await stat(this.path)).size + Buffer.byteLength(serializedEvent) > MAX_DIAGNOSTIC_FILE_BYTES)
+					throw new Error("Diagnostic journal exceeds maximum size");
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
 			if (!wasFull) {
-				const handle = await open(this.path, "a", 0o600);
+				const handle = await open(this.path, constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
 				try {
-					await handle.write(`${JSON.stringify(event)}\n`, undefined, "utf8");
+					await handle.write(serializedEvent, undefined, "utf8");
 					await handle.sync();
 				} finally {
 					await handle.close();
 				}
 			} else {
 				const temporary = `${this.path}.${process.pid}.${randomUUID()}.tmp`;
-				await writeFile(temporary, `${this.events.map((item) => JSON.stringify(item)).join("\n")}\n`, {
+				const compacted = `${this.events.map((item) => JSON.stringify(item)).join("\n")}\n`;
+				if (Buffer.byteLength(compacted) > MAX_DIAGNOSTIC_FILE_BYTES) throw new Error("Diagnostic journal exceeds maximum size");
+				await writeFile(temporary, compacted, {
 					mode: 0o600,
 				});
 				await rename(temporary, this.path);
