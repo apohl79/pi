@@ -57,4 +57,26 @@ describe("BlobV2ImageService", () => {
 			costUsd: 0.01,
 		});
 	});
+
+	test("validates an edit source before invoking the generator", async () => {
+		let calls = 0;
+		const blobs = new InMemoryV2BlobStore();
+		const service = new BlobV2ImageService(new LocalV2FileReferenceService({ projectRoot: "." }), blobs, {
+			generate: async () => {
+				calls += 1;
+				return { data: new Uint8Array([1]), mimeType: "image/png", provider: "fake", model: "image-fast" };
+			},
+		});
+
+		await expect(service.generate("session-1", { prompt: "edit", sourceDigest: "missing" })).rejects.toThrow(
+			"Unknown blob missing",
+		);
+		expect(calls).toBe(0);
+
+		const text = await blobs.put(new Uint8Array([1]), "text/plain");
+		await expect(service.generate("session-1", { prompt: "edit", sourceDigest: text.digest })).rejects.toThrow(
+			"Unsupported image MIME type",
+		);
+		expect(calls).toBe(0);
+	});
 });
