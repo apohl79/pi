@@ -219,6 +219,35 @@ describe("verifyDiagnosticBundle", () => {
 				projections: { ...projections, operationEvents: "invalid" },
 			}),
 		).toMatchObject({ valid: false });
+		const scopedEvents = [{ seq: 1, sessionId: "session-1", operationId: "operation-1" }];
+		const scopedManifest = {
+			...manifest,
+			eventCount: 1,
+			firstSeq: 1,
+			lastSeq: 1,
+			eventsSha256: createHash("sha256").update(JSON.stringify(scopedEvents)).digest("hex"),
+			scope: { sessionId: "session-1", operationId: "operation-1" },
+		};
+		const scopedProjections = {
+			...projections,
+			operations: [{ operationId: "operation-1", sessionId: "session-1", state: "complete" }],
+			operationEvents: [{ event: "operation_accepted", operationId: "operation-1", sessionId: "session-1", seq: 2 }],
+		};
+		expect(
+			verifyDiagnosticBundle({ manifest: scopedManifest, events: scopedEvents, projections: scopedProjections }),
+		).toEqual({
+			valid: true,
+		});
+		expect(
+			verifyDiagnosticBundle({
+				manifest: scopedManifest,
+				events: scopedEvents,
+				projections: {
+					...projections,
+					operations: [{ operationId: "other-operation", sessionId: "session-1" }],
+				},
+			}),
+		).toMatchObject({ valid: false });
 		expect(
 			verifyDiagnosticBundle({
 				manifest,

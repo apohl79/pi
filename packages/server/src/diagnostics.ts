@@ -178,6 +178,8 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 				(scoped.operationId === undefined || eventOperationId(event) === scoped.operationId)
 			);
 		});
+	const scopedProjections =
+		scope === undefined || projections === undefined || projectionsMatchScope(projections, scope);
 	const valid =
 		fields.schemaVersion === 1 &&
 		fields.eventCount === events.length &&
@@ -187,6 +189,7 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 		(fields.capsulesSha256 === undefined || fields.capsulesSha256 === capsulesDigest) &&
 		(fields.projectionsSha256 === undefined || fields.projectionsSha256 === projectionsDigest) &&
 		scopedEvents &&
+		scopedProjections &&
 		(scope !== undefined || contiguous);
 	return valid ? { valid: true } : { valid: false, reason: "Diagnostic bundle manifest does not match its events" };
 }
@@ -218,6 +221,46 @@ function isDiagnosticProjections(value: unknown): value is DiagnosticBundleProje
 		Array.isArray(projections.blobs) &&
 		projections.blobs.every(isDiagnosticValue)
 	);
+}
+
+function projectionsMatchScope(projections: DiagnosticBundleProjections, scope: DiagnosticBundleScope): boolean {
+	if (
+		scope.sessionId !== undefined &&
+		!projections.sessions.every((session) => scopedRecordMatches(session, "id", scope.sessionId!))
+	)
+		return false;
+	if (
+		!projections.operations.every((operation) =>
+			scopedRecordMatches(operation, "sessionId", scope.sessionId, scope.operationId),
+		)
+	)
+		return false;
+	if (
+		projections.operationEvents !== undefined &&
+		!projections.operationEvents.every((event) =>
+			scopedRecordMatches(event, "sessionId", scope.sessionId, scope.operationId),
+		)
+	)
+		return false;
+	if (typeof projections.usage !== "object" || projections.usage === null || Array.isArray(projections.usage))
+		return false;
+	const usageEntries = (projections.usage as Record<string, unknown>).entries;
+	return (
+		Array.isArray(usageEntries) &&
+		usageEntries.every((entry) => scopedRecordMatches(entry, "sessionId", scope.sessionId, scope.operationId))
+	);
+}
+
+function scopedRecordMatches(
+	value: unknown,
+	primaryField: "id" | "sessionId",
+	sessionId?: string,
+	operationId?: string,
+): boolean {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const record = value as Record<string, unknown>;
+	if (sessionId !== undefined && record[primaryField] !== sessionId && record.sessionId !== sessionId) return false;
+	return operationId === undefined || record.operationId === operationId;
 }
 
 function eventSessionId(value: unknown): string | undefined {
