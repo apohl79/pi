@@ -147,9 +147,9 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				sessionId: agent.sessionId,
 				payload: { text },
 			});
-			agent.state = "complete";
+			if (agent.state !== "interrupted") agent.state = "complete";
 		} catch {
-			agent.state = "failed";
+			if (agent.state !== "interrupted") agent.state = "failed";
 		} finally {
 			agent.activeOperationId = undefined;
 			this.resolveWaiters(agent);

@@ -577,25 +577,46 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 
 	private async abortImmediately(operationId: string): Promise<void> {
 		if (this.disposed) throw new Error("Session runtime is disposed");
-		const operation = this.operations.get(operationId);
-		if (!operation || (operation.state !== "accepted" && operation.state !== "running"))
-			throw new Error(`Operation ${operationId} is not active`);
-		const result = await this.definition.harness.abort();
-		if (!result.ok) throw result.error instanceof Error ? result.error : new Error(String(result.error));
+		let abortHarness = false;
+		let cancelledBeforeExecution = false;
+		await this.withMutation(async () => {
+			const operation = this.operations.get(operationId);
+			if (!operation || (operation.state !== "accepted" && operation.state !== "running"))
+				throw new Error(`Operation ${operationId} is not active`);
+			if (operation.state === "running") {
+				abortHarness = true;
+				return;
+			}
+			await this.persistOperation({ ...operation, state: "aborted", revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
+			this.operationId = undefined;
+			this.freshOperationId = undefined;
+			cancelledBeforeExecution = true;
+		});
+		if (abortHarness) {
+			const result = await this.definition.harness.abort();
+			if (!result.ok) throw result.error instanceof Error ? result.error : new Error(String(result.error));
+		}
+		if (cancelledBeforeExecution) await this.definition.extensionHost?.onOperationTerminal({ id: operationId, type: "turn/start" }, "aborted");
 	}
 
 	private async runUnlocked(operationId: string, command: CommandV2): Promise<void> {
 		if (this.disposed) throw new Error("Session runtime is disposed");
 		try {
+		let cancelledBeforeExecution = false;
 		await this.withMutation(async () => {
 			this.restoreOperationState(await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }));
 			const operation = this.operations.get(operationId);
 			if (!operation) throw new Error(`Operation ${operationId} was not accepted`);
+			if (operation.state === "aborted") {
+				cancelledBeforeExecution = true;
+				return;
+			}
 			if (operation.state !== "accepted") throw new Error(`Operation ${operationId} was already run`);
 			this.operationId = operationId;
 			this.freshOperationId = undefined;
 			await this.persistOperation({ ...operation, state: "running", revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
 		});
+		if (cancelledBeforeExecution) return;
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
