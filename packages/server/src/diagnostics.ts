@@ -151,6 +151,9 @@ export class JsonlForensicRecorder implements ForensicRecorder {
 	async record(input: ForensicEventInput): Promise<ForensicEvent> {
 		const write = this.pendingWrite.then(async () => {
 			await this.ensureLoaded();
+			const previousEvents = this.events.slice();
+			const previousNextSeq = this.nextSeq;
+			try {
 			const event = boundedEvent(input, this.nextSeq++);
 			const wasFull = this.events.length >= this.maxEvents;
 			this.events.push(event);
@@ -188,6 +191,11 @@ export class JsonlForensicRecorder implements ForensicRecorder {
 				await rename(temporary, this.path);
 			}
 			return event;
+			} catch (error) {
+				this.events.splice(0, this.events.length, ...previousEvents);
+				this.nextSeq = previousNextSeq;
+				throw error;
+			}
 		});
 		this.pendingWrite = write.then(
 			() => undefined,
