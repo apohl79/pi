@@ -37,6 +37,7 @@ interface AgentCompletionRecord {
 	readonly path: string;
 	readonly taskName: string;
 	readonly state: string;
+	readonly role?: string;
 	readonly model?: { readonly provider: string; readonly id: string };
 }
 
@@ -61,6 +62,7 @@ function readAgentCompletion(entry: Entry): AgentCompletionRecord | undefined {
 		path: data.path,
 		taskName: data.taskName,
 		state: data.state,
+		...(typeof data.role === "string" ? { role: data.role } : {}),
 		...(model && typeof model.provider === "string" && typeof model.id === "string"
 			? { model: { provider: model.provider, id: model.id } }
 			: {}),
@@ -79,7 +81,7 @@ function appendAgentCompletions(input: AgentMessage, completions: readonly Agent
 	const text = completions
 		.map(
 			(completion) =>
-				`- ${completion.path} (${completion.state})${completion.model ? ` [${completion.model.provider}/${completion.model.id}]` : ""}`,
+				`- ${completion.path} (${completion.state})${completion.role ? ` role=${completion.role}` : ""}${completion.model ? ` [${completion.model.provider}/${completion.model.id}]` : ""}`,
 		)
 		.join("\n");
 	const summary = `[child agent completions]\n${text}`;

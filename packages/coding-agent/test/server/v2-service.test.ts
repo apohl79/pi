@@ -44,6 +44,7 @@ describe("coding-agent v2 service adapter", () => {
 			path: "/root/worker",
 			taskName: "worker",
 			state: "complete",
+			role: "reviewer",
 			model: { provider: "child-provider", id: "child-model" },
 		});
 		const env = new NodeExecutionEnv({ cwd: process.cwd() });
@@ -75,7 +76,7 @@ describe("coding-agent v2 service adapter", () => {
 			);
 			const firstUser = messages.find((entry) => entry.message.role === "user");
 			expect(firstUser).toBeDefined();
-			expect(JSON.stringify(firstUser?.message)).toContain("/root/worker (complete)");
+			expect(JSON.stringify(firstUser?.message)).toContain("/root/worker (complete) role=reviewer");
 			expect((await session.findEntries({ customType: "agent_completion_consumed" })).length).toBe(1);
 			expect((await diagnostics.read()).map((event) => event.kind)).toEqual(["agent_completion_delivered"]);
 			await runtime.run("completion-turn-2", {

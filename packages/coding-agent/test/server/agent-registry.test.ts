@@ -226,6 +226,7 @@ describe("CodingAgentV2AgentRegistry", () => {
 			parentPath: "root",
 			taskName: "worker",
 			taskMessage: "complete this task",
+			role: "reviewer",
 			model: { provider: "inherit", id: "inherit" },
 		});
 		await registry.wait(agent.id);
@@ -233,7 +234,7 @@ describe("CodingAgentV2AgentRegistry", () => {
 		expect(
 			runtime.customEntries.find((entry) => entry.type === "custom" && entry.customType === "agent_completion"),
 		).toMatchObject({
-			data: { version: 1, agentId: agent.id, path: "root/worker", state: "complete" },
+			data: { version: 1, agentId: agent.id, path: "root/worker", state: "complete", role: "reviewer" },
 		});
 	});
 
