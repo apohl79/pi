@@ -1,4 +1,9 @@
-import type { PiClientV2, PiSessionV2Handle, V2SessionLeaseMode } from "@earendil-works/pi-client";
+import type {
+	CreateSessionV2Options,
+	PiClientV2,
+	PiSessionV2Handle,
+	V2SessionLeaseMode,
+} from "@earendil-works/pi-client";
 import type {
 	CommandV2,
 	JsonValue,
@@ -58,6 +63,15 @@ export class RemoteV2Session {
 			await session.dispose();
 			throw error;
 		}
+	}
+
+	static async create(
+		client: PiClientV2,
+		options: CreateSessionV2Options = {},
+		sessionOptions: RemoteV2SessionOptions = {},
+	): Promise<RemoteV2Session> {
+		const created = await client.createSession(options);
+		return RemoteV2Session.open(client, created.id, sessionOptions);
 	}
 
 	get id(): string | undefined {

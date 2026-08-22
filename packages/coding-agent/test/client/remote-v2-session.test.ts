@@ -71,7 +71,7 @@ function memoryTransport() {
 			}
 			requests.push(message.request);
 			const result: JsonValue =
-				message.request.command === "session/read"
+				message.request.command === "session/read" || message.request.command === "session/create"
 					? ({ session: snapshot() } as JsonValue)
 					: { command: message.request.command };
 			const response: ServerMessageV2 =
@@ -104,6 +104,21 @@ function memoryTransport() {
 }
 
 describe("RemoteV2Session", () => {
+	test("creates and opens a server-owned session", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.create(client, { name: "new session", cwd: "/workspace" });
+		expect(session.id).toBe("session-1");
+		expect(session.state.snapshot).toMatchObject({ id: "session-1", phase: "idle" });
+		expect(pair.requests.map((request) => request.command)).toEqual([
+			"session/create",
+			"session/attach",
+			"session/read",
+		]);
+		await session.dispose();
+	});
+
 	test("opens, reads authoritative state, and publishes terminal snapshots", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });
