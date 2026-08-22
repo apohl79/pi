@@ -13,7 +13,14 @@ describe("AdapterV2WebService", () => {
 					url: "https://example.test/a",
 					extract: "123456",
 				},
-				{ id: "r2", title: "Two", source: "fake", retrievedAt: 2, extract: "second" },
+				{
+					id: "r2",
+					title: "Two",
+					source: "fake",
+					retrievedAt: 2,
+					url: "https://example.test/b",
+					extract: "second",
+				},
 			],
 		};
 		const service = new AdapterV2WebService(adapter, { maxResults: 1, maxExtractBytes: 3 });
@@ -31,9 +38,28 @@ describe("AdapterV2WebService", () => {
 		expect(() => assertSafeWebUrl("https://user:pass@example.test")).toThrow("credentials");
 	});
 
+	test("requires canonical URLs on adapter results", async () => {
+		const service = new AdapterV2WebService({
+			execute: async () => [{ id: "missing-url", title: "Missing", source: "fake", retrievedAt: 1, url: "" }],
+		});
+
+		await expect(service.execute("session-1", { operation: "search_query", query: "missing" })).rejects.toThrow(
+			"Invalid URL",
+		);
+	});
+
 	test("bounds extracts in UTF-8 bytes without splitting code points", async () => {
 		const adapter: V2WebAdapter = {
-			execute: async () => [{ id: "unicode", title: "Unicode", source: "fake", retrievedAt: 1, extract: "🙂z" }],
+			execute: async () => [
+				{
+					id: "unicode",
+					title: "Unicode",
+					source: "fake",
+					retrievedAt: 1,
+					url: "https://example.test/unicode",
+					extract: "🙂z",
+				},
+			],
 		};
 		const service = new AdapterV2WebService(adapter, { maxExtractBytes: 4 });
 

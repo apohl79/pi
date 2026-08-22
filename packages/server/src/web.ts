@@ -12,7 +12,7 @@ export type V2WebRequest = Readonly<{
 
 export type V2WebResult = Readonly<{
 	id: string;
-	url?: string;
+	url: string;
 	title: string;
 	source: string;
 	retrievedAt: number;
@@ -107,7 +107,7 @@ export class AdapterV2WebService implements V2WebService {
 		const results = await this.adapter.execute(request, policy);
 		return results.slice(0, policy.maxResults).map((result) => ({
 			...result,
-			...(result.url ? { url: assertSafeWebUrl(result.url, policy).toString() } : {}),
+			url: assertSafeWebUrl(result.url, policy).toString(),
 			...(result.extract ? { extract: truncateUtf8(result.extract, policy.maxExtractBytes) } : {}),
 		}));
 	}

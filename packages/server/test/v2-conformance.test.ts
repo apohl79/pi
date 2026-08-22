@@ -224,7 +224,16 @@ describe("PiServer v2 operation acceptance", () => {
 		const server = createUnixServerV2(service, {
 			path: join(directory, "server.sock"),
 			web: new AdapterV2WebService({
-				execute: async () => [{ id: "result-1", title: "Example", source: "fake", retrievedAt: 1, extract: "ok" }],
+				execute: async () => [
+					{
+						id: "result-1",
+						title: "Example",
+						source: "fake",
+						retrievedAt: 1,
+						url: "https://example.test",
+						extract: "ok",
+					},
+				],
 			}),
 		});
 		servers.push(server);
