@@ -61,6 +61,12 @@ export interface V2UsageLedger {
 }
 
 function validateEntry(entry: V2UsageLedgerEntry): V2UsageLedgerEntry {
+	for (const key of ["responseId", "sessionId", "agentId", "operationId", "provider", "model"] as const)
+		if (typeof entry[key] !== "string" || entry[key].length === 0 || entry[key].length > MAX_IDENTITY_LENGTH)
+			throw new Error(`Usage identity field is invalid: ${key}`);
+	for (const key of ["turnId", "goalId"] as const)
+		if (entry[key] !== undefined && (typeof entry[key] !== "string" || entry[key].length === 0 || entry[key].length > MAX_IDENTITY_LENGTH))
+			throw new Error(`Usage identity field is invalid: ${key}`);
 	for (const [key, value] of Object.entries(entry))
 		if (typeof value === "string" && (value.length === 0 || value.length > MAX_IDENTITY_LENGTH))
 			throw new Error(`Usage identity field is invalid: ${key}`);
@@ -68,7 +74,7 @@ function validateEntry(entry: V2UsageLedgerEntry): V2UsageLedgerEntry {
 		throw new Error("Usage ledger identity fields are required");
 	if (!["agent", "compaction", "sessionName", "otherSideband"].includes(entry.purpose)) throw new Error("Usage purpose is invalid");
 	if (!["providerReported", "catalog", "subscription", "unknown"].includes(entry.pricing)) throw new Error("Usage pricing is invalid");
-	assertBoundedJson(entry.priceSnapshot);
+	if (entry.priceSnapshot !== undefined) assertBoundedJson(entry.priceSnapshot);
 	for (const [key, value] of Object.entries(entry)) {
 		if (
 			[
@@ -93,7 +99,7 @@ function validateEntry(entry: V2UsageLedgerEntry): V2UsageLedgerEntry {
 }
 
 function assertBoundedJson(value: unknown, depth = 0): void {
-	if (value === undefined) return;
+	if (value === undefined) throw new Error("Price snapshot contains an undefined value");
 	if (depth > MAX_V2_JSON_DEPTH) throw new Error("Price snapshot is too deeply nested");
 	if (typeof value === "string") {
 		if (value.length > MAX_V2_STRING_LENGTH) throw new Error("Price snapshot string is too long");
@@ -109,6 +115,8 @@ function assertBoundedJson(value: unknown, depth = 0): void {
 			if (key.length > MAX_V2_STRING_LENGTH) throw new Error("Price snapshot key is too long");
 			assertBoundedJson(item, depth + 1);
 		});
+	} else if (value !== null) {
+		throw new Error("Price snapshot contains an unsupported value");
 	}
 }
 
