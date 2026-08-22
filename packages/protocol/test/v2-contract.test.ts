@@ -32,6 +32,7 @@ const commandNames = [
 	"turn/abort",
 	"turn/resume",
 	"turn/rollback",
+	"turn/compact",
 	"operation/read",
 	"model/list",
 	"session/model/set",

@@ -315,6 +315,10 @@ export class RemoteV2Session {
 		return this.#accept("turn/abort");
 	}
 
+	async compact(customInstructions?: string): Promise<string> {
+		return this.#accept("turn/compact", customInstructions === undefined ? undefined : { customInstructions });
+	}
+
 	async setModel(model: ModelRef): Promise<string> {
 		return this.#accept("session/model/set", model);
 	}
