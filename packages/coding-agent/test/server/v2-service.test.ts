@@ -2,7 +2,7 @@ import { GoalContinuationScheduler, GoalManager, InMemorySessionStorage, Session
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
-import { InMemoryV2InputRegistry } from "@earendil-works/pi-server";
+import { InMemoryV2InputRegistry, InMemoryV2PlanRegistry } from "@earendil-works/pi-server";
 import { describe, expect, test } from "vitest";
 import { createCodingAgentHarness } from "../../src/server/create-harness.ts";
 import { ServerRuntimeExtensionHost } from "../../src/server/extension-host.ts";
@@ -34,11 +34,14 @@ describe("coding-agent v2 service adapter", () => {
 			env,
 		});
 		const inputs = new InMemoryV2InputRegistry();
+		const plans = new InMemoryV2PlanRegistry();
+		await plans.update("awaiting-input-session", { items: [{ step: "Inspect queue", status: "in_progress" }] });
 		const service = createCodingAgentV2Service(models, [
 			{
 				metadata: { id: "awaiting-input-session", createdAt: 1, updatedAt: 1 },
 				harness: created.harness,
 				inputs,
+				plan: async () => plans.read("awaiting-input-session"),
 				queues: async () => ({
 					steer: [
 						{
@@ -54,6 +57,7 @@ describe("coding-agent v2 service adapter", () => {
 		try {
 			expect(await (await service.openSession("awaiting-input-session")).snapshot()).toMatchObject({
 				phase: "awaitingInput",
+				plan: { version: 1, items: [{ step: "Inspect queue", status: "in_progress" }] },
 				queues: { steer: [{ id: "queued-steer", content: [{ type: "text", text: "queued" }] }] },
 			});
 		} finally {
