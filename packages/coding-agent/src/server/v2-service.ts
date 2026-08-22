@@ -403,6 +403,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const cacheRead = Math.max(0, stats.cachedTokens);
 		const input = Math.max(0, stats.uncachedTokens);
 		const output = Math.max(0, stats.totalTokens - stats.cachedTokens - stats.uncachedTokens);
+		const costUsd =
+			usageAggregate?.costUsd ?? (usageAggregate === undefined && stats.costTotal > 0 ? stats.costTotal : undefined);
 		const contextWindow = Math.max(1, this.model.contextWindow);
 		const reserveTokens = Math.max(0, compaction.reserveTokens);
 		const transcript = entries
@@ -433,8 +435,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				cacheRead,
 				cacheWrite: 0,
 				imageUnits: usageAggregate?.imageUnits ?? 0,
-				...(stats.costTotal > 0 ? { costUsd: stats.costTotal } : {}),
-				pricingState: "known",
+				...(costUsd === undefined ? {} : { costUsd }),
+				pricingState: usageAggregate?.pricingState ?? "known",
 			},
 			context: {
 				inputTokens: Math.max(0, stats.totalTokens),

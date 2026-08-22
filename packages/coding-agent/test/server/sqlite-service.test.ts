@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
-import { InMemoryV2AgentRegistry, InMemoryV2PluginRegistry } from "@earendil-works/pi-server";
+import { InMemoryV2AgentRegistry, InMemoryV2PluginRegistry, InMemoryV2UsageLedger } from "@earendil-works/pi-server";
 import { createNodeSqliteFactory, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import { afterEach, describe, expect, test } from "vitest";
 import { ModelInstructionResolver } from "../../src/server/model-instructions.ts";
@@ -37,6 +37,22 @@ describe("coding-agent SQLite v2 service", () => {
 		expect(faux.getModel().id).toBe("coding-agent-v2-sqlite-model");
 		const pluginRegistry = new InMemoryV2PluginRegistry();
 		const agentRegistry = new InMemoryV2AgentRegistry();
+		const usage = new InMemoryV2UsageLedger();
+		await usage.record({
+			responseId: "unknown-price",
+			sessionId: "sqlite-session",
+			agentId: "sqlite-session",
+			operationId: "unknown-price",
+			purpose: "agent",
+			provider: faux.getModel().provider,
+			model: faux.getModel().id,
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			pricing: "unknown",
+			createdAt: Date.now(),
+		});
 		await pluginRegistry.addMarketplace("local", "file:///tmp/marketplace");
 		await pluginRegistry.installPlugin({
 			name: "snapshot-plugin",
@@ -65,6 +81,7 @@ describe("coding-agent SQLite v2 service", () => {
 				model: faux.getModel(),
 				pluginRegistry,
 				agentRegistry,
+				usage,
 				harness: {
 					modelInstructions: {
 						resolver: instructionResolver,
@@ -89,6 +106,8 @@ describe("coding-agent SQLite v2 service", () => {
 				keepRecentTokens: 789,
 				source: "mixed",
 			});
+			expect((await created.runtime.snapshot()).usage).toMatchObject({ pricingState: "unknown" });
+			expect((await created.runtime.snapshot()).usage.costUsd).toBeUndefined();
 			expect((await created.runtime.snapshot()).instructionProfile).toMatchObject({
 				id: "sqlite-profile",
 				source: "text",
