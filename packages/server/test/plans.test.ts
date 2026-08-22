@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -60,6 +60,18 @@ describe("InMemoryV2PlanRegistry", () => {
 			await first.clear("session-1");
 			const reopened = new JsonlV2PlanRegistry(path);
 			expect(await reopened.read("session-1")).toBeUndefined();
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("rejects malformed persisted plan records", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-v2-plans-invalid-"));
+		try {
+			const path = join(directory, "plans.jsonl");
+			await writeFile(path, `${JSON.stringify({ sessionId: "session-1", plan: { version: 0, items: [] } })}\n`);
+			const registry = new JsonlV2PlanRegistry(path);
+			await expect(registry.read("session-1")).rejects.toThrow("Invalid plan record snapshot");
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
