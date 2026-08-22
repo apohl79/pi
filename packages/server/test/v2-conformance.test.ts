@@ -471,6 +471,20 @@ describe("PiServer v2 operation acceptance", () => {
 				],
 			},
 		});
+		const mismatched = await client.request({
+			command: "blob/put",
+			payload: { data: "Ynll", encoding: "base64", mimeType: "text/plain" },
+		});
+		const textDigest = (mismatched as unknown as { result: { blob: { digest: string } } }).result.blob.digest;
+		const rejected = await client.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { content: [{ type: "image", digest: textDigest, mimeType: "image/png" }] },
+		});
+		expect(rejected).toMatchObject({
+			ok: false,
+			error: { code: "request_failed", message: "turn content item 0 MIME type does not match blob metadata" },
+		});
 		await client.close();
 	});
 
