@@ -46,6 +46,7 @@ describe("AgentHarness manual tool drive", () => {
 			drive: "manual",
 			tools: [tool],
 		});
+		harness.hooks.on("before_tool", () => ({ args: { value: "patched" } }));
 
 		const run = harness.prompt("use the tool");
 		await vi.waitFor(async () => {
@@ -53,16 +54,20 @@ describe("AgentHarness manual tool drive", () => {
 		});
 		expect(await harness.executeAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 1 });
 		await vi.waitFor(async () => {
-			expect(await harness.peekAction()).toEqual({ kind: "execute_tool", toolCallId: "tool-1", toolName: "echo" });
+			expect(await harness.peekAction()).toEqual({ kind: "hook", name: "before_tool" });
 		});
 		expect(executed).toEqual([]);
+		expect(await harness.executeAction()).toEqual({ kind: "hook", name: "before_tool" });
+		await vi.waitFor(async () => {
+			expect(await harness.peekAction()).toEqual({ kind: "execute_tool", toolCallId: "tool-1", toolName: "echo" });
+		});
 		expect(await harness.executeAction()).toEqual({ kind: "execute_tool", toolCallId: "tool-1", toolName: "echo" });
 		await vi.waitFor(async () => {
 			expect(await harness.peekAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 2 });
 		});
 		expect(await harness.executeAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 2 });
 		expect(await run).toMatchObject({ ok: true, value: { kind: "completed" } });
-		expect(executed).toEqual(["hello"]);
+		expect(executed).toEqual(["patched"]);
 		await harness.close();
 	});
 });

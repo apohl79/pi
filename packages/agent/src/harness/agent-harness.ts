@@ -775,7 +775,36 @@ export class AgentHarness implements AgentLane {
 							requestOptionsPatch = result.streamOptions as Partial<SimpleStreamOptions>;
 						await this.park({ kind: "stream_assistant", step: "assistant", attempt: assistantAttempt });
 					},
-					beforeToolCall: async ({ toolCall }) => {
+					beforeToolCall: async ({ toolCall, args }) => {
+						try {
+							const result = await this.runLifecycleHook("before_tool", {
+								operationId: runId,
+								toolCallId: toolCall.id,
+								toolName: toolCall.name,
+								args: durableClone(args),
+							});
+							if (result !== null && typeof result === "object") {
+								if (
+									"args" in result &&
+									result.args !== null &&
+									typeof result.args === "object" &&
+									typeof args === "object" &&
+									args !== null
+								)
+									Object.assign(args, result.args);
+								if ("block" in result && result.block === true)
+									return {
+										block: true,
+										reason:
+											typeof ("reason" in result ? result.reason : undefined) === "string"
+												? (result as unknown as { reason: string }).reason
+												: "Tool blocked by lifecycle hook",
+										terminate: "terminate" in result && result.terminate === true,
+									};
+							}
+						} catch {
+							return { block: true, reason: "Tool blocked by lifecycle hook", terminate: true };
+						}
 						await this.park({ kind: "execute_tool", toolCallId: toolCall.id, toolName: toolCall.name });
 						return undefined;
 					},
