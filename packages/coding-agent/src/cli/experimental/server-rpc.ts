@@ -89,9 +89,29 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 				return success(id, "set_model", { provider: command.provider, id: command.modelId });
 			case "get_available_models":
 				return success(id, "get_available_models", { models: await client.listModels() });
+			case "cycle_model": {
+				const models = await client.listModels();
+				if (models.length === 0) return success(id, "cycle_model", null);
+				const current = session.snapshot?.model;
+				const currentIndex = models.findIndex(
+					(model) => model.provider === current?.provider && model.id === current.id,
+				);
+				const model = models[(currentIndex + 1) % models.length];
+				await session.setModel({ provider: model.provider, id: model.id });
+				return success(id, "cycle_model", model);
+			}
 			case "set_thinking_level":
 				await session.setThinking(command.level);
 				return success(id, "set_thinking_level");
+			case "get_available_thinking_levels":
+				return success(id, "get_available_thinking_levels", { levels: THINKING_LEVELS });
+			case "cycle_thinking_level": {
+				const current = session.snapshot?.thinkingLevel ?? "off";
+				const index = THINKING_LEVELS.indexOf(current);
+				const level = THINKING_LEVELS[(index + 1) % THINKING_LEVELS.length];
+				await session.setThinking(level);
+				return success(id, "cycle_thinking_level", { level });
+			}
 			case "set_session_name":
 				await session.setName(command.name.trim());
 				return success(id, "set_session_name");
@@ -134,6 +154,8 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 
 	void stopReading;
 }
+
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 async function promptContent(
 	session: RemoteV2Session,

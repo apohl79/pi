@@ -101,6 +101,15 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>)
 					handlers?.onData(
 						encodeServerMessageV2({ type: "response", id: message.id, ok: true, result: { sessions: [] } }),
 					);
+				} else if (message.request.command === "model/list") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: { models: [{ provider: "faux", id: "model" }] },
+						}),
+					);
 				} else if (message.request.command === "diagnostics/status") {
 					handlers?.onData(
 						encodeServerMessageV2({
@@ -297,6 +306,29 @@ describe("experimental CLI runtime", () => {
 			command: "get_messages",
 			success: true,
 			data: { messages: [] },
+		});
+		runtime.close();
+	});
+
+	test("serves the legacy thinking-level availability command from the v2 contract", async () => {
+		const server = clientFactory();
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: () => {},
+			rpcInput: Readable.from(['{"id":"thinking-1","type":"get_available_thinking_levels"}\n']),
+			rpcOutput: (value) => output.push(value),
+		});
+		await runtime.runRpc({ messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(output).toContainEqual({
+			id: "thinking-1",
+			type: "response",
+			command: "get_available_thinking_levels",
+			success: true,
+			data: { levels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
 		});
 		runtime.close();
 	});
