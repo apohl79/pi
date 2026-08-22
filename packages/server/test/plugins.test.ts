@@ -84,6 +84,21 @@ describe("InMemoryV2PluginRegistry", () => {
 		expect(persisted.plugins).toHaveLength(1);
 	});
 
+	test("upgrades a plugin version and persists the registry change", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-plugin-registry-upgrade-"));
+		const path = join(directory, "plugins.json");
+		const registry = new JsonV2PluginRegistry(path);
+		await registry.addMarketplace("local", "/workspace/plugins");
+		await registry.installPlugin({ name: "reviewer", marketplace: "local", version: "1", manifest: {} });
+
+		expect(await registry.upgradePlugin("reviewer@local", "2")).toMatchObject({ version: "2" });
+		await expect(registry.upgradePlugin("reviewer@local", "  ")).rejects.toThrow("plugin version must not be empty");
+		await expect(registry.upgradePlugin("missing@local", "2")).rejects.toThrow("Unknown plugin");
+
+		const reopened = new JsonV2PluginRegistry(path);
+		expect(await reopened.readPlugin("reviewer@local")).toMatchObject({ version: "2" });
+	});
+
 	test("does not follow a temporary symlink when writing state", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-plugin-registry-link-"));
 		const path = join(directory, "plugins.json");
