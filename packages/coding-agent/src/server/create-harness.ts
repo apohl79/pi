@@ -14,6 +14,7 @@ import {
 	type GoalManager,
 	type HarnessTool,
 } from "@earendil-works/pi-agent-core";
+import type { V2ProcessRegistry } from "@earendil-works/pi-server";
 import { type Static, type TSchema, Type } from "typebox";
 import { getExperimentalToolSampling } from "../core/experimental.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "../core/system-prompt.ts";
@@ -22,6 +23,7 @@ import { editToolSystemPromptContribution } from "../core/tools/edit.ts";
 import { readToolSystemPromptContribution } from "../core/tools/read.ts";
 import { writeToolSystemPromptContribution } from "../core/tools/write.ts";
 import type { ModelInstructionResolver, ResolvedModelInstructionProfile } from "./model-instructions.ts";
+import { createProcessTools } from "./process-tools.ts";
 
 export interface CodingAgentInputQuestion {
 	id: string;
@@ -203,6 +205,7 @@ function createCodingAgentHarnessTool<TParameters extends TSchema, TDetails>(
 export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOptions, "toolContext" | "tools"> {
 	env: ExecutionEnv;
 	goals?: GoalManager;
+	processes?: V2ProcessRegistry;
 	bashCommandPrefix?: string;
 	/** Path to the JSONL session file exposed to default bash commands as PI_SESSION_FILE. */
 	sessionFile?: string;
@@ -322,6 +325,16 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 				promptGuidelines: writeToolSystemPromptContribution.guidelines,
 			}),
 		];
+		if (options.processes) {
+			tools.push(
+				...createProcessTools(options.processes, metadata.id).map((tool) =>
+					createCodingAgentHarnessTool(tool, toolContext, {
+						promptSnippet: tool.description,
+						promptGuidelines: [],
+					}),
+				),
+			);
+		}
 		if (options.goals) {
 			tools.push(
 				...createGoalTools(options.goals).map((tool) => ({

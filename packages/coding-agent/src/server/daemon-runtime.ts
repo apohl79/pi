@@ -127,9 +127,10 @@ export async function createCodingAgentDaemonRuntime(
 					inputs,
 					plans,
 					diagnostics,
+					processes,
 					agentRegistry: () => createdAgents,
 				}
-			: { ...options, inputs, plans, diagnostics },
+			: { ...options, inputs, plans, diagnostics, processes },
 	);
 	const agents = options.agents ?? (service.createSession ? createCodingAgentV2AgentRegistry(service) : undefined);
 	createdAgents = agents;

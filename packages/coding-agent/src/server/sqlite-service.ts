@@ -19,6 +19,7 @@ import type {
 	V2InputRegistry,
 	V2PlanRegistry,
 	V2PluginRegistry,
+	V2ProcessRegistry,
 	V2UsageLedger,
 	V2WebService,
 } from "@earendil-works/pi-server";
@@ -58,6 +59,7 @@ export interface CodingAgentV2SqliteServiceOptions {
 	diagnostics?: ForensicRecorder;
 	inputs?: V2InputRegistry;
 	usage?: V2UsageLedger;
+	processes?: V2ProcessRegistry;
 	web?: V2WebService;
 	images?: V2ImageService;
 	plans?: V2PlanRegistry;
@@ -273,6 +275,7 @@ export async function createCodingAgentV2SqliteService(
 			env,
 			...(compaction === undefined ? {} : { compaction }),
 			goals,
+			...(options.processes === undefined ? {} : { processes: options.processes }),
 			...(resources === undefined ? {} : { resources }),
 			samplingInputFactory,
 			sessionFile: metadata.path,
