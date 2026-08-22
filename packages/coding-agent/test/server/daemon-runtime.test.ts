@@ -899,6 +899,10 @@ describe("coding-agent daemon runtime", () => {
 		} finally {
 			await first.close();
 		}
+		await writeFile(
+			join(directory, "daemon-state.json"),
+			JSON.stringify({ schemaVersion: 1, daemonInstanceId: "previous", state: "running", timestamp: 1 }),
+		);
 
 		const second = await createConfiguredCodingAgentDaemonRuntime(options);
 		const bundlePath = join(directory, "inactive-diagnostic-bundle.json");
