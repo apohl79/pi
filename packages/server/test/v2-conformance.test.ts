@@ -119,6 +119,7 @@ class TestService implements PiServerServiceV2 {
 	readonly sessions = new Map<string, TestRuntime>();
 
 	constructor() {
+		this.sessionMetadata.push({ id: "session-1", createdAt: 1, updatedAt: 1 });
 		this.sessions.set("session-1", new TestRuntime("session-1"));
 	}
 
@@ -198,3 +199,30 @@ describe("PiServer v2 operation acceptance", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
 		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const firstClient = await connectUnixTestClientV2(server.addresses[0]!);
+		await firstClient.hello();
+		await firstClient.request({ command: "session/attach", sessionId: "session-1" });
+		const accepted = await firstClient.request({ command: "turn/start", sessionId: "session-1", payload: { text: "hello" } });
+		expect(accepted).toMatchObject({ ok: true, accepted: { eventSeq: 2 } });
+		await firstClient.request({ command: "session/detach", sessionId: "session-1" });
+		await firstClient.close();
+
+		const secondClient = await connectUnixTestClientV2(server.addresses[0]!);
+		await secondClient.hello({ sessionId: "session-1", eventSeq: 0 });
+		const replayed = await secondClient.next(
+			(message) => message.type === "event" && message.event === "operation_accepted",
+		);
+		expect(replayed).toMatchObject({ type: "event", sessionId: "session-1", seq: 2 });
+		await secondClient.request({ command: "session/attach", sessionId: "session-1" });
+		const runtime = service.sessions.get("session-1")!;
+		runtime.release.resolve(undefined);
+		await runtime.started.promise;
+		const terminal = await secondClient.next(
+			(message) => message.type === "event" && message.event === "operation_terminal",
+		);
+		expect(terminal).toMatchObject({ type: "event", sessionId: "session-1", payload: { state: "complete" } });
+		await secondClient.close();
+	});
