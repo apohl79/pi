@@ -38,7 +38,7 @@ export interface ServerRuntimeExtensionHostOptions {
 }
 
 export class ServerRuntimeExtensionHost {
-	private readonly extensions = new Map<string, ServerRuntimeExtension>();
+	private readonly extensions = new Map<string, RegisteredServerRuntimeExtension>();
 	private readonly options: ServerRuntimeExtensionHostOptions;
 
 	public constructor(options: ServerRuntimeExtensionHostOptions) {
@@ -46,8 +46,9 @@ export class ServerRuntimeExtensionHost {
 	}
 
 	public async register(extension: ServerRuntimeExtension): Promise<void> {
-		if (this.extensions.has(extension.id)) throw new Error(`Extension ${extension.id} is already registered`);
-		this.extensions.set(extension.id, extension);
+		const registered = snapshotExtension(extension);
+		if (this.extensions.has(registered.id)) throw new Error(`Extension ${registered.id} is already registered`);
+		this.extensions.set(registered.id, registered);
 	}
 
 	public registerClientCommand(_name: string): never {
@@ -68,7 +69,8 @@ export class ServerRuntimeExtensionHost {
 	}
 
 	public async getState<T>(extensionId: string, key: string): Promise<T | undefined> {
-		return (await this.options.loadState?.(extensionId, key)) as T | undefined;
+		const value = await this.options.loadState?.(extensionId, key);
+		return cloneStateValue(value) as T | undefined;
 	}
 
 	private context(extensionId: string, operation: ServerRuntimeOperation): ServerRuntimeExtensionContext {
@@ -80,14 +82,14 @@ export class ServerRuntimeExtensionHost {
 			state: {
 				get: async <T>(key: string) => this.getState<T>(extensionId, key),
 				set: async (key: string, value: unknown) => {
-					await this.options.persistState?.(extensionId, key, value);
+					await this.options.persistState?.(extensionId, key, cloneStateValue(value));
 				},
 			},
 		};
 	}
 
 	private async dispatchHook(
-		hook: (extension: ServerRuntimeExtension) => void | Promise<void>,
+		hook: (extension: RegisteredServerRuntimeExtension) => void | Promise<void>,
 	): Promise<readonly ServerRuntimeExtensionHookResult[]> {
 		const extensions = [...this.extensions.values()];
 		const settled = await Promise.allSettled(
@@ -103,4 +105,22 @@ export class ServerRuntimeExtensionHost {
 				: { extensionId: extensions[index]!.id, status: "rejected" as const, reason: result.reason },
 		);
 	}
+}
+
+interface RegisteredServerRuntimeExtension {
+	readonly id: string;
+	readonly onOperationAccepted?: ServerRuntimeExtension["onOperationAccepted"];
+	readonly onOperationTerminal?: ServerRuntimeExtension["onOperationTerminal"];
+}
+
+function snapshotExtension(extension: ServerRuntimeExtension): RegisteredServerRuntimeExtension {
+	return Object.freeze({
+		id: extension.id,
+		onOperationAccepted: extension.onOperationAccepted,
+		onOperationTerminal: extension.onOperationTerminal,
+	});
+}
+
+function cloneStateValue<T>(value: T): T {
+	return structuredClone(value);
 }

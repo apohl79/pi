@@ -68,4 +68,57 @@ describe("ServerRuntimeExtensionHost", () => {
 			"server runtime extensions cannot register client commands",
 		);
 	});
+
+	it("snapshots state values at get and set boundaries", async () => {
+		const loaded = { nested: { count: 1 } };
+		let persisted: unknown;
+		const host = new ServerRuntimeExtensionHost({
+			resolveModel: () => ({ id: "model-a" }),
+			loadState: () => loaded,
+			persistState: async (_extensionId, _key, value) => {
+				persisted = value;
+			},
+		});
+		let received: { nested: { count: number } } | undefined;
+		const extension: ServerRuntimeExtension = {
+			id: "state",
+			async onOperationAccepted(context) {
+				received = await context.state.get<typeof loaded>("value");
+				received!.nested.count = 9;
+				const value = { nested: { count: 2 } };
+				await context.state.set("value", value);
+				value.nested.count = 8;
+			},
+		};
+
+		await host.register(extension);
+		await host.onOperationAccepted({ id: "op-1", type: "turn/start" });
+
+		expect(loaded).toEqual({ nested: { count: 1 } });
+		expect(persisted).toEqual({ nested: { count: 2 } });
+	});
+
+	it("snapshots extension identity when registering", async () => {
+		const persisted: Array<{ extensionId: string; key: string }> = [];
+		const calls: string[] = [];
+		const extension: ServerRuntimeExtension = {
+			id: "stable",
+			onOperationAccepted: async (context) => {
+				calls.push(context.operation.id);
+				await context.state.set("key", "value");
+			},
+		};
+		const host = new ServerRuntimeExtensionHost({
+			resolveModel: () => ({ id: "model-a" }),
+			persistState: async (extensionId, key) => persisted.push({ extensionId, key }),
+		});
+
+		await host.register(extension);
+		(extension as { id: string }).id = "mutated";
+		const results = await host.onOperationAccepted({ id: "op-1", type: "turn/start" });
+
+		expect(calls).toEqual(["op-1"]);
+		expect(results).toEqual([{ extensionId: "stable", status: "fulfilled" }]);
+		expect(persisted).toEqual([{ extensionId: "stable", key: "key" }]);
+	});
 });
