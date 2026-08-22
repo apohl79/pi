@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { JsonValue } from "@earendil-works/pi-protocol";
 
@@ -24,6 +24,7 @@ export interface ClientDiagnosticSpoolOptions {
 	readonly clientInstanceId: string;
 	readonly maxEntries?: number;
 	readonly maxBytes?: number;
+	readonly maxFiles?: number;
 }
 
 /** Bounded owner-only JSONL evidence retained by a client before and during transport use. */
@@ -32,10 +33,12 @@ export class ClientDiagnosticSpool {
 	readonly clientInstanceId: string;
 	private readonly maxEntries: number;
 	private readonly maxBytes: number;
+	private readonly maxFiles: number;
 	private records: ClientDiagnosticRecord[] = [];
 	private nextSeq = 1;
 	private loaded = false;
 	private writeTail: Promise<void> = Promise.resolve();
+	private currentBytes = 0;
 
 	constructor(options: ClientDiagnosticSpoolOptions) {
 		if (options.path.length === 0) throw new TypeError("Client diagnostic spool path must not be empty");
@@ -45,6 +48,7 @@ export class ClientDiagnosticSpool {
 		this.clientInstanceId = options.clientInstanceId;
 		this.maxEntries = positiveLimit(options.maxEntries ?? 512, "maxEntries");
 		this.maxBytes = positiveLimit(options.maxBytes ?? 512 * 1024, "maxBytes");
+		this.maxFiles = positiveLimit(options.maxFiles ?? 3, "maxFiles");
 	}
 
 	async append(input: ClientDiagnosticRecordInput): Promise<ClientDiagnosticRecord> {
@@ -59,8 +63,8 @@ export class ClientDiagnosticSpool {
 			...(input.fields === undefined ? {} : { fields: structuredClone(input.fields) }),
 		};
 		this.records.push(record);
-		this.trim();
-		await this.persist();
+		const trimmed = this.trim();
+		await this.persist(record, trimmed);
 		return structuredClone(record);
 	}
 
@@ -83,46 +87,97 @@ export class ClientDiagnosticSpool {
 	private async ensureLoaded(): Promise<void> {
 		if (this.loaded) return;
 		this.loaded = true;
-		try {
-			const text = await readFile(this.path, "utf8");
-			this.records = text
-				.split("\n")
-				.filter((line) => line.length > 0)
-				.flatMap((line) => {
-					try {
-						const record = JSON.parse(line) as ClientDiagnosticRecord;
-						return record.schemaVersion === 1 && record.clientInstanceId === this.clientInstanceId
-							? [record]
-							: [];
-					} catch {
-						return [];
-					}
-				})
-				.slice(-this.maxEntries);
-			this.nextSeq = (this.records.at(-1)?.seq ?? 0) + 1;
-			this.trim();
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		for (let index = this.maxFiles - 1; index >= 0; index--) {
+			const filePath = index === 0 ? this.path : `${this.path}.${index}`;
+			let text: string;
+			try {
+				text = await readFile(filePath, "utf8");
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+				throw error;
+			}
+			if (index === 0) this.currentBytes = Buffer.byteLength(text);
+			this.records.push(
+				...text
+					.split("\n")
+					.filter((line) => line.length > 0)
+					.flatMap((line) => {
+						try {
+							const record = JSON.parse(line) as ClientDiagnosticRecord;
+							return record.schemaVersion === 1 && record.clientInstanceId === this.clientInstanceId
+								? [record]
+								: [];
+						} catch {
+							return [];
+						}
+					}),
+			);
 		}
+		this.records = this.records.sort((left, right) => left.seq - right.seq).slice(-this.maxEntries);
+		this.nextSeq = (this.records.at(-1)?.seq ?? 0) + 1;
+		this.trim();
 	}
 
-	private trim(): void {
-		while (
-			this.records.length > this.maxEntries ||
-			Buffer.byteLength(`${this.records.map((record) => JSON.stringify(record)).join("\n")}\n`) > this.maxBytes
-		) {
+	private trim(): boolean {
+		let trimmed = false;
+		while (this.records.length > this.maxEntries) {
 			this.records.shift();
+			trimmed = true;
 		}
+		return trimmed;
 	}
 
-	private persist(): Promise<void> {
-		const content = `${this.records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+	private persist(record: ClientDiagnosticRecord, trimmed: boolean): Promise<void> {
 		this.writeTail = this.writeTail.then(async () => {
 			await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
-			await writeFile(this.path, content, { mode: 0o600 });
+			const line = `${JSON.stringify(record)}\n`;
+			if (trimmed) {
+				await this.clearRotated();
+				const content = `${this.records.map((item) => JSON.stringify(item)).join("\n")}\n`;
+				await writeFile(this.path, content, { mode: 0o600 });
+				this.currentBytes = Buffer.byteLength(content);
+			} else {
+				if (this.currentBytes > 0 && this.currentBytes + Buffer.byteLength(line) > this.maxBytes) {
+					await this.rotate();
+				}
+				const handle = await open(this.path, "a", 0o600);
+				try {
+					await handle.write(line, undefined, "utf8");
+					await handle.sync();
+				} finally {
+					await handle.close();
+				}
+				this.currentBytes += Buffer.byteLength(line);
+			}
 			await chmod(this.path, 0o600);
 		});
 		return this.writeTail;
+	}
+
+	private async rotate(): Promise<void> {
+		for (let index = this.maxFiles - 1; index >= 2; index--) {
+			try {
+				await rename(`${this.path}.${index - 1}`, `${this.path}.${index}`);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
+		}
+		try {
+			await rename(this.path, `${this.path}.1`);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		this.currentBytes = 0;
+	}
+
+	private async clearRotated(): Promise<void> {
+		for (let index = 1; index < this.maxFiles; index++) {
+			try {
+				await unlink(`${this.path}.${index}`);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
+		}
 	}
 }
 
