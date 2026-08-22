@@ -77,7 +77,15 @@ function fileKindFromStats(stats: {
 
 function fileInfoFromStats(
 	path: string,
-	stats: { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean; size: number; mtimeMs: number },
+	stats: {
+		isFile(): boolean;
+		isDirectory(): boolean;
+		isSymbolicLink(): boolean;
+		size: number;
+		mtimeMs: number;
+		dev?: number;
+		ino?: number;
+	},
 ): Result<FileInfo, FileError> {
 	const kind = fileKindFromStats(stats);
 	if (!kind) return err(new FileError("invalid", "Unsupported file type", path));
@@ -87,6 +95,7 @@ function fileInfoFromStats(
 		kind,
 		size: stats.size,
 		mtimeMs: stats.mtimeMs,
+		...(stats.dev !== undefined && stats.ino !== undefined ? { identity: `${stats.dev}:${stats.ino}` } : {}),
 	});
 }
 

@@ -61,6 +61,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 	private persistedLineCount = 0;
 	private persistedSize = 0;
 	private persistedModifiedAt = 0;
+	private persistedIdentity: string | undefined;
 	/** Fingerprints let refresh detect same-size/same-line-count file replacement. */
 	private persistedLineHashes: string[] = [];
 
@@ -80,6 +81,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		storage.persistedLineCount = 1;
 		storage.persistedSize = new TextEncoder().encode(encodeHeader(header)).byteLength;
 		storage.persistedModifiedAt = fileInfo.mtimeMs;
+		storage.persistedIdentity = fileInfo.identity;
 		storage.persistedLineHashes = [lineHash(encodeHeader(header).trimEnd())];
 		return storage;
 	}
@@ -116,6 +118,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 					storage.persistedSize = new TextEncoder().encode(validPrefix).byteLength;
 					const repairedInfo = fileResult(await fs.fileInfo(path), `Failed to read session metadata ${path}`);
 					storage.persistedModifiedAt = repairedInfo.mtimeMs;
+					storage.persistedIdentity = repairedInfo.identity;
 					storage.persistedLineHashes = physicalLines.slice(0, index).map(lineHash);
 					return storage;
 				}
@@ -136,6 +139,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		storage.persistedLineCount = physicalLines.length;
 		storage.persistedSize = fileInfo.size + (content.endsWith("\n") ? 0 : 1);
 		storage.persistedModifiedAt = fileInfo.mtimeMs;
+		storage.persistedIdentity = fileInfo.identity;
 		storage.persistedLineHashes = physicalLines.map(lineHash);
 		return storage;
 	}
@@ -348,7 +352,10 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 			// never turn a successful append into an error if that optional read fails.
 			try {
 				const fileInfo = await this.fs.fileInfo(this.metadata.path);
-				if (fileInfo.ok) this.persistedModifiedAt = fileInfo.value.mtimeMs;
+				if (fileInfo.ok) {
+					this.persistedModifiedAt = fileInfo.value.mtimeMs;
+					this.persistedIdentity = fileInfo.value.identity;
+				}
 			} catch {
 				// The append already committed; retain the locally projected metadata.
 			}
@@ -365,6 +372,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 				this.persistedLineCount = fresh.persistedLineCount;
 				this.persistedSize = fresh.persistedSize;
 				this.persistedModifiedAt = fresh.persistedModifiedAt;
+				this.persistedIdentity = fresh.persistedIdentity;
 				this.persistedLineHashes = fresh.persistedLineHashes;
 			} catch {
 				// Preserve the original append error when the recovery read fails.
@@ -375,7 +383,11 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 
 	private async refreshFromDisk(path: string): Promise<void> {
 		const fileInfo = fileResult(await this.fs.fileInfo(path), `Failed to read session metadata ${path}`);
-		if (fileInfo.size === this.persistedSize && fileInfo.mtimeMs === this.persistedModifiedAt) return;
+		if (
+			fileInfo.size === this.persistedSize &&
+			fileInfo.mtimeMs === this.persistedModifiedAt &&
+			(fileInfo.identity === undefined || this.persistedIdentity === undefined || fileInfo.identity === this.persistedIdentity)
+		) return;
 		const content = fileResult(await this.fs.readTextFile(path), `Failed to read session ${path}`);
 		const physicalLines = content.split("\n");
 		if (physicalLines.at(-1) === "") physicalLines.pop();
@@ -389,9 +401,11 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 			this.persistedLineCount = fresh.persistedLineCount;
 			this.persistedSize = fresh.persistedSize;
 			this.persistedModifiedAt = fresh.persistedModifiedAt;
+			this.persistedIdentity = fresh.persistedIdentity;
 			this.persistedLineHashes = fresh.persistedLineHashes;
 			return;
 		}
+		const suffix: SessionMutation[] = [];
 		for (let index = this.persistedLineCount; index < physicalLines.length; index++) {
 			const mutationResult = parseMutation(physicalLines[index]!);
 			if (!mutationResult.ok) {
@@ -400,14 +414,23 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 				this.persistedLineCount = fresh.persistedLineCount;
 				this.persistedSize = fresh.persistedSize;
 				this.persistedModifiedAt = fresh.persistedModifiedAt;
+				this.persistedIdentity = fresh.persistedIdentity;
 				this.persistedLineHashes = fresh.persistedLineHashes;
 				return;
 			}
-			this.applyMutation(mutationResult.value);
+			suffix.push(mutationResult.value);
+		}
+		const originalState = this.state;
+		try {
+			for (const mutation of suffix) this.applyMutation(mutation);
+		} catch (error) {
+			this.state = originalState;
+			throw error;
 		}
 		this.persistedLineCount = physicalLines.length;
 		this.persistedSize = fileInfo.size;
 		this.persistedModifiedAt = fileInfo.mtimeMs;
+		this.persistedIdentity = fileInfo.identity;
 		this.persistedLineHashes = currentLineHashes;
 	}
 

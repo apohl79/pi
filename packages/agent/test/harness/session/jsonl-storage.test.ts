@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Usage } from "@earendil-works/pi-ai";
@@ -519,6 +519,51 @@ describe("JSONL v4 per-session storage", () => {
 		await session.appendCustomEntry("tail");
 		const entries = await session.findEntries({ order: "oldestFirst" });
 		expect(entries.map((entry) => entry.type === "custom" && entry.customType)).toEqual(["new", "tail"]);
+	});
+
+	it("refreshes after an inode replacement with unchanged size and mtime", async () => {
+		const root = createTempDir();
+		const session = await createRepository(root).create({ id: "same-metadata", cwd: root });
+		await session.appendCustomEntry("old");
+		const metadata = await session.getMetadata();
+		const originalInfo = statSync(metadata.path);
+		const replacement = `${metadata.path}.replacement`;
+		writeFileSync(replacement, readFileSync(metadata.path, "utf8").replace('"old"', '"new"'));
+		utimesSync(replacement, originalInfo.atime, originalInfo.mtime);
+		renameSync(replacement, metadata.path);
+
+		await session.appendCustomEntry("tail");
+		expect((await session.findEntries({ order: "oldestFirst" })).map((entry) => entry.type === "custom" && entry.customType)).toEqual([
+			"new",
+			"tail",
+		]);
+	});
+
+	it("rolls back a partially applied external suffix after semantic failure", async () => {
+		const root = createTempDir();
+		const session = await createRepository(root).create({ id: "suffix-rollback", cwd: root });
+		const metadata = await session.getMetadata();
+		const external = await createRepository(root).open(metadata);
+		const valid = await external.appendEntry({ type: "custom", id: "external", customType: "note" }, "main");
+		const invalid = JSON.stringify({
+			kind: "entry",
+			seq: 2,
+			id: "invalid",
+			type: "custom",
+			parentId: "missing-parent",
+			timestamp: 1,
+			customType: "note",
+		});
+		appendFileSync(metadata.path, `${invalid}\n`);
+
+		await expect(session.appendCustomEntry("rejected")).rejects.toMatchObject({ code: "invalid_entry" });
+		expect(await session.getEntry(valid.id)).toBeUndefined();
+
+		const durablePrefix = readFileSync(metadata.path, "utf8").split("\n").slice(0, -2).join("\n") + "\n";
+		writeFileSync(metadata.path, durablePrefix);
+		const next = await session.appendCustomEntry("next");
+		expect(next.seq).toBe(2);
+		expect((await session.findEntries({ order: "oldestFirst" })).map((entry) => entry.id)).toEqual(["external", "next"]);
 	});
 
 	it("uses unchanged file metadata without rereading the session", async () => {

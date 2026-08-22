@@ -217,6 +217,8 @@ export interface FileInfo {
 	size: number;
 	/** Modification time as milliseconds since Unix epoch. */
 	mtimeMs: number;
+	/** Stable addressed-object identity when the execution environment exposes one. */
+	identity?: string;
 }
 
 /**
