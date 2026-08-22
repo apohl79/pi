@@ -1019,6 +1019,13 @@ export class AgentHarness implements AgentLane {
 			(operation) => operation.intent.kind === "run",
 		);
 		if (!openRun) return ResultValue.err(new NoActiveOperation({ lane: "main", message: "No active operation" }));
+		const active = this.activeOperation;
+		await this.durableSession.appendRecord({
+			type: "abort_requested",
+			id: this.durableSession.idGenerator.next(),
+			lane: "main",
+			runId: openRun.id,
+		});
 		const queued = await this.durableSession.findRecords({
 			type: "queue_enqueued",
 			lane: "main",
@@ -1049,21 +1056,9 @@ export class AgentHarness implements AgentLane {
 			};
 			await this.durableSession.appendRecord(cancellation);
 		}
-		const requested: NewRecord<AbortRequestedRecord> = {
-			type: "abort_requested",
-			id: this.durableSession.idGenerator.next(),
-			lane: "main",
-			runId: openRun.id,
-		};
-		await this.durableSession.appendRecord(requested);
-		const finished: NewRecord<OperationFinishedRecord> = {
-			type: "operation_finished",
-			id: this.durableSession.idGenerator.next(),
-			lane: "main",
-			runId: openRun.id,
-			outcome: "aborted",
-		};
-		await this.durableSession.appendRecord(finished);
+		active?.controller.abort();
+		await active?.done;
+		await this.finishOperation(openRun.id, "aborted", { code: "aborted", message: "Run aborted" });
 		return ResultValue.ok({ runId: openRun.id, ...recalled });
 	}
 	async steer(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
@@ -1092,6 +1087,8 @@ export class AgentHarness implements AgentLane {
 			(record) => record.entryId === entryId,
 		);
 		if (cancelled) return ResultValue.ok({ outcome: "already_cleared" });
+		const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
+		if (entries.some((entry) => entry.id === entryId)) return ResultValue.ok({ outcome: "already_consumed" });
 		const record: NewRecord<QueueCancelledRecord> =
 			enqueued.queue === "nextRun"
 				? { type: "queue_cancelled", id: this.durableSession.idGenerator.next(), lane: "main", entryId }
@@ -1116,7 +1113,12 @@ export class AgentHarness implements AgentLane {
 		const openRun = (await this.durableSession.findOpenOperations("main", { limit: 1 })).find(
 			(operation) => operation.intent.kind === "run",
 		);
-		if (requiresRun && !openRun) return ResultValue.err(new NoActiveRun({ lane: "main", message: "No active run" }));
+		const aborting = openRun
+			? (await this.durableSession.findRecords({ type: "abort_requested", lane: "main" })).some(
+					(record) => record.runId === openRun.id,
+				)
+			: false;
+		if (requiresRun && (!openRun || aborting)) return ResultValue.err(new NoActiveRun({ lane: "main", message: "No active run" }));
 		const message: AgentMessage =
 			typeof input === "string"
 				? { role: "user", content: [{ type: "text", text: input }, ...(images ?? [])], timestamp: Date.now() }
