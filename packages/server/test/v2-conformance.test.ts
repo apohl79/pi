@@ -505,6 +505,40 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(runtime.disposeCount).toBe(1);
 	});
 
+	test("allows one controller and observer lease per session", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-leases-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const controller = await connectUnixTestClientV2(server.addresses[0]!);
+		const observer = await connectUnixTestClientV2(server.addresses[0]!);
+		await controller.hello();
+		await observer.hello();
+		await controller.request({ command: "session/attach", sessionId: "session-1" });
+		const observed = await observer.request({
+			command: "session/attach",
+			sessionId: "session-1",
+			payload: { mode: "observer" },
+		});
+		expect(observed).toMatchObject({ ok: true, result: { lease: "observer" } });
+		const rejected = await observer.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { text: "no" },
+		});
+		expect(rejected).toMatchObject({
+			ok: false,
+			error: { code: "request_failed" },
+		});
+		await controller.close();
+		await observer.request({ command: "session/detach", sessionId: "session-1" });
+		const acquired = await observer.request({ command: "session/attach", sessionId: "session-1" });
+		expect(acquired).toMatchObject({ ok: true, result: { lease: "control" } });
+		await observer.close();
+	});
+
 	test("retains a runtime while accepting an operation across detach", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
