@@ -61,9 +61,11 @@ describe("CodingAgentV2AgentRegistry", () => {
 			id: "parent-model",
 		});
 		expect(runtime.commands[0]?.command).toBe("turn/start");
+		await registry.message(agent.id, "urgent context");
 		await registry.followUp(agent.id, "continue with the tests");
 		expect((await registry.wait(agent.id)).state).toBe("complete");
 		expect(runtime.commands[1]?.command).toBe("turn/followUp");
+		expect(runtime.commands[1]?.payload).toEqual({ text: "urgent context\n\ncontinue with the tests" });
 		// A completed child is stable until a follow-up is requested.
 		await registry.interrupt(agent.id);
 		expect((await registry.getSnapshot(agent.id)).state).toBe("complete");
@@ -120,5 +122,18 @@ describe("CodingAgentV2AgentRegistry", () => {
 		runtime.release();
 		expect((await registry.wait(agent.id)).state).toBe("complete");
 		expect(runtime.commands.map((command) => command.command)).toEqual(["turn/start", "turn/followUp"]);
+	});
+
+	test("bounds queued child messages", async () => {
+		const { registry } = fixture();
+		const agent = await registry.spawn({
+			sessionId: "parent-session",
+			parentPath: "root",
+			taskName: "worker",
+			taskMessage: "inspect the repository",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		for (let index = 0; index < 32; index++) await registry.message(agent.id, `message-${index}`);
+		await expect(registry.message(agent.id, "overflow")).rejects.toThrow("inbox limit");
 	});
 });
