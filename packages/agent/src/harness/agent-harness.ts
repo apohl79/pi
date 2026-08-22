@@ -430,6 +430,7 @@ export interface AgentLane {
 	getThinkingLevel(): Promise<ThinkingLevel>;
 	setThinkingLevel(level: ThinkingLevel): Promise<void>;
 	getCompactionPolicySource(): Promise<CompactionPolicySource>;
+	setCompactionEnabled(enabled: boolean): Promise<void>;
 	getActiveTools(): Promise<string[]>;
 	setActiveTools(names: string[]): Promise<void>;
 	getQueueSnapshot(): Promise<LaneSnapshot["queues"]>;
@@ -1441,6 +1442,21 @@ export class AgentHarness implements AgentLane {
 			(value) => value !== undefined,
 		).length;
 		return overriddenFields === 3 ? "model" : "mixed";
+	}
+	async setCompactionEnabled(enabled: boolean): Promise<void> {
+		const modelKey = `${this.model.provider}/${this.model.id}`;
+		const override = this.compactionSettings.modelOverrides?.[modelKey];
+		const settings: CompactionSettings =
+			override?.enabled === undefined
+				? { ...this.compactionSettings, enabled }
+				: {
+						...this.compactionSettings,
+						modelOverrides: {
+							...this.compactionSettings.modelOverrides,
+							[modelKey]: { ...override, enabled },
+						},
+					};
+		await this.setCompactionSettings(settings);
 	}
 	async setCompactionSettings(settings: CompactionSettings): Promise<void> {
 		this.compactionSettings = { ...settings };

@@ -308,6 +308,55 @@ describe("coding-agent v2 service adapter", () => {
 		}
 	});
 
+	test("toggles the active model compaction override through the v2 command", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-compaction-faux",
+			models: [
+				{ id: "coding-agent-v2-compaction-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		const session = new Session(new InMemorySessionStorage({ id: "compaction-toggle-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		try {
+			const activeModel = await created.harness.getModel();
+			await created.harness.setCompactionSettings({
+				enabled: true,
+				reserveTokens: 123,
+				keepRecentTokens: 456,
+				modelOverrides: { [`${activeModel.provider}/${activeModel.id}`]: { enabled: false, reserveTokens: 789 } },
+			});
+			expect(await created.harness.getCompactionSettings()).toMatchObject({ enabled: false, reserveTokens: 789 });
+			const runtime = createCodingAgentV2Service(models, [
+				{ metadata: { id: "compaction-toggle-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+			]).openSession("compaction-toggle-session");
+			const opened = await runtime;
+			expect((await opened.snapshot()).compactionPolicy.enabled).toBe(false);
+			await opened.run("enable-compaction", {
+				command: "session/compaction/set",
+				sessionId: "compaction-toggle-session",
+				payload: { enabled: true },
+			});
+			expect((await opened.snapshot()).compactionPolicy).toMatchObject({
+				enabled: true,
+				reserveTokens: 789,
+				keepRecentTokens: 456,
+			});
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("maps a durable harness to an accepted and executable turn runtime", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
