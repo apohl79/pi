@@ -56,7 +56,12 @@ describe("coding-agent daemon plugin end-to-end compatibility", () => {
 				command: "plugin/install",
 				payload: { name: "reviewer", marketplace: "local", version: "1.0.0" },
 			});
-			expect(installed).toMatchObject({ ok: true, result: { plugin: { id: "reviewer@local", version: "1.0.0" } } });
+			expect(installed).toMatchObject({
+				ok: true,
+				result: {
+					plugin: { id: "reviewer@local", version: "1.0.0", root: expect.stringContaining("plugins-cache") },
+				},
+			});
 		} finally {
 			client.dispose();
 			await runtime.close();

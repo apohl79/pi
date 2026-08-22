@@ -334,16 +334,16 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 					});
 		const pluginRegistry =
 			options.pluginRegistry === undefined
-				? new ActivatingV2PluginRegistry(
-						pluginMarketplaceResolver === undefined
-							? new JsonV2PluginRegistry(join(options.agentDir, "plugins.json"))
-							: new AcquiringV2PluginRegistry(
-									new JsonV2PluginRegistry(join(options.agentDir, "plugins.json")),
-									pluginMarketplaceResolver,
-								),
-						options.pluginActivationStore ??
-							new CodexPluginActivationStore(join(options.agentDir, "plugins-cache")),
-					)
+				? (() => {
+						const activated = new ActivatingV2PluginRegistry(
+							new JsonV2PluginRegistry(join(options.agentDir, "plugins.json")),
+							options.pluginActivationStore ??
+								new CodexPluginActivationStore(join(options.agentDir, "plugins-cache")),
+						);
+						return pluginMarketplaceResolver === undefined
+							? activated
+							: new AcquiringV2PluginRegistry(activated, pluginMarketplaceResolver);
+					})()
 				: options.pluginRegistry;
 		const plans =
 			options.plans ??
