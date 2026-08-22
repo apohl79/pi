@@ -26,6 +26,7 @@ import {
 	type DiagnosticContentStore,
 	type DiagnosticIntegrityProvider,
 	type DiagnosticRuntimeManifest,
+	type DiagnosticValue,
 	type ForensicRecorder,
 	InMemoryForensicRecorder,
 	verifyDiagnosticBundle,
@@ -1234,6 +1235,15 @@ export class PiServerV2 {
 		]);
 		const sessions =
 			sessionId === undefined ? allSessions : allSessions.filter((session) => session.id === sessionId);
+		const sessionSnapshots: DiagnosticValue[] = [];
+		if (sessionId !== undefined && sessions.length > 0) {
+			const runtime = await this.service.openSession(sessionId);
+			try {
+				sessionSnapshots.push(toProtocolJsonValue(await runtime.snapshot()));
+			} finally {
+				await runtime.dispose();
+			}
+		}
 		const operations = operationState.operations.filter(
 			(operation) =>
 				(sessionId === undefined || operation.sessionId === sessionId) &&
@@ -1254,6 +1264,7 @@ export class PiServerV2 {
 				: aggregateV2UsageEntries(usageEntries);
 		return {
 			sessions: sessions.map((session) => toProtocolJsonValue(session)),
+			...(sessionSnapshots.length === 0 ? {} : { sessionSnapshots }),
 			operations: operations.map((operation) => toProtocolJsonValue(operation)),
 			operationEvents: operationEvents.map((event) => toProtocolJsonValue(event)),
 			usage: toProtocolJsonValue({ aggregate: usageAggregate, entries: usageEntries }),
