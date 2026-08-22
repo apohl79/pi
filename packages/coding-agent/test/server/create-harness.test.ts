@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -112,6 +112,23 @@ describe("coding-agent Harness construction", () => {
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 			await rm(outside, { recursive: true, force: true });
+		}
+	});
+
+	test("rejects oversized model profile files before loading them", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-model-profile-size-"));
+		try {
+			await writeFile(join(directory, "profile.md"), "0123456789");
+			const canonicalDirectory = await realpath(directory);
+			const resolver = new ModelInstructionResolver(
+				[{ id: "large-profile", provider: "openai", model: "gpt-5", mode: "append", file: "profile.md" }],
+				{ cwd: canonicalDirectory, maxBytes: 5 },
+			);
+			await expect(resolver.resolve({ provider: "openai", id: "gpt-5" })).rejects.toThrow(
+				"Model profile large-profile exceeds 5-byte limit",
+			);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
 		}
 	});
 
