@@ -1,4 +1,5 @@
 import { symlink } from "node:fs/promises";
+import { join } from "node:path";
 import { applyPatch } from "diff";
 import { describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
@@ -163,6 +164,47 @@ describe("AgentHarness tools", () => {
 					context,
 				),
 			).rejects.toThrow();
+		});
+
+		it("rejects symlinked files and parents before mutation", async () => {
+			const context = createContext();
+			const outside = createTempDir();
+			getOrThrow(await context.env.writeFile(join(outside, "outside.txt"), "outside\n"));
+			await symlink(join(outside, "outside.txt"), join(context.env.cwd, "linked.txt"));
+			await symlink(outside, join(context.env.cwd, "linked-dir"));
+
+			await expect(
+				createApplyPatchTool().execute(
+					"patch-symlink-file",
+					{ patch: "*** Begin Patch\n*** Update File: linked.txt\n@@\n-outside\n+changed\n*** End Patch" },
+					undefined,
+					undefined,
+					context,
+				),
+			).rejects.toThrow(/symlink/i);
+			await expect(
+				createApplyPatchTool().execute(
+					"patch-symlink-parent",
+					{ patch: "*** Begin Patch\n*** Add File: linked-dir/new.txt\n+escaped\n*** End Patch" },
+					undefined,
+					undefined,
+					context,
+				),
+			).rejects.toThrow(/symlink|escapes/i);
+			expect(getOrThrow(await context.env.readTextFile(join(outside, "outside.txt")))).toBe("outside\n");
+		});
+
+		it("preserves CRLF line endings while applying updates", async () => {
+			const context = createContext();
+			getOrThrow(await context.env.writeFile("crlf.txt", "one\r\ntwo\r\n"));
+			await createApplyPatchTool().execute(
+				"patch-crlf",
+				{ patch: "*** Begin Patch\n*** Update File: crlf.txt\n@@\n-one\n+ONE\n*** End Patch" },
+				undefined,
+				undefined,
+				context,
+			);
+			expect(getOrThrow(await context.env.readTextFile("crlf.txt"))).toBe("ONE\r\ntwo\r\n");
 		});
 	});
 
