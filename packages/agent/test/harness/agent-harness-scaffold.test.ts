@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { AgentHarness, HarnessClosed, type HarnessTool, type Resources } from "../../src/harness/agent-harness.ts";
 import {
 	InMemorySessionStorage,
+	type LaneRecord,
 	type NewRecord,
 	type OperationStartedRecord,
 	Session,
@@ -12,6 +13,19 @@ import type { AgentMessage } from "../../src/types.ts";
 
 function createSession(id = "session"): Session {
 	return new Session(new InMemorySessionStorage({ id, createdAt: 1 }));
+}
+
+class ThrowAfterCompactionStartStorage extends InMemorySessionStorage {
+	private injected = false;
+
+	override async appendRecord<TRecord extends LaneRecord>(record: NewRecord<TRecord>): Promise<TRecord> {
+		const appended = await super.appendRecord(record);
+		if (!this.injected && record.type === "operation_started" && record.intent.kind === "compaction") {
+			this.injected = true;
+			throw new Error("compaction admission response lost after commit");
+		}
+		return appended;
+	}
 }
 
 function createHarness(session = createSession()): Promise<AgentHarness> {
@@ -151,6 +165,31 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(entries.some((entry) => entry.type === "compaction" && entry.summary.includes("durable summary"))).toBe(
 			true,
 		);
+		expect((await session.findRecords({ type: "operation_finished" })).at(-1)?.outcome).toBe("completed");
+		await harness.close();
+	});
+
+	it("continues compaction when admission reports an error after commit", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-compaction-admission-faux",
+			models: [{ id: "harness-compaction-admission-model", contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("first response")]);
+		const session = new Session(new ThrowAfterCompactionStartStorage({ id: "compaction-admission", createdAt: 1 }));
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+		});
+		await harness.prompt("create durable history");
+		faux.setResponses([fauxAssistantMessage("durable summary")]);
+
+		const result = await harness.compact();
+
+		expect(result).toMatchObject({ ok: true, value: { kind: "completed", entry: { type: "compaction" } } });
 		expect((await session.findRecords({ type: "operation_finished" })).at(-1)?.outcome).toBe("completed");
 		await harness.close();
 	});
