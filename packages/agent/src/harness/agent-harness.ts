@@ -811,8 +811,15 @@ export class AgentHarness implements AgentLane {
 							"streamOptions" in result &&
 							result.streamOptions !== null &&
 							typeof result.streamOptions === "object"
-						)
-							requestOptionsPatch = result.streamOptions as Partial<SimpleStreamOptions>;
+						) {
+							const {
+								onPayload: _onPayload,
+								onResponse: _onResponse,
+								signal: _signal,
+								...safePatch
+							} = result.streamOptions as Partial<SimpleStreamOptions>;
+							requestOptionsPatch = safePatch;
+						}
 						await this.park({ kind: "stream_assistant", step: "assistant", attempt: assistantAttempt });
 					},
 					beforeToolCall: async ({ toolCall, args }) => {
@@ -880,8 +887,27 @@ export class AgentHarness implements AgentLane {
 				},
 				async () => {},
 				controller.signal,
-				(model, context, options) =>
-					this.models.streamSimple(model, context, { ...options, ...requestOptionsPatch }),
+				async (model, context, options) => {
+					const {
+						onPayload: _onPayload,
+						onResponse: _onResponse,
+						signal: _signal,
+						...safeOptions
+					} = { ...options, ...requestOptionsPatch };
+					return this.models.streamSimple(model, context, {
+						...safeOptions,
+						signal: controller.signal,
+						onPayload: async (payload, requestModel) => {
+							const result = await this.runLifecycleHook("before_payload", {
+								operationId: runId,
+								model: requestModel,
+								payload: durableClone(payload),
+							});
+							if (result !== null && typeof result === "object" && "payload" in result) return result.payload;
+							return payload;
+						},
+					});
+				},
 			);
 			let finalEntryId: string | undefined;
 			const transcriptMessages: AgentMessage[] = [];

@@ -681,6 +681,29 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("applies before_payload hooks at the provider payload boundary", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "before-payload-faux",
+			models: [{ id: "before-payload-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("payload patched")]);
+		const { harness } = await AgentHarness.create({
+			session: createSession("before-payload"),
+			models,
+			model: faux.getModel(),
+		});
+		harness.hooks.on("before_payload", (event) => ({
+			payload: { ...(event as { payload: Record<string, unknown> }).payload, marker: "hooked" },
+		}));
+
+		await harness.prompt("hello");
+
+		expect(faux.state.lastPayload).toMatchObject({ marker: "hooked" });
+		await harness.close();
+	});
+
 	it("applies after_response message transformations before persistence", async () => {
 		const models = createModels();
 		const faux = fauxProvider({

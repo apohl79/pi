@@ -102,6 +102,7 @@ export interface FauxProviderState {
 	callCount: number;
 	deferredFetchCount: number;
 	cancelledDeferred: DeferredHandle[];
+	lastPayload?: unknown;
 }
 
 export type FauxResponseFactory = (
@@ -520,6 +521,7 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 					outer.end(message);
 					return;
 				}
+				state.lastPayload = await streamOptions?.onPayload?.({ messages: context.messages }, requestModel);
 
 				if (streamOptions?.deferred) {
 					const handle: DeferredHandle = {
