@@ -111,7 +111,7 @@ async function waitForQueue(
 		const response = await client.request({ command: "session/read", sessionId });
 		if (response.ok && "result" in response) {
 			const steer = (
-				response.result as {
+				response.result as unknown as {
 					session: { queues: { steer: readonly { id: string; content: readonly unknown[] }[] } };
 				}
 			).session.queues.steer;
