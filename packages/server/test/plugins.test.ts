@@ -65,6 +65,28 @@ describe("InMemoryV2PluginRegistry", () => {
 		await expect(registry.removeMarketplace("local")).rejects.toThrow("installed plugins");
 	});
 
+	test("rejects manifest identity conflicts on install and upgrade", async () => {
+		const registry = new InMemoryV2PluginRegistry();
+		await registry.addMarketplace("local", "/workspace/plugins");
+		await expect(
+			registry.installPlugin({
+				name: "reviewer",
+				marketplace: "local",
+				version: "1",
+				manifest: { name: "other", version: "1" },
+			}),
+		).rejects.toThrow("manifest name");
+		await registry.installPlugin({
+			name: "reviewer",
+			marketplace: "local",
+			version: "1",
+			manifest: { name: "reviewer" },
+		});
+		await expect(registry.upgradePlugin("reviewer@local", "2", { name: "reviewer", version: "1" })).rejects.toThrow(
+			"manifest version",
+		);
+	});
+
 	test("recovers marketplace and plugin state after reopening", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-plugin-registry-"));
 		const path = join(directory, "state", "plugins.json");
