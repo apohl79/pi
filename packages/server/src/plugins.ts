@@ -540,11 +540,22 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 		}
 	}
 
-	private async persist(): Promise<void> {
+	private async persist(state = this.memory.toState()): Promise<void> {
 		await mkdir(dirname(this.filePath), { recursive: true });
 		const temporary = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
-		await writeFile(temporary, `${JSON.stringify(this.memory.toState())}\n`, { mode: 0o600 });
+		await writeFile(temporary, `${JSON.stringify(state)}\n`, { mode: 0o600 });
 		await rename(temporary, this.filePath);
+	}
+
+	private async transact<T>(operation: (candidate: InMemoryV2PluginRegistry) => Promise<T>): Promise<T> {
+		await this.ensureLoaded();
+		const candidate = new InMemoryV2PluginRegistry();
+		candidate.replace(this.memory.toState());
+		const value = await operation(candidate);
+		const state = candidate.toState();
+		await this.persist(state);
+		this.memory.replace(state);
+		return value;
 	}
 
 	async listMarketplaces(): Promise<readonly V2Marketplace[]> {
@@ -553,23 +564,15 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 	}
 
 	async addMarketplace(name: string, source: string): Promise<V2Marketplace> {
-		await this.ensureLoaded();
-		const value = await this.memory.addMarketplace(name, source);
-		await this.persist();
-		return value;
+		return this.transact((candidate) => candidate.addMarketplace(name, source));
 	}
 
 	async removeMarketplace(name: string): Promise<void> {
-		await this.ensureLoaded();
-		await this.memory.removeMarketplace(name);
-		await this.persist();
+		await this.transact((candidate) => candidate.removeMarketplace(name));
 	}
 
 	async upgradeMarketplace(name: string): Promise<V2Marketplace> {
-		await this.ensureLoaded();
-		const value = await this.memory.upgradeMarketplace(name);
-		await this.persist();
-		return value;
+		return this.transact((candidate) => candidate.upgradeMarketplace(name));
 	}
 
 	async listPlugins(installedOnly = false): Promise<readonly V2Plugin[]> {
@@ -583,16 +586,11 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 	}
 
 	async installPlugin(input: Parameters<V2PluginRegistry["installPlugin"]>[0]): Promise<V2Plugin> {
-		await this.ensureLoaded();
-		const value = await this.memory.installPlugin(input);
-		await this.persist();
-		return value;
+		return this.transact((candidate) => candidate.installPlugin(input));
 	}
 
 	async uninstallPlugin(id: string): Promise<void> {
-		await this.ensureLoaded();
-		await this.memory.uninstallPlugin(id);
-		await this.persist();
+		await this.transact((candidate) => candidate.uninstallPlugin(id));
 	}
 
 	async upgradePlugin(
@@ -601,30 +599,18 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 		manifest?: Record<string, unknown>,
 		root?: string,
 	): Promise<V2Plugin> {
-		await this.ensureLoaded();
-		const value = await this.memory.upgradePlugin(id, version, manifest, root);
-		await this.persist();
-		return value;
+		return this.transact((candidate) => candidate.upgradePlugin(id, version, manifest, root));
 	}
 
 	async setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin> {
-		await this.ensureLoaded();
-		const value = await this.memory.setEnabled(id, enabled, scope);
-		await this.persist();
-		return value;
+		return this.transact((candidate) => candidate.setEnabled(id, enabled, scope));
 	}
 
 	async startAppAuth(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthStart> {
-		await this.ensureLoaded();
-		const value = await this.memory.startAppAuth(id, payload);
-		await this.persist();
-		return value;
+		return this.transact((candidate) => candidate.startAppAuth(id, payload));
 	}
 
 	async completeAppAuth(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthComplete> {
-		await this.ensureLoaded();
-		const value = await this.memory.completeAppAuth(id, payload);
-		await this.persist();
-		return value;
+		return this.transact((candidate) => candidate.completeAppAuth(id, payload));
 	}
 }
