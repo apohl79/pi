@@ -20,7 +20,7 @@ import {
 import { uuidv7 } from "@earendil-works/pi-ai";
 import { appendEntryToBranchCache, buildCachedBranch, deleteBranchCache, rebuildBranchCache } from "./branch-cache.ts";
 import { inspectSqliteDatabase, type SqliteInspection, sqliteStringLiteral } from "./maintenance.ts";
-import { applyMigrations } from "./migrations.ts";
+import { applyMigrations, pendingMigrations } from "./migrations.ts";
 import { sql } from "./sql.ts";
 import { type CachedBranchEntryRow, queryCachedBranchRows, readCachedBranch } from "./storage/branch-entries.ts";
 import { readBranchTipIds } from "./storage/branch-tips.ts";
@@ -104,6 +104,8 @@ export interface SqliteSessionRepositoryOptions {
 	env: SqliteSessionRepositoryEnv;
 	sqlite: SqliteDatabaseFactory;
 	databasePath: string;
+	/** Optional preserved destination for a pre-migration SQLite snapshot. */
+	migrationBackupPath?: string;
 	writerLease?: SqliteWriterLeaseOptions;
 }
 
@@ -176,6 +178,7 @@ function getParentPath(path: string): string {
 }
 
 function configureSqliteDatabase(db: SqliteDatabase): void {
+	sql`PRAGMA foreign_keys=ON`.exec(db);
 	sql`PRAGMA journal_mode=WAL`.exec(db);
 	sql`PRAGMA synchronous=FULL`.exec(db);
 	sql`PRAGMA busy_timeout=5000`.exec(db);
@@ -1001,11 +1004,54 @@ export class SqliteSessionRepository
 		const db = await this.options.sqlite.open(path);
 		try {
 			configureSqliteDatabase(db);
+			const pending = await pendingMigrations(db);
+			const appliedCount =
+				db.prepare("SELECT COUNT(*) AS count FROM migrations").get<{ count: number }>()?.count ?? 0;
+			const upgrading = pending.length > 0 && appliedCount > 0;
+			if (upgrading) await this.prepareMigrationBackup(db, path);
 			await applyMigrations(db);
+			if (upgrading) {
+				const inspection = inspectSqliteDatabase(db);
+				if (!inspection.healthy)
+					throw new SessionError("storage", "SQLite migration failed integrity verification");
+				const reopened = await this.options.sqlite.open(path);
+				try {
+					const reopenedInspection = inspectSqliteDatabase(reopened);
+					if (!reopenedInspection.healthy)
+						throw new SessionError("storage", "SQLite migration failed reopen verification");
+				} finally {
+					reopened.close();
+				}
+			}
 			return db;
 		} catch (error) {
 			db.close();
 			throw error;
+		}
+	}
+
+	private async prepareMigrationBackup(db: SqliteDatabase, sourcePath: string): Promise<void> {
+		const requestedPath = this.options.migrationBackupPath ?? `${sourcePath}.pre-migration.sqlite`;
+		const backupPath = resultOrThrow(
+			await this.options.env.absolutePath(requestedPath),
+			`Failed to resolve SQLite migration backup ${requestedPath}`,
+		);
+		if (backupPath === sourcePath) throw new SessionError("storage", "Migration backup must use a different path");
+		resultOrThrow(
+			await this.options.env.createDir(getParentPath(backupPath), { recursive: true }),
+			`Failed to create SQLite migration backup directory ${backupPath}`,
+		);
+		const exists = resultOrThrow(
+			await this.options.env.exists(backupPath),
+			`Failed to check SQLite migration backup ${backupPath}`,
+		);
+		if (!exists) db.exec(`VACUUM INTO ${sqliteStringLiteral(backupPath)}`);
+		const backup = await this.options.sqlite.open(backupPath);
+		try {
+			if (!inspectSqliteDatabase(backup).healthy)
+				throw new SessionError("storage", "SQLite migration backup failed integrity verification");
+		} finally {
+			backup.close();
 		}
 	}
 }

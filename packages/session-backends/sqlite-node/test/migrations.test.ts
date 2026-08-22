@@ -1,9 +1,21 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyMigrations, createNodeSqliteFactory } from "../src/index.ts";
+import { applyMigrations, createNodeSqliteFactory, pendingMigrations } from "../src/index.ts";
 import { createTempDir } from "./test-utils.ts";
 
 describe("SQLite migrations", () => {
+	it("reports pending migrations before applying them", async () => {
+		const databasePath = join(createTempDir(), "sessions.sqlite");
+		const db = await createNodeSqliteFactory().open(databasePath);
+		try {
+			expect((await pendingMigrations(db)).map((migration) => migration.id)).toEqual(["001_initial.sql"]);
+			await applyMigrations(db);
+			expect(await pendingMigrations(db)).toEqual([]);
+		} finally {
+			db.close();
+		}
+	});
+
 	it("applies the current schema once and records its migration", async () => {
 		const databasePath = join(createTempDir(), "sessions.sqlite");
 		const db = await createNodeSqliteFactory().open(databasePath);
