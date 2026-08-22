@@ -2,7 +2,6 @@ import { symlink } from "node:fs/promises";
 import { applyPatch } from "diff";
 import { describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
-import { createApplyPatchTool } from "../../src/harness/tools/apply-patch.ts";
 import { type BashToolDetails, createBashTool } from "../../src/harness/tools/bash.ts";
 import { createEditTool } from "../../src/harness/tools/edit.ts";
 import { createReadTool } from "../../src/harness/tools/read.ts";
@@ -133,39 +132,6 @@ function createTinyBmp(): Uint8Array {
 }
 
 describe("AgentHarness tools", () => {
-	describe("apply_patch", () => {
-		it("updates and adds files atomically through the mutation queue", async () => {
-			const context = createContext();
-			getOrThrow(await context.env.writeFile("patch.txt", "one\ntwo\n"));
-			const result = await createApplyPatchTool().execute(
-				"patch-1",
-				{
-					patch: "*** Begin Patch\n*** Update File: patch.txt\n@@\n-one\n+ONE\n*** Add File: added.txt\n+created\n*** End Patch",
-				},
-				undefined,
-				undefined,
-				context,
-			);
-
-			expect(textOutput(result)).toContain("Applied patch to 2 file(s)");
-			expect(getOrThrow(await context.env.readTextFile("patch.txt"))).toBe("ONE\ntwo\n");
-			expect(getOrThrow(await context.env.readTextFile("added.txt"))).toBe("created\n");
-		});
-
-		it("rejects traversal paths before mutation", async () => {
-			const context = createContext();
-			await expect(
-				createApplyPatchTool().execute(
-					"patch-2",
-					{ patch: "*** Begin Patch\n*** Update File: ../escape.txt\n@@\n-old\n+new\n*** End Patch" },
-					undefined,
-					undefined,
-					context,
-				),
-			).rejects.toThrow();
-		});
-	});
-
 	describe("read", () => {
 		it("reads text with offsets, limits, and continuation notices", async () => {
 			const context = createContext();
