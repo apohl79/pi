@@ -169,6 +169,40 @@ describe("coding-agent daemon child agents", () => {
 		}
 	});
 
+	test("passes the requested durable transcript context into a forked child", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-agents-context-fork-"));
+		directories.push(directory);
+		const childPrompts: string[] = [];
+		const runtime = await createAgentRuntime(directory, true, childPrompts);
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
+			try {
+				const rootOperation = await session.submit("root context for the child");
+				await session.waitForOperation(rootOperation);
+				const child = await session.spawnAgent("forked", "continue from the root context", {
+					forkTurns: 1,
+					model: { provider: "coding-agent-daemon-child-faux", id: "child-model" },
+				});
+				await session.waitAgent(child.id);
+				for (let attempt = 0; attempt < 50 && childPrompts.length === 0; attempt++)
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				expect(
+					childPrompts.some((prompt) => prompt.includes("[forked context]") && prompt.includes("root context")),
+				).toBe(true);
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
 	test("runs an explicitly selected child model through the production daemon", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-agents-"));
 		directories.push(directory);
