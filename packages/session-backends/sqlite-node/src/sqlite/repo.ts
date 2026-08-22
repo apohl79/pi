@@ -785,6 +785,21 @@ export class SqliteSessionRepository
 		return this.operations.enqueue(async () => inspectSqliteDatabase(await this.getDatabase()));
 	}
 
+	/** Verifies canonical SQLite integrity through a separate reopened connection. */
+	async verifyReopen(): Promise<SqliteInspection> {
+		return this.operations.enqueue(async () => {
+			const path = await this.getDatabasePath();
+			const reopened = await this.options.sqlite.open(path);
+			try {
+				const inspection = inspectSqliteDatabase(reopened);
+				if (!inspection.healthy) throw new SessionError("storage", "SQLite reopen verification failed");
+				return inspection;
+			} finally {
+				reopened.close();
+			}
+		});
+	}
+
 	/** Rebuilds only the derived branch caches after integrity checks identify stale cache state. */
 	async repairDerivedIndexes(): Promise<readonly string[]> {
 		return this.operations.enqueue(async () => {

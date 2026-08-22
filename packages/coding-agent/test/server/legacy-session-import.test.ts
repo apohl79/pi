@@ -42,6 +42,7 @@ describe("legacy SQLite session import", () => {
 			const result = await importLegacySessions({ repository, fs: env, sessionsRoot });
 			expect(result).toEqual({ imported: 1, skipped: 0, failed: 0 });
 			const [metadata] = await repository.list();
+			expect((await repository.verifyReopen()).healthy).toBe(true);
 			expect(metadata?.metadata).toMatchObject({
 				legacyImport: { version: 1, sourcePath, backupPath: expect.stringContaining(".legacy-backup-") },
 			});
