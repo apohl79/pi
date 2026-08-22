@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -100,6 +100,13 @@ describe("JsonlForensicRecorder", () => {
 		await recorder.record({ kind: "two" });
 		await recorder.record({ kind: "three" });
 		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
+	});
+
+	test("rejects malformed persisted event records", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-invalid-"));
+		const path = join(directory, "events.jsonl");
+		await writeFile(path, `${JSON.stringify({ schemaVersion: 1, seq: 1, kind: "boot" })}\n`);
+		await expect(new JsonlForensicRecorder(path).read()).rejects.toThrow("Invalid forensic event");
 	});
 });
 

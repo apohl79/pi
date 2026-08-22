@@ -659,8 +659,7 @@ export class JsonlForensicRecorder implements ForensicRecorder {
 			throw error;
 		}
 		for (const line of contents.split("\n").filter(Boolean)) {
-			const parsed = JSON.parse(line) as ForensicEvent;
-			if (!Number.isInteger(parsed.seq) || parsed.seq < 1) throw new Error("Invalid forensic sequence");
+			const parsed = parseForensicEvent(JSON.parse(line));
 			const event =
 				parsed.schemaVersion === 1 && parsed.eventId !== undefined
 					? parsed
@@ -708,4 +707,50 @@ export class JsonlForensicRecorder implements ForensicRecorder {
 		await this.ensureLoaded();
 		return structuredClone(this.events.filter((event) => event.seq > afterSeq));
 	}
+}
+
+function parseForensicEvent(value: unknown): ForensicEvent {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Invalid forensic event");
+	const event = value as Record<string, unknown>;
+	if (
+		event.schemaVersion !== 1 ||
+		!typeNonEmpty(event.eventId) ||
+		!typeNonEmpty(event.kind) ||
+		!typeNonEmpty(event.severity) ||
+		!["debug", "info", "warn", "error"].includes(event.severity) ||
+		!typeNonEmpty(event.traceId) ||
+		!typeNonEmpty(event.spanId) ||
+		!typeNonEmpty(event.processInstanceId) ||
+		!Number.isSafeInteger(event.seq) ||
+		(event.seq as number) < 1 ||
+		!Number.isSafeInteger(event.timestamp) ||
+		(event.timestamp as number) < 1 ||
+		event.payload === undefined ||
+		typeof event.payload !== "object" ||
+		event.payload === null ||
+		Array.isArray(event.payload) ||
+		!Object.values(event.payload as Record<string, unknown>).every(isDiagnosticValue)
+	)
+		throw new Error("Invalid forensic event");
+	for (const key of [
+		"parentSpanId",
+		"daemonInstanceId",
+		"clientInstanceId",
+		"sessionId",
+		"operationId",
+		"turnId",
+		"agentId",
+	])
+		if (event[key] !== undefined && !typeNonEmpty(event[key])) throw new Error("Invalid forensic event");
+	if (
+		event.outcome !== undefined &&
+		!["started", "ok", "error", "cancelled", "suspended", "ambiguous"].includes(event.outcome as string)
+	)
+		throw new Error("Invalid forensic event");
+	if (
+		event.durationMs !== undefined &&
+		(typeof event.durationMs !== "number" || !Number.isFinite(event.durationMs) || event.durationMs < 0)
+	)
+		throw new Error("Invalid forensic event");
+	return event as unknown as ForensicEvent;
 }
