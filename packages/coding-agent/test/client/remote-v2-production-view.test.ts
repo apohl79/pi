@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
@@ -63,6 +63,52 @@ describe("production remote v2 view", () => {
 				expect(rendered).toContain("Plan in_progress · verify the daemon");
 			} finally {
 				await attachment.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("resolves server files and uploads local references through the production daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-remote-files-"));
+		directories.push(directory);
+		const serverPath = join(directory, "server-note.md");
+		const localPath = join(directory, "local-note.txt");
+		await writeFile(serverPath, "server content\n", "utf8");
+		await writeFile(localPath, "local content\n", "utf8");
+		const runtime = await createRemoteRuntime(directory);
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.createSession({ cwd: directory });
+			const session = await new RemoteV2SessionSelector(client).attachView(created.id, { mode: "control" });
+			try {
+				const serverFile = await session.session.resolveFile("@server:server-note.md");
+				expect(serverFile).toMatchObject({
+					reference: "server:server-note.md",
+					kind: "file",
+					mimeType: "text/markdown",
+				});
+				const serverRead = await session.session.readFile(serverFile.reference);
+				expect(Buffer.from(serverRead.data, "base64").toString("utf8")).toBe(await readFile(serverPath, "utf8"));
+
+				const localFile = await session.session.uploadLocalFileReference(localPath, "text/plain");
+				expect(localFile).toMatchObject({
+					reference: `@local:${localPath}`,
+					path: localPath,
+					kind: "file",
+					size: 13,
+				});
+				const blob = await session.session.statBlob(localFile.blobDigest);
+				const blobRead = await session.session.readBlob(localFile.blobDigest);
+				expect(blob).toMatchObject({ digest: localFile.blobDigest, mimeType: "text/plain", size: 13 });
+				expect(Buffer.from(blobRead.data, "base64").toString("utf8")).toBe("local content\n");
+			} finally {
+				await session.dispose();
 			}
 		} finally {
 			client.dispose();
