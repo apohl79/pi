@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import { afterEach, describe, expect, test } from "vitest";
@@ -86,6 +86,85 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe("coding-agent daemon child agents", () => {
+	test("runs nested child agents through the server-owned tool path", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-agents-nested-"));
+		directories.push(directory);
+		const models = createModels();
+		const parent = fauxProvider({
+			provider: "coding-agent-daemon-nested-parent-faux",
+			models: [{ id: "parent-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		const child = fauxProvider({
+			provider: "coding-agent-daemon-nested-child-faux",
+			models: [{ id: "child-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		const nested = fauxProvider({
+			provider: "coding-agent-daemon-nested-leaf-faux",
+			models: [{ id: "leaf-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		for (const provider of [parent, child, nested]) models.setProvider(provider.provider);
+		parent.setResponses([
+			fauxAssistantMessage(
+				fauxToolCall("spawn_agent", {
+					taskName: "child",
+					taskMessage: "start nested work",
+					model: { provider: child.provider.id, id: "child-model" },
+				}),
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("parent complete"),
+		]);
+		child.setResponses([
+			fauxAssistantMessage(
+				fauxToolCall("spawn_agent", {
+					taskName: "leaf",
+					taskMessage: "finish nested work",
+					model: { provider: nested.provider.id, id: "leaf-model" },
+				}),
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("child complete"),
+		]);
+		nested.setResponses([fauxAssistantMessage("leaf complete")]);
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: parent.getModel(),
+			socketPath: join(directory, "server.sock"),
+			agentMaxDepth: 2,
+			harness: { activeToolNames: ["spawn_agent"] },
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
+			try {
+				const operationId = await session.submit("delegate nested work");
+				await session.waitForOperation(operationId);
+				let agents: readonly { path: string; state: string }[] = [];
+				for (let attempt = 0; attempt < 50; attempt++) {
+					agents = await session.listAgents();
+					if (agents.length === 2 && agents.every((agent) => agent.state === "complete")) break;
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+				expect(agents).toEqual([
+					expect.objectContaining({ path: "/root/child", state: "complete" }),
+					expect.objectContaining({ path: "/root/child/leaf", state: "complete" }),
+				]);
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
 	test("runs an explicitly selected child model through the production daemon", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-agents-"));
 		directories.push(directory);
