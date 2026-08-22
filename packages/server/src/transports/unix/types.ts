@@ -1,4 +1,5 @@
 import type { V2AgentRegistry } from "../../agents.ts";
+import type { V2AppRegistry } from "../../apps.ts";
 import type { V2BlobStore } from "../../blobs.ts";
 import type { ForensicRecorder } from "../../diagnostics.ts";
 import type { V2FileReferenceService } from "../../files.ts";
@@ -26,6 +27,7 @@ export interface UnixServerOptions extends Omit<PiServerOptions, "listeners">, U
 	processes?: V2ProcessRegistry;
 	blobs?: V2BlobStore;
 	agents?: V2AgentRegistry;
+	apps?: V2AppRegistry;
 	plans?: V2PlanRegistry;
 	inputs?: V2InputRegistry;
 	files?: V2FileReferenceService;
