@@ -28,6 +28,19 @@ class ThrowAfterOperationStartStorage extends InMemorySessionStorage {
 	}
 }
 
+class ThrowAfterOperationFinishedStorage extends InMemorySessionStorage {
+	private injected = false;
+
+	override async appendRecord<TRecord extends LaneRecord>(record: NewRecord<TRecord>): Promise<TRecord> {
+		const appended = await super.appendRecord(record);
+		if (!this.injected && record.type === "operation_finished") {
+			this.injected = true;
+			throw new Error("terminal response lost after commit");
+		}
+		return appended;
+	}
+}
+
 function createHarness(session = createSession()): Promise<AgentHarness> {
 	return AgentHarness.create({
 		session,
@@ -852,6 +865,24 @@ describe("AgentHarness v2 scaffold", () => {
 			outcome: "failed",
 			error: { code: "run_error", message: "provider failed" },
 		});
+		await harness.close();
+	});
+
+	it("does not duplicate a terminal record after its commit response is lost", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "terminal-commit-race-faux",
+			models: [{ id: "terminal-commit-race-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("done")]);
+		const storage = new ThrowAfterOperationFinishedStorage({ id: "terminal-commit-race", createdAt: 1 });
+		const session = new Session(storage);
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+
+		await harness.prompt("hello");
+
+		expect(await session.findRecords({ type: "operation_finished" })).toHaveLength(1);
 		await harness.close();
 	});
 });

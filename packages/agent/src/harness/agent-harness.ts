@@ -782,7 +782,7 @@ export class AgentHarness implements AgentLane {
 						operationId: runId,
 						message: durableClone(finalMessage),
 					});
-					await this.durableSession.appendRecord({
+					await this.appendOperationFinished({
 						type: "operation_finished",
 						id: this.durableSession.idGenerator.next(),
 						lane: this.name,
@@ -811,7 +811,7 @@ export class AgentHarness implements AgentLane {
 					message: sanitizeErrorMessage(finalMessage.errorMessage, "Provider request failed"),
 				};
 				await this.runLifecycleHook("after_response", { operationId: runId, message: durableClone(finalMessage) });
-				await this.durableSession.appendRecord({
+				await this.appendOperationFinished({
 					type: "operation_finished",
 					id: this.durableSession.idGenerator.next(),
 					lane: this.name,
@@ -838,7 +838,7 @@ export class AgentHarness implements AgentLane {
 				});
 			}
 			await this.runLifecycleHook("after_response", { operationId: runId, message: durableClone(finalMessage) });
-			await this.durableSession.appendRecord({
+			await this.appendOperationFinished({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
 				lane: this.name,
@@ -863,7 +863,7 @@ export class AgentHarness implements AgentLane {
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			await this.durableSession.appendRecord({
+			await this.appendOperationFinished({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
 				lane: this.name,
@@ -977,7 +977,7 @@ export class AgentHarness implements AgentLane {
 				this.retryPolicy,
 			);
 			if (!result.ok) {
-				await this.durableSession.appendRecord({
+				await this.appendOperationFinished({
 					type: "operation_finished",
 					id: this.durableSession.idGenerator.next(),
 					lane: this.name,
@@ -1011,7 +1011,7 @@ export class AgentHarness implements AgentLane {
 				},
 				this.name,
 			);
-			await this.durableSession.appendRecord({
+			await this.appendOperationFinished({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
 				lane: this.name,
@@ -1026,7 +1026,7 @@ export class AgentHarness implements AgentLane {
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			await this.durableSession.appendRecord({
+			await this.appendOperationFinished({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
 				lane: this.name,
@@ -1107,7 +1107,7 @@ export class AgentHarness implements AgentLane {
 					retry: this.retryPolicy,
 				});
 				if (!generated.ok) {
-					await this.durableSession.appendRecord({
+					await this.appendOperationFinished({
 						type: "operation_finished",
 						id: this.durableSession.idGenerator.next(),
 						lane: this.name,
@@ -1145,7 +1145,7 @@ export class AgentHarness implements AgentLane {
 			}
 			if (_options?.label !== undefined && targetId !== null)
 				await this.durableSession.setLabel(targetId, _options.label);
-			await this.durableSession.appendRecord({
+			await this.appendOperationFinished({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
 				lane: this.name,
@@ -1155,7 +1155,7 @@ export class AgentHarness implements AgentLane {
 			return ResultValue.ok({ runId, kind: "completed", newLeafId: summaryEntry?.id ?? targetId, summaryEntry });
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			await this.durableSession.appendRecord({
+			await this.appendOperationFinished({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
 				lane: this.name,
@@ -1226,7 +1226,7 @@ export class AgentHarness implements AgentLane {
 				}),
 			);
 		}
-		await this.durableSession.appendRecord({
+		await this.appendOperationFinished({
 			type: "operation_finished",
 			id: this.durableSession.idGenerator.next(),
 			lane: this.name,
@@ -1326,7 +1326,7 @@ export class AgentHarness implements AgentLane {
 			runId: openRun.id,
 			outcome: "aborted",
 		};
-		await this.durableSession.appendRecord(finished);
+		await this.appendOperationFinished(finished);
 		this.watchBus.emit({
 			type: "run_end",
 			lane: this.name,
@@ -1693,6 +1693,17 @@ export class AgentHarness implements AgentLane {
 		await new Promise<void>((resolve, reject) => {
 			this.manualAction = { info, resolve, reject };
 		});
+	}
+
+	private async appendOperationFinished(record: NewRecord<OperationFinishedRecord>): Promise<OperationFinishedRecord> {
+		const existing = await this.durableSession.findRecords({
+			type: "operation_finished",
+			lane: record.lane,
+			runId: record.runId,
+			limit: 1,
+		});
+		if (existing.length > 0) return existing[0]!;
+		return this.durableSession.appendRecord(record);
 	}
 
 	private async runLifecycleHook(name: HookName, event: unknown): Promise<void> {
