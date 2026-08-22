@@ -26,11 +26,36 @@ describe("ServerRuntimeExtensionHost", () => {
 
 		await host.register(extension);
 		await host.onOperationAccepted({ id: "op-1", type: "turn/start" });
-		host.onOperationTerminal({ id: "op-1", type: "turn/start" }, "ok");
+		await host.onOperationTerminal({ id: "op-1", type: "turn/start" }, "ok");
 
 		expect(calls).toEqual(["turn/start:model-a", "terminal:op-1"]);
 		expect(persisted).toEqual([{ extensionId: "audit", key: "lastOperation", value: "op-1" }]);
 		expect(await host.getState("audit", "lastOperation")).toBe("op-1");
+	});
+
+	it("isolates hook failures and event mutations, reporting settled outcomes", async () => {
+		const seen: string[] = [];
+		const host = new ServerRuntimeExtensionHost({ resolveModel: () => ({ id: "model-a" }) });
+		await host.register({
+			id: "mutating",
+			onOperationAccepted(context) {
+				(context.operation as { id: string }).id = "spoofed";
+				throw new Error("extension failed");
+			},
+		});
+		await host.register({
+			id: "observer",
+			onOperationAccepted(context) {
+				seen.push(context.operation.id);
+			},
+		});
+
+		const results = await host.onOperationAccepted({ id: "op-2", type: "turn/start" });
+
+		expect(seen).toEqual(["op-2"]);
+		expect(results).toHaveLength(2);
+		expect(results[0]).toMatchObject({ extensionId: "mutating", status: "rejected" });
+		expect(results[1]).toEqual({ extensionId: "observer", status: "fulfilled" });
 	});
 
 	it("rejects duplicate ids and isolates client-owned registrations", async () => {
