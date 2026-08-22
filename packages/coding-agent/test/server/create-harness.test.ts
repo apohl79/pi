@@ -282,6 +282,13 @@ describe("coding-agent Harness construction", () => {
 			const written = await writeStdin.execute("stdin-call", { session_id: sessionId, chars: "input" });
 			expect(written.content).toEqual([{ type: "text", text: "input" }]);
 			expect(written.details).toMatchObject({ session_id: sessionId, state: "running", cursor: 5 });
+			const bounded = await writeStdin.execute("poll-call", {
+				session_id: sessionId,
+				cursor: 0,
+				max_output_tokens: 1,
+			});
+			expect(bounded.content).toEqual([{ type: "text", text: "inpu" }]);
+			expect(bounded.details).toMatchObject({ session_id: sessionId, truncated: true });
 		} finally {
 			await created.harness.close();
 			await env.cleanup();
