@@ -26,6 +26,33 @@ const snapshot: ServerSnapshotV2 = {
 	models: [],
 };
 
+const sessionSnapshot = {
+	id: "session-1",
+	revision: 1,
+	eventSeq: 0,
+	phase: "idle",
+	model: { provider: "faux", id: "model" },
+	thinkingLevel: "medium",
+	transcript: [],
+	queues: { steer: [], followUp: [] },
+	agents: [],
+	usage: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, pricingState: "known" },
+	context: { inputTokens: 6, contextWindow: 100, usedPercentage: 6 },
+	compactionPolicy: {
+		enabled: true,
+		contextWindow: 100,
+		reserveTokens: 10,
+		keepRecentTokens: 20,
+		triggerTokens: 90,
+		source: "global",
+	},
+	pluginSetHash: "plugins-empty",
+	diagnostics: { capture: "metadata", degraded: false, lastCriticalEventSeq: 0 },
+	persistence: { schemaVersion: 1, recoveryState: "clean" },
+	createdAt: 1,
+	updatedAt: 1,
+};
+
 function clientFactory(requests?: Array<{ command: string; payload?: unknown }>) {
 	let handlers: ByteTransportHandlers | undefined;
 	const factory = async (next: ByteTransportHandlers): Promise<ByteTransport> => {
@@ -49,7 +76,7 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>)
 							type: "response",
 							id: message.id,
 							ok: true,
-							result: { session: { id: "session-1", revision: 1, phase: "idle", transcript: [] } },
+							result: { session: sessionSnapshot },
 						}),
 					);
 				} else if (message.request.command === "session/read") {
@@ -58,7 +85,7 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>)
 							type: "response",
 							id: message.id,
 							ok: true,
-							result: { session: { id: "session-1", revision: 1, phase: "idle", transcript: [] } },
+							result: { session: sessionSnapshot },
 						}),
 					);
 				} else if (message.request.command === "session/detach") {
@@ -221,12 +248,12 @@ describe("experimental CLI runtime", () => {
 			createClient: server.create,
 			write: () => {},
 			rpcInput: Readable.from([
-				JSON.stringify({
+				`${JSON.stringify({
 					id: "image-1",
 					type: "prompt",
 					message: "inspect",
 					images: [{ type: "image", data: "YWJj", mimeType: "image/png" }],
-				}) + "\n",
+				})}\n`,
 			]),
 			rpcOutput: (value) => output.push(value),
 		});
@@ -243,6 +270,34 @@ describe("experimental CLI runtime", () => {
 			],
 		});
 		expect(output).toContainEqual({ id: "image-1", type: "response", command: "prompt", success: true });
+		runtime.close();
+	});
+
+	test("projects RPC session reads from the authoritative v2 snapshot", async () => {
+		const server = clientFactory();
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: () => {},
+			rpcInput: Readable.from([
+				'{"id":"stats-1","type":"get_session_stats"}\n{"id":"messages-1","type":"get_messages"}\n',
+			]),
+			rpcOutput: (value) => output.push(value),
+		});
+		await runtime.runRpc({ messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(output).toContainEqual(
+			expect.objectContaining({ id: "stats-1", command: "get_session_stats", success: true }),
+		);
+		expect(output).toContainEqual({
+			id: "messages-1",
+			type: "response",
+			command: "get_messages",
+			success: true,
+			data: { messages: [] },
+		});
 		runtime.close();
 	});
 

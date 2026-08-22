@@ -95,6 +95,14 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 			case "set_session_name":
 				await session.setName(command.name.trim());
 				return success(id, "set_session_name");
+			case "get_session_stats":
+				return success(id, "get_session_stats", sessionStats(session.snapshot));
+			case "get_last_assistant_text":
+				return success(id, "get_last_assistant_text", { text: lastAssistantText(session.snapshot) });
+			case "get_messages":
+				return success(id, "get_messages", {
+					messages: (session.snapshot?.transcript ?? []).map(transcriptMessage).filter(isMessage),
+				});
 			case "new_session": {
 				unsubscribe();
 				await session.dispose();
@@ -214,6 +222,47 @@ function stateFor(snapshot: SessionSnapshotV2 | undefined): Record<string, unkno
 		messageCount: snapshot.transcript.length,
 		pendingMessageCount: snapshot.queues.steer.length + snapshot.queues.followUp.length,
 	};
+}
+
+function sessionStats(snapshot: SessionSnapshotV2 | undefined): Record<string, unknown> {
+	if (snapshot === undefined) throw new Error("Server RPC session snapshot is unavailable");
+	const userMessages = snapshot.transcript.filter((item) => item.role === "user").length;
+	const assistantMessages = snapshot.transcript.filter((item) => item.role === "assistant").length;
+	const toolCalls = snapshot.transcript.filter((item) => item.role === "tool").length;
+	return {
+		sessionFile: undefined,
+		sessionId: snapshot.id,
+		userMessages,
+		assistantMessages,
+		toolCalls,
+		toolResults: toolCalls,
+		totalMessages: snapshot.transcript.length,
+		tokens: {
+			input: snapshot.usage.input,
+			output: snapshot.usage.output,
+			cacheRead: snapshot.usage.cacheRead,
+			cacheWrite: snapshot.usage.cacheWrite,
+			total: snapshot.usage.input + snapshot.usage.output + snapshot.usage.cacheRead + snapshot.usage.cacheWrite,
+		},
+		cost: snapshot.usage.costUsd ?? 0,
+		contextUsage: {
+			tokens: snapshot.context.inputTokens,
+			contextWindow: snapshot.context.contextWindow,
+			percent: snapshot.context.usedPercentage,
+		},
+	};
+}
+
+function lastAssistantText(snapshot: SessionSnapshotV2 | undefined): string | null {
+	if (snapshot === undefined) throw new Error("Server RPC session snapshot is unavailable");
+	for (const item of [...snapshot.transcript].reverse()) {
+		if (item.role !== "assistant") continue;
+		return item.content
+			.filter((part): part is { type: "text"; text: string } => part.type === "text")
+			.map((part) => part.text)
+			.join("");
+	}
+	return null;
 }
 
 function success(id: string | undefined, command: string, data?: unknown): Record<string, unknown> {
