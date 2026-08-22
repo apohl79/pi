@@ -11,11 +11,14 @@ const writeSchema = Type.Object({
 });
 
 export type WriteToolInput = Static<typeof writeSchema>;
+export interface WriteToolDetails {
+	modifiedFiles: readonly string[];
+}
 
 export function createWriteTool<TContext extends ExecutionToolContext = ExecutionToolContext>(): AgentHarnessTool<
 	TContext,
 	typeof writeSchema,
-	undefined
+	WriteToolDetails
 > {
 	return {
 		name: "write",
@@ -31,7 +34,7 @@ export function createWriteTool<TContext extends ExecutionToolContext = Executio
 				if (signal?.aborted) throw new Error("Operation aborted");
 				return {
 					content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` }],
-					details: undefined,
+					details: { modifiedFiles: [absolutePath] },
 				};
 			});
 		},

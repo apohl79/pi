@@ -12,6 +12,9 @@ const applyPatchSchema = Type.Object({
 export type ApplyPatchToolInput = Static<typeof applyPatchSchema>;
 
 type PatchOperation = { kind: "update" | "add" | "delete"; path: string; lines: string[] };
+export interface ApplyPatchToolDetails {
+	modifiedFiles: readonly string[];
+}
 
 function parsePatchEnvelope(patch: string): PatchOperation[] {
 	const lines = patch.replace(/\r\n/g, "\n").split("\n");
@@ -80,7 +83,7 @@ function findSequence(content: readonly string[], expected: readonly string[]): 
 export function createApplyPatchTool<TContext extends ExecutionToolContext = ExecutionToolContext>(): AgentHarnessTool<
 	TContext,
 	typeof applyPatchSchema,
-	undefined
+	ApplyPatchToolDetails
 > {
 	return {
 		name: "apply_patch",
@@ -90,6 +93,7 @@ export function createApplyPatchTool<TContext extends ExecutionToolContext = Exe
 		async execute(_toolCallId, input, signal, _onUpdate, { env }) {
 			const operations = parsePatchEnvelope(input.patch);
 			const root = env.cwd;
+			const modifiedFiles: string[] = [];
 			for (const operation of operations) {
 				const absolutePath = await resolveToolPath(env, operation.path, signal);
 				validatePath(root, absolutePath);
@@ -113,11 +117,12 @@ export function createApplyPatchTool<TContext extends ExecutionToolContext = Exe
 							await env.writeFile(absolutePath, applyUpdate(original, operation.path, operation.lines), signal),
 						);
 					}
+					modifiedFiles.push(absolutePath);
 				});
 			}
 			return {
 				content: [{ type: "text", text: `Applied patch to ${operations.length} file(s).` }],
-				details: undefined,
+				details: { modifiedFiles },
 			};
 		},
 	};
