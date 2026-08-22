@@ -155,7 +155,7 @@ function sanitizeErrorDetails(value: unknown, depth = 0): unknown {
 function sanitizeTranscriptMessage(message: AgentMessage): AgentMessage {
 	if (message.role === "assistant") {
 		const content =
-			message.stopReason === "error"
+			message.stopReason === "error" || message.stopReason === "aborted"
 				? message.content.map((part) => {
 						if (part.type === "text") return { ...part, text: sanitizeErrorMessage(part.text, "") };
 						if (part.type === "thinking") return { ...part, thinking: sanitizeErrorMessage(part.thinking, "") };
