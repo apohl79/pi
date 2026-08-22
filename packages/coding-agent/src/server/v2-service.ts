@@ -392,6 +392,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const [
 			leafId,
 			thinkingLevel,
+			steeringMode,
+			followUpMode,
 			compactionSource,
 			stats,
 			compaction,
@@ -401,6 +403,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		] = await Promise.all([
 			this.definition.harness.getLeafId(),
 			this.definition.harness.getThinkingLevel(),
+			this.definition.harness.getSteeringMode(),
+			this.definition.harness.getFollowUpMode(),
 			this.definition.harness.getCompactionPolicySource(),
 			this.definition.harness.session.getStats(),
 			this.definition.harness.getCompactionSettings(),
@@ -458,6 +462,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 					createdAt: item.message.timestamp ?? 0,
 				})),
 			},
+			steeringMode,
+			followUpMode,
 			...(goal === undefined ? {} : { goal }),
 			...(plan === undefined ? {} : { plan }),
 			agents: agents === undefined ? [] : [...agents],
@@ -560,6 +566,14 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 						typeof payload.customInstructions === "string" ? payload.customInstructions : undefined,
 				});
 				if (!result.ok) throw new Error(result.error.message);
+			} else if (runCommand === "session/steering-mode/set") {
+				if (payload.mode !== "all" && payload.mode !== "one-at-a-time")
+					throw new Error("session/steering-mode/set requires a valid mode");
+				await harness.setSteeringMode(payload.mode);
+			} else if (runCommand === "session/follow-up-mode/set") {
+				if (payload.mode !== "all" && payload.mode !== "one-at-a-time")
+					throw new Error("session/follow-up-mode/set requires a valid mode");
+				await harness.setFollowUpMode(payload.mode);
 			} else if (runCommand === "goal/create") {
 				if (!this.definition.goals || typeof payload.objective !== "string")
 					throw new Error("goal/create requires an objective");

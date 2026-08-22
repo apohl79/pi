@@ -325,6 +325,14 @@ export class RemoteV2Session {
 	async setThinking(thinkingLevel: ProtocolThinkingLevel): Promise<string> {
 		return this.#accept("session/thinking/set", { level: thinkingLevel });
 	}
+
+	async setSteeringMode(mode: "all" | "one-at-a-time"): Promise<string> {
+		return this.#accept("session/steering-mode/set", { mode });
+	}
+
+	async setFollowUpMode(mode: "all" | "one-at-a-time"): Promise<string> {
+		return this.#accept("session/follow-up-mode/set", { mode });
+	}
 	async createGoal(objective: string, tokenBudget?: number): Promise<string> {
 		const normalized = objective.trim();
 		if (!normalized) throw new Error("Goal objective cannot be empty");
