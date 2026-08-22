@@ -43,6 +43,7 @@ export async function createCodingAgentV2SqliteService(
 		const env = typeof options.env === "function" ? await options.env(metadata) : options.env;
 		const goals = new GoalManager(session);
 		let runtime: CodingAgentV2Runtime | undefined;
+		let continuationSequence = 0;
 		const created = await createCodingAgentHarness({
 			...options.harness,
 			session,
@@ -59,7 +60,7 @@ export async function createCodingAgentV2SqliteService(
 			},
 			continueGoal: async (goal) => {
 				if (!runtime) throw new Error("Goal continuation runtime is not ready");
-				const operationId = `goal-continuation-${goal.id}-${Date.now()}`;
+				const operationId = `goal-continuation-${goal.id}-${++continuationSequence}`;
 				await runtime.accept(operationId);
 				await runtime.run(operationId, {
 					command: "turn/followUp",
