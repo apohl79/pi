@@ -111,6 +111,12 @@ export interface RemoteV2DiagnosticsStatus {
 	readonly eventCount: number;
 }
 
+export interface RemoteV2DiagnosticsExportOptions {
+	readonly decryptContent?: boolean;
+	readonly sessionId?: string;
+	readonly operationId?: string;
+}
+
 export interface RemoteV2UsageRead {
 	readonly aggregate: Record<string, unknown>;
 	readonly entries: readonly Record<string, unknown>[];
@@ -763,9 +769,16 @@ export class RemoteV2Session {
 		return result.events.map((event) => structuredClone(asRecord(event)!));
 	}
 
-	async diagnosticsExport(decryptContent = false): Promise<Record<string, unknown>> {
+	async diagnosticsExport(options: RemoteV2DiagnosticsExportOptions = {}): Promise<Record<string, unknown>> {
 		this.#assertNotDisposed();
-		const result = await this.#direct({ command: "diagnostics/export", payload: { decryptContent } });
+		const result = await this.#direct({
+			command: "diagnostics/export",
+			payload: {
+				...(options.decryptContent === undefined ? {} : { decryptContent: options.decryptContent }),
+				...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
+				...(options.operationId === undefined ? {} : { operationId: options.operationId }),
+			} as JsonValue,
+		});
 		const bundle = asRecord(result.bundle);
 		if (bundle === undefined || asRecord(bundle.manifest) === undefined)
 			throw new Error("Invalid diagnostics/export response");
