@@ -163,6 +163,7 @@ export class ServerDaemon {
 				...(this.options.usage === undefined ? {} : { usage: this.options.usage }),
 			});
 		} catch (error) {
+			await this.writeLifecycleMarker("clean").catch(() => {});
 			this.state = "stopped";
 			throw error;
 		}
