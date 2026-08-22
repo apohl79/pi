@@ -862,7 +862,7 @@ export class AgentHarness implements AgentLane {
 				finalMessage,
 			});
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = sanitizeErrorMessage(error, "Run failed");
 			await this.appendOperationFinished({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
@@ -1025,7 +1025,7 @@ export class AgentHarness implements AgentLane {
 				entry,
 			});
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = sanitizeErrorMessage(error, "Compaction failed");
 			await this.appendOperationFinished({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
@@ -1154,7 +1154,7 @@ export class AgentHarness implements AgentLane {
 			});
 			return ResultValue.ok({ runId, kind: "completed", newLeafId: summaryEntry?.id ?? targetId, summaryEntry });
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = sanitizeErrorMessage(error, "Navigation failed");
 			await this.appendOperationFinished({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),

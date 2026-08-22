@@ -885,4 +885,30 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(await session.findRecords({ type: "operation_finished" })).toHaveLength(1);
 		await harness.close();
 	});
+
+	it("redacts caught run failures before durable persistence", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "caught-run-error-faux",
+			models: [{ id: "caught-run-error-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		const session = createSession("caught-run-error");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+		});
+		harness.hooks.on("before_run", () => {
+			throw new Error('request failed: {"api_key":"secret-value"} Bearer bearer-secret');
+		});
+
+		await harness.prompt("hello");
+
+		expect((await session.findRecords({ type: "operation_finished" })).at(-1)).toMatchObject({
+			outcome: "failed",
+			error: { code: "run_failed", message: 'request failed: {"api_key"=[redacted]} Bearer [redacted]' },
+		});
+		await harness.close();
+	});
 });
