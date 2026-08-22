@@ -637,6 +637,10 @@ export class InMemoryForensicRecorder implements ForensicRecorder {
 		return structuredClone(this.events.filter((event) => event.seq > afterSeq));
 	}
 
+	isDegraded(): boolean {
+		return false;
+	}
+
 	/** Rehydrates a previously materialized event for a durable recorder adapter. */
 	restore(event: ForensicEvent): void {
 		const validated = parseForensicEvent(event);

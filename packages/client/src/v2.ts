@@ -107,8 +107,8 @@ export class PiClientV2 {
 			onData: (chunk) => {
 				if (generation === this.transportGeneration) this.receive(chunk, generation);
 			},
-			onClose: () => this.fail(new Error("PiClientV2 transport closed"), generation),
-			onError: (error) => this.fail(error, generation),
+			onClose: () => this.fail(new Error("PiClientV2 transport closed"), generation, "client.transport_closed"),
+			onError: (error) => this.fail(error, generation, "client.transport_error"),
 		};
 		try {
 			const transport = await this.options.transportFactory(handlers);
@@ -175,7 +175,8 @@ export class PiClientV2 {
 			this.pending.delete(id);
 			const failure = error instanceof Error ? error : new Error(String(error));
 			pending?.reject(failure);
-			if (generation === this.transportGeneration && transport === this.transport) this.fail(failure, generation);
+			if (generation === this.transportGeneration && transport === this.transport)
+				this.fail(failure, generation, "client.transport_error");
 		});
 		return response;
 	}
@@ -259,19 +260,27 @@ export class PiClientV2 {
 	private receive(chunk: Uint8Array, generation: number): void {
 		if (generation !== this.transportGeneration) return;
 		try {
-			for (const frame of this.decoder.push(chunk)) this.handle(parseServerMessageV2(decodeCbor(frame)));
+			for (const frame of this.decoder.push(chunk)) this.handle(parseServerMessageV2(decodeCbor(frame)), generation);
 		} catch (error) {
-			this.fail(error instanceof Error ? error : new Error(String(error)));
+			this.fail(error instanceof Error ? error : new Error(String(error)), generation, "client.protocol_error");
 		}
 	}
 
-	private handle(message: ServerMessageV2): void {
+	private handle(message: ServerMessageV2, generation = this.transportGeneration): void {
 		if (this.connectedValue && (message.type === "hello" || message.type === "hello_error")) {
-			this.fail(new Error("PiClientV2 received an unexpected handshake message"));
+			this.fail(
+				new Error("PiClientV2 received an unexpected handshake message"),
+				generation,
+				"client.protocol_error",
+			);
 			return;
 		}
 		if (!this.connectedValue && message.type !== "hello" && message.type !== "hello_error") {
-			this.fail(new Error("PiClientV2 expected server hello before other messages"));
+			this.fail(
+				new Error("PiClientV2 expected server hello before other messages"),
+				generation,
+				"client.protocol_error",
+			);
 			return;
 		}
 		if (message.type === "hello") {
@@ -310,8 +319,10 @@ export class PiClientV2 {
 		pending.resolve(message);
 	}
 
-	private fail(error: Error, generation = this.transportGeneration): void {
+	private fail(error: Error, generation = this.transportGeneration, diagnosticEvent?: string): void {
 		if (generation !== this.transportGeneration) return;
+		if (diagnosticEvent !== undefined)
+			void this.recordDiagnostic({ event: diagnosticEvent, severity: "error", fields: { error: error.name } });
 		this.connectedValue = false;
 		this.transportGeneration += 1;
 		const transport = this.transport;
