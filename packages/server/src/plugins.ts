@@ -288,7 +288,7 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 	}
 
 	private async persist(): Promise<void> {
-		await mkdir(dirname(this.filePath), { recursive: true });
+		await mkdir(dirname(this.filePath), { recursive: true, mode: 0o700 });
 		const temporary = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
 		await writeFile(temporary, `${JSON.stringify(this.memory.toState())}\n`, { mode: 0o600 });
 		await rename(temporary, this.filePath);
