@@ -65,8 +65,8 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 		const depth = request.parentPath.split("/").filter(Boolean).length - 1;
 		if (depth >= this.maxDepth) throw new Error(`Agent maximum depth ${this.maxDepth} exceeded`);
 		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
-		if (this.activeCountForParent(request.sessionId) >= this.maxActivePerParent)
-			throw new Error(`Agent active limit ${this.maxActivePerParent} exceeded for parent ${request.sessionId}`);
+		if (this.activeCountForParent(request.parentPath) >= this.maxActivePerParent)
+			throw new Error(`Agent active limit ${this.maxActivePerParent} exceeded for parent ${request.parentPath}`);
 		if (!/^[A-Za-z0-9._-]+$/.test(request.taskName))
 			throw new Error("Agent taskName contains unsupported characters");
 		const path = `${request.parentPath.replace(/\/$/, "")}/${request.taskName}`;
@@ -142,8 +142,8 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 		return [...this.agents.values()].filter((agent) => agent.state === "running").length;
 	}
 
-	private activeCountForParent(sessionId: string): number {
-		return [...this.agents.values()].filter((agent) => agent.sessionId === sessionId && agent.state === "running")
+	private activeCountForParent(parentPath: string): number {
+		return [...this.agents.values()].filter((agent) => agent.parentPath === parentPath && agent.state === "running")
 			.length;
 	}
 
