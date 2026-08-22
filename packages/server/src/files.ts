@@ -35,7 +35,8 @@ export interface V2FileReferenceOptions {
 
 type FileScope = "project" | "relative" | "home" | "absolute";
 
-const DEFAULT_MAX_READ_BYTES = 8 * 1024 * 1024;
+// Leave room for the base64 payload and response envelope within the default 4 MiB frame.
+const DEFAULT_MAX_READ_BYTES = 2 * 1024 * 1024;
 
 function cleanReference(reference: string): string {
 	const value = reference.trim();
@@ -115,6 +116,7 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 		const completions = await Promise.all(
 			entries
 				.filter((entry) => entry.name.startsWith(prefixName))
+				.slice(0, MAX_V2_ARRAY_ITEMS)
 				.map(async (entry): Promise<V2FileCompletion | undefined> => {
 					const path = resolve(directory, entry.name);
 					if (!this.allowedLexically(path)) return undefined;

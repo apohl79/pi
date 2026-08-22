@@ -761,11 +761,22 @@ export class PiServerV2 {
 		if (!command.sessionId) throw new Error("filesystem/reference/read requires sessionId");
 		this.requireAttached(state, command.sessionId);
 		const result = await this.files.read(command.sessionId, referenceFrom(command, objectPayload(command)));
-		await this.sendResponse(state, id, {
+		const response = {
 			command: command.command,
 			file: result.file,
 			encoding: "base64",
 			data: Buffer.from(result.data).toString("base64"),
+		};
+		try {
+			encodeServerMessageV2(
+				{ type: "response", id, ok: true, result: toProtocolJsonValue(response) },
+				{ maxFrameLength: this.maxFrameLength },
+			);
+		} catch {
+			throw new Error("File response exceeds the maximum frame size");
+		}
+		await this.sendResponse(state, id, {
+			...response,
 		});
 	}
 
