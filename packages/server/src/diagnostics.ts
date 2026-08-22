@@ -21,19 +21,65 @@ export interface ForensicRecorder {
 	read(afterSeq?: number): Promise<ForensicEvent[]>;
 }
 
-const SENSITIVE_KEYS = new Set(["apiKey", "authorization", "credential", "password", "secret", "token"]);
+const SENSITIVE_KEY_PARTS = [
+	"apikey",
+	"authorization",
+	"auth",
+	"credential",
+	"password",
+	"secret",
+	"token",
+	"privatekey",
+];
+const MAX_DIAGNOSTIC_EVENTS = 10_000;
+const MAX_DIAGNOSTIC_DEPTH = 8;
+const MAX_DIAGNOSTIC_ITEMS = 10_000;
+const MAX_DIAGNOSTIC_STRING = 1_048_576;
+const MAX_DIAGNOSTIC_FILE_BYTES = 64 * 1024 * 1024;
+const MAX_DIAGNOSTIC_PAYLOAD_BYTES = 1 * 1024 * 1024;
 
-function redact(value: unknown, key?: string): DiagnosticValue {
-	if (key !== undefined && SENSITIVE_KEYS.has(key)) return "[REDACTED]";
-	if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string")
-		return value;
-	if (Array.isArray(value)) return value.map((item) => redact(item));
+const normalizeKey = (key: string): string => key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+
+const isSensitiveKey = (key: string): boolean => {
+	const normalized = normalizeKey(key);
+	return SENSITIVE_KEY_PARTS.some((part) => normalized.includes(part));
+};
+
+const isCredentialShaped = (value: string): boolean =>
+	/\bbearer\s+[a-z0-9._~+/=-]{8,}\b/i.test(value) ||
+	/\b(?:api[_-]?key|token|secret|password)\s*[:=]\s*\S+/i.test(value) ||
+	/\b(?:sk|pk|rk)-[a-z0-9_-]{8,}\b/i.test(value) ||
+	/\bAIza[0-9A-Za-z_-]{20,}\b/.test(value) ||
+	/\bgh[pours]_[A-Za-z0-9_]{20,}\b/.test(value) ||
+	/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/.test(value);
+
+function redact(value: unknown, key?: string, depth = 0): DiagnosticValue {
+	if (key !== undefined && isSensitiveKey(key)) return "[REDACTED]";
+	if (depth > MAX_DIAGNOSTIC_DEPTH) return "[TRUNCATED]";
+	if (value === null || typeof value === "boolean" || typeof value === "number") return value;
+	if (typeof value === "string") return isCredentialShaped(value) ? "[REDACTED]" : value.slice(0, MAX_DIAGNOSTIC_STRING);
+	if (Array.isArray(value)) return value.slice(0, MAX_DIAGNOSTIC_ITEMS).map((item) => redact(item, undefined, depth + 1));
 	if (typeof value === "object") {
 		const output: Record<string, DiagnosticValue> = {};
-		for (const [childKey, childValue] of Object.entries(value)) output[childKey] = redact(childValue, childKey);
+		for (const [childKey, childValue] of Object.entries(value).slice(0, MAX_DIAGNOSTIC_ITEMS))
+			output[childKey.slice(0, MAX_DIAGNOSTIC_STRING)] = redact(childValue, childKey, depth + 1);
 		return output;
 	}
 	return "[UNSERIALIZABLE]";
+}
+
+function boundedEvent(input: ForensicEventInput, seq: number): ForensicEvent {
+	let payload = redact(input.payload ?? {}) as Record<string, DiagnosticValue>;
+	if (Buffer.byteLength(JSON.stringify(payload), "utf8") > MAX_DIAGNOSTIC_PAYLOAD_BYTES)
+		payload = { _truncated: "Diagnostic payload exceeded the maximum size" };
+	return {
+		kind: input.kind.slice(0, MAX_DIAGNOSTIC_STRING),
+		...(input.sessionId === undefined ? {} : { sessionId: input.sessionId.slice(0, MAX_DIAGNOSTIC_STRING) }),
+		...(input.operationId === undefined ? {} : { operationId: input.operationId.slice(0, MAX_DIAGNOSTIC_STRING) }),
+		seq,
+		timestamp: Date.now(),
+		payload,
+	};
 }
 
 export class InMemoryForensicRecorder implements ForensicRecorder {
@@ -42,16 +88,15 @@ export class InMemoryForensicRecorder implements ForensicRecorder {
 	private nextSeq = 1;
 
 	constructor(options: { maxEvents?: number } = {}) {
-		this.maxEvents = options.maxEvents ?? 2_048;
+		const maxEvents = options.maxEvents ?? 2_048;
+		if (!Number.isFinite(maxEvents) || !Number.isInteger(maxEvents) || maxEvents < 1)
+			throw new Error("maxEvents must be a finite integer greater than or equal to 1");
+		if (maxEvents > MAX_DIAGNOSTIC_EVENTS) throw new Error(`maxEvents must not exceed ${MAX_DIAGNOSTIC_EVENTS}`);
+		this.maxEvents = maxEvents;
 	}
 
 	async record(input: ForensicEventInput): Promise<ForensicEvent> {
-		const event: ForensicEvent = {
-			...input,
-			seq: this.nextSeq++,
-			timestamp: Date.now(),
-			payload: redact(input.payload ?? {}) as Record<string, DiagnosticValue>,
-		};
+		const event = boundedEvent(input, this.nextSeq++);
 		this.events.push(event);
 		if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
 		return structuredClone(event);
