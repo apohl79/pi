@@ -1085,7 +1085,11 @@ function isAgentSummary(value: unknown): value is AgentSummary {
 function isProcessOutput(value: unknown): value is RemoteV2ProcessOutput {
 	const record = asRecord(value);
 	return (
-		typeof record?.output === "string" && typeof record.cursor === "number" && typeof record.truncated === "boolean"
+		typeof record?.output === "string" &&
+		typeof record.cursor === "number" &&
+		typeof record.truncated === "boolean" &&
+		Number.isSafeInteger(record.cursor) &&
+		record.cursor >= 0
 	);
 }
 
@@ -1098,7 +1102,7 @@ function isProcessSnapshot(value: unknown): value is RemoteV2ProcessSnapshot {
 		typeof record.command === "string" &&
 		typeof record.pty === "boolean" &&
 		["running", "exited", "terminated", "lost"].includes(record.state as string) &&
-		(record.exitCode === undefined || typeof record.exitCode === "number")
+		(record.exitCode === undefined || (Number.isSafeInteger(record.exitCode) && record.exitCode >= 0))
 	);
 }
 
@@ -1108,7 +1112,7 @@ function isFileReference(value: unknown): value is RemoteV2FileReference {
 		typeof record?.reference === "string" &&
 		typeof record.path === "string" &&
 		(record.kind === "file" || record.kind === "directory") &&
-		(record.size === undefined || typeof record.size === "number") &&
+		(record.size === undefined || (Number.isSafeInteger(record.size) && record.size >= 0)) &&
 		(record.mimeType === undefined || typeof record.mimeType === "string")
 	);
 }
@@ -1124,7 +1128,12 @@ function isFileCompletion(value: unknown): value is RemoteV2FileCompletion {
 
 function isBlobStat(value: unknown): value is RemoteV2BlobStat {
 	const record = asRecord(value);
-	return typeof record?.digest === "string" && typeof record.mimeType === "string" && typeof record.size === "number";
+	return (
+		typeof record?.digest === "string" &&
+		typeof record.mimeType === "string" &&
+		Number.isSafeInteger(record.size) &&
+		record.size >= 0
+	);
 }
 
 function isWebResult(value: unknown): value is RemoteV2WebResult {
@@ -1133,7 +1142,8 @@ function isWebResult(value: unknown): value is RemoteV2WebResult {
 		typeof record?.id === "string" &&
 		typeof record.title === "string" &&
 		typeof record.source === "string" &&
-		typeof record.retrievedAt === "number" &&
+		Number.isSafeInteger(record.retrievedAt) &&
+		record.retrievedAt >= 0 &&
 		typeof record.url === "string" &&
 		(record.extract === undefined || typeof record.extract === "string") &&
 		(record.mimeType === undefined || typeof record.mimeType === "string") &&
@@ -1146,7 +1156,8 @@ function isImageView(value: unknown): value is RemoteV2ImageView {
 	return (
 		typeof record?.digest === "string" &&
 		typeof record.mimeType === "string" &&
-		typeof record.size === "number" &&
+		Number.isSafeInteger(record.size) &&
+		record.size >= 0 &&
 		typeof record.reference === "string"
 	);
 }
@@ -1160,6 +1171,10 @@ function isGeneratedImage(value: unknown): value is RemoteV2GeneratedImage {
 		typeof record.model === "string" &&
 		typeof record.promptHash === "string" &&
 		(record.costUsd === undefined || typeof record.costUsd === "number") &&
-		(dimensions === undefined || (typeof dimensions.width === "number" && typeof dimensions.height === "number"))
+		(dimensions === undefined ||
+			(Number.isSafeInteger(dimensions.width) &&
+				dimensions.width >= 0 &&
+				Number.isSafeInteger(dimensions.height) &&
+				dimensions.height >= 0))
 	);
 }
