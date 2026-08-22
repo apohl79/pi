@@ -97,6 +97,8 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	createServer?: ServerDaemonOptions["createServer"];
 	write(value: unknown): void;
 	writeText?: (value: string) => void;
+	rpcInput?: ExperimentalCliRuntimeOptions["rpcInput"];
+	rpcOutput?: ExperimentalCliRuntimeOptions["rpcOutput"];
 	runInteractive?: ExperimentalCliRuntimeOptions["runInteractive"];
 	onAttach?: ExperimentalCliRuntimeOptions["onAttach"];
 };
@@ -251,6 +253,8 @@ export async function createCodingAgentDaemonRuntime(
 			}),
 		write: options.write,
 		...(options.writeText === undefined ? {} : { writeText: options.writeText }),
+		...(options.rpcInput === undefined ? {} : { rpcInput: options.rpcInput }),
+		...(options.rpcOutput === undefined ? {} : { rpcOutput: options.rpcOutput }),
 		...(options.runInteractive === undefined ? {} : { runInteractive: options.runInteractive }),
 		onAttach: options.onAttach,
 	});
