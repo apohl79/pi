@@ -61,6 +61,7 @@ export const OperationAcceptedSchema = StrictObject({
 	operationId: IdSchema,
 	sessionRevision: NonNegativeIntegerSchema,
 	eventSeq: NonNegativeIntegerSchema,
+	compactionPolicy: Type.Optional(CompactionPolicySchema),
 });
 export type OperationAccepted = Static<typeof OperationAcceptedSchema>;
 
