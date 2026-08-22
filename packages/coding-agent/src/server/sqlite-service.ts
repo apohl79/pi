@@ -111,6 +111,22 @@ export async function createCodingAgentV2SqliteService(
 		const planRegistry = options.plans;
 		const agentRegistry =
 			typeof options.agentRegistry === "function" ? options.agentRegistry() : options.agentRegistry;
+		const threadContext = options.pluginRegistry
+			? (await options.pluginRegistry.listPlugins(true))
+					.filter((plugin) => plugin.enabled)
+					.flatMap((plugin) => plugin.threadContext ?? [])
+					.map((entry) => entry.text)
+			: [];
+		const threadContextPrompt = threadContext.length > 0 ? threadContext.join("\n\n") : undefined;
+		const systemPromptOptions =
+			threadContextPrompt === undefined
+				? options.harness?.systemPromptOptions
+				: {
+						...options.harness?.systemPromptOptions,
+						appendSystemPrompt: [options.harness?.systemPromptOptions?.appendSystemPrompt, threadContextPrompt]
+							.filter((value): value is string => value !== undefined && value.length > 0)
+							.join("\n\n"),
+					};
 		const samplingInputFactory = async (): Promise<SamplingInput> => {
 			const configuredSamplingInput = options.harness?.samplingInputFactory
 				? await options.harness.samplingInputFactory()
@@ -133,6 +149,7 @@ export async function createCodingAgentV2SqliteService(
 		};
 		const created = await createCodingAgentHarness({
 			...options.harness,
+			...(systemPromptOptions === undefined ? {} : { systemPromptOptions }),
 			session,
 			models: options.models,
 			model,
