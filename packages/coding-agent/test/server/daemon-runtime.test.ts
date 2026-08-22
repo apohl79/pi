@@ -91,6 +91,42 @@ describe("coding-agent daemon runtime", () => {
 		expect(started).toBe(false);
 	});
 
+	test("passes an explicit lifecycle marker path to the configured daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-daemon-marker-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-marker-faux",
+			models: [
+				{ id: "coding-agent-daemon-marker-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		const markerPath = join(directory, "custom", "daemon-state.json");
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "pi.sock"),
+			lifecycleMarkerPath: markerPath,
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+			createServer: (_service, options) => {
+				return {
+					id: "daemon-marker",
+					addresses: [`unix://${options.path}`],
+					start: async () => {},
+					close: async () => {},
+				};
+			},
+		});
+		await runtime.daemon.start();
+		expect(JSON.parse(await readFile(markerPath, "utf8"))).toMatchObject({ state: "running" });
+		expect(await readFile(join(directory, "daemon-state.json")).catch(() => undefined)).toBeUndefined();
+		await runtime.close();
+	});
+
 	test("runs a production Unix daemon turn with the deterministic faux provider", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-daemon-e2e-"));
 		directories.push(directory);
