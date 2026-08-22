@@ -265,6 +265,42 @@ describe("coding-agent v2 service adapter", () => {
 		}
 	});
 
+	test("falls back to the session model when no fast model is configured", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-naming-fallback-faux",
+			models: [{ id: "session-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("turn response"), fauxAssistantMessage("Recover daemon state")]);
+		const session = new Session(new InMemorySessionStorage({ id: "naming-fallback-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		try {
+			const service = createCodingAgentV2Service(models, [
+				{ metadata: { id: "naming-fallback-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+			]);
+			const runtime = await service.openSession("naming-fallback-session");
+			await runtime.run("fallback-name", {
+				command: "turn/start",
+				sessionId: "naming-fallback-session",
+				payload: { text: "recover" },
+			});
+			expect((await runtime.snapshot()).name).toBe("Recover daemon state");
+			expect((await runtime.snapshot()).nameSource).toBe("generated");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("persists the automatic naming setting across runtime recreation", async () => {
 		const models = createModels();
 		const faux = fauxProvider({

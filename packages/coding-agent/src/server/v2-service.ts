@@ -263,7 +263,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	private async generateName(operationId: string): Promise<void> {
-		if (!this.fastModel) return;
+		const namingModel = this.fastModel ?? this.model;
 		const initialSource = this.nameSource;
 		if (initialSource === "explicit") return;
 		const initialRevision = this.nameRevision;
@@ -292,7 +292,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			.join("\n")
 			.slice(-6000);
 		if (transcript.length === 0) return;
-		const response = await this.models.completeSimple(this.fastModel, {
+		const response = await this.models.completeSimple(namingModel, {
 			messages: [
 				{
 					role: "user",
