@@ -27,4 +27,41 @@ describe("ModelConfig compaction overrides", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+
+	test("rejects unsafe or context-incompatible compaction policies", async () => {
+		const cases = [
+			{
+				compaction: { reserveTokens: 10_000, keepRecentTokens: 100 },
+				expected: "reserveTokens",
+			},
+			{
+				compaction: { reserveTokens: 100, keepRecentTokens: 9_901 },
+				expected: "keepRecentTokens",
+			},
+			{
+				compaction: { reserveTokens: Number.MAX_SAFE_INTEGER + 1 },
+				expected: "safe integer",
+			},
+		] as const;
+		for (const [index, candidate] of cases.entries()) {
+			const directory = await mkdtemp(join(tmpdir(), "pi-model-config-invalid-"));
+			const path = join(directory, "models.json");
+			try {
+				await writeFile(
+					path,
+					JSON.stringify({
+						providers: {
+							faux: {
+								models: [{ id: `model-${index}`, contextWindow: 10_000, compaction: candidate.compaction }],
+							},
+						},
+					}),
+				);
+				const config = await ModelConfig.load(path);
+				expect(config.getError()).toContain(candidate.expected);
+			} finally {
+				await rm(directory, { recursive: true, force: true });
+			}
+		}
+	});
 });
