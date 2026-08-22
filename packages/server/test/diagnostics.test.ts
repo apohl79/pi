@@ -7,6 +7,7 @@ import {
 	InMemoryForensicRecorder,
 	JsonlForensicRecorder,
 	LocalDiagnosticCapsuleStore,
+	TeeForensicRecorder,
 	verifyDiagnosticBundle,
 } from "../src/diagnostics.ts";
 
@@ -73,6 +74,33 @@ describe("InMemoryForensicRecorder", () => {
 });
 
 describe("JsonlForensicRecorder", () => {
+	test("rotates bounded operational logs and replays retained files", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-rotating-"));
+		const path = join(directory, "operational.jsonl");
+		const recorder = new JsonlForensicRecorder(path, { maxBytes: 180, maxFiles: 3 });
+		await recorder.record({ kind: "one", payload: { value: "first" } });
+		await recorder.record({ kind: "two", payload: { value: "second" } });
+		await recorder.record({ kind: "three", payload: { value: "third" } });
+		expect(await recorder.read()).toHaveLength(3);
+		expect(await recorder.read()).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "three" })]));
+		const reopened = new JsonlForensicRecorder(path, { maxBytes: 180, maxFiles: 3 });
+		expect((await reopened.read()).map((event) => event.kind)).toEqual(["one", "two", "three"]);
+	});
+
+	test("does not make canonical recording depend on an operational log failure", async () => {
+		const primary = new InMemoryForensicRecorder();
+		const secondary = {
+			record: async () => {
+				throw new Error("disk full");
+			},
+			read: async () => [],
+		};
+		const recorder = new TeeForensicRecorder(primary, secondary);
+		await expect(recorder.record({ kind: "accepted" })).resolves.toMatchObject({ kind: "accepted", seq: 1 });
+		expect(recorder.getOperationalLogFailureCount()).toBe(1);
+		expect(await recorder.read()).toHaveLength(1);
+	});
+
 	test("recovers sequence and redaction state after restart", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
 		const path = join(directory, "nested", "events.jsonl");

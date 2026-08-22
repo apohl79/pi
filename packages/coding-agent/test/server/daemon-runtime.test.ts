@@ -760,6 +760,7 @@ describe("coding-agent daemon runtime", () => {
 				arch: process.arch,
 			});
 			expect(bundle.clientDiagnostics).toMatchObject({ manifest: { clientInstanceId: "production-client-1" } });
+			expect(await readFile(join(directory, "diagnostic-log.jsonl"), "utf8")).toContain("daemon_starting");
 			await runtime.cli.runDiagnostics({ command: "diagnostics", action: "verify", bundle: bundlePath });
 			expect(output.at(-1)).toEqual({ valid: true });
 		} finally {
