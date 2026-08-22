@@ -126,6 +126,17 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 		clients.delete(client);
 		client.dispose();
 	};
+	const recordClientDiagnostic = async (event: string, error: unknown): Promise<void> => {
+		try {
+			await options.diagnosticsSpool?.append({
+				event,
+				severity: "error",
+				fields: { error: error instanceof Error ? error.name : "unknown" },
+			});
+		} catch {
+			// Client crash evidence is best-effort and must not replace the original failure.
+		}
+	};
 	const runServer = async (command: ServerCommand): Promise<void> => {
 		const result =
 			command.action === "stop"
@@ -244,7 +255,12 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 				}
 				if (options.runInteractive === undefined)
 					throw new Error("Server-default interactive runner is unavailable");
-				await options.runInteractive(session, command.options);
+				try {
+					await options.runInteractive(session, command.options);
+				} catch (error) {
+					await recordClientDiagnostic("client.render_failed", error);
+					throw error;
+				}
 				return;
 			}
 			const operationId = await session.submit(await buildRemotePrompt(session, command.options));
