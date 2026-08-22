@@ -110,6 +110,11 @@ describe("remote v2 interactive command boundary", () => {
 	test("parses discoverable commands without changing v1 slash commands", () => {
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/detach");
 		expect(parseRemoteV2Command("/follow-up  continue this")).toEqual({ name: "follow-up", text: "continue this" });
+		expect(parseRemoteV2Command("/compact")).toEqual({ name: "compact" });
+		expect(parseRemoteV2Command("/compact preserve the API contract")).toEqual({
+			name: "compact",
+			instructions: "preserve the API contract",
+		});
 		expect(parseRemoteV2Command("/model faux/model-2")).toEqual({ name: "model", provider: "faux", id: "model-2" });
 		expect(parseRemoteV2Command("/rollback")).toEqual({ name: "rollback", turns: 1 });
 		expect(parseRemoteV2Command("/thinking high")).toEqual({ name: "thinking", level: "high" });
@@ -135,6 +140,10 @@ describe("remote v2 interactive command boundary", () => {
 		const attachment = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
 		const adapter = new RemoteV2InteractiveAttachment(attachment);
 		expect(await adapter.execute("/follow-up continue")).toEqual({ kind: "operation", operationId: "operation-1" });
+		expect(await adapter.execute("/compact preserve context")).toEqual({
+			kind: "operation",
+			operationId: "operation-1",
+		});
 		expect(await adapter.execute("/release-control")).toEqual({ kind: "control", mode: "observer" });
 		await adapter.execute("/take-control");
 		expect(await adapter.execute("/thinking high")).toEqual({ kind: "operation", operationId: "operation-1" });
@@ -155,6 +164,7 @@ describe("remote v2 interactive command boundary", () => {
 			"session/attach",
 			"session/read",
 			"turn/followUp",
+			"turn/compact",
 			"session/attach",
 			"session/attach",
 			"session/thinking/set",

@@ -4,6 +4,7 @@ import type { RemoteV2SessionAttachment } from "./remote-v2-selector.ts";
 
 export const REMOTE_V2_SLASH_COMMANDS = [
 	"/abort",
+	"/compact",
 	"/detach",
 	"/follow-up",
 	"/goal",
@@ -23,6 +24,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 
 export type RemoteV2Command =
 	| { readonly name: "abort" }
+	| { readonly name: "compact"; readonly instructions?: string }
 	| { readonly name: "detach" }
 	| { readonly name: "follow-up"; readonly text: string }
 	| { readonly name: "goal"; readonly objective: string }
@@ -62,6 +64,10 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		const text = arguments_.join(" ").trim();
 		if (!text) throw new Error("/follow-up requires text");
 		return { name: "follow-up", text };
+	}
+	if (name === "/compact") {
+		const instructions = arguments_.join(" ").trim();
+		return instructions.length === 0 ? { name: "compact" } : { name: "compact", instructions };
 	}
 	if (name === "/goal") {
 		const objective = arguments_.join(" ").trim();
@@ -159,6 +165,8 @@ export class RemoteV2InteractiveAttachment implements Component {
 		switch (command.name) {
 			case "abort":
 				return operation(await this.session.abort());
+			case "compact":
+				return operation(await this.session.compact(command.instructions));
 			case "detach":
 				await this.dispose();
 				return { kind: "detached" };
