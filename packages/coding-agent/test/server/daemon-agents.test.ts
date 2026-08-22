@@ -116,6 +116,7 @@ describe("coding-agent daemon child agents", () => {
 						path: "/root/specialist",
 						state: "running",
 						model: { provider: "coding-agent-daemon-child-faux", id: "child-model" },
+						startedAt: expect.any(Number),
 						usage: { input: expect.any(Number), output: expect.any(Number) },
 					},
 				},
@@ -136,7 +137,9 @@ describe("coding-agent daemon child agents", () => {
 			const listed = await client.request({ command: "agent/list", sessionId });
 			expect(listed).toMatchObject({
 				ok: true,
-				result: { agents: [{ id: agentId, path: "/root/specialist", state: "complete" }] },
+				result: {
+					agents: [{ id: agentId, path: "/root/specialist", state: "complete", startedAt: expect.any(Number) }],
+				},
 			});
 		} finally {
 			client.dispose();
