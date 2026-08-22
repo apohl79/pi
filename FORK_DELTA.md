@@ -28,7 +28,7 @@ boundary is introduced.
 | Area | Classification | Why the existing surface is insufficient |
 | --- | --- | --- |
 | Protocol v2 schemas, CBOR framing, operation/event cursors | Fork core | Stock Pi has no durable daemon command model or event-cursor contract. |
-| Server daemon lifecycle, leases, reconnect, and Unix transport | Fork core | A client-only extension cannot own process lifecycle, authentication, or reconnect recovery. |
+| Server daemon lifecycle, leases, reconnect, and platform transport (Unix sockets / Windows named pipes) | Fork core | A client-only extension cannot own process lifecycle, authentication, reconnect recovery, or the server-owned cross-platform byte transport. |
 | SQLite coding-agent service and durable session runtime | Fork-dependent extension | The existing harness is reusable, but it needs a server-owned session adapter and persistent operation boundary. |
 | Critical diagnostics, encrypted capsules, and offline verification | Fork core | Causal evidence and atomic acceptance require the authoritative server and persistence paths. |
 | Processes, files, blobs, web, images, plans, and structured input | Fork-dependent extension | These are provider-neutral server adapters exposed through v2; their ownership must remain outside the TUI. |
