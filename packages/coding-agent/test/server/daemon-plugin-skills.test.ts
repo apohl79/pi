@@ -18,7 +18,12 @@ describe("coding-agent daemon plugin skills", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-plugin-skills-"));
 		directories.push(directory);
 		const pluginRoot = join(directory, "plugin");
+		await mkdir(join(pluginRoot, ".codex-plugin"), { recursive: true });
 		await mkdir(join(pluginRoot, "skills", "review"), { recursive: true });
+		await writeFile(
+			join(pluginRoot, ".codex-plugin", "plugin.json"),
+			JSON.stringify({ name: "review-plugin", version: "1.0.0", skills: ["skills/review"] }),
+		);
 		await writeFile(
 			join(pluginRoot, "skills", "review", "SKILL.md"),
 			"---\nname: review\ndescription: Review changes\n---\nInspect the diff carefully.",

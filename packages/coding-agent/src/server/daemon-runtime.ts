@@ -39,8 +39,10 @@ import {
 	type ExperimentalCliRuntimeOptions,
 } from "../cli/experimental/runtime.ts";
 import type { TransportAddress } from "../cli/experimental/transport-address.ts";
+import { CodexPluginActivationStore } from "../core/codex-plugin-activation.ts";
 import { runMigrations } from "../migrations.ts";
 import { type CodingAgentV2AgentRegistryOptions, createCodingAgentV2AgentRegistry } from "./agent-registry.ts";
+import { ActivatingV2PluginRegistry } from "./plugin-registry.ts";
 import { createRuntimeManifest } from "./runtime-manifest.ts";
 import { SqliteForensicRecorder } from "./sqlite-forensic-recorder.ts";
 import { SqliteV2InputRegistry } from "./sqlite-input-registry.ts";
@@ -74,6 +76,7 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	images?: V2ImageService;
 	files?: V2FileReferenceService;
 	pluginRegistry?: V2PluginRegistry;
+	pluginActivationStore?: CodexPluginActivationStore;
 	apps?: V2AppRegistry;
 	operationStore?: V2OperationStore;
 	operationStorePath?: string;
@@ -310,7 +313,14 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 				createNodeSqliteFactory(),
 				options.usageStorePath ?? join(options.agentDir, "usage.sqlite"),
 			);
-		const pluginRegistry = options.pluginRegistry ?? new JsonV2PluginRegistry(join(options.agentDir, "plugins.json"));
+		const pluginRegistry =
+			options.pluginRegistry === undefined
+				? new ActivatingV2PluginRegistry(
+						new JsonV2PluginRegistry(join(options.agentDir, "plugins.json")),
+						options.pluginActivationStore ??
+							new CodexPluginActivationStore(join(options.agentDir, "plugins-cache")),
+					)
+				: options.pluginRegistry;
 		const plans =
 			options.plans ??
 			new SqliteV2PlanRegistry(

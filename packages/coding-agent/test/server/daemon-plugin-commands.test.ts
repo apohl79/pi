@@ -23,7 +23,12 @@ async function runPluginCommandScenario(): Promise<boolean> {
 	const directory = await mkdtemp(join(tmpdir(), "pi-daemon-plugin-commands-"));
 	directories.push(directory);
 	const pluginRoot = join(directory, "plugin");
+	await mkdir(join(pluginRoot, ".codex-plugin"), { recursive: true });
 	await mkdir(join(pluginRoot, "commands"), { recursive: true });
+	await writeFile(
+		join(pluginRoot, ".codex-plugin", "plugin.json"),
+		JSON.stringify({ name: "review-plugin", version: "1.0.0", commands: ["commands/review.md"] }),
+	);
 	await writeFile(
 		join(pluginRoot, "commands", "review.md"),
 		"---\ndescription: Review changes\n---\nReview $ARGUMENTS",
