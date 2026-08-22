@@ -323,4 +323,122 @@ describe("coding-agent daemon child agents", () => {
 			await runtime.close();
 		}
 	});
+
+	test("resolves root and child models independently across a root model switch", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-agents-model-switch-"));
+		directories.push(directory);
+		const models = createModels();
+		const root = fauxProvider({
+			provider: "coding-agent-daemon-root-models-faux",
+			models: [
+				{ id: "root-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+				{ id: "switched-root-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		const child = fauxProvider({
+			provider: "coding-agent-daemon-resolved-child-faux",
+			models: [{ id: "child-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(root.provider);
+		models.setProvider(child.provider);
+		const requestedModels: string[] = [];
+		root.setResponses([
+			(_context, _options, _state, model) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				return fauxAssistantMessage("root before switch");
+			},
+			(_context, _options, _state, model) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				return fauxAssistantMessage("root after switch");
+			},
+		]);
+		child.setResponses([
+			(_context, _options, _state, model) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				return fauxAssistantMessage("child response");
+			},
+		]);
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: root.getModel("root-model")!,
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
+			const sessionId = (created.result as { session: { id: string } }).session.id;
+			const waitForIdle = async (): Promise<void> => {
+				for (let attempt = 0; attempt < 50; attempt++) {
+					const snapshot = await client.request({ command: "session/read", sessionId });
+					if (
+						snapshot.ok &&
+						"result" in snapshot &&
+						(snapshot.result as { session: { phase: string } }).session.phase === "idle"
+					)
+						return;
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+				throw new Error("Timed out waiting for root turn completion");
+			};
+			await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			await client.request({ command: "session/name/auto/set", sessionId, payload: { enabled: false } });
+			const first = await client.request({ command: "turn/start", sessionId, payload: { text: "root first" } });
+			if (!first.ok || !("accepted" in first)) throw new Error("First root turn was not accepted");
+			await waitForIdle();
+			const beforeSwitch = await client.request({ command: "session/read", sessionId });
+			if (!beforeSwitch.ok || !("result" in beforeSwitch)) throw new Error("Session read failed");
+			const transcriptBeforeSwitch = (
+				beforeSwitch.result as unknown as { session: { transcript: readonly unknown[] } }
+			).session.transcript;
+			const spawned = await client.request({
+				command: "agent/spawn",
+				sessionId,
+				payload: {
+					taskName: "resolved-child",
+					taskMessage: "use the child profile",
+					model: { provider: "coding-agent-daemon-resolved-child-faux", id: "child-model" },
+				},
+			});
+			if (!spawned.ok || !("result" in spawned)) throw new Error("Child spawn failed");
+			const agentId = (spawned.result as { agent: { id: string } }).agent.id;
+			await client.request({ command: "agent/wait", payload: { agentId } });
+			const switched = await client.request({
+				command: "session/model/set",
+				sessionId,
+				payload: { provider: "coding-agent-daemon-root-models-faux", id: "switched-root-model" },
+			});
+			expect(switched).toMatchObject({ ok: true });
+			const switchedSnapshot = await client.request({ command: "session/read", sessionId });
+			if (!switchedSnapshot.ok || !("result" in switchedSnapshot)) throw new Error("Session read failed");
+			expect((switchedSnapshot.result as { session: { model: unknown } }).session.model).toEqual({
+				provider: "coding-agent-daemon-root-models-faux",
+				id: "switched-root-model",
+			});
+			const afterSwitch = await client.request({ command: "session/read", sessionId });
+			if (!afterSwitch.ok || !("result" in afterSwitch)) throw new Error("Session read failed");
+			expect(
+				(afterSwitch.result as unknown as { session: { transcript: readonly unknown[] } }).session.transcript,
+			).toEqual(transcriptBeforeSwitch);
+			const second = await client.request({ command: "turn/start", sessionId, payload: { text: "root second" } });
+			if (!second.ok || !("accepted" in second)) throw new Error("Second root turn was not accepted");
+			await waitForIdle();
+			expect(requestedModels).toEqual([
+				"coding-agent-daemon-root-models-faux/root-model",
+				"coding-agent-daemon-resolved-child-faux/child-model",
+				"coding-agent-daemon-root-models-faux/switched-root-model",
+			]);
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
 });
