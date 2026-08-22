@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
@@ -57,6 +57,49 @@ describe("production daemon filesystem completion", () => {
 				ok: true,
 				result: { items: [{ reference: "project:notes.ts", kind: "file" }] },
 			});
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("treats an absolute server reference as an execution-host path", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-filesystem-server-scope-"));
+		const outsideDirectory = await mkdtemp(join(tmpdir(), "pi-daemon-filesystem-server-target-"));
+		directories.push(directory, outsideDirectory);
+		const outsidePath = join(outsideDirectory, "outside.txt");
+		await writeFile(outsidePath, "execution host content", "utf8");
+		const canonicalOutsidePath = await realpath(outsidePath);
+		const runtime = await createFilesystemRuntime(directory);
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			expect(created).toMatchObject({ ok: true, result: { session: { id: expect.any(String) } } });
+			const createdResult = created as unknown as { result: { session: { id: string } } };
+			const sessionId = createdResult.result.session.id;
+			const completed = await client.request({
+				command: "filesystem/complete",
+				sessionId,
+				payload: { prefix: `@server:${outsidePath}` },
+			});
+			expect(completed).toMatchObject({
+				ok: true,
+				result: { items: [{ reference: `server:${outsidePath}`, kind: "file" }] },
+			});
+			const read = await client.request({
+				command: "filesystem/reference/read",
+				sessionId,
+				payload: { reference: `server:${outsidePath}` },
+			});
+			expect(read).toMatchObject({ ok: true, result: { file: { path: canonicalOutsidePath } } });
+			const readResult = read as unknown as { result: { data: string } };
+			expect(Buffer.from(readResult.result.data, "base64").toString("utf8")).toBe(
+				await readFile(outsidePath, "utf8"),
+			);
 		} finally {
 			client.dispose();
 			await runtime.close();
