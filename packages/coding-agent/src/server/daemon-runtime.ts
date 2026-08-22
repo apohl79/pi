@@ -40,6 +40,7 @@ import { runMigrations } from "../migrations.ts";
 import { createCodingAgentV2AgentRegistry } from "./agent-registry.ts";
 import { createRuntimeManifest } from "./runtime-manifest.ts";
 import { SqliteV2OperationStore } from "./sqlite-operation-store.ts";
+import { SqliteV2PlanRegistry } from "./sqlite-plan-registry.ts";
 import { type CodingAgentV2SqliteServiceOptions, createCodingAgentV2SqliteService } from "./sqlite-service.ts";
 import { SqliteV2UsageLedger } from "./sqlite-usage-ledger.ts";
 
@@ -251,6 +252,12 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 				options.usageStorePath ?? join(options.agentDir, "usage.sqlite"),
 			);
 		const pluginRegistry = options.pluginRegistry ?? new JsonV2PluginRegistry(join(options.agentDir, "plugins.json"));
+		const plans =
+			options.plans ??
+			new SqliteV2PlanRegistry(
+				createNodeSqliteFactory(),
+				options.planStorePath ?? join(options.agentDir, "plans.sqlite"),
+			);
 		const operationStore =
 			options.operationStore ??
 			new SqliteV2OperationStore(
@@ -350,6 +357,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 				options.inputs ??
 				new JsonlV2InputRegistry(options.inputStorePath ?? join(options.agentDir, "inputs.jsonl")),
 			usage,
+			plans,
 			files:
 				options.files ??
 				new LocalV2FileReferenceService({ projectRoot: options.cwd, cwd: options.cwd, allowAbsolute: true }),
@@ -372,6 +380,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 				await runtime.close();
 				if (operationStore instanceof SqliteV2OperationStore) await operationStore.close();
 				if (usage instanceof SqliteV2UsageLedger) await usage.close();
+				if (plans instanceof SqliteV2PlanRegistry) await plans.close();
 				await repository.close();
 				await env.cleanup();
 			},
