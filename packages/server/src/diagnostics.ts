@@ -91,7 +91,13 @@ export interface DiagnosticBundleManifest {
 	readonly lastSeq: number;
 	readonly eventsSha256: string;
 	readonly capsulesSha256?: string;
+	readonly scope?: DiagnosticBundleScope;
 	readonly unavailable?: readonly string[];
+}
+
+export interface DiagnosticBundleScope {
+	readonly sessionId?: string;
+	readonly operationId?: string;
 }
 
 export interface DiagnosticRuntimeManifest {
@@ -128,6 +134,9 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 	if (candidate.clientDiagnostics !== undefined && !isClientDiagnosticExport(candidate.clientDiagnostics))
 		return { valid: false, reason: "Diagnostic bundle contains invalid client diagnostics" };
 	const fields = manifest as Record<string, unknown>;
+	const scope = fields.scope;
+	if (scope !== undefined && !isDiagnosticBundleScope(scope))
+		return { valid: false, reason: "Diagnostic bundle manifest contains an invalid scope" };
 	if (
 		fields.unavailable !== undefined &&
 		(!Array.isArray(fields.unavailable) ||
@@ -144,6 +153,15 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 		const seq = eventSequence(event);
 		return seq !== undefined && (index === 0 || seq === eventSequence(events[index - 1])! + 1);
 	});
+	const scopedEvents =
+		scope === undefined ||
+		events.every((event) => {
+			const scoped = scope as DiagnosticBundleScope;
+			return (
+				(scoped.sessionId === undefined || eventSessionId(event) === scoped.sessionId) &&
+				(scoped.operationId === undefined || eventOperationId(event) === scoped.operationId)
+			);
+		});
 	const valid =
 		fields.schemaVersion === 1 &&
 		fields.eventCount === events.length &&
@@ -151,8 +169,33 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 		fields.lastSeq === lastSeq &&
 		fields.eventsSha256 === digest &&
 		(fields.capsulesSha256 === undefined || fields.capsulesSha256 === capsulesDigest) &&
-		contiguous;
+		scopedEvents &&
+		(scope !== undefined || contiguous);
 	return valid ? { valid: true } : { valid: false, reason: "Diagnostic bundle manifest does not match its events" };
+}
+
+function isDiagnosticBundleScope(value: unknown): value is DiagnosticBundleScope {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const scope = value as Record<string, unknown>;
+	const hasSession = scope.sessionId !== undefined;
+	const hasOperation = scope.operationId !== undefined;
+	return (
+		(hasSession || hasOperation) &&
+		(!hasSession || typeNonEmpty(scope.sessionId)) &&
+		(!hasOperation || typeNonEmpty(scope.operationId))
+	);
+}
+
+function eventSessionId(value: unknown): string | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	const sessionId = (value as Record<string, unknown>).sessionId;
+	return typeof sessionId === "string" ? sessionId : undefined;
+}
+
+function eventOperationId(value: unknown): string | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	const operationId = (value as Record<string, unknown>).operationId;
+	return typeof operationId === "string" ? operationId : undefined;
 }
 
 function isDiagnosticRuntimeManifest(value: unknown): value is DiagnosticRuntimeManifest {
