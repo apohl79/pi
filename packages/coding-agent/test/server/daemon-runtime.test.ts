@@ -60,6 +60,12 @@ describe("coding-agent daemon runtime", () => {
 			});
 			expect(await runtime.service.listSessions()).toEqual([]);
 			expect(output).toHaveLength(1);
+			await expect(
+				runtime.cli.runServer({ command: "server", action: "start", listen: [{ transport: "unix", path: "/tmp/other.sock" }] }),
+			).rejects.toThrow("--listen is not supported");
+			await expect(runtime.cli.runServer({ command: "server", action: "start", auth: { type: "token", token: "secret" } })).rejects.toThrow(
+				"authentication is not supported",
+			);
 			await runtime.close();
 			expect(started).toBe(false);
 		} finally {

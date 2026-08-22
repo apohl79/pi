@@ -48,8 +48,10 @@ export async function createCodingAgentDaemonRuntime(
 			stop: () => daemon.stop(),
 		},
 		defaultConnect,
-		createClient: (address) =>
-			new PiClientV2({ transportFactory: createUnixTransportFactory({ path: address.path }) }),
+		createClient: (address, auth) => {
+			if (auth !== undefined) throw new Error("Experimental client authentication is not supported by Unix transport yet");
+			return new PiClientV2({ transportFactory: createUnixTransportFactory({ path: address.path }) });
+		},
 		write: options.write,
 		onAttach: options.onAttach,
 	});

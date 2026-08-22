@@ -38,6 +38,9 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 		client.dispose();
 	};
 	const runServer = async (command: ServerCommand): Promise<void> => {
+		if (command.auth !== undefined) throw new Error("Experimental server authentication is not supported yet");
+		if (command.listen !== undefined && command.listen.length > 0)
+			throw new Error("Experimental server --listen is not supported by this daemon runtime yet");
 		const result =
 			command.action === "stop"
 				? await options.daemon.stop()
