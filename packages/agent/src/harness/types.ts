@@ -238,6 +238,8 @@ export interface FileSystem {
 	joinPath(parts: string[], abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
 	/** Read a UTF-8 text file. */
 	readTextFile(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
+	/** Read a file beneath root through pinned, no-follow directory descriptors. */
+	readTextFileWithinRoot(root: string, path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
 	/** Read UTF-8 text lines. Implementations should stop once `maxLines` lines have been read. */
 	readTextLines(
 		path: string,

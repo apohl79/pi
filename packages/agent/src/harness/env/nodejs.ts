@@ -561,6 +561,29 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		}
 	}
 
+	async readTextFileWithinRoot(
+		root: string,
+		path: string,
+		abortSignal?: AbortSignal,
+	): Promise<Result<string, FileError>> {
+		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<string>(abortSignal, resolved);
+		if (aborted) return aborted;
+		let parent: OpenedDirectory | undefined;
+		let file: Awaited<ReturnType<typeof open>> | undefined;
+		try {
+			parent = await openPinnedParent(resolvePath(this.cwd, root), resolved, false);
+			const filePath = join(procFdPath(parent.fd), basename(resolved));
+			file = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+			return ok(await file.readFile({ encoding: "utf8", signal: abortSignal }));
+		} catch (error) {
+			return err(descriptorMutationError(resolved, error));
+		} finally {
+			await file?.close().catch(() => {});
+			await parent?.close().catch(() => {});
+		}
+	}
+
 	async readTextLines(
 		path: string,
 		options?: { maxLines?: number; abortSignal?: AbortSignal },

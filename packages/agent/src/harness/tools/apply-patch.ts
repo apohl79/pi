@@ -157,7 +157,7 @@ export function createApplyPatchTool<TContext extends ExecutionToolContext = Exe
 					} else if (operation.kind === "delete") {
 						getOrThrow(await env.removeFileWithinRoot(root, absolutePath, signal));
 					} else {
-						const original = getOrThrow(await env.readTextFile(absolutePath, signal));
+						const original = getOrThrow(await env.readTextFileWithinRoot(root, absolutePath, signal));
 						const { bom, text } = stripBom(original);
 						const ending = detectLineEnding(text);
 						getOrThrow(

@@ -1,4 +1,4 @@
-import { symlink } from "node:fs/promises";
+import { symlink, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { applyPatch } from "diff";
 import { describe, expect, it } from "vitest";
@@ -45,6 +45,23 @@ class SlowReadExecutionEnv extends NodeExecutionEnv {
 	override async readTextFile(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>> {
 		await delay(20);
 		return super.readTextFile(path, abortSignal);
+	}
+}
+
+class SwapAfterValidationEnv extends NodeExecutionEnv {
+	private swapped = false;
+	constructor(cwd: string, private readonly outsidePath: string) {
+		super({ cwd });
+	}
+
+	override async canonicalPath(path: string): Promise<Result<string, FileError>> {
+		const result = await super.canonicalPath(path);
+		if (!this.swapped && path === join(this.cwd, "target.txt") && result.ok) {
+			this.swapped = true;
+			await unlink(path);
+			await symlink(this.outsidePath, path);
+		}
+		return result;
 	}
 }
 
@@ -192,6 +209,27 @@ describe("AgentHarness tools", () => {
 				),
 			).rejects.toThrow(/symlink|escapes/i);
 			expect(getOrThrow(await context.env.readTextFile(join(outside, "outside.txt")))).toBe("outside\n");
+		});
+
+		it("does not read a file after its validated path is swapped to a symlink", async () => {
+			const root = createTempDir();
+			const outside = createTempDir();
+			const outsidePath = join(outside, "outside.txt");
+			const targetPath = join(root, "target.txt");
+			const env = new SwapAfterValidationEnv(root, outsidePath);
+			getOrThrow(await env.writeFile(targetPath, "outside\n"));
+			getOrThrow(await env.writeFile(outsidePath, "outside\n"));
+
+			await expect(
+				createApplyPatchTool().execute(
+					"patch-symlink-race",
+					{ patch: "*** Begin Patch\n*** Update File: target.txt\n@@\n-outside\n+changed\n*** End Patch" },
+					undefined,
+					undefined,
+					{ env },
+				),
+			).rejects.toThrow();
+			expect(getOrThrow(await env.readTextFile(outsidePath))).toBe("outside\n");
 		});
 
 		it("preserves CRLF line endings while applying updates", async () => {
