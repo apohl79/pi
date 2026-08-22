@@ -722,9 +722,16 @@ export class PiServerV2 {
 	private async startTurn(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("turn/start requires sessionId");
 		const runtime = this.requireAttached(state, command.sessionId);
-		const operationId = randomUUID();
-		const accepted = await runtime.accept(operationId);
 		this.retainOperation(runtime);
+		const operationId = randomUUID();
+		let accepted: OperationAccepted;
+		try {
+			accepted = await runtime.accept(operationId);
+		} catch (error) {
+			this.releaseOperation(runtime);
+			if (!this.hasRuntimeReference(runtime) && !this.hasActiveOperation(runtime)) await this.disposeRuntime(runtime);
+			throw error;
+		}
 		this.operations.set(operationId, {
 			operationId,
 			sessionId: command.sessionId,
