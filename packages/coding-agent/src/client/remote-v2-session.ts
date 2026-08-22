@@ -58,6 +58,26 @@ export interface RemoteV2ProcessSnapshot extends RemoteV2ProcessOutput {
 	readonly exitCode?: number;
 }
 
+export interface RemoteV2FileReference {
+	readonly reference: string;
+	readonly path: string;
+	readonly kind: "file" | "directory";
+	readonly size?: number;
+	readonly mimeType?: string;
+}
+
+export interface RemoteV2FileCompletion {
+	readonly reference: string;
+	readonly path: string;
+	readonly kind: "file" | "directory";
+}
+
+export interface RemoteV2FileRead {
+	readonly file: RemoteV2FileReference;
+	readonly encoding: "base64";
+	readonly data: string;
+}
+
 function promptPayload(input: string | RemoteV2PromptContent, label: string): JsonValue {
 	if (typeof input === "string") {
 		const text = input.trim();
@@ -394,6 +414,41 @@ export class RemoteV2Session {
 		return structuredClone(result.process);
 	}
 
+	async completeFiles(prefix: string): Promise<readonly RemoteV2FileCompletion[]> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({
+			command: "filesystem/complete",
+			sessionId: this.#requireHandle().sessionId,
+			payload: { prefix },
+		});
+		if (!Array.isArray(result.items) || !result.items.every(isFileCompletion))
+			throw new Error("Invalid filesystem/complete response");
+		return result.items.map((item) => structuredClone(item));
+	}
+
+	async resolveFile(reference: string): Promise<RemoteV2FileReference> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({
+			command: "filesystem/reference/resolve",
+			sessionId: this.#requireHandle().sessionId,
+			payload: { reference },
+		});
+		if (!isFileReference(result.file)) throw new Error("Invalid filesystem/reference/resolve response");
+		return structuredClone(result.file);
+	}
+
+	async readFile(reference: string): Promise<RemoteV2FileRead> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({
+			command: "filesystem/reference/read",
+			sessionId: this.#requireHandle().sessionId,
+			payload: { reference },
+		});
+		if (!isFileReference(result.file) || result.encoding !== "base64" || typeof result.data !== "string")
+			throw new Error("Invalid filesystem/reference/read response");
+		return { file: structuredClone(result.file), encoding: "base64", data: result.data };
+	}
+
 	async relinquishControl(): Promise<void> {
 		this.#assertNotDisposed();
 		const handle = this.#requireHandle();
@@ -577,5 +632,25 @@ function isProcessSnapshot(value: unknown): value is RemoteV2ProcessSnapshot {
 		typeof record.pty === "boolean" &&
 		["running", "exited", "terminated", "lost"].includes(record.state as string) &&
 		(record.exitCode === undefined || typeof record.exitCode === "number")
+	);
+}
+
+function isFileReference(value: unknown): value is RemoteV2FileReference {
+	const record = asRecord(value);
+	return (
+		typeof record?.reference === "string" &&
+		typeof record.path === "string" &&
+		(record.kind === "file" || record.kind === "directory") &&
+		(record.size === undefined || typeof record.size === "number") &&
+		(record.mimeType === undefined || typeof record.mimeType === "string")
+	);
+}
+
+function isFileCompletion(value: unknown): value is RemoteV2FileCompletion {
+	const record = asRecord(value);
+	return (
+		typeof record?.reference === "string" &&
+		typeof record.path === "string" &&
+		(record.kind === "file" || record.kind === "directory")
 	);
 }
