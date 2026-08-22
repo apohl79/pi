@@ -73,7 +73,9 @@ export const PromptContentSchema = Type.Union([
 	StrictObject({ type: Type.Literal("text"), text: Type.String() }),
 	StrictObject({ type: Type.Literal("image"), digest: IdSchema, mimeType: Type.String({ minLength: 1 }) }),
 	StrictObject({ type: Type.Literal("blob"), digest: IdSchema, mimeType: Type.String({ minLength: 1 }) }),
+	StrictObject({ type: Type.Literal("mention"), name: IdSchema, path: IdSchema }),
 ]);
+export type PromptContent = Static<typeof PromptContentSchema>;
 
 export const QueuedInputSchema = StrictObject({
 	id: IdSchema,

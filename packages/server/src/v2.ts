@@ -1275,6 +1275,7 @@ export class PiServerV2 {
 					throw new Error(`turn content item ${index} must be an object`);
 				const item = part as Record<string, unknown>;
 				if (item.type === "text" && typeof item.text === "string") return { type: "text", text: item.text };
+				if (item.type === "mention") return this.resolveMention(item, index);
 				if (item.type !== "image" && item.type !== "blob")
 					throw new Error(`turn content item ${index} must be text, image, or blob`);
 				if (typeof item.mimeType !== "string" || !item.mimeType.startsWith("image/"))
@@ -1286,6 +1287,30 @@ export class PiServerV2 {
 			}),
 		);
 		return { ...command, payload: toProtocolJsonValue({ ...payload, content }) };
+	}
+
+	private async resolveMention(item: Record<string, unknown>, index: number): Promise<{ type: "text"; text: string }> {
+		if (typeof item.name !== "string" || typeof item.path !== "string")
+			throw new Error(`turn content item ${index} mention requires name and path`);
+		const name = item.name.trim();
+		const path = item.path.trim();
+		if (name.length === 0 || path.length === 0) throw new Error(`turn content item ${index} mention is empty`);
+		if (path.startsWith("app://")) {
+			const appId = path.slice("app://".length);
+			const app =
+				(await this.apps.read(appId)) ??
+				(await this.plugins.listPlugins(true))
+					.filter((plugin) => plugin.enabled)
+					.flatMap((plugin) => plugin.appDescriptors ?? [])
+					.find((candidate) => candidate.id === appId);
+			if (!app?.enabled) throw new Error(`Unknown or disabled app mention: ${path}`);
+		} else if (path.startsWith("plugin://")) {
+			const plugin = await this.plugins.readPlugin(path.slice("plugin://".length));
+			if (!plugin?.enabled) throw new Error(`Unknown or disabled plugin mention: ${path}`);
+		} else {
+			throw new Error(`Unsupported mention path: ${path}`);
+		}
+		return { type: "text", text: `@${name}` };
 	}
 
 	private async runOperation(
