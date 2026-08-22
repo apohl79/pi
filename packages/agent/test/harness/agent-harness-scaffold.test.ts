@@ -300,6 +300,22 @@ describe("AgentHarness v2 scaffold", () => {
 		await reopened.harness.close();
 	});
 
+	it("persists steering and follow-up queue modes across harness recreation", async () => {
+		const session = createSession("queue-modes");
+		const harness = await createHarness(session);
+		await harness.setSteeringMode("all");
+		await harness.setFollowUpMode("one-at-a-time");
+		await harness.close();
+		const reopened = await AgentHarness.create({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+		});
+		expect(await reopened.harness.getSteeringMode()).toBe("all");
+		expect(await reopened.harness.getFollowUpMode()).toBe("one-at-a-time");
+		await reopened.harness.close();
+	});
+
 	it("runs registered lifecycle hooks and emits operation events", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
