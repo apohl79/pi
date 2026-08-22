@@ -15,10 +15,13 @@ export type V2AppAuthStart = Readonly<{
 	authorizationUrl?: string;
 }>;
 
+export type V2AppAuthComplete = Readonly<{ appId: string; state: "authenticated" }>;
+
 export interface V2AppRegistry {
 	list(): Promise<readonly V2App[]>;
 	read(id: string): Promise<V2App | undefined>;
 	startAuth(id: string, payload: Record<string, unknown>): Promise<V2AppAuthStart>;
+	completeAuth(id: string, payload: Record<string, unknown>): Promise<V2AppAuthComplete>;
 }
 
 export type V2AppRegistryState = Readonly<{ apps: readonly V2App[] }>;
@@ -57,5 +60,16 @@ export class InMemoryV2AppRegistry implements V2AppRegistry {
 		const authorizationUrl = typeof payload.authorizationUrl === "string" ? payload.authorizationUrl : undefined;
 		this.apps.set(appId, { ...app, auth: "pending" });
 		return { appId, state: "pending", ...(authorizationUrl === undefined ? {} : { authorizationUrl }) };
+	}
+
+	async completeAuth(id: string, payload: Record<string, unknown>): Promise<V2AppAuthComplete> {
+		const appId = required(id, "app id");
+		const app = this.apps.get(appId);
+		if (!app) throw new Error(`Unknown app: ${appId}`);
+		if (app.auth !== "pending") throw new Error(`App authentication is not pending: ${appId}`);
+		if (typeof payload.code !== "string" && typeof payload.redirectUri !== "string")
+			throw new Error("app auth completion requires code or redirectUri");
+		this.apps.set(appId, { ...app, auth: "authenticated" });
+		return { appId, state: "authenticated" };
 	}
 }

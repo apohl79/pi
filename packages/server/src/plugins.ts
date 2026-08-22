@@ -27,6 +27,8 @@ export type V2PluginAppAuthStart = Readonly<{
 	authorizationUrl?: string;
 }>;
 
+export type V2PluginAppAuthComplete = Readonly<{ appId: string; state: "authenticated" }>;
+
 export type V2PluginHook = Readonly<{
 	id: string;
 	event: string;
@@ -92,6 +94,7 @@ export interface V2PluginRegistry {
 	uninstallPlugin(id: string): Promise<void>;
 	setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin>;
 	startAppAuth?(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthStart>;
+	completeAppAuth?(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthComplete>;
 }
 
 function requireName(value: string, field: string): string {
@@ -365,6 +368,25 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		}
 		throw new Error(`Unknown app: ${normalizedId}`);
 	}
+
+	async completeAppAuth(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthComplete> {
+		const normalizedId = requireName(id, "app id");
+		if (typeof payload.code !== "string" && typeof payload.redirectUri !== "string")
+			throw new Error("app auth completion requires code or redirectUri");
+		for (const [pluginId, plugin] of this.plugins) {
+			const app = (plugin.appDescriptors ?? []).find((candidate) => candidate.id === normalizedId);
+			if (!app) continue;
+			if (app.auth !== "pending") throw new Error(`App authentication is not pending: ${normalizedId}`);
+			this.plugins.set(pluginId, {
+				...plugin,
+				appDescriptors: (plugin.appDescriptors ?? []).map((candidate) =>
+					candidate.id === normalizedId ? { ...candidate, auth: "authenticated" as const } : candidate,
+				),
+			});
+			return { appId: normalizedId, state: "authenticated" };
+		}
+		throw new Error(`Unknown app: ${normalizedId}`);
+	}
 }
 
 /** JSON-backed registry with atomic replacement and restart recovery. */
@@ -465,6 +487,13 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 	async startAppAuth(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthStart> {
 		await this.ensureLoaded();
 		const value = await this.memory.startAppAuth(id, payload);
+		await this.persist();
+		return value;
+	}
+
+	async completeAppAuth(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthComplete> {
+		await this.ensureLoaded();
+		const value = await this.memory.completeAppAuth(id, payload);
 		await this.persist();
 		return value;
 	}
