@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	AgentHarness,
 	type AgentHarnessOptions,
@@ -69,6 +72,47 @@ describe("coding-agent Harness construction", () => {
 		expect(resolved).toMatchObject({ id: "luna", source: "text", mode: "append", text: "Use Luna style." });
 		expect(resolved?.contentHash).toMatch(/^[a-f0-9]{64}$/);
 		expect(await resolver.resolve({ provider: "openai", id: "gpt-5" })).toBeUndefined();
+	});
+
+	test("reports model profile identity when a file cannot be read", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-model-profile-file-"));
+		try {
+			const resolver = new ModelInstructionResolver(
+				[{ id: "missing-profile", provider: "openai", model: "gpt-5", mode: "append", file: "missing.md" }],
+				{ cwd: directory },
+			);
+			await expect(resolver.resolve({ provider: "openai", id: "gpt-5" })).rejects.toThrow(
+				"Model profile missing-profile file cannot be read",
+			);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("rejects model profile files outside trusted roots", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-model-profile-trust-"));
+		const outside = await mkdtemp(join(tmpdir(), "pi-model-profile-outside-"));
+		try {
+			await writeFile(join(outside, "profile.md"), "Do not cross the trust boundary.");
+			const resolver = new ModelInstructionResolver(
+				[
+					{
+						id: "untrusted-profile",
+						provider: "openai",
+						model: "gpt-5",
+						mode: "append",
+						file: join(outside, "profile.md"),
+					},
+				],
+				{ cwd: directory },
+			);
+			await expect(resolver.resolve({ provider: "openai", id: "gpt-5" })).rejects.toThrow(
+				"Model profile untrusted-profile file is outside trusted roots",
+			);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+			await rm(outside, { recursive: true, force: true });
+		}
 	});
 
 	test("adds a model profile without changing the selected tool contract", () => {
