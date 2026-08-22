@@ -279,6 +279,7 @@ describe("remote v2 interactive command boundary", () => {
 			"agent/interrupt",
 			"agent/message",
 			"turn/compact",
+			"session/read",
 			"turn/queue/cancel",
 			"turn/start",
 			"session/attach",

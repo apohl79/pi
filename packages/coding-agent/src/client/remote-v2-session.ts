@@ -363,6 +363,7 @@ export class RemoteV2Session {
 	async cancelQueued(entryId: string): Promise<RemoteV2PromptContent | undefined> {
 		this.#assertControl();
 		if (!entryId) throw new Error("Queue entry ID cannot be empty");
+		await this.refresh();
 		const queued = [...(this.#snapshot?.queues.steer ?? []), ...(this.#snapshot?.queues.followUp ?? [])].find(
 			(entry) => entry.id === entryId,
 		);
