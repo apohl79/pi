@@ -398,6 +398,8 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: { auth: { appId: "calendar", state: "pending", authorizationUrl: "https://auth.example.test/start" } },
 		});
+		const pending = await client.request({ command: "app/read", payload: { id: "calendar" } });
+		expect(pending).toMatchObject({ ok: true, result: { app: { id: "calendar", auth: "pending" } } });
 	});
 
 	test("acknowledges a turn before starting runtime execution", async () => {

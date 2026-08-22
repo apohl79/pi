@@ -394,6 +394,7 @@ export class PiServerV2 {
 			if (command.command === "app/list") return void (await this.listApps(state, id, command));
 			if (command.command === "app/read") return void (await this.readApp(state, id, command));
 			if (command.command === "app/auth/start") return void (await this.startAppAuth(state, id, command));
+			if (command.command === "app/auth/complete") return void (await this.completeAppAuth(state, id, command));
 			if (command.command === "plan/read") return void (await this.readPlan(state, id, command));
 			if (command.command === "plan/update") return void (await this.updatePlan(state, id, command));
 			if (command.command === "input/request/read") return void (await this.readInputRequest(state, id, command));
@@ -775,6 +776,17 @@ export class PiServerV2 {
 			command: command.command,
 			auth: await this.apps.startAuth(payload.id, payload),
 		});
+	}
+
+	private async completeAppAuth(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.id !== "string") throw new Error("app/auth/complete requires id");
+		if (typeof payload.nonce !== "string" || payload.nonce.length === 0 || payload.nonce.length > 128)
+			throw new Error("app/auth/complete requires bounded nonce");
+		if (payload.authenticated !== undefined && typeof payload.authenticated !== "boolean")
+			throw new Error("app/auth/complete authenticated must be boolean");
+		await this.apps.completeAuth(payload.id, payload);
+		await this.sendResponse(state, id, { command: command.command, appId: payload.id, state: "completed" });
 	}
 
 	private async snapshotForSession(sessionId: string, runtime: PiSessionRuntimeV2): Promise<SessionSnapshotV2> {
