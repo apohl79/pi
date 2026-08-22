@@ -154,6 +154,25 @@ export interface CompactionSettings {
 	keepRecentTokens: number;
 }
 
+/** Keep compaction arithmetic bounded and meaningful for every caller, including restored options. */
+export const MAX_COMPACTION_TOKENS = 10_000_000;
+
+export function validateCompactionSettings(settings: CompactionSettings): CompactionSettings {
+	if (typeof settings.enabled !== "boolean") throw new TypeError("Compaction enabled must be a boolean");
+	for (const [name, value] of [
+		["reserveTokens", settings.reserveTokens],
+		["keepRecentTokens", settings.keepRecentTokens],
+	] as const) {
+		if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0 || value > MAX_COMPACTION_TOKENS) {
+			throw new RangeError(`${name} must be an integer between 0 and ${MAX_COMPACTION_TOKENS}`);
+		}
+	}
+	if (settings.reserveTokens + settings.keepRecentTokens > MAX_COMPACTION_TOKENS) {
+		throw new RangeError(`reserveTokens + keepRecentTokens must not exceed ${MAX_COMPACTION_TOKENS}`);
+	}
+	return { ...settings };
+}
+
 /** Default compaction settings used by the harness. */
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	enabled: true,

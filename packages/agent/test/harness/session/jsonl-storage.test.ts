@@ -476,6 +476,21 @@ describe("JSONL v4 per-session storage", () => {
 		expect((await reopen(root, restored)).getEntry("valid")).resolves.toEqual(valid);
 	});
 
+	it("bounds custom instructions in operation intents", async () => {
+		const root = createTempDir();
+		const session = await createRepository(root).create({ id: "intent-bounds", cwd: root });
+		await expect(
+			session.appendRecord({
+				type: "operation_started",
+				id: "oversized",
+				lane: "main",
+				sourceLeafId: null,
+				intent: { kind: "compaction", resultEntryId: "result", customInstructions: "x".repeat(16_385) },
+			}),
+		).rejects.toMatchObject({ code: "invalid_payload" });
+		expect(await session.findRecords()).toEqual([]);
+	});
+
 	it("does not advance state or poison the write queue after an append failure", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });

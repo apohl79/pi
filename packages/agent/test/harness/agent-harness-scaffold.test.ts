@@ -143,6 +143,19 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(await harness.getFollowUpMode()).toBe("all");
 	});
 
+	it("rejects non-finite and unreasonably large compaction settings", async () => {
+		const harness = await createHarness(createSession("compaction-settings-bounds"));
+		await expect(
+			harness.setCompactionSettings({ enabled: true, reserveTokens: Number.POSITIVE_INFINITY, keepRecentTokens: 1 }),
+		).rejects.toThrow();
+		await expect(
+			harness.setCompactionSettings({ enabled: true, reserveTokens: 10_000_000, keepRecentTokens: 1 }),
+		).rejects.toThrow();
+		await expect(
+			harness.setCompactionSettings({ enabled: true, reserveTokens: 9_000_000, keepRecentTokens: 2_000_001 }),
+		).rejects.toThrow();
+	});
+
 	it("reconciles configuration when a durable append reports failure after commit", async () => {
 		const session = createSession("append-then-throws");
 		const harness = await createHarness(session);

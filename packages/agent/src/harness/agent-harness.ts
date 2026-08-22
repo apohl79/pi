@@ -12,9 +12,15 @@ import type {
 } from "@earendil-works/pi-ai";
 import { runAgentLoop } from "../agent-loop.ts";
 import type { AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../types.ts";
-import { type CompactionSettings, compact, prepareCompaction } from "./compaction/compaction.ts";
+import {
+	type CompactionSettings,
+	compact,
+	prepareCompaction,
+	validateCompactionSettings,
+} from "./compaction/compaction.ts";
 import { Result as ResultValue, TaggedError } from "./result.ts";
 import { buildSessionContext } from "./session/context.ts";
+import { MAX_DURABLE_COMPACTION_TEXT_LENGTH } from "./session/types.ts";
 import type {
 	AbortRequestedRecord,
 	BranchSummaryEntry,
@@ -95,8 +101,6 @@ function durableClone<T>(value: T): T {
 	if (encoded === undefined) throw new Error("Durable payload cannot be undefined");
 	return JSON.parse(encoded) as T;
 }
-
-const MAX_DURABLE_COMPACTION_TEXT_LENGTH = 16_384;
 
 function sanitizeErrorMessage(
 	value: unknown,
@@ -471,11 +475,11 @@ export class AgentHarness implements AgentLane {
 		};
 		this.streamOptions = { ...(options.streamOptions ?? {}) };
 		this.retryPolicy = options.retry ?? { enabled: false, maxRetries: 0, baseDelayMs: 1000 };
-		this.compactionSettings = options.compaction ?? {
+		this.compactionSettings = validateCompactionSettings(options.compaction ?? {
 			enabled: true,
 			reserveTokens: 16384,
 			keepRecentTokens: 20000,
-		};
+		});
 		this.steeringMode = options.steeringMode ?? "one-at-a-time";
 		this.followUpMode = options.followUpMode ?? "one-at-a-time";
 	}
@@ -795,6 +799,24 @@ export class AgentHarness implements AgentLane {
 	}
 	async compact(_options?: { customInstructions?: string }): Promise<CompactionResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		if (_options?.customInstructions !== undefined) {
+			if (typeof _options.customInstructions !== "string") {
+				return ResultValue.err(
+					new InvalidMessage({
+						lane: "main",
+						reason: "invalid_custom_instructions",
+						message: "Compaction customInstructions must be a string",
+					}),
+				);
+			}
+			if (_options.customInstructions.length > MAX_DURABLE_COMPACTION_TEXT_LENGTH) {
+				return ResultValue.err(new InvalidMessage({
+					lane: "main",
+					reason: "custom_instructions_too_large",
+					message: `Compaction customInstructions exceeds ${MAX_DURABLE_COMPACTION_TEXT_LENGTH} characters`,
+				}));
+			}
+		}
 		if (this.missingModels.length > 0 || this.missingTools.length > 0)
 			return ResultValue.err(
 				new MissingIdentities({
@@ -1158,7 +1180,7 @@ export class AgentHarness implements AgentLane {
 		return { ...this.compactionSettings };
 	}
 	async setCompactionSettings(settings: CompactionSettings): Promise<void> {
-		this.compactionSettings = { ...settings };
+		this.compactionSettings = validateCompactionSettings(settings);
 	}
 	async getSteeringMode(): Promise<QueueMode> {
 		return this.steeringMode;

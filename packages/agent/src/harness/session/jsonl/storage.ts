@@ -77,6 +77,12 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 	}
 
 	static async load(fs: JsonlSessionRepoFileSystem, path: string): Promise<JsonlSessionStorage> {
+		// Recovery may replace/truncate the file. Serialize the entire load, including
+		// torn-tail repair, with appends from every storage instance in this process.
+		return JsonlSessionStorage.withMutationLock(path, () => JsonlSessionStorage.loadUnlocked(fs, path));
+	}
+
+	private static async loadUnlocked(fs: JsonlSessionRepoFileSystem, path: string): Promise<JsonlSessionStorage> {
 		const content = fileResult(await fs.readTextFile(path), `Failed to read session ${path}`);
 		const physicalLines = content.split("\n");
 		if (physicalLines.at(-1) === "") physicalLines.pop();
@@ -301,6 +307,23 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		return result;
 	}
 
+	private static async withMutationLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+		const predecessor = JsonlSessionStorage.mutationTails.get(key) ?? Promise.resolve();
+		let release!: () => void;
+		const lock = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const chain = predecessor.then(() => lock);
+		JsonlSessionStorage.mutationTails.set(key, chain);
+		await predecessor;
+		try {
+			return await operation();
+		} finally {
+			release();
+			if (JsonlSessionStorage.mutationTails.get(key) === chain) JsonlSessionStorage.mutationTails.delete(key);
+		}
+	}
+
 	private async appendMutation(mutation: SessionMutation): Promise<void> {
 		const encoded = encodeMutation(mutation);
 		try {
@@ -319,7 +342,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 			// error. Refresh local state so callers can detect the committed record
 			// and safely retry idempotent operations.
 			try {
-				const fresh = await JsonlSessionStorage.load(this.fs, this.metadata.path);
+				const fresh = await JsonlSessionStorage.loadUnlocked(this.fs, this.metadata.path);
 				this.state = fresh.state;
 				// The append can be durable even when the backend reports a transport
 				// error. Keep the incremental refresh cursor in sync with the canonical
@@ -343,7 +366,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		// A replacement/truncation (fork publication or recovery) cannot be safely
 		// applied as a suffix; use the canonical loader in that uncommon case.
 		if (physicalLines.length < this.persistedLineCount) {
-			const fresh = await JsonlSessionStorage.load(this.fs, path);
+			const fresh = await JsonlSessionStorage.loadUnlocked(this.fs, path);
 			this.state = fresh.state;
 			this.persistedLineCount = fresh.persistedLineCount;
 			this.persistedSize = fresh.persistedSize;
@@ -353,7 +376,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		for (let index = this.persistedLineCount; index < physicalLines.length; index++) {
 			const mutationResult = parseMutation(physicalLines[index]!);
 			if (!mutationResult.ok) {
-				const fresh = await JsonlSessionStorage.load(this.fs, path);
+				const fresh = await JsonlSessionStorage.loadUnlocked(this.fs, path);
 				this.state = fresh.state;
 				this.persistedLineCount = fresh.persistedLineCount;
 				this.persistedSize = fresh.persistedSize;

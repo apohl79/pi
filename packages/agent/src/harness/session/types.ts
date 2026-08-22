@@ -5,6 +5,9 @@ import type { Session } from "./session.ts";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
+/** Maximum size of caller-supplied instructions retained in operation intent. */
+export const MAX_DURABLE_COMPACTION_TEXT_LENGTH = 16_384;
+
 export type SessionStopReason = Exclude<StopReason, "pending"> | "deferred";
 
 export interface IdGenerator {
