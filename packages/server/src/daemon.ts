@@ -207,11 +207,19 @@ export class ServerDaemon {
 				typeof value.daemonInstanceId !== "string" ||
 				(value.state !== "running" && value.state !== "clean") ||
 				!Number.isSafeInteger(value.timestamp)
-			)
+			) {
+				await this.recordDiagnostic("daemon_lifecycle_marker_invalid", { reason: "schema" }, "error", "error");
 				return undefined;
+			}
 			return value as DaemonLifecycleMarker;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+			await this.recordDiagnostic(
+				"daemon_lifecycle_marker_invalid",
+				{ reason: error instanceof SyntaxError ? "json" : "read" },
+				"error",
+				"error",
+			);
 			return undefined;
 		}
 	}
