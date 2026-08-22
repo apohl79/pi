@@ -206,6 +206,21 @@ describe("AgentHarness tools", () => {
 			expect(getOrThrow(await context.env.readTextFile("literal\\name.txt"))).toBe("created\n");
 		});
 
+		it("allows in-root names beginning with two dots", async () => {
+			const context = createContext();
+			await createApplyPatchTool().execute(
+				"patch-dot-prefix-filename",
+				{
+					patch: "*** Begin Patch\n*** Add File: ..foo.txt\n+created\n*** End Patch",
+				},
+				undefined,
+				undefined,
+				context,
+			);
+
+			expect(getOrThrow(await context.env.readTextFile("..foo.txt"))).toBe("created\n");
+		});
+
 		it("rejects traversal paths before mutation", async () => {
 			const context = createContext();
 			await expect(

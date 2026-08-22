@@ -87,7 +87,12 @@ async function openPinnedParent(root: string, target: string, createParents: boo
 	const rootPath = resolvePath(root, ".");
 	const targetPath = resolvePath(root, target);
 	const relativeTarget = relative(rootPath, targetPath);
-	if (!relativeTarget || relativeTarget.startsWith("..") || relativeTarget.includes("\0"))
+	if (
+		!relativeTarget ||
+		relativeTarget === ".." ||
+		relativeTarget.startsWith(`..${sep}`) ||
+		relativeTarget.includes("\0")
+	)
 		throw new FileError("permission_denied", `Path is outside execution root: ${targetPath}`, targetPath);
 	const components = relativeTarget.split(sep).filter(Boolean);
 	components.pop();
