@@ -209,6 +209,10 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 		return Promise.resolve(this.snapshot(this.get(processId)));
 	}
 
+	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
+		return Promise.resolve(this.snapshot(this.get(processId)));
+	}
+
 	async read(processId: string, cursor: number): Promise<V2ProcessOutput> {
 		const process = this.get(processId);
 		return process.state === "running" ? new Promise((resolve) => this.waiters.set(processId, [...(this.waiters.get(processId) ?? []), resolve])) : Promise.resolve(snapshot(process));
@@ -435,6 +439,19 @@ function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLau
 	});
 }
 
+function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
+	if (request.pty) {
+		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
+		return ptyLauncher.spawn(request);
+	}
+	return spawn(request.command, {
+		shell: true,
+		cwd: request.cwd,
+		env: { ...process.env, ...request.env },
+		stdio: ["pipe", "pipe", "pipe"],
+	});
+}
+
 export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 	private readonly maxOutputBytes: number;
 	private readonly ptyLauncher: V2PtyLauncher | undefined;
@@ -489,6 +506,10 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		});
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		return outputView(process, cursor);
+	}
+
+	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
+		return Promise.resolve(this.snapshot(this.get(processId)));
 	}
 
 	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
