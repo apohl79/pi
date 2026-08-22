@@ -1,4 +1,10 @@
-import { createModels, fauxAssistantMessage, fauxProvider, type Usage } from "@earendil-works/pi-ai";
+import {
+	createModels,
+	fauxAssistantMessage,
+	fauxProvider,
+	type SimpleStreamOptions,
+	type Usage,
+} from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
 import { describe, expect, it } from "vitest";
 import { AgentHarness, HarnessClosed, type HarnessTool, type Resources } from "../../src/harness/agent-harness.ts";
@@ -613,6 +619,33 @@ describe("AgentHarness v2 scaffold", () => {
 					message.content.some((part) => part.type === "text" && part.text === "hook context"),
 			),
 		).toBe(true);
+		await harness.close();
+	});
+
+	it("applies before_request stream option patches before provider dispatch", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "before-request-faux",
+			models: [{ id: "before-request-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		let metadata: SimpleStreamOptions["metadata"];
+		faux.setResponses([
+			(_context, options) => {
+				metadata = options?.metadata;
+				return fauxAssistantMessage("patched");
+			},
+		]);
+		const { harness } = await AgentHarness.create({
+			session: createSession("before-request"),
+			models,
+			model: faux.getModel(),
+		});
+		harness.hooks.on("before_request", () => ({ streamOptions: { metadata: { hook: "patched" } } }));
+
+		await harness.prompt("hello");
+
+		expect(metadata).toEqual({ hook: "patched" });
 		await harness.close();
 	});
 

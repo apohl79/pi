@@ -732,6 +732,7 @@ export class AgentHarness implements AgentLane {
 					: (this.systemPromptSource ?? "");
 			const activeTools = this.tools.filter((tool) => this.activeToolNames.includes(tool.name));
 			let assistantAttempt = 0;
+			let requestOptionsPatch: Partial<SimpleStreamOptions> = {};
 			const newMessages = await runAgentLoop(
 				prompts,
 				{ systemPrompt, messages: persisted.messages, tools: activeTools },
@@ -756,6 +757,22 @@ export class AgentHarness implements AgentLane {
 					reasoning: this.thinkingLevel === "off" ? undefined : this.thinkingLevel,
 					beforeAssistantResponse: async () => {
 						assistantAttempt += 1;
+						requestOptionsPatch = {};
+						const result = await this.runLifecycleHook("before_request", {
+							operationId: runId,
+							model: this.model,
+							step: "assistant",
+							attempt: assistantAttempt,
+							streamOptions: this.streamOptions,
+						});
+						if (
+							result !== null &&
+							typeof result === "object" &&
+							"streamOptions" in result &&
+							result.streamOptions !== null &&
+							typeof result.streamOptions === "object"
+						)
+							requestOptionsPatch = result.streamOptions as Partial<SimpleStreamOptions>;
 						await this.park({ kind: "stream_assistant", step: "assistant", attempt: assistantAttempt });
 					},
 					beforeToolCall: async ({ toolCall }) => {
@@ -772,7 +789,8 @@ export class AgentHarness implements AgentLane {
 				},
 				async () => {},
 				controller.signal,
-				this.models.streamSimple.bind(this.models),
+				(model, context, options) =>
+					this.models.streamSimple(model, context, { ...options, ...requestOptionsPatch }),
 			);
 			let finalEntryId: string | undefined;
 			const transcriptMessages = newMessages.map(sanitizeTranscriptMessage);
