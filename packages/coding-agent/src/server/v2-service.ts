@@ -39,6 +39,9 @@ function redactText(value: string): string {
 	return value
 		.replace(/\bBearer\s+[^\s"'`,;}\]]+/gi, "Bearer [redacted]")
 		.replace(/\b(?:sk|rk|pk)-[A-Za-z0-9][A-Za-z0-9_-]{8,}\b/gi, "[redacted]")
+		.replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, "[redacted]")
+		.replace(/\bgh[pour]_[A-Za-z0-9]{20,}\b/g, "[redacted]")
+		.replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, "[redacted]")
 		.replace(/([\"']?(?:api[_ -]?key|access[_ -]?token|token|secret|password|authorization|credential)[\"']?)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)/gi, "$1=[redacted]")
 		.replace(/[\u0000-\u001f\u007f]/g, " ")
 		.replace(/\s+/g, " ")
@@ -146,7 +149,10 @@ function transcriptItem(entry: Extract<Entry, { type: "message" }>): SessionSnap
 			role: "assistant" as const,
 			content: contentParts(message) as never,
 			model: { provider, id: model },
-			...(message.responseModel === undefined ? {} : { responseModel: boundedString(message.responseModel) }),
+			...(message.responseModel === undefined ? {} : (() => {
+				const responseModel = boundedRequired(message.responseModel, 256);
+				return responseModel ? { responseModel } : {};
+			})()),
 			...(usage(message.usage) === undefined ? {} : { usage: usage(message.usage) }),
 			timestamp,
 		};
@@ -312,11 +318,19 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const queuedSteer = queued
 			.filter((record) => record.type === "queue_enqueued" && record.queue === "steer")
 			.slice(-MAX_V2_ARRAY_ITEMS)
-			.map((record) => ({ id: boundedString(record.target.id), content: queueContent(targetMessage(record.target)).slice(0, MAX_V2_ARRAY_ITEMS) as never, createdAt: finiteTimestamp(record.timestamp) }));
+			.map((record) => {
+				const id = boundedRequired(record.target.id, 256);
+				return id ? { id, content: queueContent(targetMessage(record.target)).slice(0, MAX_V2_ARRAY_ITEMS) as never, createdAt: finiteTimestamp(record.timestamp) } : undefined;
+			})
+			.filter((record): record is { id: string; content: never; createdAt: number } => record !== undefined);
 		const queuedFollowUp = queued
 			.filter((record) => record.type === "queue_enqueued" && record.queue === "followUp")
 			.slice(-MAX_V2_ARRAY_ITEMS)
-			.map((record) => ({ id: boundedString(record.target.id), content: queueContent(targetMessage(record.target)).slice(0, MAX_V2_ARRAY_ITEMS) as never, createdAt: finiteTimestamp(record.timestamp) }));
+			.map((record) => {
+				const id = boundedRequired(record.target.id, 256);
+				return id ? { id, content: queueContent(targetMessage(record.target)).slice(0, MAX_V2_ARRAY_ITEMS) as never, createdAt: finiteTimestamp(record.timestamp) } : undefined;
+			})
+			.filter((record): record is { id: string; content: never; createdAt: number } => record !== undefined);
 		const active = this.activeOperation(laneOperation);
 		const phase: SessionPhaseV2 = laneOperation === undefined
 			? active?.state === "suspended"
@@ -447,6 +461,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 
 	private async runUnlocked(operationId: string, command: CommandV2): Promise<void> {
 		if (this.disposed) throw new Error("Session runtime is disposed");
+		try {
 		await this.withMutation(async () => {
 			this.restoreOperationState(await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }));
 			const operation = this.operations.get(operationId);
@@ -456,7 +471,6 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.freshOperationId = undefined;
 			await this.persistOperation({ ...operation, state: "running", revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
 		});
-		try {
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
@@ -546,7 +560,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		} catch (error) {
 			await this.withMutation(async () => {
 				const operation = this.operations.get(operationId);
-				if (operation && operation.state === "running")
+				if (operation && (operation.state === "accepted" || operation.state === "running"))
 					await this.persistOperation({ ...operation, state: "failed", revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
 				this.operationId = undefined;
 				this.freshOperationId = undefined;
