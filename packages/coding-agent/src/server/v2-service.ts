@@ -1,13 +1,115 @@
-import type { AgentHarness, GoalManager } from "@earendil-works/pi-agent-core";
-import type { Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
+import type { AgentHarness, AgentMessage, Entry, GoalManager } from "@earendil-works/pi-agent-core";
+import type { Model, Models, ThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import type {
 	CommandNameV2,
 	CommandV2,
+	JsonValue,
 	ModelMetadata,
 	OperationAccepted,
 	SessionMetadataV2,
 	SessionSnapshotV2,
+	SessionPhaseV2,
 } from "@earendil-works/pi-protocol";
+
+const OPERATION_ENTRY = "v2_operation";
+type PersistedOperation = {
+	operationId: string;
+	state: "accepted" | "running" | "complete" | "failed" | "aborted" | "suspended";
+	kind: string;
+	acceptedSeq: number;
+	revision: number;
+	eventSeq: number;
+};
+
+function finiteTimestamp(value: unknown, fallback = 0): number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback;
+}
+
+function jsonValue(value: unknown): JsonValue {
+	if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+	if (typeof value === "number") return Number.isFinite(value) ? value : null;
+	if (Array.isArray(value)) return value.map((item) => jsonValue(item));
+	if (typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, jsonValue(item)]));
+	return null;
+}
+
+function usage(value: Usage | undefined): {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+	cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+} | undefined {
+	if (!value) return undefined;
+	return {
+		input: Math.max(0, value.input),
+		output: Math.max(0, value.output),
+		cacheRead: Math.max(0, value.cacheRead),
+		cacheWrite: Math.max(0, value.cacheWrite),
+		totalTokens: Math.max(0, value.totalTokens),
+		cost: { ...value.cost },
+	};
+}
+
+function contentParts(message: AgentMessage): Array<Record<string, unknown>> {
+	if (typeof message !== "object" || message === null || !Array.isArray((message as { content?: unknown }).content)) {
+		return [{ type: "text", text: messageText(message) }];
+	}
+	return (message as { content: unknown[] }).content.flatMap((part) => {
+		if (typeof part !== "object" || part === null) return [];
+		const candidate = part as Record<string, unknown>;
+		if (candidate.type === "text" && typeof candidate.text === "string") return [{ type: "text", text: candidate.text }];
+		if (candidate.type === "thinking" && typeof candidate.thinking === "string") return [{ type: "thinking", thinking: candidate.thinking }];
+		if (candidate.type === "image" && typeof candidate.data === "string" && typeof candidate.mimeType === "string")
+			return [{ type: "image", data: candidate.data, mimeType: candidate.mimeType }];
+		if (candidate.type === "toolCall" && typeof candidate.id === "string" && typeof candidate.name === "string")
+			return [{ type: "toolCall", toolCallId: candidate.id, toolName: candidate.name, input: jsonValue(candidate.arguments) }];
+		return [];
+	});
+}
+
+function queueContent(message: AgentMessage): Array<Record<string, unknown>> {
+	const parts = contentParts(message).filter((part) => part.type === "text" || part.type === "image");
+	return parts.length > 0 ? parts : [{ type: "text", text: messageText(message) }];
+}
+
+function transcriptItem(entry: Extract<Entry, { type: "message" }>): SessionSnapshotV2["transcript"][number] | undefined {
+	const message = entry.message;
+	const timestamp = finiteTimestamp(entry.timestamp);
+	if (message.role === "user") return { id: entry.id, role: "user", content: contentParts(message) as never, timestamp };
+	if (message.role === "assistant") {
+		const base = {
+			id: entry.id,
+			role: "assistant" as const,
+			content: contentParts(message) as never,
+			model: { provider: message.provider, id: message.model },
+			...(message.responseModel === undefined ? {} : { responseModel: message.responseModel }),
+			...(usage(message.usage) === undefined ? {} : { usage: usage(message.usage) }),
+			timestamp,
+		};
+		if (message.stopReason === "aborted") return { ...base, status: "aborted", stopReason: "aborted", ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}) };
+		if (message.stopReason === "error" || message.stopReason === "deferred") return { ...base, status: "error", stopReason: "error", ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}) };
+		if (message.stopReason === "pending") return { ...base, status: "streaming" };
+		return { ...base, status: "complete", stopReason: message.stopReason === "toolUse" ? "toolUse" : message.stopReason === "length" ? "length" : "stop" };
+	}
+	if (message.role === "toolResult") {
+		return {
+			id: entry.id,
+			role: "tool",
+			toolCallId: message.toolCallId,
+			toolName: message.toolName,
+			input: null,
+			content: contentParts(message) as never,
+			...(message.details === undefined ? {} : { details: jsonValue(message.details) }),
+			...(usage(message.usage) === undefined ? {} : { usage: usage(message.usage) }),
+			timestamp,
+			status: message.isError ? "error" : "complete",
+			isError: message.isError,
+		};
+	}
+	return undefined;
+}
 
 export interface CodingAgentV2SessionDefinition {
 	metadata: SessionMetadataV2;
@@ -80,8 +182,8 @@ function messageText(message: unknown): string {
 }
 
 class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
-	private revision = 1;
-	private eventSeq = 1;
+	private revision = 0;
+	private eventSeq = 0;
 	private readonly definition: CodingAgentV2SessionDefinition;
 	private readonly models: Models;
 	private model: Model<string>;
@@ -90,6 +192,9 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	private sessionName: string | undefined;
 	private nameSource: "explicit" | "generated" | "derived" | undefined;
 	private disposed = false;
+	private readonly operations = new Map<string, PersistedOperation>();
+	private operationId?: string;
+	private mutationTail: Promise<void> = Promise.resolve();
 	private readonly onDispose?: () => void;
 
 	constructor(definition: CodingAgentV2SessionDefinition, models: Models, model: Model<string>, onDispose?: () => void) {
@@ -103,18 +208,26 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 
 	async snapshot(): Promise<SessionSnapshotV2> {
 		if (this.disposed) throw new Error("Session runtime is disposed");
-		const [watch, thinkingLevel, persistedName] = await Promise.all([
-			this.definition.harness.watch(),
+		const [thinkingLevel, persistedName, entries, queueRecords] = await Promise.all([
 			this.definition.harness.getThinkingLevel(),
 			this.definition.harness.session.getName(),
+			this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }),
+			this.definition.harness.session.findRecords({ order: "oldestFirst" }),
 		]);
-		const lane = watch.snapshot;
+		this.restoreOperationState(entries);
+		const open = await this.definition.harness.session.findOpenOperations("main", { limit: 1 });
+		const laneOperation = open[0];
+		const transcript = entries
+			.filter((entry): entry is Extract<Entry, { type: "message" }> => entry.type === "message")
+			.map((entry) => transcriptItem(entry))
+			.filter((item): item is SessionSnapshotV2["transcript"][number] => item !== undefined);
+		const cancelled = new Set(queueRecords.filter((record) => record.type === "queue_cancelled").map((record) => record.entryId));
+		const queued = queueRecords.filter((record) => record.type === "queue_enqueued" && !cancelled.has(record.target.id));
+		const queuedSteer = queued.filter((record) => record.type === "queue_enqueued" && record.queue === "steer").map((record) => ({ id: record.target.id, content: queueContent(record.target.message as AgentMessage) as never, createdAt: finiteTimestamp(record.timestamp) }));
+		const queuedFollowUp = queued.filter((record) => record.type === "queue_enqueued" && record.queue === "followUp").map((record) => ({ id: record.target.id, content: queueContent(record.target.message as AgentMessage) as never, createdAt: finiteTimestamp(record.timestamp) }));
+		const active = this.activeOperation(laneOperation);
+		const phase: SessionPhaseV2 = laneOperation === undefined ? (active?.state === "suspended" ? "suspended" : "idle") : laneOperation.intent.kind === "compaction" ? "compaction" : laneOperation.intent.kind === "run" ? "turn" : "suspended";
 		const goal = await this.definition.goals?.read();
-		const transcript = lane.transcript
-			.filter((entry) => entry.type === "message")
-			.map((entry) => entry.message)
-			.filter((message) => message.role === "user" || message.role === "assistant" || message.role === "toolResult")
-			.map((message, index) => ({ id: `${this.definition.metadata.id}-${index + 1}`, ...message })) as SessionSnapshotV2["transcript"];
 		const sessionName = persistedName ?? this.sessionName;
 		return {
 			id: this.definition.metadata.id,
@@ -124,14 +237,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			nameRevision: this.nameRevision,
 			revision: this.revision,
 			eventSeq: this.eventSeq,
-			phase: "idle",
+			phase,
+			...(active === undefined ? {} : { activeOperation: active }),
 			model: { provider: this.model.provider, id: this.model.id },
 			thinkingLevel,
 			transcript,
-			queues: {
-				steer: lane.queues.steer.map((item) => ({ id: item.entryId, content: [{ type: "text", text: messageText(item.message) }], createdAt: 0 })),
-				followUp: lane.queues.followUp.map((item) => ({ id: item.entryId, content: [{ type: "text", text: messageText(item.message) }], createdAt: 0 })),
-			},
+			queues: { steer: queuedSteer, followUp: queuedFollowUp },
 			...(goal === undefined ? {} : { goal }),
 			agents: [],
 			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, pricingState: "unknown" },
@@ -152,14 +263,60 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		};
 	}
 
-	async accept(_operationId: string): Promise<OperationAccepted> {
-		this.revision += 1;
-		this.eventSeq += 1;
-		return { operationId: _operationId, sessionRevision: this.revision, eventSeq: this.eventSeq };
+	private restoreOperationState(entries: readonly Entry[]): void {
+		for (const entry of entries) {
+			this.revision = Math.max(this.revision, finiteTimestamp(entry.seq));
+			if (entry.type !== "custom" || entry.customType !== OPERATION_ENTRY || typeof entry.data !== "object" || entry.data === null) continue;
+			const data = entry.data as Partial<PersistedOperation>;
+			if (typeof data.operationId !== "string" || typeof data.state !== "string" || typeof data.revision !== "number" || typeof data.eventSeq !== "number" || typeof data.acceptedSeq !== "number") continue;
+			this.operations.set(data.operationId, data as PersistedOperation);
+			this.revision = Math.max(this.revision, data.revision);
+			this.eventSeq = Math.max(this.eventSeq, data.eventSeq);
+		}
 	}
 
-	async run(_operationId: string, command: CommandV2): Promise<void> {
+	private async persistOperation(operation: PersistedOperation): Promise<void> {
+		await this.definition.harness.session.appendCustomEntry(OPERATION_ENTRY, operation);
+		this.operations.set(operation.operationId, operation);
+		this.revision = Math.max(this.revision, operation.revision);
+		this.eventSeq = Math.max(this.eventSeq, operation.eventSeq);
+	}
+
+	private activeOperation(laneOperation: { id: string; intent: { kind: string } } | undefined): SessionSnapshotV2["activeOperation"] {
+		const persisted = this.operationId ? this.operations.get(this.operationId) : [...this.operations.values()].find((operation) => operation.state === "accepted" || operation.state === "running" || operation.state === "suspended");
+		if (!persisted) return undefined;
+		const state = laneOperation?.intent.kind === "run" ? "running" : laneOperation ? "running" : persisted.state === "accepted" ? "accepted" : persisted.state;
+		return { operationId: persisted.operationId, kind: persisted.kind, state: state === "suspended" ? "suspended" : state === "accepted" ? "accepted" : "running", acceptedSeq: persisted.acceptedSeq };
+	}
+
+	private withMutation<T>(operation: () => Promise<T>): Promise<T> {
+		const previous = this.mutationTail;
+		let resolveTail!: () => void;
+		this.mutationTail = new Promise<void>((resolve) => (resolveTail = resolve));
+		return previous.then(operation).finally(resolveTail);
+	}
+
+	async accept(operationId: string): Promise<OperationAccepted> {
+		return this.withMutation(async () => {
+			this.restoreOperationState(await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }));
+			if (this.operations.has(operationId)) throw new Error(`Operation ${operationId} was already accepted`);
+			const accepted = { operationId, sessionRevision: this.revision + 1, eventSeq: this.eventSeq + 1 };
+			await this.persistOperation({ operationId, state: "accepted", kind: "turn", acceptedSeq: accepted.eventSeq, revision: accepted.sessionRevision, eventSeq: accepted.eventSeq });
+			return accepted;
+		});
+	}
+
+	async run(operationId: string, command: CommandV2): Promise<void> {
 		if (this.disposed) throw new Error("Session runtime is disposed");
+		await this.withMutation(async () => {
+			this.restoreOperationState(await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }));
+			const operation = this.operations.get(operationId);
+			if (!operation) throw new Error(`Operation ${operationId} was not accepted`);
+			if (operation.state !== "accepted") throw new Error(`Operation ${operationId} was already run`);
+			this.operationId = operationId;
+			await this.persistOperation({ ...operation, state: "running", revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
+		});
+		try {
 		const text = commandText(command);
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
@@ -237,8 +394,22 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.autoName = payload.enabled;
 		}
 		void this.autoName;
-		this.revision += 1;
-		this.eventSeq += 1;
+		await this.withMutation(async () => {
+			const operation = this.operations.get(operationId);
+			if (!operation) return;
+			const state = runCommand === "turn/abort" ? "aborted" : "complete";
+			await this.persistOperation({ ...operation, state, revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
+			this.operationId = undefined;
+		});
+		} catch (error) {
+			await this.withMutation(async () => {
+				const operation = this.operations.get(operationId);
+				if (operation && operation.state === "running")
+					await this.persistOperation({ ...operation, state: "failed", revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
+				this.operationId = undefined;
+			});
+			throw error;
+		}
 	}
 
 	async dispose(): Promise<void> {
