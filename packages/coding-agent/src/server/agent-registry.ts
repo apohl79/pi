@@ -114,7 +114,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		const agent = this.get(agentId);
 		if (agent.state === "complete" || agent.state === "interrupted" || agent.state === "failed") {
 			agent.state = "running";
-			void this.run(agent, "turn/followUp", message);
+			void this.run(agent, "turn/start", message);
 		} else agent.followUps.push(message);
 		return this.snapshot(agent);
 	}

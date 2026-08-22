@@ -14,7 +14,7 @@ afterEach(async () => {
 	await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-async function createAgentRuntime(directory: string, childCompletes = true) {
+async function createAgentRuntime(directory: string, childCompletes = true, childPrompts?: string[]) {
 	const models = createModels();
 	const parent = fauxProvider({
 		provider: "coding-agent-daemon-parent-faux",
@@ -27,7 +27,20 @@ async function createAgentRuntime(directory: string, childCompletes = true) {
 	models.setProvider(parent.provider);
 	models.setProvider(child.provider);
 	parent.setResponses([fauxAssistantMessage("inherited child completed")]);
-	child.setResponses(childCompletes ? [fauxAssistantMessage("child completed")] : [() => new Promise(() => {})]);
+	child.setResponses(
+		childCompletes
+			? [
+					(context) => {
+						childPrompts?.push(JSON.stringify(context.messages));
+						return fauxAssistantMessage("child completed");
+					},
+					(context) => {
+						childPrompts?.push(JSON.stringify(context.messages));
+						return fauxAssistantMessage("child follow-up completed");
+					},
+				]
+			: [() => new Promise(() => {})],
+	);
 	return createConfiguredCodingAgentDaemonRuntime({
 		agentDir: directory,
 		cwd: directory,
@@ -159,6 +172,41 @@ describe("coding-agent daemon child agents", () => {
 			expect((await session.interruptAgent(child.id)).state).toBe("interrupted");
 		} finally {
 			await session?.dispose();
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("delivers a server message into the child follow-up transcript", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-agents-message-"));
+		directories.push(directory);
+		const childPrompts: string[] = [];
+		const runtime = await createAgentRuntime(directory, true, childPrompts);
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			const sessionId = (created as unknown as { result: { session: { id: string } } }).result.session.id;
+			await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			const spawned = await client.request({
+				command: "agent/spawn",
+				sessionId,
+				payload: {
+					taskName: "messaged",
+					taskMessage: "complete the first task",
+					model: { provider: "coding-agent-daemon-child-faux", id: "child-model" },
+				},
+			});
+			const agentId = (spawned as unknown as { result: { agent: { id: string } } }).result.agent.id;
+			await client.request({ command: "agent/wait", payload: { agentId } });
+			await client.request({ command: "agent/message", payload: { agentId, message: "urgent context" } });
+			await client.request({ command: "agent/followUp", payload: { agentId, message: "continue the task" } });
+			await client.request({ command: "agent/wait", payload: { agentId } });
+			expect(childPrompts.some((prompt) => prompt.includes("urgent context"))).toBe(true);
+		} finally {
 			client.dispose();
 			await runtime.close();
 		}
