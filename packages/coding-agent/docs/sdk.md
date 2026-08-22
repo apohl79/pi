@@ -55,8 +55,6 @@ import {
 const handle = await createServerAgentSession({
   agentDir: "/tmp/pi-agent",
   cwd: process.cwd(),
-  models,
-  model,
 });
 
 const operationId = await handle.session.submit("Inspect the repository");
