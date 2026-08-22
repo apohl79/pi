@@ -150,6 +150,7 @@ export class PiServerV2 {
 	private readonly agentSessions = new Map<string, string>();
 	private readonly inputSessions = new Map<string, string>();
 	private readonly disposedRuntimes = new WeakSet<PiSessionRuntimeV2>();
+	private readonly activeOperations = new Map<PiSessionRuntimeV2, number>();
 	private startPromise?: Promise<this>;
 	private closePromise?: Promise<void>;
 	private closing = false;
@@ -697,7 +698,7 @@ export class PiServerV2 {
 		this.requireAttached(state, command.sessionId);
 		const runtime = state.sessions.get(command.sessionId);
 		state.sessions.delete(command.sessionId);
-		if (runtime && !this.hasRuntimeReference(runtime)) await this.disposeRuntime(runtime);
+		if (runtime && !this.hasRuntimeReference(runtime) && !this.hasActiveOperation(runtime)) await this.disposeRuntime(runtime);
 		await this.sendResponse(state, id, { command: command.command, sessionId: command.sessionId });
 	}
 
@@ -723,6 +724,7 @@ export class PiServerV2 {
 		const runtime = this.requireAttached(state, command.sessionId);
 		const operationId = randomUUID();
 		const accepted = await runtime.accept(operationId);
+		this.retainOperation(runtime);
 		this.operations.set(operationId, {
 			operationId,
 			sessionId: command.sessionId,
@@ -766,6 +768,9 @@ export class PiServerV2 {
 			await this.finalizeOperation(runtime, sessionId, operationId, "complete");
 		} catch (error) {
 			await this.finalizeOperation(runtime, sessionId, operationId, "failed", safeOperationError(error));
+		} finally {
+			this.releaseOperation(runtime);
+			if (!this.hasRuntimeReference(runtime) && !this.hasActiveOperation(runtime)) await this.disposeRuntime(runtime);
 		}
 	}
 
@@ -896,6 +901,20 @@ export class PiServerV2 {
 		return Array.from(this.connections).some((connection) =>
 			Array.from(connection.sessions.values()).some((candidate) => candidate === runtime),
 		);
+	}
+
+	private retainOperation(runtime: PiSessionRuntimeV2): void {
+		this.activeOperations.set(runtime, (this.activeOperations.get(runtime) ?? 0) + 1);
+	}
+
+	private releaseOperation(runtime: PiSessionRuntimeV2): void {
+		const count = this.activeOperations.get(runtime);
+		if (count === undefined || count <= 1) this.activeOperations.delete(runtime);
+		else this.activeOperations.set(runtime, count - 1);
+	}
+
+	private hasActiveOperation(runtime: PiSessionRuntimeV2): boolean {
+		return (this.activeOperations.get(runtime) ?? 0) > 0;
 	}
 
 	private async disposeRuntime(runtime: PiSessionRuntimeV2): Promise<void> {
