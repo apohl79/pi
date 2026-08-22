@@ -40,24 +40,42 @@ const DEFAULT_MAX_EXTRACT_BYTES = 32 * 1024;
 
 function isPrivateIpv4(hostname: string): boolean {
 	const parts = hostname.split(".").map(Number);
+	if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
 	return (
-		parts.length === 4 &&
-		(parts[0] === 10 ||
-			parts[0] === 127 ||
-			(parts[0] === 192 && parts[1] === 168) ||
-			(parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31))
+		parts[0] === 0 ||
+		parts[0] === 10 ||
+		parts[0] === 127 ||
+		(parts[0] === 169 && parts[1] === 254) ||
+		(parts[0] === 192 && parts[1] === 168) ||
+		(parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+		(parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) ||
+		(parts[0] === 198 && parts[1] >= 18 && parts[1] <= 19)
 	);
 }
 
 function isPrivateHost(hostname: string): boolean {
-	const host = hostname.toLowerCase().replace(/\.$/, "");
+	const host = hostname
+		.toLowerCase()
+		.replace(/^\[|\]$/g, "")
+		.replace(/\.$/, "");
+	const mappedMatch = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/u.exec(host);
+	const mappedIpv4 = host.startsWith("::ffff:")
+		? mappedMatch === null
+			? host.slice("::ffff:".length)
+			: `${Number.parseInt(mappedMatch[1]!, 16) >> 8}.${Number.parseInt(mappedMatch[1]!, 16) & 255}.${Number.parseInt(mappedMatch[2]!, 16) >> 8}.${Number.parseInt(mappedMatch[2]!, 16) & 255}`
+		: undefined;
 	return (
 		host === "localhost" ||
 		host.endsWith(".localhost") ||
 		host.endsWith(".internal") ||
 		isPrivateIpv4(host) ||
+		(mappedIpv4 !== undefined && isPrivateIpv4(mappedIpv4)) ||
 		(isIP(host) === 6 &&
-			(host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:")))
+			(host === "::" ||
+				host === "::1" ||
+				host.startsWith("fc") ||
+				host.startsWith("fd") ||
+				/^(?:fe[89ab]):/u.test(host)))
 	);
 }
 
