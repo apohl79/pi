@@ -46,6 +46,7 @@ export async function createCodingAgentDaemonRuntime(
 ): Promise<CodingAgentDaemonRuntime> {
 	const service = await createCodingAgentV2SqliteService(options);
 	const agents = options.agents ?? (service.createSession ? createCodingAgentV2AgentRegistry(service) : undefined);
+	const ownsAgents = options.agents === undefined && agents !== undefined && "dispose" in agents;
 	const daemon = new ServerDaemon({
 		service,
 		socketPath: options.socketPath,
@@ -78,7 +79,21 @@ export async function createCodingAgentDaemonRuntime(
 		cli,
 		close: async () => {
 			cli.close();
-			await daemon.stop();
+			const errors: unknown[] = [];
+			try {
+				await daemon.stop();
+			} catch (error) {
+				errors.push(error);
+			}
+			if (ownsAgents) {
+				try {
+					await (agents as { dispose(): Promise<void> }).dispose();
+				} catch (error) {
+					errors.push(error);
+				}
+			}
+			if (errors.length === 1) throw errors[0];
+			if (errors.length > 1) throw new AggregateError(errors, "Failed to close coding-agent daemon runtime");
 		},
 	};
 }

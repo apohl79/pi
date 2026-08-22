@@ -5,6 +5,7 @@ import type { CodingAgentV2Runtime, CodingAgentV2Service } from "../../src/serve
 
 class FixtureRuntime implements CodingAgentV2Runtime {
 	readonly commands: CommandV2[] = [];
+	disposeCount = 0;
 	async snapshot(): Promise<SessionSnapshotV2> {
 		return {} as SessionSnapshotV2;
 	}
@@ -15,7 +16,9 @@ class FixtureRuntime implements CodingAgentV2Runtime {
 		this.commands.push(command);
 	}
 	async abort(_operationId: string): Promise<void> {}
-	async dispose(): Promise<void> {}
+	async dispose(): Promise<void> {
+		this.disposeCount += 1;
+	}
 }
 
 function fixture() {
@@ -77,5 +80,19 @@ describe("CodingAgentV2AgentRegistry", () => {
 			model: { provider: "faux", id: "model" },
 		});
 		await expect(registry.message(agent.id, "x".repeat(64 * 1024 + 1))).rejects.toThrow("maximum length");
+	});
+
+	test("disposes child runtimes exactly once", async () => {
+		const { registry, runtime } = fixture();
+		await registry.spawn({
+			sessionId: "parent",
+			parentPath: "root",
+			taskName: "worker",
+			taskMessage: "work",
+			model: { provider: "faux", id: "model" },
+		});
+		await registry.dispose();
+		await registry.dispose();
+		expect(runtime.disposeCount).toBe(1);
 	});
 });

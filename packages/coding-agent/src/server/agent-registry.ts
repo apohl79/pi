@@ -40,6 +40,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private readonly agents = new Map<string, ChildAgent>();
 	private readonly service: CodingAgentV2Service;
 	private spawnTail: Promise<void> = Promise.resolve();
+	private disposePromise?: Promise<void>;
 
 	constructor(service: CodingAgentV2Service, options: CodingAgentV2AgentRegistryOptions = {}) {
 		this.service = service;
@@ -50,6 +51,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
+		if (this.disposePromise) throw new Error("Agent registry is disposed");
 		const previous = this.spawnTail;
 		let release!: () => void;
 		this.spawnTail = new Promise<void>((resolve) => (release = resolve));
@@ -100,6 +102,19 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		return [...this.agents.values()]
 			.filter((agent) => agent.parentSessionId === sessionId)
 			.map((agent) => this.snapshot(agent));
+	}
+
+	async dispose(): Promise<void> {
+		if (this.disposePromise) return this.disposePromise;
+		this.disposePromise = (async () => {
+			await this.spawnTail;
+			const results = await Promise.allSettled([...this.agents.values()].map((agent) => agent.runtime.dispose()));
+			this.agents.clear();
+			const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+			if (failures.length === 1) throw failures[0]!.reason;
+			if (failures.length > 1) throw new AggregateError(failures.map((failure) => failure.reason), "Failed to dispose child agent runtimes");
+		})();
+		return this.disposePromise;
 	}
 
 	async getSnapshot(agentId: string): Promise<V2AgentSnapshot> {
