@@ -117,6 +117,13 @@ export interface RemoteV2DiagnosticsExportOptions {
 	readonly operationId?: string;
 }
 
+export interface RemoteV2DiagnosticsTimeline {
+	readonly events: readonly Record<string, unknown>[];
+	readonly operations: readonly Record<string, unknown>[];
+	readonly operationEvents: readonly Record<string, unknown>[];
+	readonly usage?: Record<string, unknown>;
+}
+
 export interface RemoteV2UsageRead {
 	readonly aggregate: Record<string, unknown>;
 	readonly entries: readonly Record<string, unknown>[];
@@ -762,11 +769,31 @@ export class RemoteV2Session {
 	async diagnosticsTimeline(
 		options: { readonly afterSeq?: number; readonly sessionId?: string; readonly operationId?: string } = {},
 	): Promise<readonly Record<string, unknown>[]> {
+		return (await this.diagnosticsTimelineEvidence(options)).events;
+	}
+
+	async diagnosticsTimelineEvidence(
+		options: { readonly afterSeq?: number; readonly sessionId?: string; readonly operationId?: string } = {},
+	): Promise<RemoteV2DiagnosticsTimeline> {
 		this.#assertNotDisposed();
 		const result = await this.#direct({ command: "diagnostics/timeline", payload: options });
 		if (!Array.isArray(result.events) || !result.events.every((event) => asRecord(event) !== undefined))
 			throw new Error("Invalid diagnostics/timeline response");
-		return result.events.map((event) => structuredClone(asRecord(event)!));
+		if (result.operations !== undefined && (!Array.isArray(result.operations) || !result.operations.every(asRecord)))
+			throw new Error("Invalid diagnostics/timeline operations");
+		if (
+			result.operationEvents !== undefined &&
+			(!Array.isArray(result.operationEvents) || !result.operationEvents.every(asRecord))
+		)
+			throw new Error("Invalid diagnostics/timeline operation events");
+		if (result.usage !== undefined && asRecord(result.usage) === undefined)
+			throw new Error("Invalid diagnostics/timeline usage");
+		return {
+			events: result.events.map((event) => structuredClone(asRecord(event)!)),
+			operations: (result.operations ?? []).map((operation) => structuredClone(asRecord(operation)!)),
+			operationEvents: (result.operationEvents ?? []).map((event) => structuredClone(asRecord(event)!)),
+			...(result.usage === undefined ? {} : { usage: structuredClone(asRecord(result.usage)!) }),
+		};
 	}
 
 	async diagnosticsExport(options: RemoteV2DiagnosticsExportOptions = {}): Promise<Record<string, unknown>> {
