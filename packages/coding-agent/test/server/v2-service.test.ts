@@ -1,6 +1,6 @@
 import { GoalManager, InMemorySessionStorage, Session } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, test } from "vitest";
 import { createCodingAgentHarness } from "../../src/server/create-harness.ts";
 import { ServerRuntimeExtensionHost } from "../../src/server/extension-host.ts";
@@ -345,7 +345,7 @@ describe("coding-agent v2 service adapter", () => {
 		try {
 			await session.appendMessage({ role: "user", content: [{ type: "text", text: "Bearer secret-token\u0085" }], timestamp: 1 });
 			await session.appendMessage(
-				fauxAssistantMessage("password=super-secret", {
+				fauxAssistantMessage([fauxToolCall("run", { token: "tool-secret" }), { type: "text", text: "password=super-secret" }], {
 					stopReason: "error",
 					errorMessage: "authorization: Bearer error-secret\u009f",
 					timestamp: 2,
@@ -358,6 +358,7 @@ describe("coding-agent v2 service adapter", () => {
 			expect(transcript).toHaveLength(2);
 			expect(JSON.stringify(transcript)).not.toContain("secret-token");
 			expect(JSON.stringify(transcript)).not.toContain("super-secret");
+			expect(JSON.stringify(transcript)).not.toContain("tool-secret");
 			expect(JSON.stringify(transcript)).not.toContain("error-secret");
 			expect(JSON.stringify(transcript)).not.toContain("\u0085");
 		} finally {

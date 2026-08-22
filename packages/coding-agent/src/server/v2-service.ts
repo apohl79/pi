@@ -138,9 +138,7 @@ function aggregateUsage(records: readonly LaneRecord[], branchEntryIds: Readonly
 }
 
 function contentParts(message: AgentMessage): Array<Record<string, unknown>> {
-	const redact =
-		(message.role === "assistant" && (message.stopReason === "error" || message.stopReason === "deferred" || message.stopReason === "aborted")) ||
-		(message.role === "toolResult" && message.isError === true);
+	const redact = true;
 	if (typeof message !== "object" || message === null || !Array.isArray((message as { content?: unknown }).content)) {
 		return [{ type: "text", text: redact ? redactText(boundedString(messageText(message))) : boundedString(messageText(message)) }];
 	}
@@ -166,7 +164,7 @@ function contentParts(message: AgentMessage): Array<Record<string, unknown>> {
 
 function queueContent(message: AgentMessage): Array<Record<string, unknown>> {
 	const parts = contentParts(message).filter((part) => part.type === "text" || part.type === "image");
-	return parts.length > 0 ? parts : [{ type: "text", text: boundedString(messageText(message)) }];
+	return parts.length > 0 ? parts : [{ type: "text", text: redactText(boundedString(messageText(message))) }];
 }
 
 function targetMessage(target: unknown): AgentMessage {
@@ -212,7 +210,7 @@ function transcriptItem(entry: Extract<Entry, { type: "message" }>): SessionSnap
 			toolName,
 			input: null,
 			content: contentParts(message) as never,
-			...(message.details === undefined ? {} : { details: jsonValue(message.details, 0, new Set<object>(), message.isError === true) }),
+			...(message.details === undefined ? {} : { details: jsonValue(message.details, 0, new Set<object>(), true) }),
 			...(usage(message.usage) === undefined ? {} : { usage: usage(message.usage) }),
 			timestamp,
 			status: message.isError ? "error" : "complete",
