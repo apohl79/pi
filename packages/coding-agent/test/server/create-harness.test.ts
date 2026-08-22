@@ -74,6 +74,36 @@ describe("coding-agent Harness construction", () => {
 		expect(await resolver.resolve({ provider: "openai", id: "gpt-5" })).toBeUndefined();
 	});
 
+	test("resolves model instruction profiles independently by agent scope", async () => {
+		const resolver = new ModelInstructionResolver(
+			[
+				{
+					id: "root-profile",
+					provider: "openai",
+					model: "gpt-5",
+					mode: "append",
+					text: "Root instructions.",
+					applyTo: ["root"],
+				},
+				{
+					id: "child-profile",
+					provider: "openai",
+					model: "gpt-5",
+					mode: "append",
+					text: "Child instructions.",
+					applyTo: ["subagent"],
+				},
+			],
+			{ cwd: "/workspace" },
+		);
+		expect(await resolver.resolve({ provider: "openai", id: "gpt-5" }, "root")).toMatchObject({
+			id: "root-profile",
+		});
+		expect(await resolver.resolve({ provider: "openai", id: "gpt-5" }, "subagent")).toMatchObject({
+			id: "child-profile",
+		});
+	});
+
 	test("resolves file-backed profiles through canonical trusted roots", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-model-profile-success-"));
 		try {
