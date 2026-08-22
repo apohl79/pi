@@ -96,7 +96,14 @@ function durableClone<T>(value: T): T {
 	return JSON.parse(encoded) as T;
 }
 
-function sanitizeErrorMessage(value: unknown, fallback: string): string {
+const MAX_DURABLE_COMPACTION_TEXT_LENGTH = 16_384;
+
+function sanitizeErrorMessage(
+	value: unknown,
+	fallback: string,
+	maxLength = 512,
+	preserveWhitespace = false,
+): string {
 	const raw = value instanceof Error ? value.message : String(value);
 	const sanitized = raw
 		// Error payloads commonly echo credentials as an Authorization header or
@@ -109,10 +116,10 @@ function sanitizeErrorMessage(value: unknown, fallback: string): string {
 			/([\"']?(?:api[_ -]?key|access[_ -]?token|token|secret|password|authorization|credential)[\"']?)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)/gi,
 			"$1=[redacted]",
 		)
-		.replace(/[\u0000-\u001f\u007f]/g, " ")
-		.replace(/\s+/g, " ")
+		.replace(/[\u0000-\u001f\u007f]/g, (character) => (preserveWhitespace && /[\r\n\t]/.test(character) ? character : " "))
+		.replace(preserveWhitespace ? /[ \t]+/g : /\s+/g, preserveWhitespace ? " " : " ")
 		.trim()
-		.slice(0, 512);
+		.slice(0, maxLength);
 	return sanitized || fallback;
 }
 
@@ -123,7 +130,7 @@ function sanitizeErrorDetails(value: unknown, depth = 0): unknown {
 	if (value !== null && typeof value === "object") {
 		const sanitized: Record<string, unknown> = {};
 		for (const [key, item] of Object.entries(value).slice(0, 32)) {
-			if (/api[_ -]?key|token|secret|password|authorization|credential/i.test(key)) {
+			if (/api[_ -]?key|access[_ -]?token|secret|password|authorization|credential|^token$/i.test(key)) {
 				sanitized[key] = "[redacted]";
 			} else {
 				sanitized[key] = sanitizeErrorDetails(item, depth + 1);
@@ -162,6 +169,32 @@ function sanitizeTranscriptMessage(message: AgentMessage): AgentMessage {
 		};
 	}
 	return message;
+}
+
+function sanitizeCompactionValue(value: unknown, depth = 0): unknown {
+	if (depth >= 12) return "[redacted]";
+	if (typeof value === "string") {
+		return sanitizeErrorMessage(value, "", MAX_DURABLE_COMPACTION_TEXT_LENGTH, true);
+	}
+	if (Array.isArray(value)) return value.map((item) => sanitizeCompactionValue(item, depth + 1));
+	if (value !== null && typeof value === "object") {
+		const sanitized: Record<string, unknown> = {};
+		for (const [key, item] of Object.entries(value)) {
+			if (/api[_ -]?key|token|secret|password|authorization|credential/i.test(key)) {
+				sanitized[key] = "[redacted]";
+			} else if (key === "details") {
+				sanitized[key] = sanitizeErrorDetails(item);
+			} else {
+				sanitized[key] = sanitizeCompactionValue(item, depth + 1);
+			}
+		}
+		return sanitized;
+	}
+	return value;
+}
+
+function sanitizeCompactionMessage(message: AgentMessage): AgentMessage {
+	return sanitizeCompactionValue(sanitizeTranscriptMessage(message)) as AgentMessage;
 }
 
 export interface OperationError {
@@ -904,10 +937,17 @@ export class AgentHarness implements AgentLane {
 				{
 					type: "compaction",
 					id: resultEntryId,
-					summary: result.value.summary,
-					retainedTail: durableClone(result.value.retainedTail),
+					summary: sanitizeErrorMessage(
+						result.value.summary,
+						"Compaction summary unavailable",
+						MAX_DURABLE_COMPACTION_TEXT_LENGTH,
+						true,
+					),
+					retainedTail: durableClone(result.value.retainedTail.map(sanitizeCompactionMessage)),
 					tokensBefore: result.value.tokensBefore,
-					...(result.value.details === undefined ? {} : { details: durableClone(result.value.details) }),
+					...(result.value.details === undefined
+						? {}
+						: { details: durableClone(sanitizeErrorDetails(result.value.details)) }),
 					...(result.value.usage === undefined ? {} : { usage: durableClone(result.value.usage) }),
 				},
 				"main",

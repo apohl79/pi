@@ -258,4 +258,60 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(assistant.message.errorMessage!.length).toBeLessThanOrEqual(512);
 		await harness.close();
 	});
+
+	it("redacts credentials from durable compaction output", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "compaction-redaction",
+			models: [{ id: "compaction-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("Summary: api_key=summary-secret\nBearer summary-bearer")]);
+		const session = createSession("compaction-redaction");
+		await session.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "old context" }],
+			timestamp: 1,
+		});
+		await session.appendMessage({
+			role: "assistant",
+			content: [{ type: "toolCall", id: "read-secret", name: "read", arguments: { path: "/tmp/sk-project-secret-file" } }],
+			api: "anthropic-messages",
+			provider: faux.provider,
+			model: faux.getModel().id,
+			usage,
+			stopReason: "stop",
+			timestamp: 2,
+		});
+		await session.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "retained api_key=tail-secret Bearer tail-bearer" }],
+			api: "anthropic-messages",
+			provider: faux.provider,
+			model: faux.getModel().id,
+			usage,
+			stopReason: "stop",
+			timestamp: 3,
+		});
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			compaction: { enabled: true, reserveTokens: 2000, keepRecentTokens: 1 },
+		});
+
+		const result = await harness.compact();
+		expect(result).toMatchObject({ ok: true, value: { kind: "completed" } });
+		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		const entry = entries.find((candidate) => candidate.type === "compaction");
+		expect(entry?.type).toBe("compaction");
+		if (entry?.type !== "compaction") return;
+		expect(entry.summary).toContain("Summary:");
+		expect(entry.summary).not.toMatch(/summary-secret|summary-bearer/);
+		const tailText = JSON.stringify(entry.retainedTail);
+		expect(tailText).not.toMatch(/tail-secret|tail-bearer|sk-project-secret/);
+		const detailsText = JSON.stringify(entry.details);
+		expect(detailsText).not.toMatch(/sk-project-secret/);
+		await harness.close();
+	});
 });
