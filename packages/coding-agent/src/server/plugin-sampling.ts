@@ -15,6 +15,8 @@ export type PluginSamplingDiagnostic = Readonly<{
 	pluginId: string;
 	entryId: string;
 	reason: "condition_failed" | "condition_error" | "bound_exceeded";
+	durationMs?: number;
+	characters?: number;
 }>;
 
 export type PluginSamplingDiagnosticSink = (diagnostic: PluginSamplingDiagnostic) => void;
@@ -31,19 +33,36 @@ export function createPluginSamplingInput(
 		for (const source of orderedSources) {
 			for (const entry of source.entries) {
 				if (entry.conditionShell !== undefined) {
+					const startedAt = Date.now();
 					const condition = await env.exec(entry.conditionShell, { timeout: CONDITION_TIMEOUT_SECONDS });
+					const durationMs = Math.max(0, Date.now() - startedAt);
 					if (!condition.ok) {
-						onDiagnostic?.({ pluginId: source.pluginId, entryId: entry.id, reason: "condition_error" });
+						onDiagnostic?.({
+							pluginId: source.pluginId,
+							entryId: entry.id,
+							reason: "condition_error",
+							durationMs,
+						});
 						continue;
 					}
 					if (condition.value.exitCode !== 0) {
-						onDiagnostic?.({ pluginId: source.pluginId, entryId: entry.id, reason: "condition_failed" });
+						onDiagnostic?.({
+							pluginId: source.pluginId,
+							entryId: entry.id,
+							reason: "condition_failed",
+							durationMs,
+						});
 						continue;
 					}
 				}
 				const size = entry.text.length;
 				if (messages.length >= MAX_TOTAL_ENTRIES || characters + size > MAX_TOTAL_CHARACTERS) {
-					onDiagnostic?.({ pluginId: source.pluginId, entryId: entry.id, reason: "bound_exceeded" });
+					onDiagnostic?.({
+						pluginId: source.pluginId,
+						entryId: entry.id,
+						reason: "bound_exceeded",
+						characters: size,
+					});
 					continue;
 				}
 				messages.push({ role: "user", content: entry.text, timestamp: Date.now() });
