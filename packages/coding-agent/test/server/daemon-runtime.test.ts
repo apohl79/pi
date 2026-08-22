@@ -25,6 +25,30 @@ afterEach(async () => {
 });
 
 describe("coding-agent daemon runtime", () => {
+	test("validates default child-agent limits from daemon options", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-daemon-agent-limits-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-agent-limits-faux",
+			models: [{ id: "agent-limits-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+
+		await expect(
+			createConfiguredCodingAgentDaemonRuntime({
+				agentDir: directory,
+				cwd: directory,
+				models,
+				model: faux.getModel(),
+				socketPath: join(directory, "server.sock"),
+				agentMaxDepth: 0,
+				harness: { tools: [], activeToolNames: [] },
+				write: () => {},
+			}),
+		).rejects.toThrow("maxDepth must be a positive integer");
+	});
+
 	test("builds runtime identity from injected release metadata", () => {
 		expect(
 			createRuntimeManifest({

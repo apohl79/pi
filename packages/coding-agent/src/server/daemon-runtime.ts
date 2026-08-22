@@ -40,7 +40,7 @@ import {
 } from "../cli/experimental/runtime.ts";
 import type { TransportAddress } from "../cli/experimental/transport-address.ts";
 import { runMigrations } from "../migrations.ts";
-import { createCodingAgentV2AgentRegistry } from "./agent-registry.ts";
+import { type CodingAgentV2AgentRegistryOptions, createCodingAgentV2AgentRegistry } from "./agent-registry.ts";
 import { createRuntimeManifest } from "./runtime-manifest.ts";
 import { SqliteForensicRecorder } from "./sqlite-forensic-recorder.ts";
 import { SqliteV2InputRegistry } from "./sqlite-input-registry.ts";
@@ -77,6 +77,10 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	apps?: V2AppRegistry;
 	operationStore?: V2OperationStore;
 	operationStorePath?: string;
+	/** Bounds for the default server-owned child-agent registry. */
+	agentMaxDepth?: CodingAgentV2AgentRegistryOptions["maxDepth"];
+	agentMaxActive?: CodingAgentV2AgentRegistryOptions["maxActive"];
+	agentMaxActivePerParent?: CodingAgentV2AgentRegistryOptions["maxActivePerParent"];
 	blobs?: V2BlobStore;
 	blobStorePath?: string;
 	diagnostics?: ServerDaemonOptions["diagnostics"];
@@ -151,7 +155,16 @@ export async function createCodingAgentDaemonRuntime(
 	);
 	const agents =
 		options.agents ??
-		(service.createSession ? createCodingAgentV2AgentRegistry(service, { diagnostics }) : undefined);
+		(service.createSession
+			? createCodingAgentV2AgentRegistry(service, {
+					diagnostics,
+					...(options.agentMaxDepth === undefined ? {} : { maxDepth: options.agentMaxDepth }),
+					...(options.agentMaxActive === undefined ? {} : { maxActive: options.agentMaxActive }),
+					...(options.agentMaxActivePerParent === undefined
+						? {}
+						: { maxActivePerParent: options.agentMaxActivePerParent }),
+				})
+			: undefined);
 	createdAgents = agents;
 	const daemon = new ServerDaemon({
 		service,
