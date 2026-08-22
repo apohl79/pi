@@ -443,6 +443,7 @@ export async function createCodingAgentV2SqliteService(
 		return {
 			metadata: sessionMetadata(metadata),
 			harness: created.harness,
+			recoveryState: created.suspended.length === 0 ? "clean" : "needsResolution",
 			...(instructionProfile === undefined ? {} : { instructionProfile }),
 			...(pluginSetHash === undefined ? {} : { pluginSetHash }),
 			...(agents === undefined ? {} : { agents }),

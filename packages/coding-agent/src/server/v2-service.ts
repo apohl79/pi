@@ -92,6 +92,7 @@ function appendAgentCompletions(input: AgentMessage, completions: readonly Agent
 export interface CodingAgentV2SessionDefinition {
 	metadata: SessionMetadataV2;
 	harness: AgentHarness;
+	recoveryState?: "clean" | "recovered" | "needsResolution" | "degraded";
 	goals?: GoalManager;
 	goalContinuation?: GoalContinuationScheduler;
 	extensionHost?: ServerRuntimeExtensionHost;
@@ -312,6 +313,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	private nameSource: "explicit" | "generated" | "derived" | undefined;
 	private phase: SessionPhaseV2 = "idle";
 	private activeOperation: OperationSummary | undefined;
+	private recoveryState: "clean" | "recovered" | "needsResolution" | "degraded";
 
 	private readonly fastModel: Model<string> | undefined;
 	private autoNameLoaded = false;
@@ -329,6 +331,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		this.model = model;
 		this.sessionName = definition.metadata.sessionName;
 		this.nameSource = definition.metadata.nameSource;
+		this.recoveryState = definition.recoveryState ?? "clean";
 		this.fastModel = options?.fastModel;
 	}
 
@@ -702,7 +705,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			},
 			pluginSetHash: pluginSetHash ?? "plugins-empty",
 			diagnostics: diagnostics ?? { capture: "metadata", degraded: false, lastCriticalEventSeq: 0 },
-			persistence: { schemaVersion: 1, recoveryState: "clean" },
+			persistence: { schemaVersion: 1, recoveryState: this.recoveryState },
 			createdAt: this.definition.metadata.createdAt,
 			updatedAt: this.definition.metadata.updatedAt ?? this.definition.metadata.createdAt,
 		};
@@ -771,6 +774,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				const result = await harness.resume();
 				if (!result.ok) throw new Error(result.error.message);
 				if (result.value.kind === "failed") throw new Error(result.value.error.message);
+				this.recoveryState = "recovered";
 				await this.recordUsageLedger(_operationId, beforeEntryIds);
 				await this.recordGoalUsage(usageBefore);
 				goalUsageRecorded = true;

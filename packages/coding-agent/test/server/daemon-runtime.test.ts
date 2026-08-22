@@ -959,6 +959,95 @@ describe("coding-agent daemon runtime", () => {
 		}
 	});
 
+	test("surfaces suspended harness work after a production daemon restart", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-suspended-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-suspended-faux",
+			models: [
+				{ id: "coding-agent-daemon-suspended-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		const first = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		let sessionId: string;
+		try {
+			await first.daemon.start();
+			if (!first.service.createSession) throw new Error("Configured service cannot create sessions");
+			const created = await first.service.createSession({ cwd: directory });
+			sessionId = created.sessionId;
+			const metadata = (await first.repository.list()).find((item) => item.id === sessionId);
+			if (!metadata) throw new Error("Session metadata was not persisted");
+			const session = await first.repository.open(metadata);
+			await session.appendRecord({
+				type: "operation_started",
+				id: "crashed-root-turn",
+				lane: "main",
+				sourceLeafId: null,
+				intent: {
+					kind: "run",
+					originalPrompt: [
+						{ role: "user", content: [{ type: "text", text: "resume after restart" }], timestamp: 1 },
+					],
+					initialMessages: [],
+				},
+			});
+		} finally {
+			await first.close();
+		}
+
+		const second = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await second.daemon.start();
+			await client.connect();
+			const read = await client.request({ command: "session/read", sessionId });
+			expect(read).toMatchObject({
+				ok: true,
+				result: { session: { persistence: { recoveryState: "needsResolution" }, phase: "idle" } },
+			});
+			faux.setResponses([fauxAssistantMessage("resumed after restart")]);
+			await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			const resumed = await client.request({ command: "turn/resume", sessionId });
+			expect(resumed).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+			if (!resumed.ok || !("accepted" in resumed)) throw new Error("Resume was not accepted");
+			for (let attempt = 0; attempt < 50; attempt++) {
+				const snapshot = await client.request({ command: "session/read", sessionId });
+				if (
+					snapshot.ok &&
+					"result" in snapshot &&
+					(snapshot.result as { session: { persistence: { recoveryState: string } } }).session.persistence
+						.recoveryState === "recovered"
+				)
+					break;
+				if (attempt === 49) throw new Error("Timed out waiting for recovery completion");
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+		} finally {
+			client.dispose();
+			await second.close();
+		}
+	});
+
 	test("restores content-addressed blobs after a production daemon restart", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-blobs-"));
 		directories.push(directory);
