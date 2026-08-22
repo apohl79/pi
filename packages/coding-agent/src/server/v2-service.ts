@@ -30,18 +30,39 @@ function boundedString(value: unknown): string {
 	return typeof value === "string" ? value.slice(0, MAX_V2_STRING_LENGTH) : "";
 }
 
-function jsonValue(value: unknown, depth = 0, ancestors = new Set<object>()): JsonValue {
-	if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+function boundedRequired(value: unknown, max = MAX_V2_STRING_LENGTH): string | undefined {
+	if (typeof value !== "string" || value.length === 0 || value.length > max) return undefined;
+	return value;
+}
+
+function redactText(value: string): string {
+	return value
+		.replace(/\bBearer\s+[^\s"'`,;}\]]+/gi, "Bearer [redacted]")
+		.replace(/\b(?:sk|rk|pk)-[A-Za-z0-9][A-Za-z0-9_-]{8,}\b/gi, "[redacted]")
+		.replace(/([\"']?(?:api[_ -]?key|access[_ -]?token|token|secret|password|authorization|credential)[\"']?)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)/gi, "$1=[redacted]")
+		.replace(/[\u0000-\u001f\u007f]/g, " ")
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, MAX_V2_STRING_LENGTH);
+}
+
+function finiteNonNegative(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function jsonValue(value: unknown, depth = 0, ancestors = new Set<object>(), redact = false): JsonValue {
+	if (value === null || typeof value === "boolean") return value;
+	if (typeof value === "string") return redact ? redactText(value) : boundedString(value);
 	if (typeof value === "number") return Number.isFinite(value) ? value : null;
 	if (depth >= MAX_V2_JSON_DEPTH || typeof value !== "object") return "[truncated]";
 	if (ancestors.has(value)) return "[cycle]";
 	ancestors.add(value);
 	try {
-		if (Array.isArray(value)) return value.slice(0, MAX_V2_ARRAY_ITEMS).map((item) => jsonValue(item, depth + 1, ancestors));
+		if (Array.isArray(value)) return value.slice(0, MAX_V2_ARRAY_ITEMS).map((item) => jsonValue(item, depth + 1, ancestors, redact));
 		return Object.fromEntries(
 			Object.entries(value)
 				.slice(0, MAX_V2_ARRAY_ITEMS)
-				.map(([key, item]) => [boundedString(key), jsonValue(item, depth + 1, ancestors)]),
+				.map(([key, item]) => [boundedString(key), /api[_ -]?key|token|secret|password|authorization|credential/i.test(key) ? "[redacted]" : jsonValue(item, depth + 1, ancestors, redact)]),
 		) as JsonValue;
 	} finally {
 		ancestors.delete(value);
@@ -58,28 +79,44 @@ function usage(value: Usage | undefined): {
 } | undefined {
 	if (!value) return undefined;
 	return {
-		input: Math.max(0, value.input),
-		output: Math.max(0, value.output),
-		cacheRead: Math.max(0, value.cacheRead),
-		cacheWrite: Math.max(0, value.cacheWrite),
-		totalTokens: Math.max(0, value.totalTokens),
-		cost: { ...value.cost },
+		input: finiteNonNegative(value.input),
+		output: finiteNonNegative(value.output),
+		cacheRead: finiteNonNegative(value.cacheRead),
+		cacheWrite: finiteNonNegative(value.cacheWrite),
+		totalTokens: finiteNonNegative(value.totalTokens),
+		cost: {
+			input: finiteNonNegative(value.cost.input),
+			output: finiteNonNegative(value.cost.output),
+			cacheRead: finiteNonNegative(value.cost.cacheRead),
+			cacheWrite: finiteNonNegative(value.cost.cacheWrite),
+			total: finiteNonNegative(value.cost.total),
+		},
 	};
 }
 
 function contentParts(message: AgentMessage): Array<Record<string, unknown>> {
+	const redact =
+		(message.role === "assistant" && (message.stopReason === "error" || message.stopReason === "deferred" || message.stopReason === "aborted")) ||
+		(message.role === "toolResult" && message.isError === true);
 	if (typeof message !== "object" || message === null || !Array.isArray((message as { content?: unknown }).content)) {
-		return [{ type: "text", text: boundedString(messageText(message)) }];
+		return [{ type: "text", text: redact ? redactText(boundedString(messageText(message))) : boundedString(messageText(message)) }];
 	}
 	return (message as { content: unknown[] }).content.slice(0, MAX_V2_ARRAY_ITEMS).flatMap((part) => {
 		if (typeof part !== "object" || part === null) return [];
 		const candidate = part as Record<string, unknown>;
-		if (candidate.type === "text" && typeof candidate.text === "string") return [{ type: "text", text: boundedString(candidate.text) }];
-		if (candidate.type === "thinking" && typeof candidate.thinking === "string") return [{ type: "thinking", thinking: boundedString(candidate.thinking) }];
-		if (candidate.type === "image" && typeof candidate.data === "string" && typeof candidate.mimeType === "string")
-			return [{ type: "image", data: boundedString(candidate.data), mimeType: boundedString(candidate.mimeType) }];
-		if (candidate.type === "toolCall" && typeof candidate.id === "string" && typeof candidate.name === "string")
-			return [{ type: "toolCall", toolCallId: boundedString(candidate.id), toolName: boundedString(candidate.name), input: jsonValue(candidate.arguments) }];
+		if (candidate.type === "text" && typeof candidate.text === "string") return [{ type: "text", text: redact ? redactText(boundedString(candidate.text)) : boundedString(candidate.text) }];
+		if (candidate.type === "thinking" && typeof candidate.thinking === "string") return [{ type: "thinking", thinking: redact ? redactText(boundedString(candidate.thinking)) : boundedString(candidate.thinking) }];
+		if (candidate.type === "image" && typeof candidate.data === "string" && typeof candidate.mimeType === "string") {
+			const mimeType = boundedRequired(candidate.mimeType, 127);
+			if (!mimeType || !/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(mimeType)) return [];
+			return [{ type: "image", data: boundedString(candidate.data), mimeType }];
+		}
+		if (candidate.type === "toolCall") {
+			const toolCallId = boundedRequired(candidate.id, 256);
+			const toolName = boundedRequired(candidate.name, 256);
+			if (!toolCallId || !toolName) return [];
+			return [{ type: "toolCall", toolCallId, toolName, input: jsonValue(candidate.arguments, 0, new Set<object>(), redact) }];
+		}
 		return [];
 	});
 }
@@ -97,31 +134,39 @@ function targetMessage(target: unknown): AgentMessage {
 function transcriptItem(entry: Extract<Entry, { type: "message" }>): SessionSnapshotV2["transcript"][number] | undefined {
 	const message = entry.message;
 	const timestamp = finiteTimestamp(entry.timestamp);
-	if (message.role === "user") return { id: boundedString(entry.id), role: "user", content: contentParts(message) as never, timestamp };
+	const entryId = boundedRequired(entry.id, 256);
+	if (!entryId) return undefined;
+	if (message.role === "user") return { id: entryId, role: "user", content: contentParts(message) as never, timestamp };
 	if (message.role === "assistant") {
+		const provider = boundedRequired(message.provider, 256);
+		const model = boundedRequired(message.model, 256);
+		if (!provider || !model) return undefined;
 		const base = {
-			id: boundedString(entry.id),
+			id: entryId,
 			role: "assistant" as const,
 			content: contentParts(message) as never,
-			model: { provider: boundedString(message.provider), id: boundedString(message.model) },
+			model: { provider, id: model },
 			...(message.responseModel === undefined ? {} : { responseModel: boundedString(message.responseModel) }),
 			...(usage(message.usage) === undefined ? {} : { usage: usage(message.usage) }),
 			timestamp,
 		};
-		if (message.stopReason === "aborted") return { ...base, status: "aborted", stopReason: "aborted", ...(message.errorMessage ? { errorMessage: boundedString(message.errorMessage) } : {}) };
-		if (message.stopReason === "error" || message.stopReason === "deferred") return { ...base, status: "error", stopReason: "error", ...(message.errorMessage ? { errorMessage: boundedString(message.errorMessage) } : {}) };
+		if (message.stopReason === "aborted") return { ...base, status: "aborted", stopReason: "aborted", ...(message.errorMessage ? { errorMessage: redactText(boundedString(message.errorMessage)) } : {}) };
+		if (message.stopReason === "error" || message.stopReason === "deferred") return { ...base, status: "error", stopReason: "error", ...(message.errorMessage ? { errorMessage: redactText(boundedString(message.errorMessage)) } : {}) };
 		if (message.stopReason === "pending") return { ...base, status: "streaming" };
 		return { ...base, status: "complete", stopReason: message.stopReason === "toolUse" ? "toolUse" : message.stopReason === "length" ? "length" : "stop" };
 	}
 	if (message.role === "toolResult") {
+		const toolCallId = boundedRequired(message.toolCallId, 256);
+		const toolName = boundedRequired(message.toolName, 256);
+		if (!toolCallId || !toolName) return undefined;
 		return {
-			id: boundedString(entry.id),
+			id: entryId,
 			role: "tool",
-			toolCallId: boundedString(message.toolCallId),
-			toolName: boundedString(message.toolName),
+			toolCallId,
+			toolName,
 			input: null,
 			content: contentParts(message) as never,
-			...(message.details === undefined ? {} : { details: jsonValue(message.details) }),
+			...(message.details === undefined ? {} : { details: jsonValue(message.details, 0, new Set<object>(), message.isError === true) }),
 			...(usage(message.usage) === undefined ? {} : { usage: usage(message.usage) }),
 			timestamp,
 			status: message.isError ? "error" : "complete",
@@ -151,6 +196,11 @@ export interface CodingAgentV2Runtime {
 }
 
 async function modelMetadata(models: Models, model: Model<string>): Promise<ModelMetadata> {
+	const provider = boundedRequired(model.provider, 256);
+	const id = boundedRequired(model.id, 256);
+	const name = boundedRequired(model.name, MAX_V2_STRING_LENGTH);
+	const api = boundedRequired(model.api, 256);
+	if (!provider || !id || !name || !api) throw new Error("Model metadata contains an invalid required field");
 	let authenticated = false;
 	try {
 		authenticated = (await models.getAuth(model)) !== undefined;
@@ -158,15 +208,20 @@ async function modelMetadata(models: Models, model: Model<string>): Promise<Mode
 		authenticated = false;
 	}
 	return {
-		provider: model.provider,
-		id: model.id,
-		name: model.name,
-		api: model.api,
+		provider,
+		id,
+		name,
+		api,
 		reasoning: model.reasoning,
 		input: model.input,
 		contextWindow: model.contextWindow,
 		maxTokens: model.maxTokens,
-		cost: model.cost,
+		cost: {
+			input: finiteNonNegative(model.cost.input),
+			output: finiteNonNegative(model.cost.output),
+			cacheRead: finiteNonNegative(model.cost.cacheRead),
+			cacheWrite: finiteNonNegative(model.cost.cacheWrite),
+		},
 		supportedThinkingLevels: model.reasoning ? ["off", "minimal", "low", "medium", "high", "xhigh", "max"] : ["off"],
 		authenticated,
 	};
@@ -222,6 +277,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	private disposed = false;
 	private readonly operations = new Map<string, PersistedOperation>();
 	private operationId?: string;
+	private freshOperationId?: string;
 	private mutationTail: Promise<void> = Promise.resolve();
 	private executionTail: Promise<void> = Promise.resolve();
 	private readonly onDispose?: () => void;
@@ -262,7 +318,17 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			.slice(-MAX_V2_ARRAY_ITEMS)
 			.map((record) => ({ id: boundedString(record.target.id), content: queueContent(targetMessage(record.target)).slice(0, MAX_V2_ARRAY_ITEMS) as never, createdAt: finiteTimestamp(record.timestamp) }));
 		const active = this.activeOperation(laneOperation);
-		const phase: SessionPhaseV2 = laneOperation === undefined ? (active?.state === "suspended" ? "suspended" : "idle") : laneOperation.intent.kind === "compaction" ? "compaction" : laneOperation.intent.kind === "run" ? "turn" : "suspended";
+		const phase: SessionPhaseV2 = laneOperation === undefined
+			? active?.state === "suspended"
+				? "suspended"
+				: active?.state === "accepted"
+					? "turn"
+					: "idle"
+			: laneOperation.intent.kind === "compaction"
+				? "compaction"
+				: laneOperation.intent.kind === "run"
+					? "turn"
+					: "suspended";
 		const goal = await this.definition.goals?.read();
 		const sessionName = persistedName ?? this.sessionName;
 		return {
@@ -304,7 +370,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.revision = Math.max(this.revision, finiteTimestamp(entry.seq));
 			if (entry.type !== "custom" || entry.customType !== OPERATION_ENTRY || typeof entry.data !== "object" || entry.data === null) continue;
 			const data = entry.data as Partial<PersistedOperation>;
-			if (typeof data.operationId !== "string" || typeof data.state !== "string" || typeof data.revision !== "number" || typeof data.eventSeq !== "number" || typeof data.acceptedSeq !== "number") continue;
+			const states = ["accepted", "running", "complete", "failed", "aborted", "suspended"];
+			if (
+				typeof data.operationId !== "string" || data.operationId.length === 0 || data.operationId.length > 256 ||
+				!states.includes(data.state as string) || typeof data.kind !== "string" || data.kind.length === 0 || data.kind.length > 256 ||
+				![data.revision, data.eventSeq, data.acceptedSeq].every((value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+			) continue;
 			this.operations.set(data.operationId, data as PersistedOperation);
 			this.revision = Math.max(this.revision, data.revision);
 			this.eventSeq = Math.max(this.eventSeq, data.eventSeq);
@@ -312,7 +383,18 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	private async persistOperation(operation: PersistedOperation): Promise<void> {
-		await this.definition.harness.session.appendCustomEntry(OPERATION_ENTRY, operation);
+		try {
+			await this.definition.harness.session.appendCustomEntry(OPERATION_ENTRY, operation);
+		} catch (error) {
+			const entries = await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }).catch(() => []);
+			const committed = entries.some(
+				(entry) =>
+					entry.type === "custom" &&
+					entry.customType === OPERATION_ENTRY &&
+					JSON.stringify(entry.data) === JSON.stringify(operation),
+			);
+			if (!committed) throw error;
+		}
 		this.operations.set(operation.operationId, operation);
 		this.revision = Math.max(this.revision, operation.revision);
 		this.eventSeq = Math.max(this.eventSeq, operation.eventSeq);
@@ -321,8 +403,10 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	private activeOperation(laneOperation: { id: string; intent: { kind: string } } | undefined): SessionSnapshotV2["activeOperation"] {
 		const persisted = this.operationId ? this.operations.get(this.operationId) : [...this.operations.values()].find((operation) => operation.state === "accepted" || operation.state === "running" || operation.state === "suspended");
 		if (!persisted) return undefined;
-		const state = laneOperation
+		const state = laneOperation || this.operationId === persisted.operationId
 			? "running"
+			: this.freshOperationId === persisted.operationId && persisted.state === "accepted"
+				? "accepted"
 			: persisted.state === "accepted" || persisted.state === "running"
 				? "suspended"
 				: persisted.state;
@@ -344,6 +428,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			if (active) throw new Error(`Session is busy with ${active.operationId}`);
 			const accepted = { operationId, sessionRevision: this.revision + 1, eventSeq: this.eventSeq + 1 };
 			await this.persistOperation({ operationId, state: "accepted", kind: "turn", acceptedSeq: accepted.eventSeq, revision: accepted.sessionRevision, eventSeq: accepted.eventSeq });
+			this.freshOperationId = operationId;
 			return accepted;
 		});
 	}
@@ -368,6 +453,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			if (!operation) throw new Error(`Operation ${operationId} was not accepted`);
 			if (operation.state !== "accepted") throw new Error(`Operation ${operationId} was already run`);
 			this.operationId = operationId;
+			this.freshOperationId = undefined;
 			await this.persistOperation({ ...operation, state: "running", revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
 		});
 		try {
@@ -455,6 +541,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			const state = runCommand === "turn/abort" ? "aborted" : "complete";
 			await this.persistOperation({ ...operation, state, revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
 			this.operationId = undefined;
+			this.freshOperationId = undefined;
 		});
 		} catch (error) {
 			await this.withMutation(async () => {
@@ -462,6 +549,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				if (operation && operation.state === "running")
 					await this.persistOperation({ ...operation, state: "failed", revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
 				this.operationId = undefined;
+				this.freshOperationId = undefined;
 			});
 			throw error;
 		}
@@ -470,8 +558,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	async dispose(): Promise<void> {
 		if (this.disposed) return;
 		this.disposed = true;
-		this.onDispose?.();
 		await this.definition.harness.close();
+		this.onDispose?.();
 	}
 }
 
@@ -494,7 +582,10 @@ export function createCodingAgentV2Service(
 			if (pending) return pending;
 			const promise = (async () => {
 				const model = await definition.harness.getModel();
-				const runtime = new CodingAgentV2RuntimeImpl(definition, models, model, () => runtimes.delete(sessionId));
+				let runtime!: CodingAgentV2RuntimeImpl;
+				runtime = new CodingAgentV2RuntimeImpl(definition, models, model, () => {
+					if (runtimes.get(sessionId) === runtime) runtimes.delete(sessionId);
+				});
 				runtimes.set(sessionId, runtime);
 				return runtime;
 			})();
