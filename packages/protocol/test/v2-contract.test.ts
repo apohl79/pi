@@ -27,6 +27,7 @@ const commandNames = [
 	"session/detach",
 	"session/read",
 	"session/delete",
+	"session/fork",
 	"session/name/set",
 	"session/name/generate",
 	"session/name/auto/set",

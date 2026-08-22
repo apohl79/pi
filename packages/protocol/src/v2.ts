@@ -264,6 +264,7 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("session/detach"),
 	Type.Literal("session/read"),
 	Type.Literal("session/delete"),
+	Type.Literal("session/fork"),
 	Type.Literal("session/name/set"),
 	Type.Literal("session/name/generate"),
 	Type.Literal("session/name/auto/set"),

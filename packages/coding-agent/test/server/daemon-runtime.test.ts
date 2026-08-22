@@ -481,6 +481,64 @@ describe("coding-agent daemon runtime", () => {
 		}
 	});
 
+	test("forks a durable session and re-identifies its goal", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-session-fork-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "pi-daemon-session-fork-faux",
+			models: [{ id: "pi-daemon-session-fork-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			expect(created.ok).toBe(true);
+			const sourceId = (created as unknown as { result: { session: { id: string } } }).result.session.id;
+			await client.request({ command: "session/attach", sessionId: sourceId, payload: { mode: "control" } });
+			await client.request({ command: "goal/create", sessionId: sourceId, payload: { objective: "fork work" } });
+			const sourceGoal = await client.request({ command: "goal/read", sessionId: sourceId });
+			expect(sourceGoal.ok).toBe(true);
+			const sourceGoalId = (sourceGoal as unknown as { result: { goal: { id: string } } }).result.goal.id;
+			const forked = await client.request({
+				command: "session/fork",
+				sessionId: sourceId,
+				payload: { scope: "tree" },
+			});
+			expect(forked.ok).toBe(true);
+			const forkedSession = (forked as unknown as { result: { session: { id: string } } }).result.session;
+			expect(forkedSession.id).not.toBe(sourceId);
+			const forkedGoal = await client.request({ command: "goal/read", sessionId: forkedSession.id });
+			expect(forkedGoal).toMatchObject({
+				ok: true,
+				result: { goal: { id: expect.not.stringMatching(sourceGoalId) } },
+			});
+			const sessions = await client.request({ command: "session/list" });
+			expect(sessions.ok).toBe(true);
+			expect(
+				(sessions as unknown as { result: { sessions: Array<{ id: string }> } }).result.sessions.map(
+					(session) => session.id,
+				),
+			).toContain(forkedSession.id);
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
 	test("records automatic session naming in the production usage ledger", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-session-name-"));
 		directories.push(directory);

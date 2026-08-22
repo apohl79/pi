@@ -70,6 +70,10 @@ export interface PiServerServiceV2 {
 	listModels(): Promise<ModelMetadata[]>;
 	openSession(sessionId: string): Promise<PiSessionRuntimeV2>;
 	createSession?(options: Record<string, unknown>): Promise<{ sessionId: string; runtime: PiSessionRuntimeV2 }>;
+	forkSession?(
+		sourceSessionId: string,
+		options: Record<string, unknown>,
+	): Promise<{ sessionId: string; runtime: PiSessionRuntimeV2 }>;
 	deleteSession?(sessionId: string): Promise<void>;
 }
 
@@ -383,6 +387,7 @@ export class PiServerV2 {
 				payload: { command: command.command, requestId: id },
 			});
 			if (command.command === "session/create") return void (await this.createSession(state, id, command));
+			if (command.command === "session/fork") return void (await this.forkSession(state, id, command));
 			if (command.command === "session/delete") return void (await this.deleteSession(state, id, command));
 			if (command.command === "session/list")
 				return void (await this.sendResponse(state, id, {
@@ -510,6 +515,29 @@ export class PiServerV2 {
 		this.releaseControlFor(state, command.sessionId);
 		if (runtime && !this.hasRuntimeReference(runtime)) await this.disposeRuntime(runtime);
 		await this.sendResponse(state, id, { command: command.command, sessionId: command.sessionId });
+	}
+
+	private async forkSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("session/fork requires sessionId");
+		this.requireControl(state, command.sessionId);
+		if (!this.service.forkSession) throw new Error("session/fork is not supported by this service");
+		const payload = objectPayload(command);
+		if (payload.scope !== undefined && payload.scope !== "branch" && payload.scope !== "tree")
+			throw new Error("session/fork scope must be branch or tree");
+		if (payload.position !== undefined && payload.position !== "before" && payload.position !== "at")
+			throw new Error("session/fork position must be before or at");
+		for (const field of ["id", "name", "cwd", "entryId"])
+			if (payload[field] !== undefined && typeof payload[field] !== "string")
+				throw new Error(`session/fork ${field} must be a string`);
+		const forked = await this.service.forkSession(command.sessionId, payload);
+		if (state.sessions.has(forked.sessionId)) throw new Error(`Session ${forked.sessionId} is already attached`);
+		this.trackRuntime(forked.runtime);
+		state.sessions.set(forked.sessionId, forked.runtime);
+		this.claimControl(state, forked.sessionId);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			session: toProtocolJsonValue(await this.snapshotForSession(forked.sessionId, forked.runtime)),
+		});
 	}
 
 	private async attach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

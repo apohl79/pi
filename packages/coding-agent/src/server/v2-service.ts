@@ -118,6 +118,10 @@ export interface CodingAgentV2Service {
 	listModels(): Promise<ModelMetadata[]>;
 	openSession(sessionId: string): Promise<CodingAgentV2Runtime>;
 	createSession?(options: Record<string, unknown>): Promise<{ sessionId: string; runtime: CodingAgentV2Runtime }>;
+	forkSession?(
+		sourceSessionId: string,
+		options: Record<string, unknown>,
+	): Promise<{ sessionId: string; runtime: CodingAgentV2Runtime }>;
 	deleteSession?(sessionId: string): Promise<void>;
 }
 
@@ -126,6 +130,8 @@ export interface CodingAgentV2ServiceOptions {
 	fastModel?: Model<string>;
 	/** Durable owner creates a fully initialized session definition. */
 	createSession?: (options: Record<string, unknown>) => Promise<CodingAgentV2SessionDefinition>;
+	/** Durable owner forks a session and returns its initialized definition. */
+	forkSession?: (sourceSessionId: string, options: Record<string, unknown>) => Promise<CodingAgentV2SessionDefinition>;
 	/** Durable owner removes a session after the adapter disposes its runtime. */
 	deleteSession?: (sessionId: string) => Promise<void>;
 	/** Durable catalog used when definitions are opened lazily. */
@@ -140,6 +146,7 @@ export interface CodingAgentV2SessionStore {
 	list(): Promise<SessionMetadataV2[]>;
 	open(sessionId: string): Promise<CodingAgentV2SessionDefinition>;
 	create(options: Record<string, unknown>): Promise<CodingAgentV2SessionDefinition>;
+	fork?(sourceSessionId: string, options: Record<string, unknown>): Promise<CodingAgentV2SessionDefinition>;
 	delete(sessionId: string): Promise<void>;
 }
 
@@ -949,6 +956,7 @@ export function createCodingAgentV2Service(
 	);
 	const runtimes = new Map<string, CodingAgentV2RuntimeImpl>();
 	const sessionFactory = options?.createSession;
+	const sessionForker = options?.forkSession;
 	const sessionDeleter = options?.deleteSession;
 	return {
 		listSessions: async () =>
@@ -959,6 +967,19 @@ export function createCodingAgentV2Service(
 		createSession: sessionFactory
 			? async (payload) => {
 					const definition = await sessionFactory(payload);
+					if (byId.has(definition.metadata.id))
+						throw new Error(`Session ${definition.metadata.id} already exists`);
+					byId.set(definition.metadata.id, definition);
+					knownIds.add(definition.metadata.id);
+					const model = await definition.harness.getModel();
+					const runtime = new CodingAgentV2RuntimeImpl(definition, models, model, options);
+					runtimes.set(definition.metadata.id, runtime);
+					return { sessionId: definition.metadata.id, runtime };
+				}
+			: undefined,
+		forkSession: sessionForker
+			? async (sourceSessionId, payload) => {
+					const definition = await sessionForker(sourceSessionId, payload);
 					if (byId.has(definition.metadata.id))
 						throw new Error(`Session ${definition.metadata.id} already exists`);
 					byId.set(definition.metadata.id, definition);
@@ -1013,6 +1034,12 @@ export async function createCodingAgentV2ServiceFromStore(
 		listSessions: () => store.list(),
 		openSession: (sessionId) => store.open(sessionId),
 		createSession: (payload) => store.create(payload),
+		...(store.fork === undefined
+			? {}
+			: {
+					forkSession: (sourceSessionId: string, payload: Record<string, unknown>) =>
+						store.fork!(sourceSessionId, payload),
+				}),
 		deleteSession: (sessionId) => store.delete(sessionId),
 	});
 }
