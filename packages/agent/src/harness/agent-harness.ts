@@ -405,8 +405,10 @@ class LifecycleRegistry implements Hooks, Events {
 		for (const listener of this.events.get(type) ?? []) void Promise.resolve(listener(event));
 	}
 
-	async runHook(name: HookName, event: unknown): Promise<void> {
-		for (const registration of this.hooks.get(name) ?? []) await registration.handler(event);
+	async runHook(name: HookName, event: unknown): Promise<unknown> {
+		let result: unknown;
+		for (const registration of this.hooks.get(name) ?? []) result = await registration.handler(event);
+		return result;
 	}
 
 	hasHook(name: HookName): boolean {
@@ -737,6 +739,20 @@ export class AgentHarness implements AgentLane {
 					...this.streamOptions,
 					model: this.model,
 					samplingInput,
+					transformContext: async (messages) => {
+						const result = await this.runLifecycleHook("transform_context", {
+							operationId: runId,
+							messages: durableClone(messages),
+						});
+						if (
+							result !== null &&
+							typeof result === "object" &&
+							"messages" in result &&
+							Array.isArray(result.messages)
+						)
+							return result.messages as AgentMessage[];
+						return messages;
+					},
 					reasoning: this.thinkingLevel === "off" ? undefined : this.thinkingLevel,
 					beforeAssistantResponse: async () => {
 						assistantAttempt += 1;
@@ -1775,10 +1791,10 @@ export class AgentHarness implements AgentLane {
 		return this.durableSession.appendRecord(record);
 	}
 
-	private async runLifecycleHook(name: HookName, event: unknown): Promise<void> {
-		if (!this.lifecycle.hasHook(name)) return;
+	private async runLifecycleHook(name: HookName, event: unknown): Promise<unknown> {
+		if (!this.lifecycle.hasHook(name)) return undefined;
 		await this.park({ kind: "hook", name });
-		await this.lifecycle.runHook(name, event);
+		return this.lifecycle.runHook(name, event);
 	}
 
 	private async laneSnapshot(lane: string): Promise<LaneSnapshot> {
