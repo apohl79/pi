@@ -399,6 +399,15 @@ export class RemoteV2Session {
 		return result.agents.map((agent) => structuredClone(agent));
 	}
 
+	async waitAgent(agentId: string, timeoutMs?: number): Promise<AgentSummary> {
+		const result = await this.#direct({
+			command: "agent/wait",
+			payload: { agentId, ...(timeoutMs === undefined ? {} : { timeoutMs }) },
+		});
+		if (!isAgentSummary(result.agent)) throw new Error("Invalid agent/wait response");
+		return structuredClone(result.agent);
+	}
+
 	async spawnAgent(
 		taskName: string,
 		taskMessage: string,
