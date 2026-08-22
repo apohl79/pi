@@ -25,10 +25,10 @@ import { BlobV2ImageService } from "../src/images.ts";
 import { InMemoryV2InputRegistry } from "../src/inputs.ts";
 import { InMemoryV2OperationStore, JsonlV2OperationStore } from "../src/operation-store.ts";
 import { InMemoryV2ProcessRegistry, NodeV2ProcessRegistry } from "../src/processes.ts";
-import { connectUnixTestClientV2, Deferred } from "../src/testing/index.ts";
+import { connectInMemoryTestClientV2, connectUnixTestClientV2, Deferred } from "../src/testing/index.ts";
 import { createUnixServerV2 } from "../src/transports/unix/preset.ts";
 import { InMemoryV2UsageLedger } from "../src/usage-ledger.ts";
-import type { PiServerServiceV2, PiSessionRuntimeV2 } from "../src/v2.ts";
+import { type PiServerServiceV2, PiServerV2, type PiSessionRuntimeV2 } from "../src/v2.ts";
 import { AdapterV2WebService } from "../src/web.ts";
 
 const runtimes: TestRuntime[] = [];
@@ -175,6 +175,38 @@ afterEach(async () => {
 });
 
 describe("PiServer v2 operation acceptance", () => {
+	test("accepts deterministic in-memory v2 handshakes and fragmented requests", async () => {
+		const service = new TestService();
+		const server = new PiServerV2(service, { listeners: [], serverId: "memory-server" });
+		await server.start();
+		const client = connectInMemoryTestClientV2(server.accept.bind(server));
+		try {
+			expect(await client.hello()).toMatchObject({
+				type: "hello",
+				version: 2,
+				snapshot: { serverId: "memory-server" },
+			});
+			await client.sendFragmentedMessage(
+				{
+					type: "request",
+					id: "memory-model-list",
+					request: { command: "model/list" },
+				},
+				3,
+			);
+			expect(
+				await client.next((message) => message.type === "response" && message.id === "memory-model-list"),
+			).toMatchObject({
+				type: "response",
+				id: "memory-model-list",
+				ok: true,
+			});
+		} finally {
+			await client.close();
+			await server.close();
+		}
+	});
+
 	test("routes host-scoped filesystem completion, resolution, and reads", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-files-"));
 		directories.push(directory);
