@@ -56,9 +56,16 @@ export class RemoteV2StatuslineController {
 	readonly #source: RemoteV2StatuslineSource;
 	readonly #options: RemoteV2StatuslinePayloadOptions;
 	readonly #unsubscribe: () => void;
+	readonly #onUpdated?: () => void;
 	#snapshot: StatuslineSnapshot = { pending: false };
 
-	constructor(source: RemoteV2StatuslineSource, runner: StatuslineRunner, options: RemoteV2StatuslinePayloadOptions) {
+	constructor(
+		source: RemoteV2StatuslineSource,
+		runner: StatuslineRunner,
+		options: RemoteV2StatuslinePayloadOptions,
+		onUpdated?: () => void,
+	) {
+		this.#onUpdated = onUpdated;
 		this.#source = source;
 		this.#runner = runner;
 		this.#options = options;
@@ -75,12 +82,45 @@ export class RemoteV2StatuslineController {
 		const payload = createRemoteV2StatuslinePayload(state, this.#options);
 		if (payload === undefined) return this.snapshot;
 		this.#snapshot = await this.#runner.update(payload);
+		this.#onUpdated?.();
 		return this.snapshot;
 	}
 
 	async dispose(): Promise<void> {
 		this.#unsubscribe();
 		await this.#runner.dispose();
+	}
+}
+
+/** Local client-host statusline projection for the server-default remote TUI. */
+export class RemoteV2StatuslineComponent implements Component {
+	readonly #controller: RemoteV2StatuslineController;
+	#snapshot: StatuslineSnapshot = { pending: false };
+
+	constructor(
+		source: RemoteV2StatuslineSource,
+		runner: StatuslineRunner,
+		options: RemoteV2StatuslinePayloadOptions,
+		onUpdated: () => void,
+	) {
+		this.#controller = new RemoteV2StatuslineController(source, runner, options, () => {
+			this.#snapshot = this.#controller.snapshot;
+			onUpdated();
+		});
+		this.#snapshot = this.#controller.snapshot;
+	}
+
+	render(width: number): string[] {
+		void width;
+		if (this.#snapshot.output) return [this.#snapshot.output];
+		if (this.#snapshot.error) return [`statusline error: ${this.#snapshot.error}`];
+		return [];
+	}
+
+	invalidate(): void {}
+
+	dispose(): void {
+		void this.#controller.dispose();
 	}
 }
 

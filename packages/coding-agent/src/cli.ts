@@ -10,13 +10,14 @@ import { DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-agent-core";
 import { isServerDefaultCompatible, parseArgs } from "./cli/args.ts";
 import { isExperimentalCommand } from "./cli/experimental/dispatch.ts";
 import { RemoteV2InteractiveAttachment } from "./client/remote-v2-interactive.ts";
-import { RemoteV2SessionView } from "./client/remote-v2-view.ts";
+import { RemoteV2SessionView, RemoteV2StatuslineComponent } from "./client/remote-v2-view.ts";
 import { APP_NAME, getAgentDir } from "./config.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
 import { main } from "./main.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "./server/daemon-runtime.ts";
+import { StatuslineRunner } from "./server/statusline.ts";
 
 process.title = APP_NAME;
 process.env.PI_CODING_AGENT = "true";
@@ -73,12 +74,20 @@ async function runCli(): Promise<void> {
 		runInteractive: async (session, options) => {
 			const view = new RemoteV2SessionView(session);
 			const attachment = new RemoteV2InteractiveAttachment({ session, view, dispose: async () => view.dispose() });
-			const tui = createInteractiveTui({
+			let tui: ReturnType<typeof createInteractiveTui>;
+			const statusline = new RemoteV2StatuslineComponent(
+				session,
+				new StatuslineRunner(),
+				{ cwd: process.cwd(), transcriptPath: "", projectDir: process.cwd() },
+				() => tui?.requestRender(),
+			);
+			tui = createInteractiveTui({
 				tuiMode: options.tuiMode ?? "regular",
 				showHardwareCursor: false,
 				logDirectory: agentDir,
 			});
 			tui.addChild(attachment);
+			tui.addChild(statusline);
 			tui.setFocus(attachment);
 			await new Promise<void>((resolve) => {
 				let settled = false;
@@ -88,7 +97,10 @@ async function runCli(): Promise<void> {
 					removeInputListener();
 					process.stdin.off("end", finish);
 					tui.stop();
-					void attachment.dispose().finally(resolve);
+					void attachment.dispose().finally(() => {
+						statusline.dispose();
+						resolve();
+					});
 				};
 				const inputListener = (data: string) => {
 					if (data === "\u0003") {
