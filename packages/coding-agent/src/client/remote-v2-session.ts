@@ -180,7 +180,7 @@ export class RemoteV2Session {
 		this.#lastEvent = event;
 		if (event.event === "operation_accepted") {
 			const payload = asRecord(event.payload);
-			if (event.operationId)
+			if (event.operationId && this.#lifecycle.status !== "busy")
 				this.#lifecycle = {
 					status: "busy",
 					operationId: event.operationId,
@@ -219,6 +219,7 @@ export class RemoteV2Session {
 		if (this.#lifecycle.status === "detached" || !this.#handle) throw new Error("Session is not open");
 		const handle = this.#requireHandle();
 		if (handle.mode !== "control") throw new Error("Session requires a control lease");
+		if (this.#lifecycle.status === "busy") throw new Error("Session operation is already in progress");
 	}
 	#assertNotDisposed(): void {
 		if (this.#lifecycle.status === "disposed") throw new Error("Remote v2 session is disposed");
