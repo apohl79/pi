@@ -697,10 +697,12 @@ export class AgentHarness implements AgentLane {
 			release();
 			throw error;
 		}
+		let startedEventEmitted = false;
 		try {
 			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 			await this.durableSession.appendRecord(started);
 			this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
+			startedEventEmitted = true;
 		} catch (error) {
 			const raced = await this.durableSession.findOpenOperations("main", { limit: 1 }).catch(() => []);
 			if (raced.length > 0 && raced[0]!.id === runId) {
@@ -721,6 +723,10 @@ export class AgentHarness implements AgentLane {
 				this.releaseQueueClaims(claimedQueueIds);
 				release();
 				throw error;
+			}
+			if (!startedEventEmitted) {
+				this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
+				startedEventEmitted = true;
 			}
 		}
 		try {
@@ -1134,6 +1140,7 @@ export class AgentHarness implements AgentLane {
 			throw error;
 		}
 		let startedPersisted = false;
+		let startedEventEmitted = false;
 		try {
 			try {
 				await this.lifecycle.runHook("before_compaction", { operationId: runId, model: this.model });
@@ -1144,6 +1151,8 @@ export class AgentHarness implements AgentLane {
 					sourceLeafId: await this.durableSession.getLeafId(),
 					intent: { kind: "compaction", resultEntryId, customInstructions: _options?.customInstructions },
 				});
+				this.lifecycle.emit("operation_started", { operationId: runId, kind: "compaction" });
+				startedEventEmitted = true;
 			} catch (error) {
 				const raced = await this.durableSession.findOpenOperations("main", { limit: 1 }).catch(() => []);
 				if (raced.length > 0 && raced[0]!.id !== runId) {
@@ -1159,6 +1168,10 @@ export class AgentHarness implements AgentLane {
 				if (raced.length === 0) throw error;
 				// The append may have committed before the backend reported an error.
 				// Continue the operation when our own start is durably visible.
+			}
+			if (!startedEventEmitted) {
+				this.lifecycle.emit("operation_started", { operationId: runId, kind: "compaction" });
+				startedEventEmitted = true;
 			}
 			startedPersisted = true;
 			const result = await compact(
@@ -1286,6 +1299,7 @@ export class AgentHarness implements AgentLane {
 			});
 			this.activeOperation = { id: runId, kind: "navigation", controller, done, resolveDone };
 			let started = false;
+			let startedEventEmitted = false;
 			try {
 				await this.lifecycle.runHook("before_navigation", { operationId: runId, targetId, summarize });
 				await this.durableSession.appendRecord({
@@ -1303,6 +1317,8 @@ export class AgentHarness implements AgentLane {
 					},
 				});
 				started = true;
+				this.lifecycle.emit("operation_started", { operationId: runId, kind: "navigation" });
+				startedEventEmitted = true;
 				let summary: BranchSummaryResult | undefined;
 				if (summarize && oldLeafId) {
 					const collected = await collectEntriesForBranchSummary(this.durableSession, oldLeafId, targetId ?? oldLeafId);
@@ -1353,6 +1369,14 @@ export class AgentHarness implements AgentLane {
 				return ResultValue.ok({ runId, kind: "completed", newLeafId: summaryEntry?.id ?? targetId, summaryEntry });
 			} catch (error) {
 				const message = sanitizeErrorMessage(error, "Navigation failed");
+				if (!started) {
+					const committed = await this.durableSession.findOpenOperations("main", { limit: 1 }).catch(() => []);
+					started = committed.some((operation) => operation.id === runId);
+				}
+				if (started && !startedEventEmitted) {
+					this.lifecycle.emit("operation_started", { operationId: runId, kind: "navigation" });
+					startedEventEmitted = true;
+				}
 				let restored = true;
 				try {
 					if (started && (await this.durableSession.getLeafId()) !== oldLeafId) await this.durableSession.moveLane("main", oldLeafId);
