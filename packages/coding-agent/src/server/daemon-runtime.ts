@@ -95,9 +95,24 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			repository,
 			env,
 			close: async () => {
-				await runtime.close();
-				await repository.close();
-				await env.cleanup();
+				const errors: unknown[] = [];
+				try {
+					await runtime.close();
+				} catch (error) {
+					errors.push(error);
+				}
+				try {
+					await repository.close();
+				} catch (error) {
+					errors.push(error);
+				}
+				try {
+					await env.cleanup();
+				} catch (error) {
+					errors.push(error);
+				}
+				if (errors.length === 1) throw errors[0];
+				if (errors.length > 1) throw new AggregateError(errors, "Failed to close configured daemon runtime");
 			},
 		};
 	} catch (error) {
