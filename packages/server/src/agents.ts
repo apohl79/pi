@@ -45,6 +45,11 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 		this.maxDepth = options.maxDepth ?? 1;
 		this.maxActive = options.maxActive ?? 8;
 		this.maxActivePerParent = options.maxActivePerParent ?? 4;
+		if (!Number.isInteger(this.maxDepth) || this.maxDepth < 1) throw new Error("maxDepth must be a positive integer");
+		if (!Number.isInteger(this.maxActive) || this.maxActive < 1 || this.maxActive > 8)
+			throw new Error("maxActive must be an integer from 1 to 8");
+		if (!Number.isInteger(this.maxActivePerParent) || this.maxActivePerParent < 1 || this.maxActivePerParent > 8)
+			throw new Error("maxActivePerParent must be an integer from 1 to 8");
 	}
 
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {

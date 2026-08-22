@@ -233,4 +233,16 @@ describe("CodingAgentV2AgentRegistry", () => {
 			text: '[forked context]\nuser: [{"type":"text","text":"recent context"}]\n\ncontinue the task',
 		});
 	});
+
+	test("rejects unsafe agent registry limits", () => {
+		const service: CodingAgentV2Service = {
+			listSessions: async () => [],
+			listModels: async () => [],
+			openSession: async () => fixture().runtime,
+		};
+		expect(() => new CodingAgentV2AgentRegistry(service, { maxActive: 9 })).toThrow(
+			"maxActive must be an integer from 1 to 8",
+		);
+		expect(() => new CodingAgentV2AgentRegistry(service, { maxActivePerParent: 0 })).toThrow("maxActivePerParent");
+	});
 });
