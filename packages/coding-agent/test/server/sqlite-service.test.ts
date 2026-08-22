@@ -178,6 +178,59 @@ describe("coding-agent SQLite v2 service", () => {
 		}
 	});
 
+	test("preserves an explicitly configured root profile scope", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-v2-profile-scope-"));
+		directories.push(directory);
+		const env = new NodeExecutionEnv({ cwd: directory });
+		const repository = new SqliteSessionRepository({
+			env,
+			sqlite: createNodeSqliteFactory(),
+			databasePath: "sessions.sqlite",
+		});
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-profile-scope-faux",
+			models: [{ id: "model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const resolver = new ModelInstructionResolver(
+			[
+				{
+					id: "explicit-subagent-profile",
+					provider: faux.getModel().provider,
+					model: "model",
+					mode: "append",
+					text: "Explicit scope.",
+					applyTo: ["subagent"],
+				},
+			],
+			{ cwd: directory },
+		);
+		expect(await resolver.resolve({ provider: faux.getModel().provider, id: "model" }, "subagent")).toMatchObject({
+			id: "explicit-subagent-profile",
+		});
+		try {
+			const service = await createCodingAgentV2SqliteService({
+				repository,
+				models,
+				env,
+				model: faux.getModel(),
+				harness: {
+					modelInstructions: { resolver, scope: "subagent" },
+					tools: [],
+					activeToolNames: [],
+				},
+			});
+			const created = await service.createSession!({ id: "explicit-scope-session", cwd: directory });
+			expect((await created.runtime.snapshot()).instructionProfile).toMatchObject({
+				id: "explicit-subagent-profile",
+			});
+		} finally {
+			await repository.close();
+			await env.cleanup();
+		}
+	});
+
 	test("injects enabled plugin sampling into provider requests", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-v2-plugin-sampling-"));
 		directories.push(directory);
