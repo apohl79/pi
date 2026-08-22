@@ -219,4 +219,22 @@ describe("PiClientV2", () => {
 		await second;
 		client.dispose();
 	});
+
+	test("tracks interleaved session cursors and refuses ambiguous automatic replay", async () => {
+		const pair = transportPair();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		const first = client.connect();
+		await Promise.resolve();
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
+		await first;
+		pair.deliver({ type: "event", sessionId: "session-1", seq: 4, revision: 1, event: "usage_updated", payload: {} });
+		pair.deliver({ type: "event", sessionId: "session-2", seq: 9, revision: 1, event: "usage_updated", payload: {} });
+		expect(client.lastEventCursors).toEqual([
+			{ sessionId: "session-1", eventSeq: 4 },
+			{ sessionId: "session-2", eventSeq: 9 },
+		]);
+		client.disconnect();
+		await expect(client.connect()).rejects.toThrow("multiple sessions");
+		client.dispose();
+	});
 });

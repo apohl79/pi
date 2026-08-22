@@ -52,6 +52,7 @@ export class PiClientV2 {
 	private disposed = false;
 	private requestSequence = 0;
 	private lastEventCursorValue?: EventCursor;
+	private readonly eventCursors = new Map<string, EventCursor>();
 	private handshake?: { resolve: (snapshot: ServerSnapshotV2) => void; reject: (error: Error) => void };
 	private transportGeneration = 0;
 
@@ -68,9 +69,15 @@ export class PiClientV2 {
 		return this.lastEventCursorValue === undefined ? undefined : { ...this.lastEventCursorValue };
 	}
 
+	get lastEventCursors(): readonly EventCursor[] {
+		return [...this.eventCursors.values()].map((cursor) => ({ ...cursor }));
+	}
+
 	async connect(lastEvent?: EventCursor): Promise<ServerSnapshotV2> {
 		if (this.disposed) throw new Error("PiClientV2 is disposed");
 		if (this.connectedValue || this.handshake) throw new Error("PiClientV2 is already connecting or connected");
+		if (lastEvent === undefined && this.eventCursors.size > 1)
+			throw new Error("PiClientV2 requires an explicit event cursor when multiple sessions have events");
 		const effectiveLastEvent = lastEvent ?? this.lastEventCursorValue;
 		this.decoder = new FrameDecoder({ maxFrameLength: this.options.maxFrameLength ?? DEFAULT_MAX_FRAME_LENGTH });
 		const snapshot = new Promise<ServerSnapshotV2>((resolve, reject) => {
@@ -191,6 +198,7 @@ export class PiClientV2 {
 		}
 		if (message.type === "event") {
 			this.lastEventCursorValue = { sessionId: message.sessionId, eventSeq: message.seq };
+			this.eventCursors.set(message.sessionId, this.lastEventCursorValue);
 			for (const listener of this.listeners) {
 				try {
 					listener(message);
