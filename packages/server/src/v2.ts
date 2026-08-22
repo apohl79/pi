@@ -939,13 +939,46 @@ export class PiServerV2 {
 			Array.isArray(payload.manifest)
 		)
 			throw new Error("plugin/install requires name, marketplace, version, and manifest");
-		await this.sendResponse(state, id, {
+		const manifest = payload.manifest as Record<string, unknown>;
+		const boundedResources = (value: unknown): string[] =>
+			Array.isArray(value)
+				? value
+						.filter((item): item is string => typeof item === "string")
+						.slice(0, 256)
+						.map((item) => item.slice(0, 1024))
+				: [];
+		const preview = {
+			id: `${payload.name}@${payload.marketplace}`,
+			name: payload.name,
+			marketplace: payload.marketplace,
+			version: payload.version,
+			manifestDigest: "0".repeat(64),
+			...(typeof payload.root === "string" ? { root: payload.root } : {}),
+			enabled: true,
+			scope: payload.scope === "project" ? "project" : "user",
+			provenance: "manifest",
+			resources: {
+				skills: boundedResources(manifest.skills),
+				commands: boundedResources(manifest.commands),
+				apps: Array.isArray(manifest.apps) ? manifest.apps.length : manifest.apps === undefined ? 0 : 1,
+				hooks: Array.isArray(manifest.hooks) ? manifest.hooks.length : manifest.hooks === undefined ? 0 : 1,
+			},
+		};
+		try {
+			encodeServerMessageV2(
+				{ type: "response", id, ok: true, result: toProtocolJsonValue({ command: command.command, plugin: preview }) },
+				{ maxFrameLength: this.maxFrameLength },
+			);
+		} catch {
+			throw new Error("Plugin response exceeds the maximum frame size");
+		}
+		await this.sendBoundedPluginResponse(state, id, {
 			command: command.command,
 			plugin: await this.plugins.installPlugin({
 				name: payload.name,
 				marketplace: payload.marketplace,
 				version: payload.version,
-				manifest: payload.manifest as Record<string, unknown>,
+				manifest,
 				...(typeof payload.root === "string" ? { root: payload.root } : {}),
 				...(payload.scope === "user" || payload.scope === "project" ? { scope: payload.scope } : {}),
 			}),

@@ -48,7 +48,7 @@ export interface V2PluginRegistry {
 
 function requireName(value: string, field: string): string {
 	const normalized = value.trim();
-	if (normalized.length === 0 || normalized.length > MAX_V2_STRING_LENGTH)
+	if (normalized.length === 0 || normalized.length > 1024)
 		throw new Error(`${field} must be non-empty and bounded`);
 	return normalized;
 }
@@ -163,10 +163,16 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 			provenance: "manifest",
 			resources: {
 				skills: Array.isArray(manifest.skills)
-					? manifest.skills.filter((value): value is string => typeof value === "string")
+					? manifest.skills
+						.filter((value): value is string => typeof value === "string")
+						.slice(0, 256)
+						.map((value) => value.slice(0, 1024))
 					: [],
 				commands: Array.isArray(manifest.commands)
-					? manifest.commands.filter((value): value is string => typeof value === "string")
+					? manifest.commands
+						.filter((value): value is string => typeof value === "string")
+						.slice(0, 256)
+						.map((value) => value.slice(0, 1024))
 					: [],
 				apps: resourceCount(manifest.apps),
 				hooks: resourceCount(manifest.hooks),
