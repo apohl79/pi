@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { cp, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile, chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { type CodexPluginManifest, loadCodexPluginManifest } from "./codex-plugin.ts";
 
@@ -42,6 +42,19 @@ async function rejectSymlinkEntries(root: string): Promise<void> {
 		const path = join(root, entry.name);
 		if (entry.isSymbolicLink()) throw new CodexPluginActivationError("activation_failed", "Plugin source contains a symlink");
 		if (entry.isDirectory()) await rejectSymlinkEntries(path);
+	}
+}
+
+async function ensurePrivateCacheRoot(root: string): Promise<void> {
+	await mkdir(root, { recursive: true, mode: 0o700 });
+	let metadata = await lstat(root);
+	if (!metadata.isDirectory()) throw new Error("Plugin cache root is not a directory");
+	const uid = process.getuid?.();
+	if (uid !== undefined && metadata.uid !== uid) throw new Error("Plugin cache root has an unexpected owner");
+	if ((metadata.mode & 0o077) !== 0) {
+		await chmod(root, 0o700);
+		metadata = await lstat(root);
+		if ((metadata.mode & 0o077) !== 0) throw new Error("Plugin cache root permissions are unsafe");
 	}
 }
 
@@ -102,12 +115,13 @@ export class CodexPluginActivationStore {
 				`Plugin version is already active: ${options.id}@${options.version}`,
 			);
 		}
-		await mkdir(this.cacheRoot, { recursive: true, mode: 0o700 });
+		await ensurePrivateCacheRoot(this.cacheRoot);
 		const stageRoot = join(this.cacheRoot, `.staging-${randomUUID()}`);
 		let versionInstalled = false;
 		try {
 			await mkdir(join(this.cacheRoot, key, "versions"), { recursive: true, mode: 0o700 });
 			await cp(sourceRoot, stageRoot, { recursive: true, force: false, errorOnExist: true });
+			await rejectSymlinkEntries(stageRoot);
 			const staged = await loadCodexPluginManifest(stageRoot);
 			if (
 				!staged.manifest ||
