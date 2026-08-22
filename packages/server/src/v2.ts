@@ -982,6 +982,18 @@ export class PiServerV2 {
 		if (count === undefined) return;
 		if (count <= 1) this.pendingAttaches.delete(runtime);
 		else this.pendingAttaches.set(runtime, count - 1);
+		// A concurrent attach may have observed the runtime after another
+		// request installed it in the connection map, while every attach
+		// request ultimately failed before committing ownership. Remove that
+		// provisional map entry when the final pending lease is released so a
+		// disposed runtime can never remain addressable on this connection.
+		if (
+			!this.hasPendingAttach(runtime) &&
+			!state.attachedSessions.has(sessionId) &&
+			state.sessions.get(sessionId) === runtime
+		) {
+			state.sessions.delete(sessionId);
+		}
 		if (this.hasRuntimeReference(runtime) || this.hasActiveOperation(runtime) || this.hasPendingAttach(runtime)) return;
 		try {
 			await this.disposeRuntime(runtime);

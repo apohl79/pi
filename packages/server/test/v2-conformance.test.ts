@@ -162,6 +162,26 @@ class RacingSnapshotRuntime extends TestRuntime {
 	}
 }
 
+class AllFailSnapshotRuntime extends TestRuntime {
+	readonly firstSnapshotEntered = new Deferred<void>();
+	readonly secondSnapshotEntered = new Deferred<void>();
+	readonly firstSnapshotRelease = new Deferred<void>();
+	readonly secondSnapshotRelease = new Deferred<void>();
+	private snapshotCalls = 0;
+
+	override async snapshot(): Promise<SessionSnapshotV2> {
+		this.snapshotCalls += 1;
+		if (this.snapshotCalls === 1) {
+			this.firstSnapshotEntered.resolve(undefined);
+			await this.firstSnapshotRelease.promise;
+		} else {
+			this.secondSnapshotEntered.resolve(undefined);
+			await this.secondSnapshotRelease.promise;
+		}
+		throw new Error("attach snapshot failed");
+	}
+}
+
 class TestService implements PiServerServiceV2 {
 	readonly sessionMetadata: SessionMetadataV2[] = [];
 	readonly sessions = new Map<string, TestRuntime>();
@@ -368,5 +388,32 @@ describe("PiServer v2 operation acceptance", () => {
 
 		await expect(client.request({ command: "session/detach", sessionId: "session-1" })).resolves.toMatchObject({ ok: true });
 		await vi.waitFor(() => expect(runtime.disposed).toBe(true));
+	});
+
+	test("disposes and unmaps a runtime when every concurrent attach fails", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
+		directories.push(directory);
+		const runtime = new AllFailSnapshotRuntime("session-1");
+		const service = new TestService(runtime);
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+
+		const first = client.request({ command: "session/attach", sessionId: "session-1" });
+		await runtime.firstSnapshotEntered.promise;
+		const second = client.request({ command: "session/attach", sessionId: "session-1" });
+		await runtime.secondSnapshotEntered.promise;
+		runtime.firstSnapshotRelease.resolve(undefined);
+		runtime.secondSnapshotRelease.resolve(undefined);
+		await expect(first).resolves.toMatchObject({ ok: false, error: { code: "request_failed" } });
+		await expect(second).resolves.toMatchObject({ ok: false, error: { code: "request_failed" } });
+		await vi.waitFor(() => expect(runtime.disposed).toBe(true));
+		await expect(client.request({ command: "session/read", sessionId: "session-1" })).resolves.toMatchObject({
+			ok: false,
+			error: { code: "request_failed" },
+		});
+		await client.close();
 	});
 });
