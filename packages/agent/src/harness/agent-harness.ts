@@ -119,6 +119,26 @@ function durableClone<T>(value: T): T {
 	return JSON.parse(encoded) as T;
 }
 
+function persistedRetryPolicy(entry: Entry): RetryPolicy | undefined {
+	if (entry.type !== "custom" || entry.customType !== "retry_policy_change") return undefined;
+	if (typeof entry.data !== "object" || entry.data === null || Array.isArray(entry.data)) return undefined;
+	const data = entry.data as Record<string, unknown>;
+	if (
+		typeof data.enabled !== "boolean" ||
+		!Number.isInteger(data.maxRetries) ||
+		(data.maxRetries as number) < 0 ||
+		typeof data.baseDelayMs !== "number" ||
+		!Number.isFinite(data.baseDelayMs) ||
+		(data.baseDelayMs as number) < 0
+	)
+		return undefined;
+	return {
+		enabled: data.enabled,
+		maxRetries: data.maxRetries as number,
+		baseDelayMs: data.baseDelayMs,
+	};
+}
+
 export interface OperationError {
 	code: string;
 	message: string;
@@ -478,6 +498,8 @@ export class AgentHarness implements AgentLane {
 		}
 		const persistedTools = branchEntries.find((entry) => entry.type === "active_tools_change");
 		if (persistedTools?.type === "active_tools_change") harness.activeToolNames = [...persistedTools.activeToolNames];
+		const persistedRetry = branchEntries.find((entry) => persistedRetryPolicy(entry) !== undefined);
+		if (persistedRetry !== undefined) harness.retryPolicy = persistedRetryPolicy(persistedRetry)!;
 		const lanes = await options.session.getLanes();
 		const suspended: SuspendedOperation[] = [];
 		for (const lane of lanes.filter((candidate) => candidate.lane === harness.name)) {
@@ -1360,6 +1382,15 @@ export class AgentHarness implements AgentLane {
 	}
 	async setRetryPolicy(policy: RetryPolicy): Promise<void> {
 		this.retryPolicy = { ...policy };
+		await this.durableSession.appendEntry(
+			{
+				type: "custom",
+				customType: "retry_policy_change",
+				id: this.durableSession.idGenerator.next(),
+				data: durableClone(policy),
+			},
+			this.name,
+		);
 	}
 	async getCompactionSettings(): Promise<CompactionSettings> {
 		return resolveCompactionSettings(this.compactionSettings, this.model.provider, this.model.id);
