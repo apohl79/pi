@@ -494,4 +494,25 @@ describe("JSONL v4 per-session storage", () => {
 		const reopened = await createRepository(root).open(await session.getMetadata());
 		expect(await reopened.getLog()).toEqual([{ kind: "entry", seq: 1, entry: committed }]);
 	});
+
+	it("does not replay a durably appended line after a reported append failure", async () => {
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+		const repository = new JsonlSessionRepo({ fs: env, sessionsRoot: root });
+		const session = await repository.create({ id: "append-then-fails", cwd: root });
+		const appendFile = env.appendFile.bind(env);
+		vi.spyOn(env, "appendFile").mockImplementationOnce(async (path, content) => {
+			await appendFile(path, content);
+			return { ok: false, error: new FileError("unknown", "reported after commit") };
+		});
+
+		await expect(session.appendCustomEntry("durably-committed")).rejects.toMatchObject({ code: "storage" });
+		const next = await session.appendCustomEntry("next");
+
+		const reopened = await createRepository(root).open(await session.getMetadata());
+		expect((await reopened.findEntries({ order: "oldestFirst" })).map((entry) => entry.id)).toEqual([
+			"durably-committed",
+			next.id,
+		]);
+	});
 });

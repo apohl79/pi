@@ -694,12 +694,17 @@ export class AgentHarness implements AgentLane {
 				this.rememberFinishedOperation(runId);
 				return;
 			}
+			// Reuse one terminal id for every append/reconciliation attempt. If the
+			// append committed before its transport response, retrying with a fresh id
+			// would create a duplicate terminal record when confirmation is delayed or
+			// temporarily unavailable.
+			const terminalId = this.durableSession.idGenerator.next();
 			let lastError: unknown;
 			for (let attempt = 0; attempt < 3; attempt++) {
 				try {
 					await this.durableSession.appendRecord({
 						type: "operation_finished",
-						id: this.durableSession.idGenerator.next(),
+						id: terminalId,
 						lane: "main",
 						runId,
 						outcome,

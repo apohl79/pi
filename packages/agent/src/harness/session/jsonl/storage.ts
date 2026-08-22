@@ -321,6 +321,12 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 			try {
 				const fresh = await JsonlSessionStorage.load(this.fs, this.metadata.path);
 				this.state = fresh.state;
+				// The append can be durable even when the backend reports a transport
+				// error. Keep the incremental refresh cursor in sync with the canonical
+				// reload, otherwise the next mutation replays the committed suffix.
+				this.persistedLineCount = fresh.persistedLineCount;
+				this.persistedSize = fresh.persistedSize;
+				this.persistedModifiedAt = fresh.persistedModifiedAt;
 			} catch {
 				// Preserve the original append error when the recovery read fails.
 			}
