@@ -1,4 +1,4 @@
-import type { AgentHarness, AgentMessage, Entry, GoalManager } from "@earendil-works/pi-agent-core";
+import type { AgentHarness, AgentMessage, Entry, GoalManager, LaneRecord } from "@earendil-works/pi-agent-core";
 import type { Model, Models, ThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import type {
 	CommandNameV2,
@@ -97,6 +97,29 @@ function usage(value: Usage | undefined): {
 			total: finiteNonNegative(value.cost.total),
 		},
 	};
+}
+
+function aggregateUsage(records: readonly LaneRecord[]): {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	costUsd: number;
+} {
+	const add = (left: number, right: number): number => {
+		const sum = left + right;
+		return Number.isFinite(sum) ? Math.min(Number.MAX_SAFE_INTEGER, sum) : Number.MAX_SAFE_INTEGER;
+	};
+	return records.filter((record): record is Extract<LaneRecord, { type: "usage" }> => record.type === "usage").reduce(
+		(total, record) => ({
+			input: add(total.input, finiteNonNegative(record.usage.input)),
+			output: add(total.output, finiteNonNegative(record.usage.output)),
+			cacheRead: add(total.cacheRead, finiteNonNegative(record.usage.cacheRead)),
+			cacheWrite: add(total.cacheWrite, finiteNonNegative(record.usage.cacheWrite)),
+			costUsd: add(total.costUsd, finiteNonNegative(record.usage.cost.total)),
+		}),
+		{ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 },
+	);
 }
 
 function contentParts(message: AgentMessage): Array<Record<string, unknown>> {
@@ -301,12 +324,11 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 
 	async snapshot(): Promise<SessionSnapshotV2> {
 		if (this.disposed) throw new Error("Session runtime is disposed");
-		const [thinkingLevel, persistedName, entries, queueRecords, stats, compaction] = await Promise.all([
+		const [thinkingLevel, persistedName, entries, queueRecords, compaction] = await Promise.all([
 			this.definition.harness.getThinkingLevel(),
 			this.definition.harness.session.getName(),
 			this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }),
 			this.definition.harness.session.findRecords({ order: "oldestFirst" }),
-			this.definition.harness.session.getStats(),
 			this.definition.harness.getCompactionSettings(),
 		]);
 		this.restoreOperationState(entries);
@@ -349,11 +371,13 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 					: "suspended";
 		const goal = await this.definition.goals?.read();
 		const sessionName = persistedName ?? this.sessionName;
-		const cacheRead = Math.max(0, stats.cachedTokens);
-		const input = Math.max(0, stats.uncachedTokens);
-		const output = Math.max(0, stats.totalTokens - stats.cachedTokens - stats.uncachedTokens);
+		const totals = aggregateUsage(queueRecords);
 		const contextWindow = Math.max(1, this.model.contextWindow);
 		const reserveTokens = Math.max(0, compaction.reserveTokens);
+		const latestUsage = queueRecords
+			.filter((record): record is Extract<LaneRecord, { type: "usage" }> => record.type === "usage" && record.cause === "assistant")
+			.at(-1)?.usage;
+		const currentTokens = Math.min(contextWindow, finiteNonNegative(latestUsage?.totalTokens));
 		return {
 			id: this.definition.metadata.id,
 			...(sessionName === undefined
@@ -371,17 +395,17 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			...(goal === undefined ? {} : { goal }),
 			agents: [],
 			usage: {
-				input,
-				output,
-				cacheRead,
-				cacheWrite: 0,
-				...(stats.costTotal > 0 ? { costUsd: stats.costTotal } : {}),
+				input: totals.input,
+				output: totals.output,
+				cacheRead: totals.cacheRead,
+				cacheWrite: totals.cacheWrite,
+				...(totals.costUsd > 0 ? { costUsd: totals.costUsd } : {}),
 				pricingState: "known",
 			},
 			context: {
-				inputTokens: Math.max(0, stats.totalTokens),
+				inputTokens: currentTokens,
 				contextWindow,
-				usedPercentage: Math.min(100, (Math.max(0, stats.totalTokens) / contextWindow) * 100),
+				usedPercentage: (currentTokens / contextWindow) * 100,
 			},
 			compactionPolicy: {
 				enabled: compaction.enabled,
