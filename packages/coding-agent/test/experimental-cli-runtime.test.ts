@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import type { ByteTransport, ByteTransportHandlers } from "@earendil-works/pi-client";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { ClientDiagnosticSpool } from "@earendil-works/pi-client/diagnostics";
@@ -180,6 +181,23 @@ describe("experimental CLI runtime", () => {
 		});
 		await runtime.runAttach({ command: "attach", sessionId: "session-1" });
 		expect(attached).toHaveBeenCalledTimes(1);
+		runtime.close();
+	});
+
+	test("runs the core RPC prompt contract through the server-owned session", async () => {
+		const server = clientFactory();
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: () => {},
+			rpcInput: Readable.from(['{"id":"prompt-1","type":"prompt","message":"hello"}\n']),
+			rpcOutput: (value) => output.push(value),
+		});
+		await runtime.runRpc({ messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(output).toContainEqual({ id: "prompt-1", type: "response", command: "prompt", success: true });
 		runtime.close();
 	});
 

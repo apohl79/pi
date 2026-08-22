@@ -33,6 +33,7 @@ async function runCli(): Promise<void> {
 	const args = process.argv.slice(2);
 	const jsonMode = args.some((arg, index) => arg === "--mode" && args[index + 1] === "json");
 	const rpcMode = args.some((arg, index) => arg === "--mode" && args[index + 1] === "rpc");
+	const serverDefaultRpc = !args.includes("--no-server") && rpcMode;
 	const serverDefaultPrint =
 		!args.includes("--no-server") && (args.includes("--print") || args.includes("-p") || jsonMode);
 	const serverDefaultInteractive =
@@ -43,7 +44,7 @@ async function runCli(): Promise<void> {
 		!args.some((arg) => arg.startsWith("-") || arg.startsWith("@")) &&
 		!args.some((arg) => arg === "--help" || arg === "-h" || arg === "--version" || arg === "-v") &&
 		(args.length === 0 || !LEGACY_COMMANDS.has(args[0]!));
-	if (!isExperimentalCommand(args) && !serverDefaultPrint && !serverDefaultInteractive) {
+	if (!isExperimentalCommand(args) && !serverDefaultPrint && !serverDefaultInteractive && !serverDefaultRpc) {
 		await main(args);
 		return;
 	}
@@ -106,7 +107,8 @@ async function runCli(): Promise<void> {
 		},
 	});
 	try {
-		if (serverDefaultPrint || serverDefaultInteractive)
+		if (serverDefaultRpc) await runtime.cli.runRpc(parseArgs(args));
+		else if (serverDefaultPrint || serverDefaultInteractive)
 			await runtime.cli.runPi({ command: "pi", options: parseArgs(args) });
 		else await main(args, { experimentalCliContext: runtime.cli });
 	} finally {
