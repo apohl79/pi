@@ -1134,6 +1134,7 @@ export class AgentHarness implements AgentLane {
 					item.queue === "nextRun" ||
 					item.runId !== openRun.id ||
 					cancelled.has(item.target.id) ||
+					this.claimedQueueItems.has(item.target.id) ||
 					item.target.type !== "message"
 				)
 					continue;
