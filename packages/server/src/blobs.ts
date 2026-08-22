@@ -25,6 +25,10 @@ function digestOf(data: Uint8Array): string {
 	return createHash("sha256").update(data).digest("hex");
 }
 
+function assertDigest(digest: string): void {
+	if (!/^[a-f0-9]{64}$/u.test(digest)) throw new Error(`Blob digest is invalid: ${digest}`);
+}
+
 function assertMimeType(mimeType: string): void {
 	if (mimeType.trim().length === 0 || mimeType.includes("\n")) throw new Error("Blob MIME type is invalid");
 }
@@ -128,14 +132,22 @@ export class FileV2BlobStore implements V2BlobStore {
 	}
 
 	async read(digest: string): Promise<Uint8Array> {
+		assertDigest(digest);
 		const data = await readFile(join(this.root, `${digest}.blob`));
 		if (data.byteLength > this.maxBytes) throw new Error(`Blob exceeds maximum size of ${this.maxBytes} bytes`);
+		const metadata = await this.stat(digest);
+		if (digestOf(data) !== digest) throw new Error(`Blob content digest mismatch for ${digest}`);
+		if (metadata.size !== data.byteLength) throw new Error(`Blob metadata size mismatch for ${digest}`);
 		return new Uint8Array(data);
 	}
 
 	async stat(digest: string): Promise<V2BlobStat> {
+		assertDigest(digest);
 		const metadata = JSON.parse(await readFile(join(this.root, `${digest}.json`), "utf8")) as V2BlobStat;
 		if (metadata.digest !== digest) throw new Error(`Blob metadata digest mismatch for ${digest}`);
+		if (!Number.isSafeInteger(metadata.size) || metadata.size < 0)
+			throw new Error(`Blob metadata size is invalid for ${digest}`);
+		assertMimeType(metadata.mimeType);
 		return metadata;
 	}
 
@@ -162,7 +174,12 @@ export class FileV2BlobStore implements V2BlobStore {
 					errors.push(`content_mismatch:${digest}`);
 				bytes += data.byteLength;
 			} catch (error) {
-				errors.push(`${digest}:${error instanceof Error ? error.name : "unknown"}`);
+				const message = error instanceof Error ? error.message : "";
+				errors.push(
+					message.includes("digest mismatch") || message.includes("size mismatch")
+						? `content_mismatch:${digest}`
+						: `${digest}:${error instanceof Error ? error.name : "unknown"}`,
+				);
 			}
 		}
 		return { ok: errors.length === 0, blobs: entries.length, bytes, errors };
