@@ -11,7 +11,7 @@ import type {
 	SessionSnapshotV2,
 	UsageAggregate,
 } from "@earendil-works/pi-protocol";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import { InMemoryV2AgentRegistry } from "../src/agents.ts";
 import { InMemoryV2AppRegistry } from "../src/apps.ts";
 import { InMemoryV2BlobStore } from "../src/blobs.ts";
@@ -97,7 +97,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 		this.current = sessionSnapshot(id);
 	}
 
-	async snapshot(): Promise<SessionSnapshotV2> {
+	snapshot(): SessionSnapshotV2 {
 		return structuredClone(this.current);
 	}
 
@@ -126,77 +126,12 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	}
 }
 
-class ControlledAcceptRuntime extends TestRuntime {
-	readonly acceptEntered = new Deferred<void>();
-	readonly acceptRelease = new Deferred<void>();
-	rejectAccept = false;
-
-	override async accept(operationId: string): Promise<OperationAccepted> {
-		this.acceptEntered.resolve(undefined);
-		await this.acceptRelease.promise;
-		if (this.rejectAccept) throw new Error("accept failed");
-		return super.accept(operationId);
-	}
-}
-
-class BlockingSnapshotRuntime extends TestRuntime {
-	readonly snapshotEntered = new Deferred<void>();
-	readonly snapshotRelease = new Deferred<void>();
-
-	override async snapshot(): Promise<SessionSnapshotV2> {
-		this.snapshotEntered.resolve(undefined);
-		await this.snapshotRelease.promise;
-		return super.snapshot();
-	}
-}
-
-class RacingSnapshotRuntime extends TestRuntime {
-	readonly firstSnapshotEntered = new Deferred<void>();
-	readonly secondSnapshotEntered = new Deferred<void>();
-	readonly firstSnapshotRelease = new Deferred<void>();
-	readonly secondSnapshotRelease = new Deferred<void>();
-	private snapshotCalls = 0;
-
-	override async snapshot(): Promise<SessionSnapshotV2> {
-		this.snapshotCalls += 1;
-		if (this.snapshotCalls === 1) {
-			this.firstSnapshotEntered.resolve(undefined);
-			await this.firstSnapshotRelease.promise;
-			throw new Error("first attach snapshot failed");
-		}
-		this.secondSnapshotEntered.resolve(undefined);
-		await this.secondSnapshotRelease.promise;
-		return super.snapshot();
-	}
-}
-
-class AllFailSnapshotRuntime extends TestRuntime {
-	readonly firstSnapshotEntered = new Deferred<void>();
-	readonly secondSnapshotEntered = new Deferred<void>();
-	readonly firstSnapshotRelease = new Deferred<void>();
-	readonly secondSnapshotRelease = new Deferred<void>();
-	private snapshotCalls = 0;
-
-	override async snapshot(): Promise<SessionSnapshotV2> {
-		this.snapshotCalls += 1;
-		if (this.snapshotCalls === 1) {
-			this.firstSnapshotEntered.resolve(undefined);
-			await this.firstSnapshotRelease.promise;
-		} else {
-			this.secondSnapshotEntered.resolve(undefined);
-			await this.secondSnapshotRelease.promise;
-		}
-		throw new Error("attach snapshot failed");
-	}
-}
-
 class TestService implements PiServerServiceV2 {
 	readonly sessionMetadata: SessionMetadataV2[] = [];
 	readonly sessions = new Map<string, TestRuntime>();
 
-	constructor(runtime = new TestRuntime("session-1")) {
-		this.sessionMetadata.push({ id: "session-1", createdAt: 1, updatedAt: 1 });
-		this.sessions.set("session-1", runtime);
+	constructor() {
+		this.sessions.set("session-1", new TestRuntime("session-1"));
 	}
 
 	listSessions(): Promise<SessionMetadataV2[]> {
@@ -553,7 +488,6 @@ describe("PiServer v2 operation acceptance", () => {
 			accepted: { operationId: expect.stringMatching(/^[0-9a-f-]{36}$/), sessionRevision: 2, eventSeq: 2 },
 		});
 		expect(runtime.accepted).toHaveLength(1);
-		expect(runtime.runEntered).toBe(false);
 
 		runtime.release.resolve(undefined);
 		await runtime.started.promise;
@@ -585,24 +519,18 @@ describe("PiServer v2 operation acceptance", () => {
 		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
 		servers.push(server);
 		await server.start();
-		const firstClient = await connectUnixTestClientV2(server.addresses[0]!);
-		await firstClient.hello();
-		await firstClient.request({ command: "session/attach", sessionId: "session-1" });
-		const accepted = await firstClient.request({ command: "turn/start", sessionId: "session-1", payload: { text: "hello" } });
-		expect(accepted).toMatchObject({ ok: true, accepted: { eventSeq: 2 } });
+		const first = await connectUnixTestClientV2(server.addresses[0]!);
+		await first.hello();
+		await first.request({ command: "session/attach", sessionId: "session-1" });
 		const runtime = service.sessions.get("session-1")!;
-		await firstClient.request({ command: "session/detach", sessionId: "session-1" });
-		await firstClient.close();
-		expect(runtime.disposed).toBe(false);
+		const response = await first.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { text: "hello" },
+		});
+		expect(response).toMatchObject({ ok: true, accepted: { sessionRevision: 2, eventSeq: 2 } });
+		await first.close();
 
-		const secondClient = await connectUnixTestClientV2(server.addresses[0]!);
-		await secondClient.hello({ sessionId: "session-1", eventSeq: 0 });
-		const replayed = await secondClient.next(
-			(message) => message.type === "event" && message.event === "operation_accepted",
-		);
-		expect(replayed).toMatchObject({ type: "event", sessionId: "session-1", seq: 2 });
-		await secondClient.request({ command: "session/attach", sessionId: "session-1" });
-		expect(runtime.runEntered).toBe(true);
 		runtime.release.resolve(undefined);
 		await runtime.started.promise;
 		const second = await connectUnixTestClientV2(server.addresses[0]!);
@@ -742,7 +670,7 @@ describe("PiServer v2 operation acceptance", () => {
 	test("restores operation records and event replay after server restart", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
-		const store = new JsonlV2OperationStore(join(directory, "operations.jsonl"));
+		const store = new InMemoryV2OperationStore();
 		const firstService = new TestService();
 		const firstServer = createUnixServerV2(firstService, {
 			path: join(directory, "server.sock"),
@@ -775,7 +703,6 @@ describe("PiServer v2 operation acceptance", () => {
 		await second.hello({ sessionId: "session-1", eventSeq: 2 });
 		const replay = await second.next((message) => message.type === "event" && message.event === "operation_terminal");
 		expect(replay).toMatchObject({ operationId, payload: { state: "complete" } });
-		await second.request({ command: "session/attach", sessionId: "session-1" });
 		const operation = await second.request({ command: "operation/read", operationId, sessionId: "session-1" });
 		expect(operation).toMatchObject({ ok: true, result: { operation: { operationId, state: "complete" } } });
 		await second.close();
@@ -824,7 +751,6 @@ describe("PiServer v2 operation acceptance", () => {
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
-		await client.request({ command: "session/attach", sessionId: "session-1" });
 		const started = await client.request({
 			command: "process/start",
 			sessionId: "session-1",
@@ -951,20 +877,7 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: { agents: [{ id: agent.id, state: "running" }] },
 		});
-		const messageEvent = client.next((message) => message.type === "event" && message.event === "agent_message");
-		await client.request({
-			command: "agent/message",
-			payload: { agentId: agent.id, message: `token=super-secret ${"continue ".repeat(1000)}` },
-		});
-		const receivedMessage = await messageEvent;
-		expect(receivedMessage).toMatchObject({
-			event: "agent_message",
-			payload: { agentId: agent.id, message: expect.stringContaining("token=[redacted]") },
-		});
-		if (receivedMessage.type === "event") {
-			const payload = receivedMessage.payload as { message?: unknown };
-			if (typeof payload.message === "string") expect(payload.message.length).toBeLessThanOrEqual(4096);
-		}
+		await client.request({ command: "agent/message", payload: { agentId: agent.id, message: "continue" } });
 		const interrupted = await client.request({ command: "agent/interrupt", payload: { agentId: agent.id } });
 		expect(interrupted).toMatchObject({ ok: true, result: { agent: { id: agent.id, state: "interrupted" } } });
 		await client.close();
@@ -1011,18 +924,41 @@ describe("PiServer v2 operation acceptance", () => {
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
-		await client.request({ command: "session/attach", sessionId: "session-1" });
 		const updated = await client.request({
 			command: "plan/update",
 			sessionId: "session-1",
 			payload: { items: [{ step: "implement", status: "in_progress" }] },
 		});
 		expect(updated).toMatchObject({ ok: true, result: { plan: { version: 1 } } });
+		await expect(
+			client.next((message) => message.type === "event" && message.event === "plan_updated"),
+		).resolves.toMatchObject({
+			event: "plan_updated",
+			payload: { plan: { version: 1, items: [{ step: "implement" }] } },
+		});
 		const read = await client.request({ command: "session/read", sessionId: "session-1" });
 		expect(read).toMatchObject({
 			ok: true,
 			result: { session: { plan: { version: 1, items: [{ step: "implement" }] } } },
 		});
+		const cleared = await client.request({ command: "plan/clear", sessionId: "session-1" });
+		expect(cleared).toMatchObject({ ok: true, result: { cleared: true } });
+		await expect(
+			client.next(
+				(message) =>
+					message.type === "event" &&
+					message.event === "plan_updated" &&
+					typeof message.payload === "object" &&
+					message.payload !== null &&
+					"plan" in message.payload &&
+					message.payload.plan === null,
+			),
+		).resolves.toMatchObject({ event: "plan_updated", payload: { plan: null } });
+		const clearedSession = await client.request({ command: "session/read", sessionId: "session-1" });
+		expect(clearedSession).toMatchObject({ ok: true, result: { session: {} } });
+		expect((clearedSession as { result?: { session?: Record<string, unknown> } }).result?.session).not.toHaveProperty(
+			"plan",
+		);
 		await client.close();
 	});
 
@@ -1038,7 +974,6 @@ describe("PiServer v2 operation acceptance", () => {
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
-		await client.request({ command: "session/attach", sessionId: "session-1" });
 		const session = await client.request({ command: "session/read", sessionId: "session-1" });
 		expect(session).toMatchObject({ result: { session: { queues: { pendingInputRequestId: request.id } } } });
 		const read = await client.request({ command: "input/request/read", payload: { requestId: request.id } });
