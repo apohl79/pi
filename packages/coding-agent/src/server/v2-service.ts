@@ -28,7 +28,13 @@ export interface CodingAgentV2Runtime {
 	dispose(): Promise<void>;
 }
 
-function modelMetadata(model: Model<string>): ModelMetadata {
+async function modelMetadata(models: Models, model: Model<string>): Promise<ModelMetadata> {
+	let authenticated = false;
+	try {
+		authenticated = (await models.getAuth(model)) !== undefined;
+	} catch {
+		authenticated = false;
+	}
 	return {
 		provider: model.provider,
 		id: model.id,
@@ -40,7 +46,7 @@ function modelMetadata(model: Model<string>): ModelMetadata {
 		maxTokens: model.maxTokens,
 		cost: model.cost,
 		supportedThinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
-		authenticated: true,
+		authenticated,
 	};
 }
 
@@ -72,38 +78,52 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	private autoName = true;
 	private sessionName: string | undefined;
 	private nameSource: "explicit" | "generated" | "derived" | undefined;
+	private disposed = false;
+	private readonly onDispose?: () => void;
 
-	constructor(definition: CodingAgentV2SessionDefinition, models: Models, model: Model<string>) {
+	constructor(definition: CodingAgentV2SessionDefinition, models: Models, model: Model<string>, onDispose?: () => void) {
 		this.definition = definition;
 		this.models = models;
 		this.model = model;
 		this.sessionName = definition.metadata.sessionName;
 		this.nameSource = definition.metadata.nameSource;
+		this.onDispose = onDispose;
 	}
 
 	async snapshot(): Promise<SessionSnapshotV2> {
-		const [leafId, thinkingLevel] = await Promise.all([
-			this.definition.harness.getLeafId(),
+		if (this.disposed) throw new Error("Session runtime is disposed");
+		const [watch, thinkingLevel, persistedName] = await Promise.all([
+			this.definition.harness.watch(),
 			this.definition.harness.getThinkingLevel(),
+			this.definition.harness.session.getName(),
 		]);
-		void leafId;
+		const lane = watch.snapshot;
 		const goal = await this.definition.goals?.read();
+		const transcript = lane.transcript
+			.filter((entry) => entry.type === "message")
+			.map((entry) => entry.message)
+			.filter((message) => message.role === "user" || message.role === "assistant" || message.role === "toolResult")
+			.map((message, index) => ({ id: `${this.definition.metadata.id}-${index + 1}`, ...message })) as SessionSnapshotV2["transcript"];
+		const sessionName = persistedName ?? this.sessionName;
 		return {
 			id: this.definition.metadata.id,
-			...(this.sessionName === undefined
+			...(sessionName === undefined
 				? {}
-				: { name: this.sessionName, ...(this.nameSource === undefined ? {} : { nameSource: this.nameSource }) }),
+				: { name: sessionName, ...(this.nameSource === undefined ? {} : { nameSource: this.nameSource }) }),
 			nameRevision: this.nameRevision,
 			revision: this.revision,
 			eventSeq: this.eventSeq,
 			phase: "idle",
 			model: { provider: this.model.provider, id: this.model.id },
 			thinkingLevel,
-			transcript: [],
-			queues: { steer: [], followUp: [] },
+			transcript,
+			queues: {
+				steer: lane.queues.steer.map((item) => ({ id: item.entryId, content: [{ type: "text", text: JSON.stringify(item.message) }], createdAt: 0 })),
+				followUp: lane.queues.followUp.map((item) => ({ id: item.entryId, content: [{ type: "text", text: JSON.stringify(item.message) }], createdAt: 0 })),
+			},
 			...(goal === undefined ? {} : { goal }),
 			agents: [],
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, pricingState: "known" },
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, pricingState: "unknown" },
 			context: { inputTokens: 0, contextWindow: this.model.contextWindow, usedPercentage: 0 },
 			compactionPolicy: {
 				enabled: true,
@@ -128,14 +148,24 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async run(_operationId: string, command: CommandV2): Promise<void> {
+		if (this.disposed) throw new Error("Session runtime is disposed");
 		const text = commandText(command);
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
-		if (runCommand === "turn/start" || runCommand === "turn/resume") await harness.prompt(text);
-		else if (runCommand === "turn/steer") await harness.steer(text);
-		else if (runCommand === "turn/followUp") await harness.followUp(text);
-		else if (runCommand === "turn/abort") await harness.abort();
+		const unwrap = <T>(result: { ok: boolean; value?: T; error?: unknown }): T => {
+			if (!result.ok) throw result.error instanceof Error ? result.error : new Error(String(result.error));
+			return result.value as T;
+		};
+		if (runCommand === "turn/start") {
+			const outcome = unwrap(await harness.prompt(text));
+			if ("kind" in outcome && outcome.kind === "failed") throw new Error(outcome.error.message);
+		} else if (runCommand === "turn/resume") {
+			const outcome = unwrap(await harness.resume());
+			if ("kind" in outcome && outcome.kind === "failed") throw new Error(outcome.error.message);
+		} else if (runCommand === "turn/steer") unwrap(await harness.steer(text));
+		else if (runCommand === "turn/followUp") unwrap(await harness.followUp(text));
+		else if (runCommand === "turn/abort") unwrap(await harness.abort());
 		else if (runCommand === "turn/rollback")
 			throw new Error("Conversation rollback is not available in this adapter");
 		else if (runCommand === "goal/create") {
@@ -156,8 +186,13 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				activeTimeSeconds: typeof payload.activeTimeSeconds === "number" ? payload.activeTimeSeconds : undefined,
 				tokenBudget: typeof payload.tokenBudget === "number" ? payload.tokenBudget : undefined,
 			});
-		} else if (runCommand === "goal/pause") await this.definition.goals?.pause();
-		else if (runCommand === "goal/resume") await this.definition.goals?.resume();
+		} else if (runCommand === "goal/pause") {
+			if (!this.definition.goals) throw new Error("Goals are not configured");
+			await this.definition.goals.pause();
+		} else if (runCommand === "goal/resume") {
+			if (!this.definition.goals) throw new Error("Goals are not configured");
+			await this.definition.goals.resume();
+		}
 		else if (runCommand === "session/model/set") {
 			if (typeof payload.provider !== "string" || typeof payload.id !== "string")
 				throw new Error("session/model/set requires provider and id");
@@ -174,6 +209,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.sessionName = payload.name === null ? undefined : payload.name;
 			this.nameSource = payload.name === null ? undefined : "explicit";
 			this.nameRevision += 1;
+			await harness.session.setName(this.sessionName);
 		} else if (runCommand === "session/name/generate") {
 			const generated =
 				typeof payload.name === "string" && payload.name.trim().length > 0
@@ -194,6 +230,9 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async dispose(): Promise<void> {
+		if (this.disposed) return;
+		this.disposed = true;
+		this.onDispose?.();
 		await this.definition.harness.close();
 	}
 }
@@ -204,18 +243,29 @@ export function createCodingAgentV2Service(
 ): CodingAgentV2Service {
 	const byId = new Map(definitions.map((definition) => [definition.metadata.id, definition]));
 	const runtimes = new Map<string, CodingAgentV2RuntimeImpl>();
+	const opening = new Map<string, Promise<CodingAgentV2RuntimeImpl>>();
 	return {
 		listSessions: async () => definitions.map((definition) => structuredClone(definition.metadata)),
-		listModels: async () => models.getModels().map((model) => modelMetadata(model)),
+		listModels: async () => Promise.all(models.getModels().map((model) => modelMetadata(models, model))),
 		openSession: async (sessionId) => {
 			const definition = byId.get(sessionId);
 			if (!definition) throw new Error(`Unknown session ${sessionId}`);
 			const existing = runtimes.get(sessionId);
 			if (existing) return existing;
-			const model = await definition.harness.getModel();
-			const runtime = new CodingAgentV2RuntimeImpl(definition, models, model);
-			runtimes.set(sessionId, runtime);
-			return runtime;
+			const pending = opening.get(sessionId);
+			if (pending) return pending;
+			const promise = (async () => {
+				const model = await definition.harness.getModel();
+				const runtime = new CodingAgentV2RuntimeImpl(definition, models, model, () => runtimes.delete(sessionId));
+				runtimes.set(sessionId, runtime);
+				return runtime;
+			})();
+			opening.set(sessionId, promise);
+			try {
+				return await promise;
+			} finally {
+				opening.delete(sessionId);
+			}
 		},
 	};
 }
