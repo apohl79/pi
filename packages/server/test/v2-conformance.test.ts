@@ -118,13 +118,26 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	}
 }
 
+class ControlledAcceptRuntime extends TestRuntime {
+	readonly acceptEntered = new Deferred<void>();
+	readonly acceptRelease = new Deferred<void>();
+	rejectAccept = false;
+
+	override async accept(operationId: string): Promise<OperationAccepted> {
+		this.acceptEntered.resolve(undefined);
+		await this.acceptRelease.promise;
+		if (this.rejectAccept) throw new Error("accept failed");
+		return super.accept(operationId);
+	}
+}
+
 class TestService implements PiServerServiceV2 {
 	readonly sessionMetadata: SessionMetadataV2[] = [];
 	readonly sessions = new Map<string, TestRuntime>();
 
-	constructor() {
+	constructor(runtime = new TestRuntime("session-1")) {
 		this.sessionMetadata.push({ id: "session-1", createdAt: 1, updatedAt: 1 });
-		this.sessions.set("session-1", new TestRuntime("session-1"));
+		this.sessions.set("session-1", runtime);
 	}
 
 	listSessions(): Promise<SessionMetadataV2[]> {
@@ -232,5 +245,50 @@ describe("PiServer v2 operation acceptance", () => {
 		);
 		expect(terminal).toMatchObject({ type: "event", sessionId: "session-1", payload: { state: "complete" } });
 		await secondClient.close();
+	});
+
+	test("retains a runtime while accepting an operation across detach", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
+		directories.push(directory);
+		const runtime = new ControlledAcceptRuntime("session-1");
+		const service = new TestService(runtime);
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+
+		const turn = client.request({ command: "turn/start", sessionId: "session-1", payload: { text: "hello" } });
+		await runtime.acceptEntered.promise;
+		await expect(client.request({ command: "session/detach", sessionId: "session-1" })).resolves.toMatchObject({ ok: true });
+		expect(runtime.disposed).toBe(false);
+
+		runtime.acceptRelease.resolve(undefined);
+		await expect(turn).resolves.toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+		runtime.release.resolve(undefined);
+		await runtime.started.promise;
+		await vi.waitFor(() => expect(runtime.disposed).toBe(true));
+	});
+
+	test("releases and disposes a runtime when acceptance fails after detach", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
+		directories.push(directory);
+		const runtime = new ControlledAcceptRuntime("session-1");
+		runtime.rejectAccept = true;
+		const service = new TestService(runtime);
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+
+		const turn = client.request({ command: "turn/start", sessionId: "session-1", payload: { text: "hello" } });
+		await runtime.acceptEntered.promise;
+		await expect(client.request({ command: "session/detach", sessionId: "session-1" })).resolves.toMatchObject({ ok: true });
+		runtime.acceptRelease.resolve(undefined);
+		await expect(turn).resolves.toMatchObject({ ok: false, error: { code: "request_failed" } });
+		await vi.waitFor(() => expect(runtime.disposed).toBe(true));
 	});
 });

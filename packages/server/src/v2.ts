@@ -198,7 +198,8 @@ export class PiServerV2 {
 			for (const result of listenerResults)
 				if (result.status === "rejected")
 					this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
-			await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state)));
+			await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state, undefined, true)));
+			await this.disposeActiveOperationRuntimes();
 			throw error;
 		}
 	}
@@ -244,7 +245,8 @@ export class PiServerV2 {
 			for (const result of listenerResults)
 				if (result.status === "rejected")
 					this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
-			await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state)));
+			await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state, undefined, true)));
+			await this.disposeActiveOperationRuntimes();
 			this.started = false;
 		})();
 		return this.closePromise;
@@ -723,8 +725,21 @@ export class PiServerV2 {
 		if (!command.sessionId) throw new Error("turn/start requires sessionId");
 		const runtime = this.requireAttached(state, command.sessionId);
 		const operationId = randomUUID();
-		const accepted = await runtime.accept(operationId);
 		this.retainOperation(runtime);
+		let accepted: OperationAccepted;
+		try {
+			accepted = await runtime.accept(operationId);
+		} catch (error) {
+			this.releaseOperation(runtime);
+			if (!this.hasRuntimeReference(runtime) && !this.hasActiveOperation(runtime)) {
+				try {
+					await this.disposeRuntime(runtime);
+				} catch (disposeError) {
+					this.reportError(disposeError instanceof Error ? disposeError : new Error(String(disposeError)));
+				}
+			}
+			throw error;
+		}
 		this.operations.set(operationId, {
 			operationId,
 			sessionId: command.sessionId,
@@ -871,13 +886,16 @@ export class PiServerV2 {
 		await this.closeConnection(state, encodeServerMessageV2({ type: "hello_error", error: { code, message: safeMessage } }, { maxFrameLength: this.maxFrameLength }));
 	}
 
-	private async closeConnection(state: V2ConnectionState, finalChunk?: Uint8Array): Promise<void> {
+	private async closeConnection(state: V2ConnectionState, finalChunk?: Uint8Array, forceDispose = false): Promise<void> {
 		if (state.disconnectPromise) return state.disconnectPromise;
 		state.closed = true;
 		clearTimeout(state.handshakeTimeout);
 		state.disconnectPromise = (async () => {
-			const disposals = Array.from(state.sessions.values(), (runtime) => this.disposeRuntime(runtime));
+			const runtimes = new Set(state.sessions.values());
 			state.sessions.clear();
+			const disposals = Array.from(runtimes)
+				.filter((runtime) => forceDispose || !this.hasActiveOperation(runtime))
+				.map((runtime) => this.disposeRuntime(runtime));
 			const disposalResults = await Promise.allSettled(disposals);
 			for (const result of disposalResults)
 				if (result.status === "rejected")
@@ -921,6 +939,15 @@ export class PiServerV2 {
 		if (this.disposedRuntimes.has(runtime)) return;
 		this.disposedRuntimes.add(runtime);
 		await runtime.dispose();
+	}
+
+	private async disposeActiveOperationRuntimes(): Promise<void> {
+		const results = await Promise.allSettled(
+			Array.from(this.activeOperations.keys(), (runtime) => this.disposeRuntime(runtime)),
+		);
+		for (const result of results)
+			if (result.status === "rejected")
+				this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
 	}
 
 	private reportError(error: Error): void {
