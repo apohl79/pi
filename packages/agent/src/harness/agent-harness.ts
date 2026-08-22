@@ -381,7 +381,10 @@ class LifecycleRegistry implements Hooks, Events {
 	}
 
 	emit(type: string, event: unknown): void {
-		for (const listener of this.events.get(type) ?? []) void Promise.resolve(listener(event));
+		for (const listener of this.events.get(type) ?? [])
+			void Promise.resolve()
+				.then(() => listener(event))
+				.catch((error: unknown) => console.error(`AgentHarness lifecycle event listener failed (${type})`, error));
 	}
 
 	async runHook(name: HookName, event: unknown): Promise<void> {
@@ -793,8 +796,6 @@ export class AgentHarness implements AgentLane {
 				return ResultValue.ok({ runId, kind: "failed", leafId: (await this.durableSession.getLeafId()) ?? "", error, finalEntryId, finalMessage });
 			}
 			await this.finishOperation(runId, "completed");
-			await this.lifecycle.runHook("before_run_end", { operationId: runId, outcome: "completed" });
-			this.lifecycle.emit("operation_finished", { operationId: runId, outcome: "completed" });
 			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 			return ResultValue.ok({
 				runId,
@@ -827,15 +828,21 @@ export class AgentHarness implements AgentLane {
 		runId: string,
 		outcome: OperationFinishedRecord["outcome"],
 		error?: OperationFinishedRecord["error"],
+		alreadyLocked = false,
 	): Promise<void> {
 		if (this.finishedOperations.has(runId)) return;
 		const existingAttempt = this.finishingOperations.get(runId);
 		if (existingAttempt) return existingAttempt;
-		const attempt = this.withLifecycleLock(async () => {
+		const operation = async () => {
 			const existing = await this.durableSession.findRecords({ type: "operation_finished", runId, limit: 1 });
 			if (existing.length > 0) {
 				this.rememberFinishedOperation(runId);
 				return;
+			}
+			try {
+				await this.lifecycle.runHook("before_run_end", { operationId: runId, outcome });
+			} catch (hookError) {
+				console.error("AgentHarness before_run_end hook failed", hookError);
 			}
 			// Reuse one terminal id for every append/reconciliation attempt. If the
 			// append committed before its transport response, retrying with a fresh id
@@ -873,7 +880,9 @@ export class AgentHarness implements AgentLane {
 			}
 			if (lastError !== undefined) throw lastError;
 			this.rememberFinishedOperation(runId);
-		});
+			this.lifecycle.emit("operation_finished", { operationId: runId, outcome });
+		};
+		const attempt = alreadyLocked ? operation() : this.withLifecycleLock(operation);
 		this.finishingOperations.set(runId, attempt);
 		try {
 			await attempt;
@@ -1306,14 +1315,12 @@ export class AgentHarness implements AgentLane {
 					});
 					if (!generated.ok) {
 						const message = sanitizeErrorMessage(generated.error.message, "Navigation summary failed");
-						await this.durableSession.appendRecord({
-							type: "operation_finished",
-							id: this.durableSession.idGenerator.next(),
-							lane: "main",
+						await this.finishOperation(
 							runId,
-							outcome: generated.error.code === "aborted" ? "aborted" : "failed",
-							error: { code: generated.error.code, message },
-						});
+							generated.error.code === "aborted" ? "aborted" : "failed",
+							{ code: generated.error.code, message },
+							true,
+						);
 						return ResultValue.ok(
 							generated.error.code === "aborted"
 								? { runId, kind: "aborted" as const, leafId: oldLeafId }
@@ -1342,13 +1349,7 @@ export class AgentHarness implements AgentLane {
 					);
 				}
 				if (label !== undefined && targetId !== null) await this.durableSession.setLabel(targetId, label);
-				await this.durableSession.appendRecord({
-					type: "operation_finished",
-					id: this.durableSession.idGenerator.next(),
-					lane: "main",
-					runId,
-					outcome: "completed",
-				});
+				await this.finishOperation(runId, "completed", undefined, true);
 				return ResultValue.ok({ runId, kind: "completed", newLeafId: summaryEntry?.id ?? targetId, summaryEntry });
 			} catch (error) {
 				const message = sanitizeErrorMessage(error, "Navigation failed");
@@ -1363,14 +1364,12 @@ export class AgentHarness implements AgentLane {
 					? await this.durableSession.findRecords({ type: "operation_finished", runId, limit: 1 }).catch(() => [])
 					: [];
 				if (started && terminal.length === 0)
-					await this.durableSession.appendRecord({
-						type: "operation_finished",
-						id: this.durableSession.idGenerator.next(),
-						lane: "main",
+					await this.finishOperation(
 						runId,
-						outcome: controller.signal.aborted ? "aborted" : "failed",
-						error: { code: controller.signal.aborted ? "aborted" : "navigation_failed", message: failure },
-					});
+						controller.signal.aborted ? "aborted" : "failed",
+						{ code: controller.signal.aborted ? "aborted" : "navigation_failed", message: failure },
+						true,
+					);
 				if (controller.signal.aborted) throw new HarnessClosed();
 				return ResultValue.ok({ runId, kind: "failed", leafId: oldLeafId, error: { code: "navigation_failed", message: failure } });
 			} finally {
