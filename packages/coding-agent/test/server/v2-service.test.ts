@@ -39,12 +39,22 @@ describe("coding-agent v2 service adapter", () => {
 				metadata: { id: "awaiting-input-session", createdAt: 1, updatedAt: 1 },
 				harness: created.harness,
 				inputs,
+				queues: async () => ({
+					steer: [
+						{
+							entryId: "queued-steer",
+							message: { role: "user", content: [{ type: "text", text: "queued" }], timestamp: 7 },
+						},
+					],
+					followUp: [],
+				}),
 			},
 		]);
 		const request = await inputs.create("awaiting-input-session", [{ id: "answer", prompt: "Answer?" }]);
 		try {
 			expect(await (await service.openSession("awaiting-input-session")).snapshot()).toMatchObject({
 				phase: "awaitingInput",
+				queues: { steer: [{ id: "queued-steer", content: [{ type: "text", text: "queued" }] }] },
 			});
 		} finally {
 			await inputs.cancel(request.id);

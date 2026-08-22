@@ -386,6 +386,7 @@ export interface AgentLane {
 	getCompactionPolicySource(): Promise<CompactionPolicySource>;
 	getActiveTools(): Promise<string[]>;
 	setActiveTools(names: string[]): Promise<void>;
+	getQueueSnapshot(): Promise<LaneSnapshot["queues"]>;
 	readonly session: SessionTree;
 	watch(): Promise<WatchHandle<LaneSnapshot>>;
 }
@@ -1265,6 +1266,9 @@ export class AgentHarness implements AgentLane {
 	async watch(): Promise<WatchHandle<LaneSnapshot>> {
 		const snapshot = await this.laneSnapshot(this.name);
 		return this.watchBus.watch(() => snapshot);
+	}
+	async getQueueSnapshot(): Promise<LaneSnapshot["queues"]> {
+		return (await this.laneSnapshot(this.name)).queues;
 	}
 
 	async lane(name: string): Promise<AgentLane | undefined> {
