@@ -7,7 +7,7 @@
  */
 import { join } from "node:path";
 import { DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-agent-core";
-import { parseArgs } from "./cli/args.ts";
+import { isServerDefaultCompatible, parseArgs } from "./cli/args.ts";
 import { isExperimentalCommand } from "./cli/experimental/dispatch.ts";
 import { RemoteV2InteractiveAttachment } from "./client/remote-v2-interactive.ts";
 import { RemoteV2SessionView } from "./client/remote-v2-view.ts";
@@ -36,12 +36,13 @@ async function runCli(): Promise<void> {
 	const serverDefaultRpc = !args.includes("--no-server") && rpcMode;
 	const serverDefaultPrint =
 		!args.includes("--no-server") && (args.includes("--print") || args.includes("-p") || jsonMode);
+	const parsedArgs = parseArgs(args);
 	const serverDefaultInteractive =
 		!args.includes("--no-server") &&
 		!isExperimentalCommand(args) &&
 		!serverDefaultPrint &&
 		!rpcMode &&
-		!args.some((arg) => arg.startsWith("-") || arg.startsWith("@")) &&
+		isServerDefaultCompatible(parsedArgs) &&
 		!args.some((arg) => arg === "--help" || arg === "-h" || arg === "--version" || arg === "-v") &&
 		(args.length === 0 || !LEGACY_COMMANDS.has(args[0]!));
 	if (!isExperimentalCommand(args) && !serverDefaultPrint && !serverDefaultInteractive && !serverDefaultRpc) {
@@ -107,9 +108,9 @@ async function runCli(): Promise<void> {
 		},
 	});
 	try {
-		if (serverDefaultRpc) await runtime.cli.runRpc(parseArgs(args));
+		if (serverDefaultRpc) await runtime.cli.runRpc(parsedArgs);
 		else if (serverDefaultPrint || serverDefaultInteractive)
-			await runtime.cli.runPi({ command: "pi", options: parseArgs(args) });
+			await runtime.cli.runPi({ command: "pi", options: parsedArgs });
 		else await main(args, { experimentalCliContext: runtime.cli });
 	} finally {
 		await runtime.close();
