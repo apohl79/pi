@@ -31,4 +31,26 @@ describe("SqliteV2InputRegistry", () => {
 		expect(await reopened.takeRespondedForSession("session-1")).toBeUndefined();
 		await reopened.close();
 	});
+
+	test("rejects malformed persisted input rows", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-inputs-invalid-"));
+		directories.push(directory);
+		const path = join(directory, "inputs.sqlite");
+		const database = await createNodeSqliteFactory().open(path);
+		database.exec(
+			"CREATE TABLE v2_inputs (request_id TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);" +
+				"CREATE TABLE v2_input_consumed (request_id TEXT PRIMARY KEY NOT NULL)",
+		);
+		database
+			.prepare("INSERT INTO v2_inputs (request_id, value) VALUES (?, ?)")
+			.run(
+				"request-1",
+				JSON.stringify({ id: "request-1", sessionId: "session-1", status: "pending", questions: [] }),
+			);
+		database.close();
+
+		await expect(new SqliteV2InputRegistry(createNodeSqliteFactory(), path).read("request-1")).rejects.toThrow(
+			"Input request must contain one to three questions",
+		);
+	});
 });
