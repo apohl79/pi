@@ -1,4 +1,5 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export type CodexPluginJson = null | boolean | number | string | CodexPluginJson[] | { [key: string]: CodexPluginJson };
 
@@ -47,6 +48,22 @@ export type CodexPluginResourceResolution =
 	| { ok: true; path: string }
 	| { ok: false; code: "absolute_path" | "path_escape"; message: string };
 
+function canonicalizeWithMissingSuffix(path: string): string | undefined {
+	const missing: string[] = [];
+	let current = path;
+	while (true) {
+		try {
+			const canonical = realpathSync(current);
+			return join(canonical, ...missing.reverse());
+		} catch {
+			const parent = dirname(current);
+			if (parent === current) return undefined;
+			missing.push(current.slice(parent.length + 1));
+			current = parent;
+		}
+	}
+}
+
 /** Resolve a manifest resource without allowing absolute paths or root escape. */
 export function resolveCodexPluginResource(root: string, resource: string): CodexPluginResourceResolution {
 	const normalized = resource.replaceAll("\\", "/");
@@ -55,11 +72,13 @@ export function resolveCodexPluginResource(root: string, resource: string): Code
 	}
 	const pluginRoot = resolve(root);
 	const candidate = resolve(pluginRoot, normalized);
-	const fromRoot = relative(pluginRoot, candidate);
+	const canonicalRoot = canonicalizeWithMissingSuffix(pluginRoot) ?? pluginRoot;
+	const canonicalCandidate = canonicalizeWithMissingSuffix(candidate);
+	const fromRoot = relative(canonicalRoot, canonicalCandidate ?? candidate);
 	if (fromRoot === ".." || fromRoot.startsWith("../") || isAbsolute(fromRoot)) {
 		return { ok: false, code: "path_escape", message: `Plugin resource escapes its root: ${resource}` };
 	}
-	return { ok: true, path: candidate };
+	return { ok: true, path: canonicalCandidate ?? candidate };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
