@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 
 export type V2ProcessState = "running" | "exited" | "terminated" | "lost";
 
@@ -76,8 +77,9 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 	async write(processId: string, input: string): Promise<V2ProcessOutput> {
 		const process = this.get(processId);
 		if (process.state !== "running") throw new Error(`Process ${processId} is not running`);
+		const cursor = process.totalBytes;
 		this.append(process, input);
-		return this.read(processId, process.totalBytes - input.length);
+		return this.read(processId, cursor);
 	}
 
 	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
@@ -87,10 +89,10 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 	async read(processId: string, cursor: number): Promise<V2ProcessOutput> {
 		const process = this.get(processId);
 		if (!Number.isInteger(cursor) || cursor < 0) throw new Error("Process cursor must be a non-negative integer");
-		const baseCursor = process.totalBytes - process.output.length;
+		const baseCursor = process.totalBytes - Buffer.byteLength(process.output, "utf8");
 		const start = Math.max(cursor, baseCursor);
 		return {
-			output: process.output.slice(start - baseCursor),
+			output: readUtf8FromCursor(process.output, start - baseCursor),
 			cursor: process.totalBytes,
 			truncated: cursor < baseCursor,
 		};
@@ -110,12 +112,12 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 	}
 
 	private append(process: ProcessState, value: string): void {
-		process.totalBytes += value.length;
-		process.output = `${process.output}${value}`.slice(-this.maxOutputBytes);
+		process.totalBytes += Buffer.byteLength(value, "utf8");
+		process.output = retainUtf8(`${process.output}${value}`, this.maxOutputBytes);
 	}
 
 	private snapshot(process: ProcessState): V2ProcessSnapshot {
-		const baseCursor = process.totalBytes - process.output.length;
+		const baseCursor = process.totalBytes - Buffer.byteLength(process.output, "utf8");
 		return {
 			processId: process.processId,
 			sessionId: process.sessionId,
@@ -138,6 +140,8 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 
 interface NodeProcessState extends ProcessState {
 	readonly child: ChildProcess;
+	readonly stdoutDecoder: StringDecoder;
+	readonly stderrDecoder: StringDecoder;
 	waiters: Array<(snapshot: V2ProcessSnapshot) => void>;
 }
 
@@ -229,22 +233,26 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 			output: "",
 			totalBytes: 0,
 			child,
+			stdoutDecoder: new StringDecoder("utf8"),
+			stderrDecoder: new StringDecoder("utf8"),
 			waiters: [],
 		};
 		this.processes.set(state.processId, state);
-		const append = (chunk: Buffer): void => {
-			state.totalBytes += chunk.length;
-			state.output = `${state.output}${chunk.toString("utf8")}`.slice(-this.maxOutputBytes);
+		const append = (value: string): void => {
+			state.totalBytes += Buffer.byteLength(value, "utf8");
+			state.output = retainUtf8(`${state.output}${value}`, this.maxOutputBytes);
 		};
-		child.stdout?.on("data", append);
-		child.stderr?.on("data", append);
+		child.stdout?.on("data", (chunk: Buffer) => append(state.stdoutDecoder.write(chunk)));
+		child.stderr?.on("data", (chunk: Buffer) => append(state.stderrDecoder.write(chunk)));
 		child.once("error", (error) => {
-			append(Buffer.from(error.message));
+			append(error.message);
 			this.finish(state, "exited", 1);
 		});
-		child.once("close", (code) =>
-			this.finish(state, state.state === "terminated" ? "terminated" : "exited", code ?? 0),
-		);
+		child.once("close", (code) => {
+			append(state.stdoutDecoder.end());
+			append(state.stderrDecoder.end());
+			this.finish(state, state.state === "terminated" ? "terminated" : "exited", code ?? 0);
+		});
 		return Promise.resolve(this.snapshot(state));
 	}
 
@@ -263,9 +271,9 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 	async read(processId: string, cursor: number): Promise<V2ProcessOutput> {
 		const process = this.get(processId);
 		if (!Number.isInteger(cursor) || cursor < 0) throw new Error("Process cursor must be a non-negative integer");
-		const baseCursor = process.totalBytes - process.output.length;
+		const baseCursor = process.totalBytes - Buffer.byteLength(process.output, "utf8");
 		return {
-			output: process.output.slice(Math.max(0, cursor - baseCursor)),
+			output: readUtf8FromCursor(process.output, Math.max(0, cursor - baseCursor)),
 			cursor: process.totalBytes,
 			truncated: cursor < baseCursor,
 		};
@@ -297,7 +305,7 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 	}
 
 	private snapshot(process: NodeProcessState): V2ProcessSnapshot {
-		const baseCursor = process.totalBytes - process.output.length;
+		const baseCursor = process.totalBytes - Buffer.byteLength(process.output, "utf8");
 		return {
 			processId: process.processId,
 			sessionId: process.sessionId,
@@ -316,4 +324,19 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		if (!process) throw new Error(`Unknown process ${processId}`);
 		return process;
 	}
+}
+
+function retainUtf8(value: string, maxBytes: number): string {
+	if (maxBytes <= 0) return "";
+	const bytes = Buffer.from(value, "utf8");
+	let start = Math.max(0, bytes.length - maxBytes);
+	while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start += 1;
+	return bytes.subarray(start).toString("utf8");
+}
+
+function readUtf8FromCursor(value: string, offset: number): string {
+	const bytes = Buffer.from(value, "utf8");
+	let start = Math.max(0, Math.min(offset, bytes.length));
+	while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start += 1;
+	return bytes.subarray(start).toString("utf8");
 }
