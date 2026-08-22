@@ -995,7 +995,13 @@ export class RemoteV2Session {
 			const snapshot = asRecord(event.payload)?.snapshot;
 			if (isSnapshot(snapshot)) {
 				this.#snapshot = structuredClone(snapshot);
-				this.#lifecycle = snapshot.phase === "idle" ? { status: "ready" } : this.#lifecycle;
+				const operation = snapshot.activeOperation;
+				this.#lifecycle =
+					snapshot.phase === "idle" ||
+					operation === undefined ||
+					(operation.state !== "accepted" && operation.state !== "running" && operation.state !== "suspended")
+						? { status: "ready" }
+						: { status: "busy", operationId: operation.operationId, command: "turn/start" };
 			}
 		} else if (event.event === "plan_updated" && this.#snapshot) {
 			const plan = asRecord(event.payload)?.plan;
