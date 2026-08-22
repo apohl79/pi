@@ -91,6 +91,7 @@ export interface DiagnosticBundleManifest {
 	readonly lastSeq: number;
 	readonly eventsSha256: string;
 	readonly capsulesSha256?: string;
+	readonly projectionsSha256?: string;
 	readonly scope?: DiagnosticBundleScope;
 	readonly unavailable?: readonly string[];
 }
@@ -98,6 +99,14 @@ export interface DiagnosticBundleManifest {
 export interface DiagnosticBundleScope {
 	readonly sessionId?: string;
 	readonly operationId?: string;
+}
+
+export interface DiagnosticBundleProjections {
+	readonly sessions: readonly DiagnosticValue[];
+	readonly operations: readonly DiagnosticValue[];
+	readonly usage: DiagnosticValue;
+	readonly plugins: DiagnosticValue;
+	readonly blobs: readonly DiagnosticValue[];
 }
 
 export interface DiagnosticRuntimeManifest {
@@ -131,6 +140,9 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 		return { valid: false, reason: "Diagnostic bundle contains an invalid runtime manifest" };
 	if (candidate.integrity !== undefined && !isDiagnosticIntegrityReport(candidate.integrity))
 		return { valid: false, reason: "Diagnostic bundle contains an invalid integrity report" };
+	const projections = candidate.projections;
+	if (projections !== undefined && !isDiagnosticProjections(projections))
+		return { valid: false, reason: "Diagnostic bundle contains invalid canonical projections" };
 	if (candidate.clientDiagnostics !== undefined && !isClientDiagnosticExport(candidate.clientDiagnostics))
 		return { valid: false, reason: "Diagnostic bundle contains invalid client diagnostics" };
 	const fields = manifest as Record<string, unknown>;
@@ -147,6 +159,8 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 	const digest = createHash("sha256").update(serializedEvents).digest("hex");
 	const serializedCapsules = JSON.stringify(capsules ?? []);
 	const capsulesDigest = createHash("sha256").update(serializedCapsules).digest("hex");
+	const serializedProjections = JSON.stringify(projections ?? {});
+	const projectionsDigest = createHash("sha256").update(serializedProjections).digest("hex");
 	const firstSeq = events.length === 0 ? 0 : eventSequence(events[0]);
 	const lastSeq = events.length === 0 ? 0 : eventSequence(events[events.length - 1]);
 	const contiguous = events.every((event, index) => {
@@ -169,6 +183,7 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 		fields.lastSeq === lastSeq &&
 		fields.eventsSha256 === digest &&
 		(fields.capsulesSha256 === undefined || fields.capsulesSha256 === capsulesDigest) &&
+		(fields.projectionsSha256 === undefined || fields.projectionsSha256 === projectionsDigest) &&
 		scopedEvents &&
 		(scope !== undefined || contiguous);
 	return valid ? { valid: true } : { valid: false, reason: "Diagnostic bundle manifest does not match its events" };
@@ -183,6 +198,21 @@ function isDiagnosticBundleScope(value: unknown): value is DiagnosticBundleScope
 		(hasSession || hasOperation) &&
 		(!hasSession || typeNonEmpty(scope.sessionId)) &&
 		(!hasOperation || typeNonEmpty(scope.operationId))
+	);
+}
+
+function isDiagnosticProjections(value: unknown): value is DiagnosticBundleProjections {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const projections = value as Record<string, unknown>;
+	return (
+		Array.isArray(projections.sessions) &&
+		projections.sessions.every(isDiagnosticValue) &&
+		Array.isArray(projections.operations) &&
+		projections.operations.every(isDiagnosticValue) &&
+		isDiagnosticValue(projections.usage) &&
+		isDiagnosticValue(projections.plugins) &&
+		Array.isArray(projections.blobs) &&
+		projections.blobs.every(isDiagnosticValue)
 	);
 }
 

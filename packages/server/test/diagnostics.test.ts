@@ -190,6 +190,27 @@ describe("verifyDiagnosticBundle", () => {
 				capsules: [{ ...capsules[0], ciphertext: "changed" }],
 			}),
 		).toMatchObject({ valid: false });
+		const projections = {
+			sessions: [{ id: "session-1" }],
+			operations: [{ operationId: "operation-1", state: "complete" }],
+			usage: { aggregate: { responses: 1 }, entries: [] },
+			plugins: { marketplaces: [], plugins: [] },
+			blobs: [{ digest: "a".repeat(64), mimeType: "text/plain", size: 1 }],
+		};
+		const projectionsSha256 = createHash("sha256").update(JSON.stringify(projections)).digest("hex");
+		expect(verifyDiagnosticBundle({ manifest: { ...manifest, projectionsSha256 }, events, projections })).toEqual({
+			valid: true,
+		});
+		expect(
+			verifyDiagnosticBundle({
+				manifest: { ...manifest, projectionsSha256 },
+				events,
+				projections: { ...projections, sessions: [{ id: "tampered" }] },
+			}),
+		).toMatchObject({ valid: false });
+		expect(verifyDiagnosticBundle({ manifest, events, projections: { sessions: [] } })).toMatchObject({
+			valid: false,
+		});
 		expect(
 			verifyDiagnosticBundle({
 				manifest,

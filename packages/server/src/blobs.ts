@@ -19,6 +19,7 @@ export interface V2BlobStore {
 	put(data: Uint8Array, mimeType: string): Promise<V2BlobStat>;
 	read(digest: string): Promise<Uint8Array>;
 	stat(digest: string): Promise<V2BlobStat>;
+	list(): Promise<readonly V2BlobStat[]>;
 }
 
 function digestOf(data: Uint8Array): string {
@@ -70,6 +71,13 @@ export class InMemoryV2BlobStore implements V2BlobStore {
 		const blob = this.blobs.get(digest);
 		if (!blob) throw new Error(`Unknown blob ${digest}`);
 		return { digest, mimeType: blob.mimeType, size: blob.data.byteLength };
+	}
+
+	async list(): Promise<readonly V2BlobStat[]> {
+		return [...this.blobs.keys()].sort().map((digest) => {
+			const blob = this.blobs.get(digest)!;
+			return { digest, mimeType: blob.mimeType, size: blob.data.byteLength };
+		});
 	}
 }
 
@@ -150,6 +158,17 @@ export class FileV2BlobStore implements V2BlobStore {
 			throw new Error(`Blob metadata size is invalid for ${digest}`);
 		assertMimeType(metadata.mimeType);
 		return metadata;
+	}
+
+	async list(): Promise<readonly V2BlobStat[]> {
+		let entries: string[];
+		try {
+			entries = (await readdir(this.root)).filter((entry) => entry.endsWith(".json")).sort();
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+			throw error;
+		}
+		return Promise.all(entries.map((entry) => this.stat(entry.slice(0, -5))));
 	}
 
 	/** Verifies bounded on-disk blob metadata and content-addressed bytes without repairing them. */
