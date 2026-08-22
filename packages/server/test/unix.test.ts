@@ -39,7 +39,7 @@ afterEach(async () => {
 	tempDirectories.clear();
 });
 
-describe("Unix listener filesystem lifecycle", () => {
+describe.runIf(process.platform !== "win32")("Unix listener filesystem lifecycle", () => {
 	test("rejects a live listener without unlinking it", async () => {
 		const path = await makeSocketPath();
 		const first = makeServer(path);
@@ -113,5 +113,19 @@ describe("Unix listener filesystem lifecycle", () => {
 		const client = await connectUnixTestClient(path);
 		clients.add(client);
 		expect(await client.hello()).toMatchObject({ type: "hello" });
+	});
+});
+
+describe.runIf(process.platform === "win32")("Windows named-pipe listener", () => {
+	test("binds a named pipe and completes the protocol handshake", async () => {
+		const path = `\\\\.\\pipe\\pi-server-${process.pid}-${Math.random().toString(36).slice(2)}`;
+		const server = makeServer(path);
+		await server.start();
+
+		const client = await connectUnixTestClient(path);
+		clients.add(client);
+		expect(await client.hello()).toMatchObject({ type: "hello" });
+
+		await server.close();
 	});
 });
