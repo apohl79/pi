@@ -191,6 +191,7 @@ export async function createCodingAgentDaemonRuntime(
 					: {
 							diagnostics: {
 								manifest: {
+									clientInstanceId: clientSpool.clientInstanceId,
 									runtime: clientRuntimeManifest.runtime,
 									platform: clientRuntimeManifest.platform,
 									arch: clientRuntimeManifest.arch,

@@ -319,6 +319,7 @@ function isClientDiagnosticExport(value: unknown): boolean {
 		if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) return false;
 		const fields = manifest as Record<string, unknown>;
 		return (
+			(fields.clientInstanceId === undefined || typeNonEmpty(fields.clientInstanceId)) &&
 			typeNonEmpty(fields.runtime) &&
 			typeNonEmpty(fields.platform) &&
 			typeNonEmpty(fields.arch) &&
