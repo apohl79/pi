@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EventEnvelopeV2, OperationRecordV2 } from "@earendil-works/pi-protocol";
@@ -39,5 +39,24 @@ describe("JsonlV2OperationStore", () => {
 
 		expect(restored.operations).toEqual([{ ...operation, state: "complete", terminalSeq: 3 }]);
 		expect(restored.events).toEqual([event]);
+	});
+
+	test("ignores a torn final JSONL record but rejects interior corruption", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-operation-store-corrupt-"));
+		directories.push(directory);
+		const path = join(directory, "operations.jsonl");
+		const operation: OperationRecordV2 = {
+			operationId: "op-1",
+			sessionId: "session-1",
+			state: "accepted",
+			accepted: { operationId: "op-1", sessionRevision: 2, eventSeq: 2 },
+		};
+		const encoded = JSON.stringify({ kind: "operation", value: operation });
+
+		await writeFile(path, `${encoded}\n{"kind":"event"`, "utf8");
+		expect((await new JsonlV2OperationStore(path).load()).operations).toEqual([operation]);
+
+		await writeFile(path, `${encoded}\n{"kind":\n`, "utf8");
+		await expect(new JsonlV2OperationStore(path).load()).rejects.toThrow();
 	});
 });
