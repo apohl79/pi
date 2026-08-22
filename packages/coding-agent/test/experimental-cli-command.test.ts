@@ -86,10 +86,23 @@ describe("experimental CLI commands", () => {
 			command: { command: "diagnostics", action: "tail", sessionId: "session-1", follow: true, afterSeq: 3 },
 		});
 		expect(
-			experimentalCli.parse(["diagnostics", "export", "--decrypt-content", "--output", "/tmp/bundle.json"]),
+			experimentalCli.parse([
+				"diagnostics",
+				"export",
+				"--decrypt-content",
+				"--output",
+				"/tmp/bundle.json",
+				"session-1",
+			]),
 		).toEqual({
 			ok: true,
-			command: { command: "diagnostics", action: "export", decryptContent: true, output: "/tmp/bundle.json" },
+			command: {
+				command: "diagnostics",
+				action: "export",
+				sessionId: "session-1",
+				decryptContent: true,
+				output: "/tmp/bundle.json",
+			},
 		});
 		expect(experimentalCli.parse(["diagnostics", "doctor", "--repair-safe"])).toEqual({
 			ok: true,
@@ -97,7 +110,7 @@ describe("experimental CLI commands", () => {
 		});
 		expect(experimentalCli.parse(["diagnostics", "export", "--decrypt-content"])).toEqual({
 			ok: false,
-			errors: ["diagnostics export --decrypt-content requires --output PATH"],
+			errors: ["diagnostics export requires a session id", "diagnostics export requires --output PATH"],
 		});
 	});
 
