@@ -92,4 +92,31 @@ describe("durable GoalManager", () => {
 		await manager.pause();
 		scheduler.close();
 	});
+
+	test("allows an unbounded scheduler and ignores a closed pending continuation", async () => {
+		const manager = new GoalManager(new Session(new InMemorySessionStorage({ id: "goal-unbounded", createdAt: 1 })));
+		await manager.create("Continue after idle");
+		let callback!: () => void | Promise<void>;
+		let release!: () => void;
+		let continued = false;
+		const scheduler = new GoalContinuationScheduler({
+			goals: manager,
+			waitForIdle: async (pending) => {
+				callback = pending;
+				await new Promise<void>((resolve) => {
+					release = resolve;
+				});
+			},
+			continueGoal: async () => {
+				continued = true;
+			},
+		});
+		const scheduled = scheduler.schedule();
+		await Promise.resolve();
+		scheduler.close();
+		await callback();
+		release();
+		expect(await scheduled).toBe(false);
+		expect(continued).toBe(false);
+	});
 });
