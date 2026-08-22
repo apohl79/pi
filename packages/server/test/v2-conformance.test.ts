@@ -905,6 +905,39 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.close();
 	});
 
+	test("does not acknowledge or run a turn when critical acceptance diagnostics fail", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-critical-diagnostic-failure-"));
+		directories.push(directory);
+		const service = new TestService();
+		const diagnostics = {
+			record: async () => {
+				throw new Error("critical diagnostic unavailable");
+			},
+			read: async () => [],
+		};
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock"), diagnostics });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const runtime = service.sessions.get("session-1")!;
+		const response = await client.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { text: "hello" },
+		});
+		expect(response).toMatchObject({ ok: false, error: { code: "request_failed" } });
+		expect(runtime.accepted).toHaveLength(1);
+		expect(runtime.commands).toHaveLength(0);
+		const operationId = runtime.accepted[0]!.operationId;
+		const operation = await client.request({ command: "operation/read", sessionId: "session-1", operationId });
+		expect(operation).toMatchObject({
+			ok: true,
+			result: { operation: { operationId, state: "failed", error: "Critical diagnostic persistence failed" } },
+		});
+	});
+
 	test("continues a detached operation and replays events after reattach", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);

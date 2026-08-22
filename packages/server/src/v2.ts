@@ -1548,7 +1548,44 @@ export class PiServerV2 {
 			state: "accepted",
 			accepted,
 		});
-		await this.operationStore.putOperation(this.operations.get(operationId)!);
+		const acceptedRecord = this.operations.get(operationId)!;
+		await this.operationStore.putOperation(acceptedRecord);
+		try {
+			await this.diagnostics?.record({
+				kind: "operation_accepted",
+				severity: "info",
+				outcome: "started",
+				traceId: operationId,
+				spanId: id,
+				sessionId: command.sessionId,
+				operationId,
+				payload: {
+					command: command.command,
+					...(capsule === undefined
+						? {}
+						: {
+								contentRef: {
+									eventId: capsule.eventId,
+									kind: capsule.kind,
+									keyId: capsule.keyId,
+									plaintextSha256: capsule.plaintextSha256,
+									byteLength: capsule.byteLength,
+									originalByteLength: capsule.originalByteLength,
+									truncated: capsule.truncated,
+								},
+							}),
+				},
+			});
+		} catch (error) {
+			const failed = {
+				...acceptedRecord,
+				state: "failed" as const,
+				error: "Critical diagnostic persistence failed",
+			};
+			this.operations.set(operationId, failed);
+			await this.operationStore.putOperation(failed).catch(() => undefined);
+			throw error;
+		}
 		await this.send(state, { type: "response", id, ok: true, accepted });
 		await this.broadcastEvent(
 			command.sessionId,
@@ -1558,31 +1595,6 @@ export class PiServerV2 {
 			"operation_accepted",
 			{ eventSeq: accepted.eventSeq, revision: accepted.sessionRevision },
 		);
-		await this.diagnostics?.record({
-			kind: "operation_accepted",
-			severity: "info",
-			outcome: "started",
-			traceId: operationId,
-			spanId: id,
-			sessionId: command.sessionId,
-			operationId,
-			payload: {
-				command: command.command,
-				...(capsule === undefined
-					? {}
-					: {
-							contentRef: {
-								eventId: capsule.eventId,
-								kind: capsule.kind,
-								keyId: capsule.keyId,
-								plaintextSha256: capsule.plaintextSha256,
-								byteLength: capsule.byteLength,
-								originalByteLength: capsule.originalByteLength,
-								truncated: capsule.truncated,
-							},
-						}),
-			},
-		});
 		void this.runOperation(runtime, command.sessionId, operationId, resolvedCommand);
 	}
 
