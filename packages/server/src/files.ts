@@ -69,9 +69,11 @@ function isWithin(root: string, candidate: string): boolean {
 function referenceFor(scope: FileScope, root: string, path: string): string {
 	return scope === "project"
 		? `project:${relative(root, path) || "."}`
-		: scope === "home"
-			? `~/${relative(root, path)}`
-			: path;
+		: scope === "server"
+			? `server:${relative(root, path) || "."}`
+			: scope === "home"
+				? `~/${relative(root, path)}`
+				: path;
 }
 
 function mimeTypeFor(path: string): string | undefined {
