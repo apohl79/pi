@@ -17,6 +17,7 @@ const MAX_UNIX_SOCKET_PATH_BYTES = process.platform === "linux" ? 107 : 103;
 
 export function validateUnixSocketPath(path: string, description = "Unix socket path"): void {
 	if (!path) throw new TypeError(`${description} must not be empty`);
+	if (process.platform === "win32") return;
 	if (Buffer.byteLength(path) > MAX_UNIX_SOCKET_PATH_BYTES) {
 		throw new TypeError(`${description} is too long; maximum is ${MAX_UNIX_SOCKET_PATH_BYTES} UTF-8 bytes`);
 	}
@@ -63,6 +64,20 @@ class UnixListener implements PiServerListener {
 		this.accept = accept;
 
 		const ownedBindPath = getOwnedBindPath(this.path);
+		if (process.platform === "win32") {
+			const server = createServer((socket) => this.acceptSocket(socket));
+			server.on("error", (error) => this.reportError(error));
+			this.server = server;
+			try {
+				await listenNetServer(server, this.path);
+				this.boundPath = this.path;
+				return;
+			} catch (error) {
+				await this.closeServerAndCleanup(server);
+				this.server = undefined;
+				throw error;
+			}
+		}
 		validateUnixSocketPath(ownedBindPath, "PiServer private Unix bind path");
 		await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
 		await removeStaleSocket(this.path);
@@ -391,6 +406,22 @@ function closeNetServer(server: Server, reportError: (error: Error) => void): Pr
 			if (error) reportError(error);
 			resolve();
 		});
+	});
+}
+
+function listenNetServer(server: Server, path: string): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		const onError = (error: Error): void => {
+			server.off("listening", onListening);
+			reject(error);
+		};
+		const onListening = (): void => {
+			server.off("error", onError);
+			resolve();
+		};
+		server.once("error", onError);
+		server.once("listening", onListening);
+		server.listen(path);
 	});
 }
 
