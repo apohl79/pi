@@ -131,6 +131,17 @@ class ControlledAcceptRuntime extends TestRuntime {
 	}
 }
 
+class BlockingSnapshotRuntime extends TestRuntime {
+	readonly snapshotEntered = new Deferred<void>();
+	readonly snapshotRelease = new Deferred<void>();
+
+	override async snapshot(): Promise<SessionSnapshotV2> {
+		this.snapshotEntered.resolve(undefined);
+		await this.snapshotRelease.promise;
+		return super.snapshot();
+	}
+}
+
 class TestService implements PiServerServiceV2 {
 	readonly sessionMetadata: SessionMetadataV2[] = [];
 	readonly sessions = new Map<string, TestRuntime>();
@@ -290,5 +301,26 @@ describe("PiServer v2 operation acceptance", () => {
 		runtime.acceptRelease.resolve(undefined);
 		await expect(turn).resolves.toMatchObject({ ok: false, error: { code: "request_failed" } });
 		await vi.waitFor(() => expect(runtime.disposed).toBe(true));
+	});
+
+	test("does not dispose a runtime while a pending attach still holds its lease", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
+		directories.push(directory);
+		const runtime = new BlockingSnapshotRuntime("session-1");
+		const service = new TestService(runtime);
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const attachment = client.request({ command: "session/attach", sessionId: "session-1" });
+		await runtime.snapshotEntered.promise;
+
+		await client.close();
+		expect(runtime.disposed).toBe(false);
+
+		runtime.snapshotRelease.resolve(undefined);
+		await vi.waitFor(() => expect(runtime.disposed).toBe(true));
+		await attachment.catch(() => undefined);
 	});
 });

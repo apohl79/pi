@@ -906,7 +906,11 @@ export class PiServerV2 {
 			const runtimes = new Set(state.sessions.values());
 			state.sessions.clear();
 			const disposals = Array.from(runtimes)
-				.filter((runtime) => forceDispose || !this.hasActiveOperation(runtime))
+				.filter(
+					(runtime) =>
+						forceDispose ||
+						(!this.hasActiveOperation(runtime) && !this.hasPendingAttach(runtime) && !this.hasRuntimeReference(runtime)),
+				)
 				.map((runtime) => this.disposeRuntime(runtime));
 			const disposalResults = await Promise.allSettled(disposals);
 			for (const result of disposalResults)
