@@ -1,5 +1,5 @@
-import { readFile, realpath, stat } from "node:fs/promises";
-import { realpathSync } from "node:fs";
+import { constants, realpathSync } from "node:fs";
+import { open, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { MAX_V2_ARRAY_ITEMS, MAX_V2_JSON_DEPTH, MAX_V2_STRING_LENGTH } from "@earendil-works/pi-protocol";
 
@@ -134,7 +134,13 @@ async function readJson(path: string): Promise<JsonReadResult> {
 		const metadata = await stat(path);
 		if (!metadata.isFile() || metadata.size > MAX_MANIFEST_BYTES) return { kind: "malformed" };
 		const canonical = await realpath(path);
-		const value = JSON.parse(await readFile(canonical, "utf8")) as unknown;
+		const handle = await open(canonical, constants.O_RDONLY | constants.O_NOFOLLOW);
+		let value: unknown;
+		try {
+			value = JSON.parse(await handle.readFile("utf8")) as unknown;
+		} finally {
+			await handle.close();
+		}
 		assertBoundedJson(value);
 		return { kind: "ok", value };
 	} catch (error) {
@@ -256,6 +262,7 @@ function marketplaceSource(value: unknown): CodexMarketplaceSource | undefined {
 
 export function parseCodexMarketplaceManifest(input: unknown): CodexMarketplaceParseResult {
 	const diagnostics: CodexPluginDiagnostic[] = [];
+	assertBoundedJson(input);
 	if (!isRecord(input) || !Array.isArray(input.plugins)) {
 		return {
 			diagnostics: [
@@ -291,6 +298,7 @@ export function parseCodexMarketplaceManifest(input: unknown): CodexMarketplaceP
 
 export function parseCodexPluginManifest(input: unknown): CodexPluginParseResult {
 	const diagnostics: CodexPluginDiagnostic[] = [];
+	assertBoundedJson(input);
 	if (!isRecord(input)) {
 		return {
 			diagnostics: [{ code: "invalid_manifest", severity: "error", message: "Plugin manifest must be an object" }],
