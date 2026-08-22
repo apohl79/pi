@@ -200,7 +200,10 @@ export async function createCodingAgentV2SqliteService(
 			...(webService === undefined ? {} : { web: async (request) => webService.execute(metadata.id, request) }),
 			...(imageService === undefined
 				? {}
-				: { viewImage: async (reference) => imageService.view(metadata.id, reference) }),
+				: {
+						viewImage: async (reference) => imageService.view(metadata.id, reference),
+						generateImage: async (request) => imageService.generate(metadata.id, request),
+					}),
 			...(planRegistry === undefined
 				? {}
 				: {
