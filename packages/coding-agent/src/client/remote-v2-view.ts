@@ -64,7 +64,8 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	const operation = state.lifecycle.status === "busy" ? ` operation=${state.lifecycle.operationId}` : "";
 	const lines = [`Session ${snapshot.id} · phase=${snapshot.phase} · model=${model}${operation}`];
 	let characters = 0;
-	for (const item of snapshot.transcript.slice(-maxItems)) {
+	const transcript = maxItems === 0 ? [] : snapshot.transcript.slice(-maxItems);
+	for (const item of transcript) {
 		const text = sanitizeTranscriptText(transcriptText(item));
 		if (!text) continue;
 		const line = `${item.role}: ${text}`;

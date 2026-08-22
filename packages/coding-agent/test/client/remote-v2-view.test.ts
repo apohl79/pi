@@ -78,4 +78,13 @@ describe("formatRemoteV2Session", () => {
 		);
 		expect(output).not.toContain("assistant:");
 	});
+
+	test("renders no transcript items when the item limit is zero", () => {
+		const output = formatRemoteV2Session(
+			{ lifecycle: { status: "ready" }, snapshot },
+			{ maxTranscriptItems: 0, maxTranscriptCharacters: 10_000 },
+		);
+		expect(output).not.toContain("assistant:");
+		expect(output).not.toContain("user:");
+	});
 });
