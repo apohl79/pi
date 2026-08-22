@@ -78,6 +78,7 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 			taskName: request.taskName,
 			state: "running",
 			model: request.model,
+			startedAt: Date.now(),
 		};
 		this.agents.set(summary.id, {
 			summary,

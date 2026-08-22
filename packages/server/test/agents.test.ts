@@ -12,7 +12,12 @@ describe("InMemoryV2AgentRegistry", () => {
 			model: { provider: "test", id: "small" },
 		});
 
-		expect(child).toMatchObject({ path: "/root/research", state: "running", taskName: "research" });
+		expect(child).toMatchObject({
+			path: "/root/research",
+			state: "running",
+			taskName: "research",
+			startedAt: expect.any(Number),
+		});
 		expect(await registry.list("session-1")).toEqual([child]);
 		await registry.interrupt(child.id);
 		expect(await registry.wait(child.id)).toMatchObject({ id: child.id, state: "interrupted" });
