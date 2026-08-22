@@ -928,13 +928,22 @@ export class RemoteV2Session {
 
 	async dispose(): Promise<void> {
 		if (this.#lifecycle.status === "disposed") return;
-		this.#unsubscribe?.();
-		this.#unsubscribe = undefined;
-		if (this.#handle && this.#lifecycle.status !== "detached") await this.#handle.detach();
-		this.#handle = undefined;
-		this.#lifecycle = { status: "disposed" };
-		this.#emit();
-		this.#listeners.clear();
+		let detachFailed = false;
+		let detachError: unknown;
+		try {
+			if (this.#handle && this.#lifecycle.status !== "detached") await this.#handle.detach();
+		} catch (error) {
+			detachFailed = true;
+			detachError = error;
+		} finally {
+			this.#unsubscribe?.();
+			this.#unsubscribe = undefined;
+			this.#handle = undefined;
+			this.#lifecycle = { status: "disposed" };
+			this.#emit();
+			this.#listeners.clear();
+		}
+		if (detachFailed) throw detachError;
 	}
 
 	#accept(command: CommandV2["command"], payload?: JsonValue): Promise<string> {
