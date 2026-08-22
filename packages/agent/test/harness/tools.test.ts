@@ -1,4 +1,4 @@
-import { symlink, unlink } from "node:fs/promises";
+import { chmod, stat, symlink, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { applyPatch } from "diff";
 import { describe, expect, it } from "vitest";
@@ -168,6 +168,26 @@ describe("AgentHarness tools", () => {
 			expect(textOutput(result)).toContain("Applied patch to 2 file(s)");
 			expect(getOrThrow(await context.env.readTextFile("patch.txt"))).toBe("ONE\ntwo\n");
 			expect(getOrThrow(await context.env.readTextFile("added.txt"))).toBe("created\n");
+		});
+
+		it("preserves existing file mode bits when replacing a file", async () => {
+			const context = createContext();
+			const target = join(context.env.cwd, "script.sh");
+			getOrThrow(await context.env.writeFile(target, "#!/bin/sh\necho before\n"));
+			await chmod(target, 0o6750);
+
+			await createApplyPatchTool().execute(
+				"patch-preserve-mode",
+				{
+					patch: "*** Begin Patch\n*** Update File: script.sh\n@@\n-echo before\n+echo after\n*** End Patch",
+				},
+				undefined,
+				undefined,
+				context,
+			);
+
+			expect((await stat(target)).mode & 0o7777).toBe(0o6750);
+			expect(getOrThrow(await context.env.readTextFile(target))).toBe("#!/bin/sh\necho after\n");
 		});
 
 		it("preserves a POSIX backslash in a filename", async () => {

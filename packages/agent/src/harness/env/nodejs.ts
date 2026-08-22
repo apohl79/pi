@@ -688,9 +688,17 @@ export class NodeExecutionEnv implements ExecutionEnv {
 			parent = await openPinnedParent(resolvePath(this.cwd, root), target, true);
 			const parentPath = procFdPath(parent.fd);
 			temporaryPath = join(parentPath, `.pi-apply-patch-${randomUUID()}`);
+			let targetMode: number | undefined;
+			try {
+				const targetStats = await lstat(join(parentPath, basename(target)));
+				if (targetStats.isFile()) targetMode = targetStats.mode & 0o7777;
+			} catch (error) {
+				if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+			}
 			const temporary = await open(temporaryPath, NO_FOLLOW_FILE_FLAGS, 0o600);
 			try {
 				await temporary.writeFile(content);
+				if (targetMode !== undefined) await temporary.chmod(targetMode);
 				await temporary.sync();
 			} finally {
 				await temporary.close();
