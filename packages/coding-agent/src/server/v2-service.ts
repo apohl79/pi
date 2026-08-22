@@ -747,6 +747,23 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		};
 	}
 
+	async rejectAccepted(_operationId: string, _error: string): Promise<void> {
+		this.revision += 1;
+		this.eventSeq += 1;
+		this.phase = "failed";
+		this.recoveryState = "degraded";
+		this.activeOperation = {
+			...(this.activeOperation ?? {
+				operationId: _operationId,
+				kind: "pending" as const,
+				acceptedSeq: this.eventSeq - 1,
+			}),
+			operationId: _operationId,
+			state: "failed",
+			terminalSeq: this.eventSeq,
+		};
+	}
+
 	async run(_operationId: string, command: CommandV2): Promise<void> {
 		await this.ensureAutoNameLoaded();
 		await this.ensureNameStateLoaded();

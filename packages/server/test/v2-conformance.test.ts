@@ -24,7 +24,7 @@ import {
 import { LocalV2FileReferenceService } from "../src/files.ts";
 import { BlobV2ImageService } from "../src/images.ts";
 import { InMemoryV2InputRegistry } from "../src/inputs.ts";
-import { InMemoryV2OperationStore, JsonlV2OperationStore } from "../src/operation-store.ts";
+import { InMemoryV2OperationStore, JsonlV2OperationStore, type V2OperationStore } from "../src/operation-store.ts";
 import { InMemoryV2ProcessRegistry, NodeV2ProcessRegistry } from "../src/processes.ts";
 import { connectInMemoryTestClientV2, connectUnixTestClientV2, Deferred } from "../src/testing/index.ts";
 import { createUnixServerV2 } from "../src/transports/unix/preset.ts";
@@ -95,6 +95,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	readonly started = new Deferred<void>();
 	readonly release = new Deferred<void>();
 	disposeCount = 0;
+	rejected: Array<{ operationId: string; error: string }> = [];
 	fail = false;
 	private current: SessionSnapshotV2;
 
@@ -125,10 +126,26 @@ class TestRuntime implements PiSessionRuntimeV2 {
 		void operationId;
 	}
 
+	async rejectAccepted(operationId: string, error: string): Promise<void> {
+		this.rejected.push({ operationId, error });
+	}
+
 	dispose(): Promise<void> {
 		this.disposeCount += 1;
 		return Promise.resolve();
 	}
+}
+
+class FailingAcceptanceOperationStore implements V2OperationStore {
+	async load(): Promise<{ operations: readonly never[]; events: readonly never[] }> {
+		return { operations: [], events: [] };
+	}
+
+	async putOperation(): Promise<void> {
+		throw new Error("ENOSPC: no space left on device");
+	}
+
+	async appendEvent(): Promise<void> {}
 }
 
 class TestService implements PiServerServiceV2 {
@@ -936,6 +953,32 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: { operation: { operationId, state: "failed", error: "Critical diagnostic persistence failed" } },
 		});
+	});
+
+	test("does not leave an accepted turn running when operation persistence is full", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-operation-store-full-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, {
+			path: join(directory, "server.sock"),
+			operationStore: new FailingAcceptanceOperationStore(),
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const runtime = service.sessions.get("session-1")!;
+		const response = await client.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { text: "must not start" },
+		});
+		expect(response).toMatchObject({ ok: false, error: { code: "request_failed" } });
+		expect(runtime.commands).toHaveLength(0);
+		expect(runtime.rejected).toHaveLength(1);
+		expect(runtime.rejected[0]).toMatchObject({ error: "ENOSPC: no space left on device" });
+		await client.close();
 	});
 
 	test("continues a detached operation and replays events after reattach", async () => {

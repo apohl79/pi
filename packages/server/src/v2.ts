@@ -62,6 +62,8 @@ function fileReferencePayload(file: Awaited<ReturnType<V2FileReferenceService["r
 export interface PiSessionRuntimeV2 {
 	snapshot(): MaybePromise<SessionSnapshotV2>;
 	accept(operationId: string): Promise<OperationAccepted>;
+	/** Mark an accepted operation failed when durable operation acceptance cannot be persisted. */
+	rejectAccepted?(operationId: string, error: string): Promise<void>;
 	run(operationId: string, command: CommandV2): Promise<void>;
 	dispose(): Promise<void>;
 }
@@ -1544,15 +1546,34 @@ export class PiServerV2 {
 			await this.diagnosticContent?.save?.(capsule);
 			this.diagnosticCapsules.set(capsule.eventId, capsule);
 		}
-		const accepted = await runtime.accept(operationId);
-		this.operations.set(operationId, {
-			operationId,
-			sessionId: command.sessionId,
-			state: "accepted",
-			accepted,
-		});
+		let accepted: OperationAccepted;
+		try {
+			accepted = await runtime.accept(operationId);
+			this.operations.set(operationId, {
+				operationId,
+				sessionId: command.sessionId,
+				state: "accepted",
+				accepted,
+			});
+			const acceptedRecord = this.operations.get(operationId)!;
+			await this.operationStore.putOperation(acceptedRecord);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.operations.delete(operationId);
+			await runtime.rejectAccepted?.(operationId, message).catch(() => undefined);
+			await this.recordProtocolDiagnostic({
+				kind: "operation_accept_failed",
+				severity: "error",
+				outcome: "error",
+				traceId: operationId,
+				spanId: id,
+				sessionId: command.sessionId,
+				operationId,
+				payload: { error: message },
+			});
+			throw error;
+		}
 		const acceptedRecord = this.operations.get(operationId)!;
-		await this.operationStore.putOperation(acceptedRecord);
 		try {
 			await this.diagnostics?.record({
 				kind: "operation_accepted",
