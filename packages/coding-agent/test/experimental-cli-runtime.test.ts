@@ -638,6 +638,31 @@ describe("experimental CLI runtime", () => {
 		runtime.close();
 	});
 
+	test("routes local file arguments through the remote prompt contract", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-cli-file-"));
+		const file = join(directory, "prompt.md");
+		await writeFile(file, "file context");
+		const requests: Array<{ command: string; payload?: unknown }> = [];
+		const server = clientFactory(requests);
+		const output: string[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: () => {},
+			writeText: (value) => output.push(value),
+		});
+		await runtime.runPi({
+			command: "pi",
+			options: { print: true, messages: ["answer"], fileArgs: [file], unknownFlags: new Map(), diagnostics: [] },
+		});
+		expect(output).toEqual(["remote reply"]);
+		expect(requests.find((request) => request.command === "turn/start")?.payload).toEqual({
+			text: `<file name="${file}">\nfile context\n</file>\nanswer`,
+		});
+		runtime.close();
+	});
+
 	test("applies server-default model and thinking options before the prompt", async () => {
 		const requests: Array<{ command: string; payload?: unknown }> = [];
 		const server = clientFactory(requests);
