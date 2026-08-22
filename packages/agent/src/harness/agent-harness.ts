@@ -523,6 +523,7 @@ export class AgentHarness implements AgentLane {
 	private compactionSettings: CompactionSettings;
 	private steeringMode: QueueMode;
 	private followUpMode: QueueMode;
+	private activeRun?: { id: string; controller: AbortController };
 	private suspendedOperations: SuspendedOperation[] = [];
 	private readonly lifecycle: LifecycleRegistry;
 	private readonly watchBus = new HarnessEventBus();
@@ -717,6 +718,8 @@ export class AgentHarness implements AgentLane {
 		await this.appendOperationStarted(started);
 		this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
 		this.watchBus.emit({ type: "run_start", lane: this.name, runId });
+		const controller = new AbortController();
+		this.activeRun = { id: runId, controller };
 		try {
 			await this.runLifecycleHook("before_run", { operationId: runId, prompts: durableClone(prompts) });
 			const entries = await this.session.findEntriesOnBranch({ order: "oldestFirst" });
@@ -752,7 +755,7 @@ export class AgentHarness implements AgentLane {
 							)),
 				},
 				async () => {},
-				undefined,
+				controller.signal,
 				this.models.streamSimple.bind(this.models),
 			);
 			let finalEntryId: string | undefined;
@@ -776,8 +779,12 @@ export class AgentHarness implements AgentLane {
 			const finalMessage = transcriptMessages.at(-1);
 			if (!finalEntryId || !finalMessage || finalMessage.role !== "assistant")
 				throw new Error("Agent loop produced no assistant message");
-			if (finalMessage.stopReason === "aborted" || finalMessage.stopReason === "error") {
-				if (finalMessage.stopReason === "aborted") {
+			if (
+				controller.signal.aborted ||
+				finalMessage.stopReason === "aborted" ||
+				finalMessage.stopReason === "error"
+			) {
+				if (controller.signal.aborted || finalMessage.stopReason === "aborted") {
 					await this.runLifecycleHook("after_response", {
 						operationId: runId,
 						message: durableClone(finalMessage),
@@ -862,6 +869,48 @@ export class AgentHarness implements AgentLane {
 				finalMessage,
 			});
 		} catch (error) {
+			if (controller.signal.aborted) {
+				const finalMessage: AssistantMessage = {
+					role: "assistant",
+					content: [],
+					api: this.model.api,
+					provider: this.model.provider,
+					model: this.model.id,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "aborted",
+					errorMessage: "Operation aborted",
+					timestamp: Date.now(),
+				};
+				const finalEntryId = await this.session.appendMessage(finalMessage);
+				await this.appendOperationFinished({
+					type: "operation_finished",
+					id: this.durableSession.idGenerator.next(),
+					lane: this.name,
+					runId,
+					outcome: "aborted",
+				});
+				this.watchBus.emit({
+					type: "run_end",
+					lane: this.name,
+					runId,
+					outcome: "aborted",
+					leafId: (await this.session.getLeafId()) ?? "",
+				});
+				return ResultValue.ok({
+					kind: "aborted",
+					runId,
+					leafId: (await this.session.getLeafId()) ?? "",
+					finalEntryId,
+					finalMessage,
+				});
+			}
 			const message = sanitizeErrorMessage(error, "Run failed");
 			await this.appendOperationFinished({
 				type: "operation_finished",
@@ -884,6 +933,8 @@ export class AgentHarness implements AgentLane {
 				leafId: (await this.session.getLeafId()) ?? "",
 				error: { code: "run_failed", message },
 			});
+		} finally {
+			if (this.activeRun?.id === runId) this.activeRun = undefined;
 		}
 	}
 
@@ -1331,6 +1382,10 @@ export class AgentHarness implements AgentLane {
 			runId: openRun.id,
 		};
 		await this.durableSession.appendRecord(requested);
+		if (this.activeRun?.id === openRun.id) {
+			this.activeRun.controller.abort();
+			return ResultValue.ok({ runId: openRun.id, ...recalled });
+		}
 		const finished: NewRecord<OperationFinishedRecord> = {
 			type: "operation_finished",
 			id: this.durableSession.idGenerator.next(),
