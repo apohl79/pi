@@ -139,6 +139,7 @@ describe("AgentHarness v2 scaffold", () => {
 			reserveTokens: 7,
 			keepRecentTokens: 1,
 		});
+		expect(await harness.getCompactionPolicySource()).toBe("mixed");
 		await harness.prompt("first request with enough text to create history");
 		await harness.prompt("second request with enough text to create history");
 		faux.setResponses([fauxAssistantMessage("durable summary"), fauxAssistantMessage("durable turn prefix")]);

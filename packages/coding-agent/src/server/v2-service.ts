@@ -367,16 +367,25 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async snapshot(): Promise<SessionSnapshotV2> {
-		const [leafId, thinkingLevel, stats, compaction, entries, pendingInputRequestId, usageAggregate] =
-			await Promise.all([
-				this.definition.harness.getLeafId(),
-				this.definition.harness.getThinkingLevel(),
-				this.definition.harness.session.getStats(),
-				this.definition.harness.getCompactionSettings(),
-				this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }),
-				this.definition.inputs?.pendingForSession(this.definition.metadata.id),
-				this.definition.usage?.aggregate({ sessionId: this.definition.metadata.id }),
-			]);
+		const [
+			leafId,
+			thinkingLevel,
+			compactionSource,
+			stats,
+			compaction,
+			entries,
+			pendingInputRequestId,
+			usageAggregate,
+		] = await Promise.all([
+			this.definition.harness.getLeafId(),
+			this.definition.harness.getThinkingLevel(),
+			this.definition.harness.getCompactionPolicySource(),
+			this.definition.harness.session.getStats(),
+			this.definition.harness.getCompactionSettings(),
+			this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }),
+			this.definition.inputs?.pendingForSession(this.definition.metadata.id),
+			this.definition.usage?.aggregate({ sessionId: this.definition.metadata.id }),
+		]);
 		void leafId;
 		const [goal, persistedName] = await Promise.all([
 			this.definition.goals?.read(),
@@ -430,7 +439,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				reserveTokens,
 				keepRecentTokens: Math.max(0, compaction.keepRecentTokens),
 				triggerTokens: Math.max(0, contextWindow - reserveTokens),
-				source: "global",
+				source: compactionSource,
 			},
 			pluginSetHash: "plugins-empty",
 			diagnostics: { capture: "metadata", degraded: false, lastCriticalEventSeq: 0 },
