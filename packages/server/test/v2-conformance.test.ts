@@ -330,12 +330,15 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: { events: [{ kind: "boot", payload: { token: "[REDACTED]" } }] },
 		});
-		expect(exported).toMatchObject({ ok: true, result: { format: "json", events: [{ seq: 1 }] } });
+		expect(exported).toMatchObject({
+			ok: true,
+			result: { format: "json", bundle: { manifest: { integrity: "corruption-detection-only" }, events: [{ seq: 1 }] } },
+		});
 		expect(verified).toMatchObject({ ok: true, result: { valid: true, gaps: [] } });
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
 		const bundle = (exported as unknown as { result: { bundle: JsonValue } }).result.bundle;
 		const bundleVerified = await client.request({ command: "diagnostics/verify", payload: { bundle } });
-		expect(bundleVerified).toMatchObject({ ok: true, result: { valid: true } });
+		expect(bundleVerified).toMatchObject({ ok: true, result: { valid: true, integrity: "corruption-detection-only" } });
 		const tampered = structuredClone(bundle) as {
 			events: Array<{ [key: string]: JsonValue }>;
 			manifest: { [key: string]: JsonValue };
