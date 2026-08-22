@@ -207,6 +207,51 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("redacts provider compaction errors before durable persistence", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "compaction-error-redaction-faux",
+			models: [{ id: "compaction-error-redaction-model", contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("history")]);
+		const session = createSession("compaction-error-redaction");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+		});
+		await harness.prompt("create durable history");
+		faux.setResponses([
+			fauxAssistantMessage("", {
+				stopReason: "error",
+				errorMessage: 'request failed: {"api_key":"secret-value"} Bearer bearer-secret',
+			}),
+		]);
+
+		const result = await harness.compact();
+
+		expect(result).toMatchObject({
+			ok: true,
+			value: {
+				kind: "failed",
+				error: {
+					message: 'Turn prefix summarization failed: request failed: {"api_key"=[redacted]} Bearer [redacted]',
+				},
+			},
+		});
+		expect(
+			(await session.findRecords({ type: "operation_finished" })).some(
+				(record) =>
+					record.outcome === "failed" &&
+					record.error?.message ===
+						'Turn prefix summarization failed: request failed: {"api_key"=[redacted]} Bearer [redacted]',
+			),
+		).toBe(true);
+		await harness.close();
+	});
+
 	it("recovers navigation admission when the start record was already committed", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
