@@ -26,10 +26,17 @@ describe("coding-agent daemon plugin apps", () => {
 			ok: true,
 			result: { app: { id: "calendar-plugin@local:calendar", name: "Calendar", description: "Plugin calendar" } },
 		});
+		expect(result.auth).toMatchObject({
+			ok: true,
+			result: {
+				auth: { appId: "calendar-plugin@local:calendar", state: "pending", authorizationUrl: "https://auth.local" },
+			},
+		});
+		expect(result.afterAuth).toMatchObject({ ok: true, result: { app: { auth: "pending" } } });
 	});
 });
 
-async function runPluginAppsScenario(): Promise<{ listed: unknown; read: unknown }> {
+async function runPluginAppsScenario(): Promise<{ listed: unknown; read: unknown; auth: unknown; afterAuth: unknown }> {
 	const directory = await mkdtemp(join(tmpdir(), "pi-daemon-plugin-apps-"));
 	directories.push(directory);
 	const models = createModels();
@@ -74,7 +81,15 @@ async function runPluginAppsScenario(): Promise<{ listed: unknown; read: unknown
 		});
 		const listed = await client.request({ command: "app/list" });
 		const read = await client.request({ command: "app/read", payload: { id: "calendar-plugin@local:calendar" } });
-		return { listed, read };
+		const auth = await client.request({
+			command: "app/auth/start",
+			payload: { id: "calendar-plugin@local:calendar", authorizationUrl: "https://auth.local" },
+		});
+		const afterAuth = await client.request({
+			command: "app/read",
+			payload: { id: "calendar-plugin@local:calendar" },
+		});
+		return { listed, read, auth, afterAuth };
 	} finally {
 		client.dispose();
 		await runtime.close();
