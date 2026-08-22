@@ -87,11 +87,21 @@ function clientWithRequests(): { client: PiClientV2; commands: string[] } {
 						type: "response" as const,
 						id: message.id,
 						ok: true as const,
-						result: (message.request.command === "session/read"
-							? { session: snapshot() }
-							: message.request.command === "plan/update"
-								? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
-								: { command: message.request.command }) as JsonValue,
+						result: (message.request.command === "agent/followUp" || message.request.command === "agent/interrupt"
+							? {
+									agent: {
+										id: "agent-1",
+										path: "/root/agent-1",
+										taskName: "agent-1",
+										state: message.request.command === "agent/interrupt" ? "interrupted" : "complete",
+										model: { provider: "faux", id: "model" },
+									},
+								}
+							: message.request.command === "session/read"
+								? { session: snapshot() }
+								: message.request.command === "plan/update"
+									? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
+									: { command: message.request.command }) as JsonValue,
 					};
 			handlers?.onData(encodeServerMessageV2(response));
 		},
@@ -112,6 +122,15 @@ describe("remote v2 interactive command boundary", () => {
 	test("parses discoverable commands without changing v1 slash commands", () => {
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/detach");
 		expect(parseRemoteV2Command("/follow-up  continue this")).toEqual({ name: "follow-up", text: "continue this" });
+		expect(parseRemoteV2Command("/agent-follow-up agent-1 continue work")).toEqual({
+			name: "agent-follow-up",
+			agentId: "agent-1",
+			text: "continue work",
+		});
+		expect(parseRemoteV2Command("/agent-interrupt agent-1")).toEqual({
+			name: "agent-interrupt",
+			agentId: "agent-1",
+		});
 		expect(parseRemoteV2Command("/compact")).toEqual({ name: "compact" });
 		expect(parseRemoteV2Command("/compact preserve the API contract")).toEqual({
 			name: "compact",
@@ -138,6 +157,7 @@ describe("remote v2 interactive command boundary", () => {
 		});
 		expect(parseRemoteV2Command("/plan-clear")).toEqual({ name: "plan-clear" });
 		expect(() => parseRemoteV2Command("/rollback 0")).toThrow("positive integer");
+		expect(() => parseRemoteV2Command("/agent-interrupt")).toThrow("requires <agent-id>");
 		expect(() => parseRemoteV2Command('/input request-1 {"choice":true}')).toThrow("only strings");
 		expect(() => parseRemoteV2Command('/plan [{"step":"ship","status":"bad"}]')).toThrow("valid status");
 	});
@@ -148,6 +168,14 @@ describe("remote v2 interactive command boundary", () => {
 		const attachment = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
 		const adapter = new RemoteV2InteractiveAttachment(attachment);
 		expect(await adapter.execute("/follow-up continue")).toEqual({ kind: "operation", operationId: "operation-1" });
+		expect(await adapter.execute("/agent-follow-up agent-1 continue work")).toEqual({
+			kind: "status",
+			text: "agent complete",
+		});
+		expect(await adapter.execute("/agent-interrupt agent-1")).toEqual({
+			kind: "status",
+			text: "agent interrupted",
+		});
 		expect(await adapter.execute("/compact preserve context")).toEqual({
 			kind: "operation",
 			operationId: "operation-1",
@@ -177,6 +205,8 @@ describe("remote v2 interactive command boundary", () => {
 			"session/attach",
 			"session/read",
 			"turn/followUp",
+			"agent/followUp",
+			"agent/interrupt",
 			"turn/compact",
 			"session/attach",
 			"session/attach",
