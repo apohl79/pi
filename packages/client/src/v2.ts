@@ -97,6 +97,7 @@ export class PiClientV2 {
 		this.fail(new Error("PiClientV2 disconnected"));
 		this.transport?.close();
 		this.transport = undefined;
+		this.listeners.clear();
 	}
 
 	onEvent(listener: (event: EventEnvelopeV2) => void): () => void {
@@ -209,6 +210,8 @@ export class PiClientV2 {
 class SessionHandle implements PiSessionV2Handle {
 	private leaseMode: V2SessionLeaseMode;
 	private detached = false;
+	private transition: Promise<void> = Promise.resolve();
+	private readonly subscriptions = new Set<() => void>();
 	private readonly client: PiClientV2;
 	readonly sessionId: string;
 
@@ -227,31 +230,49 @@ class SessionHandle implements PiSessionV2Handle {
 		return this.client.readSession(this.sessionId);
 	}
 
-	async relinquishControl(): Promise<void> {
-		this.assertAttached();
-		if (this.leaseMode === "observer") return;
-		await this.client.attachSession(this.sessionId, "observer");
-		this.leaseMode = "observer";
+	relinquishControl(): Promise<void> {
+		return this.enqueue(async () => {
+			this.assertAttached();
+			if (this.leaseMode === "observer") return;
+			await this.client.attachSession(this.sessionId, "observer");
+			this.leaseMode = "observer";
+		});
 	}
 
-	async acquireControl(): Promise<void> {
-		this.assertAttached();
-		if (this.leaseMode === "control") return;
-		await this.client.attachSession(this.sessionId, "control");
-		this.leaseMode = "control";
+	acquireControl(): Promise<void> {
+		return this.enqueue(async () => {
+			this.assertAttached();
+			if (this.leaseMode === "control") return;
+			await this.client.attachSession(this.sessionId, "control");
+			this.leaseMode = "control";
+		});
 	}
 
-	async detach(): Promise<void> {
-		if (this.detached) return;
-		this.client.result(await this.client.request({ command: "session/detach", sessionId: this.sessionId }));
-		this.detached = true;
+	detach(): Promise<void> {
+		return this.enqueue(async () => {
+			if (this.detached) return;
+			this.client.result(await this.client.request({ command: "session/detach", sessionId: this.sessionId }));
+			this.detached = true;
+			for (const unsubscribe of this.subscriptions) unsubscribe();
+			this.subscriptions.clear();
+		});
 	}
 
 	onEvent(listener: (event: EventEnvelopeV2) => void): () => void {
 		this.assertAttached();
-		return this.client.onEvent((event) => {
+		const unsubscribe = this.client.onEvent((event) => {
 			if (event.sessionId === this.sessionId) listener(event);
 		});
+		this.subscriptions.add(unsubscribe);
+		return () => {
+			if (this.subscriptions.delete(unsubscribe)) unsubscribe();
+		};
+	}
+
+	private enqueue(operation: () => Promise<void>): Promise<void> {
+		const next = this.transition.then(operation, operation);
+		this.transition = next.catch(() => {});
+		return next;
 	}
 
 	private assertAttached(): void {
