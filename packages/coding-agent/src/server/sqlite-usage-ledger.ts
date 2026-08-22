@@ -1,5 +1,5 @@
 import type { V2UsageFilter, V2UsageLedger, V2UsageLedgerEntry } from "@earendil-works/pi-server";
-import { InMemoryV2UsageLedger } from "@earendil-works/pi-server";
+import { InMemoryV2UsageLedger, validateV2UsageEntry } from "@earendil-works/pi-server";
 import type { SqliteDatabase, SqliteDatabaseFactory } from "@earendil-works/pi-session-backend-sqlite-node";
 
 interface UsageRow {
@@ -24,7 +24,7 @@ export class SqliteV2UsageLedger implements V2UsageLedger {
 	record(entry: V2UsageLedgerEntry): Promise<V2UsageLedgerEntry> {
 		return this.#enqueue(async () => {
 			await this.#ensureLoaded();
-			const recorded = await this.#memory.record(entry);
+			const recorded = validateV2UsageEntry(entry);
 			const database = await this.#database();
 			database
 				.prepare(
@@ -32,6 +32,7 @@ export class SqliteV2UsageLedger implements V2UsageLedger {
 						"ON CONFLICT(response_id) DO UPDATE SET value = excluded.value",
 				)
 				.run(recorded.responseId, JSON.stringify(recorded));
+			await this.#memory.record(recorded);
 			return recorded;
 		});
 	}

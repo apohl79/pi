@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -61,5 +61,15 @@ describe("V2 usage ledger", () => {
 		await expect(new InMemoryV2UsageLedger().record({ ...baseEntry, input: -1 })).rejects.toThrow(
 			"Usage field is invalid",
 		);
+	});
+
+	test("does not publish usage when the durable append fails", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-usage-ledger-failure-"));
+		const blocker = join(directory, "parent-file");
+		await writeFile(blocker, "not a directory");
+		const ledger = new JsonlV2UsageLedger(join(blocker, "usage.jsonl"));
+
+		await expect(ledger.record(baseEntry)).rejects.toThrow();
+		expect(await ledger.read()).toEqual([]);
 	});
 });
