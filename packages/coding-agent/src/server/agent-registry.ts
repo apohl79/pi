@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Entry } from "@earendil-works/pi-agent-core";
 import type { AgentSummary } from "@earendil-works/pi-protocol";
-import type { V2AgentRegistry, V2AgentRequest, V2AgentSnapshot } from "@earendil-works/pi-server";
+import type { ForensicRecorder, V2AgentRegistry, V2AgentRequest, V2AgentSnapshot } from "@earendil-works/pi-server";
 import type { CodingAgentV2Runtime, CodingAgentV2Service } from "./v2-service.ts";
 
 const MAX_AGENT_INBOX_MESSAGES = 32;
@@ -59,6 +59,7 @@ export interface CodingAgentV2AgentRegistryOptions {
 	readonly maxDepth?: number;
 	readonly maxActive?: number;
 	readonly maxActivePerParent?: number;
+	readonly diagnostics?: ForensicRecorder;
 }
 
 /** Executes server-owned child agents through the durable coding-agent service. */
@@ -66,6 +67,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private readonly maxDepth: number;
 	private readonly maxActive: number;
 	private readonly maxActivePerParent: number;
+	private readonly diagnostics: ForensicRecorder | undefined;
 	private readonly agents = new Map<string, ChildAgent>();
 	private readonly service: CodingAgentV2Service;
 	private disposed = false;
@@ -76,6 +78,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		this.maxDepth = options.maxDepth ?? 1;
 		this.maxActive = options.maxActive ?? 8;
 		this.maxActivePerParent = options.maxActivePerParent ?? 4;
+		this.diagnostics = options.diagnostics;
 		if (!Number.isInteger(this.maxDepth) || this.maxDepth < 1) throw new Error("maxDepth must be a positive integer");
 		if (!Number.isInteger(this.maxActive) || this.maxActive < 1 || this.maxActive > 8)
 			throw new Error("maxActive must be an integer from 1 to 8");
@@ -123,6 +126,11 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			completionQueued: false,
 		};
 		this.agents.set(summary.id, agent);
+		this.recordDiagnostic("agent_spawned", agent, undefined, {
+			path: summary.path,
+			taskName: summary.taskName,
+			model: `${summary.model.provider}/${summary.model.id}`,
+		});
 		await this.persist(agent);
 		void this.run(agent, "turn/start", [forkedContext, request.taskMessage].filter(Boolean).join("\n\n"));
 		return this.snapshot(agent);
@@ -200,7 +208,9 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 					payload: {},
 				});
 			} finally {
+				const previousState = agent.state;
 				agent.state = "interrupted";
+				this.recordDiagnostic("agent_state_changed", agent, previousState);
 				await this.persist(agent);
 				await this.queueCompletion(agent);
 				this.resolveWaiters(agent);
@@ -217,7 +227,9 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		await Promise.all(
 			agents.map(async (agent) => {
 				if (agent.state !== "running" && agent.state !== "awaitingInput") return;
+				const previousState = agent.state;
 				agent.state = "interrupted";
+				this.recordDiagnostic("agent_state_changed", agent, previousState);
 				await this.persist(agent);
 				await this.queueCompletion(agent);
 			}),
@@ -238,7 +250,9 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				payload: { text: prompt },
 			});
 			if (inbox.length > 0) agent.inbox.splice(0, inbox.length);
+			const previousState = agent.state;
 			agent.state = "complete";
+			this.recordDiagnostic("agent_state_changed", agent, previousState);
 			const next = agent.followUps.shift();
 			await this.persist(agent);
 			if (next !== undefined) {
@@ -247,7 +261,9 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				void this.run(agent, "turn/start", next);
 			} else await this.queueCompletion(agent);
 		} catch {
+			const previousState = agent.state;
 			agent.state = "failed";
+			this.recordDiagnostic("agent_state_changed", agent, previousState);
 			await this.persist(agent);
 			await this.queueCompletion(agent);
 		} finally {
@@ -401,6 +417,26 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private resolveWaiters(agent: ChildAgent): void {
 		const waiters = agent.waiters.splice(0);
 		for (const resolve of waiters) resolve();
+	}
+
+	private recordDiagnostic(
+		kind: string,
+		agent: ChildAgent,
+		previousState: AgentSummary["state"] | undefined,
+		payload?: Record<string, unknown>,
+	): void {
+		void this.diagnostics
+			?.record({
+				kind,
+				agentId: agent.summary.id,
+				sessionId: agent.parentSessionId,
+				payload: {
+					...(previousState === undefined ? {} : { previousState }),
+					state: agent.state,
+					...payload,
+				},
+			})
+			.catch(() => undefined);
 	}
 
 	private snapshot(agent: ChildAgent): AgentSummary {

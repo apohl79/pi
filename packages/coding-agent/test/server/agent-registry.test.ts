@@ -1,5 +1,6 @@
 import type { Entry } from "@earendil-works/pi-agent-core";
 import type { CommandV2, OperationAccepted, SessionSnapshotV2 } from "@earendil-works/pi-protocol";
+import { InMemoryForensicRecorder } from "@earendil-works/pi-server";
 import { describe, expect, test } from "vitest";
 import { CodingAgentV2AgentRegistry } from "../../src/server/agent-registry.ts";
 import type { CodingAgentV2Runtime, CodingAgentV2Service } from "../../src/server/v2-service.ts";
@@ -234,6 +235,32 @@ describe("CodingAgentV2AgentRegistry", () => {
 		).toMatchObject({
 			data: { version: 1, agentId: agent.id, path: "root/worker", state: "complete" },
 		});
+	});
+
+	test("records child spawn and terminal state transitions in diagnostics", async () => {
+		const { runtime } = fixture();
+		const diagnostics = new InMemoryForensicRecorder();
+		const registry = new CodingAgentV2AgentRegistry(
+			{
+				listSessions: async () => [],
+				listModels: async () => [],
+				openSession: async () => runtime,
+				createSession: async () => ({ sessionId: "child-session", runtime }),
+			},
+			{ diagnostics },
+		);
+		const agent = await registry.spawn({
+			sessionId: "parent-session",
+			parentPath: "root",
+			taskName: "worker",
+			taskMessage: "complete this task",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		await registry.wait(agent.id);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const events = await diagnostics.read();
+		expect(events.map((event) => event.kind)).toEqual(["agent_spawned", "agent_state_changed"]);
+		expect(events.every((event) => event.agentId === agent.id && event.sessionId === "parent-session")).toBe(true);
 	});
 
 	test("queues terminal completion metadata exactly once across an interrupt race", async () => {
