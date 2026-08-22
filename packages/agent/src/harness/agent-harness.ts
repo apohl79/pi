@@ -351,21 +351,52 @@ export interface Events {
 	on(type: string, listener: (event: unknown) => void | Promise<void>): () => void;
 }
 
-class UnavailableRegistry implements Hooks, Events {
-	private readonly operation: string;
-	private readonly isClosed: () => boolean;
+class LifecycleRegistry implements Hooks, Events {
+	private readonly hooks = new Map<HookName, Array<{ id: string; handler: (event: unknown) => unknown | Promise<unknown> }>>();
+	private readonly events = new Map<string, Set<(event: unknown) => void | Promise<void>>>();
+	private nextId = 0;
 
-	constructor(operation: string, isClosed: () => boolean) {
-		this.operation = operation;
-		this.isClosed = isClosed;
-	}
+	constructor(private readonly isClosed: () => boolean) {}
 
 	on(
-		_name: HookName | string,
-		_handler: (event: unknown) => unknown | Promise<unknown>,
-		_options?: { id?: string },
+		name: HookName | string,
+		handler: (event: unknown) => unknown | Promise<unknown>,
+		options?: { id?: string },
 	): () => void {
-		throw this.isClosed() ? new HarnessClosed() : new HarnessNotImplemented(this.operation);
+		if (this.isClosed()) throw new HarnessClosed();
+		const hookName = name as HookName;
+		const id = options?.id ?? `hook-${++this.nextId}`;
+		const handlers = this.hooks.get(hookName) ?? [];
+		const registration = { id, handler };
+		if (handlers.some((candidate) => candidate.id === id)) throw new Error(`Duplicate lifecycle hook id: ${id}`);
+		handlers.push(registration);
+		this.hooks.set(hookName, handlers);
+		return () => {
+			const current = this.hooks.get(hookName);
+			if (!current) return;
+			const remaining = current.filter((candidate) => candidate !== registration);
+			if (remaining.length === 0) this.hooks.delete(hookName);
+			else this.hooks.set(hookName, remaining);
+		};
+	}
+
+	emit(type: string, event: unknown): void {
+		for (const listener of this.events.get(type) ?? []) void Promise.resolve(listener(event));
+	}
+
+	async runHook(name: HookName, event: unknown): Promise<void> {
+		for (const registration of this.hooks.get(name) ?? []) await registration.handler(event);
+	}
+
+	onEvent(type: string, listener: (event: unknown) => void | Promise<void>): () => void {
+		if (this.isClosed()) throw new HarnessClosed();
+		const listeners = this.events.get(type) ?? new Set();
+		listeners.add(listener);
+		this.events.set(type, listeners);
+		return () => {
+			listeners.delete(listener);
+			if (listeners.size === 0) this.events.delete(type);
+		};
 	}
 }
 
@@ -447,6 +478,7 @@ export class AgentHarness implements AgentLane {
 	private readonly models: Models;
 	private readonly systemPromptSource: AgentHarnessOptions["systemPrompt"];
 	private readonly toProviderMessages: AgentHarnessOptions["toProviderMessages"];
+	private readonly lifecycle: LifecycleRegistry;
 	private model: Model<Api>;
 	private thinkingLevel: ThinkingLevel;
 	private activeToolNames: string[];
@@ -484,8 +516,9 @@ export class AgentHarness implements AgentLane {
 		this.systemPromptSource = options.systemPrompt;
 		this.toProviderMessages = options.toProviderMessages;
 		this.session = options.session;
-		this.hooks = new UnavailableRegistry("hooks.on", () => this.closed);
-		this.events = new UnavailableRegistry("events.on", () => this.closed);
+		this.lifecycle = new LifecycleRegistry(() => this.closed);
+		this.hooks = this.lifecycle;
+		this.events = { on: (type, listener) => this.lifecycle.onEvent(type, listener) };
 		this.model = options.model;
 		this.thinkingLevel = options.thinkingLevel ?? "off";
 		this.activeToolNames = [...(options.activeToolNames ?? options.tools?.map((tool) => tool.name) ?? [])];
