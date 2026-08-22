@@ -262,6 +262,10 @@ export class PiClientV2 {
 	}
 
 	private handle(message: ServerMessageV2): void {
+		if (!this.connectedValue && message.type !== "hello" && message.type !== "hello_error") {
+			this.fail(new Error("PiClientV2 expected server hello before other messages"));
+			return;
+		}
 		if (message.type === "hello") {
 			this.connectedValue = true;
 			this.handshake?.resolve(message.snapshot);
@@ -269,8 +273,7 @@ export class PiClientV2 {
 			return;
 		}
 		if (message.type === "hello_error") {
-			this.handshake?.reject(new Error(message.error.message));
-			this.handshake = undefined;
+			this.fail(new Error(message.error.message));
 			return;
 		}
 		if (message.type === "event") {
