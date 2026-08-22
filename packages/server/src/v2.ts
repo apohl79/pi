@@ -425,6 +425,7 @@ export class PiServerV2 {
 				command.command === "session/thinking/set" ||
 				command.command === "session/steering-mode/set" ||
 				command.command === "session/follow-up-mode/set" ||
+				command.command === "session/compaction/set" ||
 				command.command === "session/name/set" ||
 				command.command === "session/name/generate" ||
 				command.command === "session/name/auto/set"

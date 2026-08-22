@@ -268,6 +268,7 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("session/thinking/set"),
 	Type.Literal("session/steering-mode/set"),
 	Type.Literal("session/follow-up-mode/set"),
+	Type.Literal("session/compaction/set"),
 	Type.Literal("agent/spawn"),
 	Type.Literal("agent/list"),
 	Type.Literal("agent/wait"),

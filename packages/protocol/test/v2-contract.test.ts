@@ -39,6 +39,7 @@ const commandNames = [
 	"session/thinking/set",
 	"session/steering-mode/set",
 	"session/follow-up-mode/set",
+	"session/compaction/set",
 	"agent/spawn",
 	"agent/list",
 	"agent/wait",

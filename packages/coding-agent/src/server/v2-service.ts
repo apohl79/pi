@@ -574,6 +574,10 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				if (payload.mode !== "all" && payload.mode !== "one-at-a-time")
 					throw new Error("session/follow-up-mode/set requires a valid mode");
 				await harness.setFollowUpMode(payload.mode);
+			} else if (runCommand === "session/compaction/set") {
+				if (typeof payload.enabled !== "boolean") throw new Error("session/compaction/set requires enabled");
+				const settings = await harness.getCompactionSettings();
+				await harness.setCompactionSettings({ ...settings, enabled: payload.enabled });
 			} else if (runCommand === "goal/create") {
 				if (!this.definition.goals || typeof payload.objective !== "string")
 					throw new Error("goal/create requires an objective");

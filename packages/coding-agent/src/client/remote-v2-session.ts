@@ -333,6 +333,10 @@ export class RemoteV2Session {
 	async setFollowUpMode(mode: "all" | "one-at-a-time"): Promise<string> {
 		return this.#accept("session/follow-up-mode/set", { mode });
 	}
+
+	async setAutoCompaction(enabled: boolean): Promise<string> {
+		return this.#accept("session/compaction/set", { enabled });
+	}
 	async createGoal(objective: string, tokenBudget?: number): Promise<string> {
 		const normalized = objective.trim();
 		if (!normalized) throw new Error("Goal objective cannot be empty");
