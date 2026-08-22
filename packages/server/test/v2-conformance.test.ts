@@ -82,6 +82,8 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	readonly accepted: OperationAccepted[] = [];
 	readonly started = new Deferred<void>();
 	readonly release = new Deferred<void>();
+	runEntered = false;
+	disposed = false;
 	private current: SessionSnapshotV2;
 
 	constructor(id: string) {
@@ -99,6 +101,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	}
 
 	async run(operationId: string, _command: CommandV2): Promise<void> {
+		this.runEntered = true;
 		await this.release.promise;
 		this.started.resolve(undefined);
 		this.current = {
@@ -110,6 +113,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	}
 
 	dispose(): Promise<void> {
+		this.disposed = true;
 		return Promise.resolve();
 	}
 }
@@ -171,6 +175,7 @@ describe("PiServer v2 operation acceptance", () => {
 			accepted: { operationId: expect.stringMatching(/^[0-9a-f-]{36}$/), sessionRevision: 2, eventSeq: 2 },
 		});
 		expect(runtime.accepted).toHaveLength(1);
+		expect(runtime.runEntered).toBe(false);
 
 		runtime.release.resolve(undefined);
 		await runtime.started.promise;
@@ -207,8 +212,10 @@ describe("PiServer v2 operation acceptance", () => {
 		await firstClient.request({ command: "session/attach", sessionId: "session-1" });
 		const accepted = await firstClient.request({ command: "turn/start", sessionId: "session-1", payload: { text: "hello" } });
 		expect(accepted).toMatchObject({ ok: true, accepted: { eventSeq: 2 } });
+		const runtime = service.sessions.get("session-1")!;
 		await firstClient.request({ command: "session/detach", sessionId: "session-1" });
 		await firstClient.close();
+		expect(runtime.disposed).toBe(false);
 
 		const secondClient = await connectUnixTestClientV2(server.addresses[0]!);
 		await secondClient.hello({ sessionId: "session-1", eventSeq: 0 });
@@ -217,7 +224,6 @@ describe("PiServer v2 operation acceptance", () => {
 		);
 		expect(replayed).toMatchObject({ type: "event", sessionId: "session-1", seq: 2 });
 		await secondClient.request({ command: "session/attach", sessionId: "session-1" });
-		const runtime = service.sessions.get("session-1")!;
 		runtime.release.resolve(undefined);
 		await runtime.started.promise;
 		const terminal = await secondClient.next(
