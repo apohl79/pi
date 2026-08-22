@@ -946,7 +946,13 @@ export class PiServerV2 {
 		state.sessions.set(command.sessionId, runtime);
 		await runtime.cancelQueued(payload.entryId);
 		await this.sendResponse(state, id, { command: command.command, entryId: payload.entryId, cancelled: true });
-		await this.broadcastEvent(command.sessionId, runtime, {}, undefined, "session_snapshot");
+		await this.broadcastEvent(
+			command.sessionId,
+			runtime,
+			{ snapshot: await runtime.snapshot() },
+			undefined,
+			"session_snapshot",
+		);
 	}
 
 	private async updatePlan(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
