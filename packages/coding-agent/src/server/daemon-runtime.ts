@@ -11,7 +11,6 @@ import {
 	InMemoryV2PlanRegistry,
 	JsonlForensicRecorder,
 	JsonlV2InputRegistry,
-	JsonlV2OperationStore,
 	JsonlV2PlanRegistry,
 	JsonlV2UsageLedger,
 	JsonV2PluginRegistry,
@@ -41,6 +40,7 @@ import type { TransportAddress } from "../cli/experimental/transport-address.ts"
 import { runMigrations } from "../migrations.ts";
 import { createCodingAgentV2AgentRegistry } from "./agent-registry.ts";
 import { createRuntimeManifest } from "./runtime-manifest.ts";
+import { SqliteV2OperationStore } from "./sqlite-operation-store.ts";
 import { type CodingAgentV2SqliteServiceOptions, createCodingAgentV2SqliteService } from "./sqlite-service.ts";
 
 export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOptions, "repository"> & {
@@ -249,7 +249,10 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 		const pluginRegistry = options.pluginRegistry ?? new JsonV2PluginRegistry(join(options.agentDir, "plugins.json"));
 		const operationStore =
 			options.operationStore ??
-			new JsonlV2OperationStore(options.operationStorePath ?? join(options.agentDir, "operations.jsonl"));
+			new SqliteV2OperationStore(
+				createNodeSqliteFactory(),
+				options.operationStorePath ?? join(options.agentDir, "operations.sqlite"),
+			);
 		const blobs = options.blobs ?? new FileV2BlobStore(options.blobStorePath ?? join(options.agentDir, "blobs"));
 		const integrity =
 			options.integrity ??
@@ -363,6 +366,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			env,
 			close: async () => {
 				await runtime.close();
+				if (operationStore instanceof SqliteV2OperationStore) await operationStore.close();
 				await repository.close();
 				await env.cleanup();
 			},
