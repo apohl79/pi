@@ -1398,6 +1398,12 @@ export class AgentHarness implements AgentLane {
 	}
 	async abort(): Promise<AbortResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		const activeNavigation = this.activeOperation?.kind === "navigation" ? this.activeOperation : undefined;
+		if (activeNavigation) {
+			activeNavigation.controller.abort();
+			await activeNavigation.done;
+			return ResultValue.ok({ runId: activeNavigation.id, steer: [], followUp: [] });
+		}
 		const request = await this.withLifecycleLock(async () => {
 			if (this.closed) return undefined;
 			// Recheck under the same lifecycle lock used by finishOperation. This
