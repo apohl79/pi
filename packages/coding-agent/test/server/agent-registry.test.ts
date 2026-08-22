@@ -111,6 +111,37 @@ describe("CodingAgentV2AgentRegistry", () => {
 		).rejects.toThrow("maximum depth");
 	});
 
+	test("preserves canonical parent paths for nested child requests", async () => {
+		const runtime = new FixtureRuntime();
+		let childNumber = 0;
+		const registry = new CodingAgentV2AgentRegistry(
+			{
+				listSessions: async () => [],
+				listModels: async () => [],
+				openSession: async () => runtime,
+				createSession: async () => ({ sessionId: `child-session-${++childNumber}`, runtime }),
+			},
+			{ maxDepth: 2 },
+		);
+		const parent = await registry.spawn({
+			sessionId: "root-session",
+			parentPath: "/root",
+			taskName: "parent",
+			taskMessage: "start parent",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		const nested = await registry.spawn({
+			sessionId: "child-session-1",
+			parentPath: "/child-session-1",
+			taskName: "nested",
+			taskMessage: "start nested",
+			model: { provider: "inherit", id: "inherit" },
+		});
+
+		expect(parent.path).toBe("/root/parent");
+		expect(nested.path).toBe("/root/parent/nested");
+	});
+
 	test("disposes child runtimes exactly once", async () => {
 		const { registry, runtime } = fixture();
 		await registry.spawn({
