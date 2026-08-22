@@ -108,6 +108,7 @@ export class RemoteV2InteractiveAttachment implements Component {
 	#disposed = false;
 	#input = "";
 	#status = "";
+	#completionSequence = 0;
 
 	constructor(attachment: RemoteV2SessionAttachment) {
 		this.#attachment = attachment;
@@ -212,8 +213,13 @@ export class RemoteV2InteractiveAttachment implements Component {
 			return;
 		}
 		if (data === "\u007f" || data === "\b") {
+			this.#completionSequence++;
 			this.#input = this.#input.slice(0, -1);
 			this.invalidate();
+			return;
+		}
+		if (data === "\t") {
+			void this.completeInput();
 			return;
 		}
 		if (
@@ -222,7 +228,27 @@ export class RemoteV2InteractiveAttachment implements Component {
 			data !== "\u007f" &&
 			this.#input.length < RemoteV2InteractiveAttachment.MAX_INPUT_LENGTH
 		) {
+			this.#completionSequence++;
 			this.#input += data;
+			this.invalidate();
+		}
+	}
+
+	private async completeInput(): Promise<void> {
+		const sequence = ++this.#completionSequence;
+		const tokenStart = Math.max(this.#input.lastIndexOf(" "), this.#input.lastIndexOf("\t")) + 1;
+		const prefix = this.#input.slice(tokenStart);
+		if (!prefix.startsWith("@")) return;
+		try {
+			const items = await this.session.completeFiles(prefix);
+			if (sequence !== this.#completionSequence || this.#input.slice(tokenStart) !== prefix) return;
+			const item = items[0];
+			if (item === undefined) return;
+			this.#input = `${this.#input.slice(0, tokenStart)}${item.reference}`;
+			this.invalidate();
+		} catch (error: unknown) {
+			if (sequence === this.#completionSequence)
+				this.#status = error instanceof Error ? error.message : String(error);
 			this.invalidate();
 		}
 	}
