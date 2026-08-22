@@ -92,6 +92,8 @@ function appendAgentCompletions(input: AgentMessage, completions: readonly Agent
 export interface CodingAgentV2SessionDefinition {
 	metadata: SessionMetadataV2;
 	harness: AgentHarness;
+	/** Called before the runtime closes the harness so durable callbacks can preserve recoverable work. */
+	onDispose?: () => void;
 	recoveryState?: "clean" | "recovered" | "needsResolution" | "degraded";
 	goals?: GoalManager;
 	goalContinuation?: GoalContinuationScheduler;
@@ -910,6 +912,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async dispose(): Promise<void> {
+		this.definition.onDispose?.();
 		this.definition.goalContinuation?.close();
 		await this.definition.harness.close();
 	}
