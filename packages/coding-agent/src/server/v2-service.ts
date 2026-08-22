@@ -233,6 +233,17 @@ export interface CodingAgentV2Service {
 	listSessions(): Promise<SessionMetadataV2[]>;
 	listModels(): Promise<ModelMetadata[]>;
 	openSession(sessionId: string): Promise<CodingAgentV2Runtime>;
+	createSession?(options: Record<string, unknown>): Promise<{ sessionId: string; runtime: CodingAgentV2Runtime }>;
+	deleteSession?(sessionId: string): Promise<void>;
+}
+
+export interface CodingAgentV2ServiceOptions {
+	/** Provider-local fast model used only for side-band automatic naming. */
+	fastModel?: Model<string>;
+	/** Durable owner creates a fully initialized session definition. */
+	createSession?: (options: Record<string, unknown>) => Promise<CodingAgentV2SessionDefinition>;
+	/** Durable owner removes a session after the adapter disposes its runtime. */
+	deleteSession?: (sessionId: string) => Promise<void>;
 }
 
 export interface CodingAgentV2Runtime {
@@ -699,14 +710,68 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 export function createCodingAgentV2Service(
 	models: Models,
 	definitions: readonly CodingAgentV2SessionDefinition[],
+	options?: CodingAgentV2ServiceOptions,
 ): CodingAgentV2Service {
 	const byId = new Map(definitions.map((definition) => [definition.metadata.id, definition]));
 	const runtimes = new Map<string, CodingAgentV2RuntimeImpl>();
 	const opening = new Map<string, Promise<CodingAgentV2RuntimeImpl>>();
+	const creatingIds = new Set<string>();
+	const sessionLocks = new Map<string, Promise<void>>();
+	const withSessionLock = async <T>(sessionId: string, operation: () => Promise<T>): Promise<T> => {
+		const previous = sessionLocks.get(sessionId) ?? Promise.resolve();
+		let release!: () => void;
+		const current = new Promise<void>((resolve) => (release = resolve));
+		sessionLocks.set(sessionId, current);
+		await previous;
+		try {
+			return await operation();
+		} finally {
+			release();
+			if (sessionLocks.get(sessionId) === current) sessionLocks.delete(sessionId);
+		}
+	};
+	const sessionFactory = options?.createSession;
+	const sessionDeleter = options?.deleteSession;
 	return {
-		listSessions: async () => definitions.map((definition) => structuredClone(definition.metadata)),
+		listSessions: async () => [...byId.values()].map((definition) => structuredClone(definition.metadata)),
 		listModels: async () => Promise.all(models.getModels().map((model) => modelMetadata(models, model))),
-		openSession: async (sessionId) => {
+		createSession: sessionFactory
+			? async (payload) => withSessionLock("__create__", async () => {
+					const definition = await sessionFactory(payload);
+					if (creatingIds.has(definition.metadata.id)) throw new Error(`Session ${definition.metadata.id} is being created`);
+					if (byId.has(definition.metadata.id))
+						throw new Error(`Session ${definition.metadata.id} already exists`);
+					creatingIds.add(definition.metadata.id);
+					try {
+					const model = await definition.harness.getModel();
+					let runtime!: CodingAgentV2RuntimeImpl;
+					runtime = new CodingAgentV2RuntimeImpl(definition, models, model, () => {
+						if (runtimes.get(definition.metadata.id) === runtime) runtimes.delete(definition.metadata.id);
+					});
+					byId.set(definition.metadata.id, definition);
+					runtimes.set(definition.metadata.id, runtime);
+					return { sessionId: definition.metadata.id, runtime };
+					} finally {
+						creatingIds.delete(definition.metadata.id);
+					}
+				})
+			: undefined,
+		deleteSession: sessionDeleter
+			? async (sessionId) => withSessionLock(sessionId, async () => {
+					if (creatingIds.has(sessionId)) throw new Error(`Session ${sessionId} is being created`);
+					if (!byId.has(sessionId)) throw new Error(`Unknown session ${sessionId}`);
+					await sessionDeleter(sessionId);
+					const runtime = runtimes.get(sessionId);
+					try {
+						if (runtime) await runtime.dispose();
+					} finally {
+						runtimes.delete(sessionId);
+						byId.delete(sessionId);
+					}
+				})
+			: undefined,
+		openSession: (sessionId) => withSessionLock(sessionId, async () => {
+			if (creatingIds.has(sessionId)) throw new Error(`Session ${sessionId} is being created`);
 			const definition = byId.get(sessionId);
 			if (!definition) throw new Error(`Unknown session ${sessionId}`);
 			const existing = runtimes.get(sessionId);
@@ -715,6 +780,7 @@ export function createCodingAgentV2Service(
 			if (pending) return pending;
 			const promise = (async () => {
 				const model = await definition.harness.getModel();
+				if (byId.get(sessionId) !== definition) throw new Error(`Session ${sessionId} was deleted while opening`);
 				let runtime!: CodingAgentV2RuntimeImpl;
 				runtime = new CodingAgentV2RuntimeImpl(definition, models, model, () => {
 					if (runtimes.get(sessionId) === runtime) runtimes.delete(sessionId);
@@ -728,6 +794,6 @@ export function createCodingAgentV2Service(
 			} finally {
 				opening.delete(sessionId);
 			}
-		},
+		}),
 	};
 }
