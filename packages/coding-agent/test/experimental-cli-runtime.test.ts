@@ -9,6 +9,7 @@ import { ClientDiagnosticSpool } from "@earendil-works/pi-client/diagnostics";
 import {
 	decodeCbor,
 	encodeServerMessageV2,
+	type JsonValue,
 	PROTOCOL_V2_VERSION,
 	parseClientMessageV2,
 	type ServerSnapshotV2,
@@ -133,7 +134,9 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>,
 								bundle: {
 									manifest: { schemaVersion: 1, unavailable: ["client-diagnostic-spool"] },
 									events: [],
-									...(clientDiagnostics === undefined ? {} : { clientDiagnostics }),
+									...(clientDiagnostics === undefined
+										? {}
+										: { clientDiagnostics: clientDiagnostics as JsonValue }),
 								},
 							},
 						}),
