@@ -41,7 +41,12 @@ export async function createServerAgentSession(
 	const { session: sessionOptions, sessionOptions: remoteOptions, ...runtimeOptions } = options;
 	const modelRuntime =
 		options.models === undefined
-			? await ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false })
+			? await ModelRuntime.create({
+					authPath: join(agentDir, "auth.json"),
+					modelsPath: join(agentDir, "models.json"),
+					allowModelNetwork: false,
+					refreshOnCreate: false,
+				})
 			: undefined;
 	const models = options.models ?? modelRuntime;
 	const model = options.model ?? models?.getModels()[0];
