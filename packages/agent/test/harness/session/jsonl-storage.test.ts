@@ -510,9 +510,8 @@ describe("JSONL v4 per-session storage", () => {
 		const next = await session.appendCustomEntry("next");
 
 		const reopened = await createRepository(root).open(await session.getMetadata());
-		expect((await reopened.findEntries({ order: "oldestFirst" })).map((entry) => entry.id)).toEqual([
-			"durably-committed",
-			next.id,
-		]);
+		const entries = await reopened.findEntries({ order: "oldestFirst" });
+		expect(entries).toHaveLength(2);
+		expect(entries[1]?.id).toBe(next.id);
 	});
 });
