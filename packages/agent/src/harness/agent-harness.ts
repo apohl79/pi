@@ -1397,28 +1397,53 @@ export class AgentHarness implements AgentLane {
 	}
 	async resume(): Promise<ResumeResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
-		const operation = open[0];
-		if (!operation) return ResultValue.err(new NothingToResume({ lane: "main", message: "Nothing to resume" }));
-		const suspended = this.suspendedOperations.find((candidate) => candidate.id === operation.id);
-		if (suspended && (suspended.missing.models.length > 0 || suspended.missing.tools.length > 0)) {
-			return ResultValue.err(
-				new MissingIdentities({
-					lane: "main",
-					tools: [...suspended.missing.tools],
-					models: [...suspended.missing.models],
-					message: "Resume requires missing tools or models",
-				}),
+		const recovered = await this.withLifecycleLock(async () => {
+			if (this.closed) return { error: new Closed({ message: "AgentHarness is closed" }) } as const;
+			if (this.activeOperation) {
+				return {
+					error: new LaneBusy({
+						lane: "main",
+						operationId: this.activeOperation.id,
+						operationKind: this.activeOperation.kind,
+						message: "Lane is busy",
+					}),
+				} as const;
+			}
+			const open = await this.openOperationsAcrossLanes();
+			const operation = open[0];
+			if (!operation) return { error: new NothingToResume({ lane: "main", message: "Nothing to resume" }) } as const;
+			const suspended = this.suspendedOperations.find(
+				(candidate) =>
+					candidate.id === operation.id &&
+					candidate.lane === operation.lane &&
+					candidate.kind === operation.intent.kind &&
+					candidate.startedAt === operation.timestamp,
 			);
-		}
-		await this.durableSession.appendRecord({
-			type: "operation_finished",
-			id: this.durableSession.idGenerator.next(),
-			lane: "main",
-			runId: operation.id,
-			outcome: "failed",
-			error: { code: "recovered_by_resume", message: "Suspended operation was reopened by resume" },
+			if (!suspended) return { error: new NothingToResume({ lane: operation.lane, message: "Nothing to resume" }) } as const;
+			if (suspended.missing.models.length > 0 || suspended.missing.tools.length > 0) {
+				return {
+					error: new MissingIdentities({
+						lane: operation.lane,
+						tools: [...suspended.missing.tools],
+						models: [...suspended.missing.models],
+						message: "Resume requires missing tools or models",
+					}),
+				} as const;
+			}
+			const terminal = await this.durableSession.findRecords({ type: "operation_finished", runId: operation.id, limit: 1 });
+			if (terminal.length === 0)
+				await this.durableSession.appendRecord({
+					type: "operation_finished",
+					id: this.durableSession.idGenerator.next(),
+					lane: operation.lane,
+					runId: operation.id,
+					outcome: "failed",
+					error: { code: "recovered_by_resume", message: "Suspended operation was reopened by resume" },
+				});
+			return { operation } as const;
 		});
+		if ("error" in recovered) return ResultValue.err(recovered.error);
+		const { operation } = recovered;
 		if (operation.intent.kind === "run") {
 			const result = await this.prompt(operation.intent.originalPrompt);
 			if (!result.ok)
