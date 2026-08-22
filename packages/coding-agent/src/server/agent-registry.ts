@@ -147,6 +147,10 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	async followUp(agentId: string, message: string): Promise<AgentSummary> {
 		const agent = this.get(agentId);
 		this.validateMessage(message);
+		if (agent.activeOperationId !== undefined && (agent.state === "complete" || agent.state === "interrupted" || agent.state === "failed"))
+			throw new Error(`Cannot follow up active agent ${agentId}`);
+		if (agent.state !== "complete" && agent.state !== "interrupted" && agent.state !== "failed" && agent.followUps.length >= this.maxMessages)
+			throw new Error(`Agent follow-up queue limit ${this.maxMessages} exceeded`);
 		this.appendMessage(agent, message);
 		if (agent.state === "complete" || agent.state === "interrupted" || agent.state === "failed") {
 			agent.state = "running";
