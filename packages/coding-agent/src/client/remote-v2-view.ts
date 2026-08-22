@@ -240,6 +240,10 @@ export function createRemoteV2StatuslinePayload(
 	const active = snapshot.agents.filter(
 		(agent) => agent.state === "running" || agent.state === "awaitingInput",
 	).length;
+	const agentCosts = snapshot.agents.map((agent) => agent.usage?.costUsd);
+	const totalAgentCost = agentCosts.every((cost): cost is number => cost !== undefined)
+		? agentCosts.reduce((total, cost) => total + cost, 0)
+		: undefined;
 	return {
 		harness: "pi",
 		session_id: snapshot.id,
@@ -276,7 +280,11 @@ export function createRemoteV2StatuslinePayload(
 							: { remaining_tokens: Math.max(0, snapshot.goal.tokenBudget - snapshot.goal.tokensUsed) }),
 					},
 				}),
-		agents: { active, total: snapshot.agents.length },
+		agents: {
+			active,
+			total: snapshot.agents.length,
+			...(totalAgentCost === undefined ? {} : { total_cost_usd: totalAgentCost }),
+		},
 		server: {
 			connected: state.lifecycle.status !== "detached" && state.lifecycle.status !== "disposed",
 			phase: snapshot.phase,
