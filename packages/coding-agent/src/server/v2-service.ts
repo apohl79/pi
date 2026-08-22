@@ -247,6 +247,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 
 	private readonly fastModel: Model<string> | undefined;
 	private autoNameLoaded = false;
+	private nameGeneration: Promise<void> | undefined;
 
 	constructor(
 		definition: CodingAgentV2SessionDefinition,
@@ -357,6 +358,15 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		this.autoNameLoaded = true;
 	}
 
+	private scheduleNameGeneration(operationId: string): void {
+		if (this.nameGeneration !== undefined) return;
+		this.nameGeneration = this.generateName(operationId)
+			.catch(() => undefined)
+			.finally(() => {
+				this.nameGeneration = undefined;
+			});
+	}
+
 	private async recordGoalUsage(beforeTokens: number): Promise<void> {
 		if (!this.definition.goals) return;
 		if (!(await this.definition.goals.read())) return;
@@ -420,6 +430,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async snapshot(): Promise<SessionSnapshotV2> {
+		await this.nameGeneration;
 		await this.ensureAutoNameLoaded();
 		const [
 			leafId,
@@ -564,6 +575,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			(await harness.session.findEntriesOnBranch({ order: "oldestFirst" })).map((entry) => entry.id),
 		);
 		let goalUsageRecorded = false;
+		let generateNameAfterTurn = false;
 		const extensionHost = this.definition.extensionHost;
 		this.phase = "turn";
 		this.activeOperation = {
@@ -583,7 +595,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				await this.recordUsageLedger(_operationId, beforeEntryIds);
 				await this.recordGoalUsage(usageBefore);
 				goalUsageRecorded = true;
-				if (this.autoName) await this.generateName(_operationId);
+				generateNameAfterTurn = this.autoName;
 			} else if (runCommand === "turn/resume") {
 				const result = await harness.resume();
 				if (!result.ok) throw new Error(result.error.message);
@@ -708,6 +720,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			state: "complete",
 			terminalSeq: this.eventSeq,
 		};
+		if (generateNameAfterTurn) this.scheduleNameGeneration(_operationId);
 		if (runCommand === "turn/start" || runCommand === "turn/resume" || runCommand === "turn/followUp")
 			void this.definition.goalContinuation?.schedule().catch(() => undefined);
 	}
