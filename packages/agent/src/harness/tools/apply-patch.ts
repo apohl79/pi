@@ -116,27 +116,6 @@ function applyUpdate(original: string, path: string, lines: readonly string[]): 
 	return content.join("\n");
 }
 
-async function writeAtomically(
-	env: ExecutionToolContext["env"],
-	root: string,
-	target: string,
-	content: string,
-	signal?: AbortSignal,
-): Promise<void> {
-	// Stage in a filesystem-provided temporary file and replace the destination
-	// with rename. Unlike writeFile(target), rename replaces a symlink at the
-	// destination rather than following it. Revalidate the addressed path at
-	// the mutation boundary to catch parent symlink changes during preparation.
-	const temporary = getOrThrow(await env.createTempFile({ prefix: "pi-apply-patch-", abortSignal: signal }));
-	try {
-		getOrThrow(await env.writeFile(temporary, content, signal));
-		await validateMutationPath(env, root, target, signal);
-		getOrThrow(await env.renameFile(temporary, target, signal));
-	} finally {
-		await env.remove(temporary, { force: true, abortSignal: signal });
-	}
-}
-
 function findSequence(content: readonly string[], expected: readonly string[]): number {
 	for (let index = 0; index <= content.length - expected.length; index++) {
 		if (content.slice(index, index + expected.length).every((line, offset) => line === expected[offset]))
@@ -167,26 +146,27 @@ export function createApplyPatchTool<TContext extends ExecutionToolContext = Exe
 					if (operation.kind === "add") {
 						if (operation.lines.some((line) => !line.startsWith("+")))
 							throw new Error(`Added file ${operation.path} contains a non-addition line`);
-						getOrThrow(await env.createDir(dirname(absolutePath), { recursive: true, abortSignal: signal }));
-						await writeAtomically(
-							env,
-							root,
-							absolutePath,
-							`${operation.lines.map((line) => line.slice(1)).join("\n")}\n`,
-							signal,
+						getOrThrow(
+							await env.atomicReplaceFileWithinRoot(
+								root,
+								absolutePath,
+								`${operation.lines.map((line) => line.slice(1)).join("\n")}\n`,
+								signal,
+							),
 						);
 					} else if (operation.kind === "delete") {
-						getOrThrow(await env.remove(absolutePath, { force: false, abortSignal: signal }));
+						getOrThrow(await env.removeFileWithinRoot(root, absolutePath, signal));
 					} else {
 						const original = getOrThrow(await env.readTextFile(absolutePath, signal));
 						const { bom, text } = stripBom(original);
 						const ending = detectLineEnding(text);
-						await writeAtomically(
-							env,
-							root,
-							absolutePath,
-							bom + restoreLineEndings(applyUpdate(normalizeToLF(text), operation.path, operation.lines), ending),
-							signal,
+						getOrThrow(
+							await env.atomicReplaceFileWithinRoot(
+								root,
+								absolutePath,
+								bom + restoreLineEndings(applyUpdate(normalizeToLF(text), operation.path, operation.lines), ending),
+								signal,
+							),
 						);
 					}
 				});
