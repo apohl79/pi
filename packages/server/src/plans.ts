@@ -23,8 +23,7 @@ export class InMemoryV2PlanRegistry implements V2PlanRegistry {
 		sessionId: string,
 		input: { readonly items: readonly PlanItem[]; readonly version?: number },
 	): Promise<PlanSnapshot> {
-		const current = this.plans.get(sessionId);
-		const plan = validatePlan(current, input);
+		const plan = validateV2Plan(this.plans.get(sessionId), input);
 		this.plans.set(sessionId, plan);
 		return structuredClone(plan);
 	}
@@ -59,7 +58,7 @@ export class JsonlV2PlanRegistry implements V2PlanRegistry {
 		input: { readonly items: readonly PlanItem[]; readonly version?: number },
 	): Promise<PlanSnapshot> {
 		await this.loaded;
-		const plan = validatePlan(this.plans.get(sessionId), input);
+		const plan = validateV2Plan(this.plans.get(sessionId), input);
 		await this.append({ sessionId, plan });
 		this.plans.set(sessionId, plan);
 		return structuredClone(plan);
@@ -102,7 +101,7 @@ export class JsonlV2PlanRegistry implements V2PlanRegistry {
 	}
 }
 
-function validatePlan(
+export function validateV2Plan(
 	current: PlanSnapshot | undefined,
 	input: { readonly items: readonly PlanItem[]; readonly version?: number },
 ): PlanSnapshot {

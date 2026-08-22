@@ -1,6 +1,6 @@
 import type { PlanItem, PlanSnapshot } from "@earendil-works/pi-protocol";
 import type { V2PlanRegistry } from "@earendil-works/pi-server";
-import { InMemoryV2PlanRegistry } from "@earendil-works/pi-server";
+import { InMemoryV2PlanRegistry, validateV2Plan } from "@earendil-works/pi-server";
 import type { SqliteDatabase, SqliteDatabaseFactory } from "@earendil-works/pi-session-backend-sqlite-node";
 
 interface PlanRow {
@@ -31,13 +31,15 @@ export class SqliteV2PlanRegistry implements V2PlanRegistry {
 	update(sessionId: string, input: { readonly items: readonly PlanItem[]; readonly version?: number }) {
 		return this.#enqueue(async () => {
 			await this.#ensureLoaded();
-			const plan = await this.#memory.update(sessionId, input);
+			const current = await this.#memory.read(sessionId);
+			const plan = validateV2Plan(current, input);
 			(await this.#database())
 				.prepare(
 					"INSERT INTO v2_plans (session_id, value) VALUES (?, ?) " +
 						"ON CONFLICT(session_id) DO UPDATE SET value = excluded.value",
 				)
 				.run(sessionId, JSON.stringify(plan));
+			await this.#memory.update(sessionId, input);
 			return plan;
 		});
 	}
@@ -45,8 +47,8 @@ export class SqliteV2PlanRegistry implements V2PlanRegistry {
 	clear(sessionId: string): Promise<void> {
 		return this.#enqueue(async () => {
 			await this.#ensureLoaded();
-			await this.#memory.clear(sessionId);
 			(await this.#database()).prepare("DELETE FROM v2_plans WHERE session_id = ?").run(sessionId);
+			await this.#memory.clear(sessionId);
 		});
 	}
 
