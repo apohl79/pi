@@ -609,7 +609,17 @@ export class AgentHarness implements AgentLane {
 		}
 		const runId = localRunId;
 		const claimedQueueIds = new Set<string>();
-		const nextRunItems = await this.claimQueueItems("nextRun", undefined, claimedQueueIds);
+		let nextRunItems: ProvisionedEntry[];
+		try {
+			nextRunItems = await this.claimQueueItems("nextRun", undefined, claimedQueueIds);
+		} catch (error) {
+			// Queue discovery happens before operation_started is durable. A storage
+			// failure here must not strand the local lane admission or its completion
+			// promise, otherwise subsequent prompts and aborts observe a phantom run.
+			this.releaseQueueClaims(claimedQueueIds);
+			release();
+			throw error;
+		}
 		const initialMessages = [
 			...nextRunItems,
 			...prompts.map((message) => ({
@@ -1110,8 +1120,13 @@ export class AgentHarness implements AgentLane {
 			const openRun = (await this.durableSession.findOpenOperations("main", { limit: 1 })).find(
 				(operation) => operation.intent.kind === "run",
 			);
+			const active = this.activeOperation?.kind === "run" ? this.activeOperation : undefined;
+			// prompt() admits a local run before operation_started is durable. In
+			// that window there is no record to mark, but abort still needs to signal
+			// and await the local operation rather than reporting a phantom idle lane.
+			if (!openRun && active) return { runId: active.id, active, durable: false, recalled: { steer: [], followUp: [] } };
 			if (!openRun) return undefined;
-			const active = this.activeOperation?.id === openRun.id ? this.activeOperation : undefined;
+			const durableActive = active?.id === openRun.id ? active : undefined;
 			await this.durableSession.appendRecord({
 				type: "abort_requested",
 				id: this.durableSession.idGenerator.next(),
@@ -1148,11 +1163,12 @@ export class AgentHarness implements AgentLane {
 					entryId: item.target.id,
 				} satisfies NewRecord<QueueCancelledRecord>);
 			}
-			return { runId: openRun.id, active, recalled };
+			return { runId: openRun.id, active: durableActive, durable: true, recalled };
 		});
 		if (!request) return ResultValue.err(new NoActiveOperation({ lane: "main", message: "No active operation" }));
 		request.active?.controller.abort();
 		await request.active?.done;
+		if (!request.durable) return ResultValue.ok({ runId: request.runId, ...request.recalled });
 		// Remote/recovered runs have no local controller. Persist a durable
 		// terminal outcome rather than waiting on an unrelated local operation.
 		await this.finishOperation(request.runId, "aborted", { code: "aborted", message: "Run aborted" });
