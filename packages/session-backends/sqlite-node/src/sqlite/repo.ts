@@ -19,6 +19,7 @@ import {
 } from "@earendil-works/pi-agent-core";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import { appendEntryToBranchCache, buildCachedBranch, deleteBranchCache, rebuildBranchCache } from "./branch-cache.ts";
+import { inspectSqliteDatabase, type SqliteInspection, sqliteStringLiteral } from "./maintenance.ts";
 import { applyMigrations } from "./migrations.ts";
 import { sql } from "./sql.ts";
 import { type CachedBranchEntryRow, queryCachedBranchRows, readCachedBranch } from "./storage/branch-entries.ts";
@@ -104,6 +105,11 @@ export interface SqliteSessionRepositoryOptions {
 	sqlite: SqliteDatabaseFactory;
 	databasePath: string;
 	writerLease?: SqliteWriterLeaseOptions;
+}
+
+export interface SqliteBackupReport {
+	destinationPath: string;
+	inspection: SqliteInspection;
 }
 
 interface ResolvedWriterLeaseOptions {
@@ -768,6 +774,38 @@ export class SqliteSessionRepository
 			const db = await this.getDatabase();
 			const rows = readSessionRows(db, options);
 			return rows.map((row) => decodeSessionMetadata(row, path));
+		});
+	}
+
+	/** Inspects schema application and SQLite integrity without repairing canonical state. */
+	async inspect(): Promise<SqliteInspection> {
+		return this.operations.enqueue(async () => inspectSqliteDatabase(await this.getDatabase()));
+	}
+
+	/** Creates and verifies a consistent online snapshot using SQLite's backup primitive. */
+	async backup(destinationPath: string): Promise<SqliteBackupReport> {
+		return this.operations.enqueue(async () => {
+			const sourcePath = await this.getDatabasePath();
+			const resolvedDestination = resultOrThrow(
+				await this.options.env.absolutePath(destinationPath),
+				`Failed to resolve SQLite backup ${destinationPath}`,
+			);
+			if (resolvedDestination === sourcePath)
+				throw new SessionError("storage", "SQLite backup must use a different path");
+			resultOrThrow(
+				await this.options.env.createDir(getParentPath(resolvedDestination), { recursive: true }),
+				`Failed to create SQLite backup directory ${resolvedDestination}`,
+			);
+			const db = await this.getDatabase();
+			db.exec(`VACUUM INTO ${sqliteStringLiteral(resolvedDestination)}`);
+			const backup = await this.options.sqlite.open(resolvedDestination);
+			try {
+				const inspection = inspectSqliteDatabase(backup);
+				if (!inspection.healthy) throw new SessionError("storage", "SQLite backup failed integrity verification");
+				return { destinationPath: resolvedDestination, inspection };
+			} finally {
+				backup.close();
+			}
 		});
 	}
 

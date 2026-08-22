@@ -1,5 +1,7 @@
+export * from "./maintenance.ts";
 export * from "./migrations.ts";
 export {
+	type SqliteBackupReport,
 	SqliteSessionRepository,
 	type SqliteSessionRepositoryOptions,
 	type SqliteWriterLeaseOptions,
