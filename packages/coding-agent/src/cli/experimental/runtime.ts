@@ -5,6 +5,8 @@ import type { ClientDiagnosticSpool } from "@earendil-works/pi-client/diagnostic
 import type { CommandV2, JsonValue, ModelMetadata, ModelRef } from "@earendil-works/pi-protocol";
 import { verifyDiagnosticBundle } from "@earendil-works/pi-server";
 import { type RemoteV2PromptPart, RemoteV2Session } from "../../client/remote-v2-session.ts";
+import { processImage } from "../../utils/image-process.ts";
+import { stripBom } from "../../utils/text.ts";
 import type { Args } from "../args.ts";
 import { processFileArguments } from "../file-processor.ts";
 import type { ExperimentalCliContext } from "./cli.ts";
@@ -72,15 +74,40 @@ async function buildRemotePrompt(
 	session: RemoteV2Session,
 	options: Args,
 ): Promise<string | readonly RemoteV2PromptPart[]> {
-	const files = options.fileArgs.length === 0 ? undefined : await processFileArguments(options.fileArgs);
-	const text = `${files?.text ?? ""}${options.messages.join(" ")}`.trim();
-	if (files === undefined || files.images.length === 0) {
+	let text = "";
+	const images: Array<{ readonly data: string; readonly mimeType: string }> = [];
+	for (const fileArg of options.fileArgs) {
+		if (fileArg.startsWith("local:")) {
+			const files = await processFileArguments([fileArg.slice("local:".length)]);
+			text += files.text;
+			images.push(...files.images);
+			continue;
+		}
+		const file = await session.resolveFile(fileArg);
+		if (file.kind !== "file") throw new Error(`File reference must resolve to a file: ${fileArg}`);
+		const read = await session.readFile(file.reference);
+		const data = Buffer.from(read.data, "base64");
+		if (file.mimeType?.startsWith("image/")) {
+			const processed = await processImage(data, file.mimeType, { autoResizeImages: true });
+			if (!processed.ok) {
+				text += `<file name="${file.path}">${processed.message}</file>\n`;
+				continue;
+			}
+			images.push({ data: processed.data, mimeType: processed.mimeType });
+			text += `<file name="${file.path}">${processed.hints.join("\n")}</file>\n`;
+			continue;
+		}
+		text += `<file name="${file.path}">\n${stripBom(data.toString("utf8"))}\n</file>\n`;
+	}
+	text += options.messages.join(" ");
+	text = text.trim();
+	if (images.length === 0) {
 		if (!text) throw new Error("Server-default mode requires a prompt or file argument");
 		return text;
 	}
 	const content: RemoteV2PromptPart[] = [];
 	if (text) content.push({ type: "text", text });
-	for (const image of files.images) {
+	for (const image of images) {
 		const blob = await session.putBlob(image.data, image.mimeType);
 		content.push({ type: "image", digest: blob.digest, mimeType: image.mimeType });
 	}
