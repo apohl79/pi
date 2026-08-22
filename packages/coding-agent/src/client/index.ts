@@ -1,3 +1,13 @@
+export type {
+	CreateSessionV2Options,
+	ForkSessionV2Options,
+	PiClientV2Options,
+	PiSessionV2Handle,
+	V2SessionLeaseMode,
+} from "@earendil-works/pi-client";
+export { PiClientV2 } from "@earendil-works/pi-client";
+export { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
+
 export {
 	type CreateRemoteSessionOptions,
 	RemoteSession,
