@@ -211,6 +211,9 @@ export class PiServerV2 {
 								...(event.daemonInstanceId === undefined ? { daemonInstanceId: this.daemonInstanceId } : {}),
 							}),
 						read: (afterSeq?: number) => diagnostics.read(afterSeq),
+						...(diagnostics.isDegraded === undefined
+							? {}
+							: { isDegraded: () => diagnostics.isDegraded?.() === true }),
 					};
 		this.diagnosticContent = options.diagnosticContent;
 		this.integrity = options.integrity;
