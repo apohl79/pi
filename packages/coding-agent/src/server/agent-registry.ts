@@ -5,11 +5,13 @@ import type { CodingAgentV2Runtime, CodingAgentV2Service } from "./v2-service.ts
 
 interface ChildAgent {
 	readonly summary: AgentSummary;
+	readonly parentSessionId: string;
 	readonly sessionId: string;
 	readonly runtime: CodingAgentV2Runtime;
 	state: AgentSummary["state"];
 	messages: string[];
 	waiters: Array<() => void>;
+	activeOperationId?: string;
 }
 
 export interface CodingAgentV2AgentRegistryOptions {
@@ -23,6 +25,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private readonly maxActive: number;
 	private readonly agents = new Map<string, ChildAgent>();
 	private readonly service: CodingAgentV2Service;
+	private spawnTail: Promise<void> = Promise.resolve();
 
 	constructor(service: CodingAgentV2Service, options: CodingAgentV2AgentRegistryOptions = {}) {
 		this.service = service;
@@ -31,6 +34,18 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
+		const previous = this.spawnTail;
+		let release!: () => void;
+		this.spawnTail = new Promise<void>((resolve) => (release = resolve));
+		try {
+			await previous;
+			return await this.spawnUnlocked(request);
+		} finally {
+			release();
+		}
+	}
+
+	private async spawnUnlocked(request: V2AgentRequest): Promise<AgentSummary> {
 		this.validateRequest(request);
 		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
 		if (!this.service.createSession) throw new Error("Coding-agent service does not support child sessions");
@@ -51,6 +66,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		};
 		const agent: ChildAgent = {
 			summary,
+			parentSessionId: request.sessionId,
 			sessionId: created.sessionId,
 			runtime: created.runtime,
 			state: "running",
@@ -64,7 +80,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 
 	async list(sessionId: string): Promise<readonly AgentSummary[]> {
 		return [...this.agents.values()]
-			.filter((agent) => agent.sessionId === sessionId)
+			.filter((agent) => agent.parentSessionId === sessionId)
 			.map((agent) => this.snapshot(agent));
 	}
 
@@ -106,8 +122,8 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		const agent = this.get(agentId);
 		if (agent.state === "running" || agent.state === "awaitingInput") {
 			try {
-				const operationId = randomUUID();
-				await agent.runtime.accept(operationId);
+				const operationId = agent.activeOperationId;
+				if (operationId === undefined) throw new Error(`Agent ${agentId} has no active operation`);
 				await agent.runtime.run(operationId, {
 					command: "turn/abort",
 					sessionId: agent.sessionId,
@@ -124,6 +140,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private async run(agent: ChildAgent, command: "turn/start" | "turn/followUp", text: string): Promise<void> {
 		try {
 			const operationId = randomUUID();
+			agent.activeOperationId = operationId;
 			await agent.runtime.accept(operationId);
 			await agent.runtime.run(operationId, {
 				command,
@@ -134,6 +151,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		} catch {
 			agent.state = "failed";
 		} finally {
+			agent.activeOperationId = undefined;
 			this.resolveWaiters(agent);
 		}
 	}
@@ -147,7 +165,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	private activeCount(): number {
-		return [...this.agents.values()].filter((agent) => agent.state === "running").length;
+		return [...this.agents.values()].filter((agent) => agent.state === "running" || agent.state === "awaitingInput").length;
 	}
 
 	private resolveWaiters(agent: ChildAgent): void {

@@ -38,6 +38,8 @@ describe("CodingAgentV2AgentRegistry", () => {
 			taskMessage: "inspect the repository",
 			model: { provider: "faux", id: "model" },
 		});
+		expect(await registry.list("parent-session")).toEqual([agent]);
+		expect(await registry.list("child-session")).toEqual([]);
 		expect((await registry.wait(agent.id)).state).toBe("complete");
 		expect(runtime.commands[0]?.command).toBe("turn/start");
 		await registry.followUp(agent.id, "continue with the tests");

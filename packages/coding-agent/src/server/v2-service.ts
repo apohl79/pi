@@ -560,6 +560,10 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async run(operationId: string, command: CommandV2): Promise<void> {
+		if (command.command === "turn/abort") {
+			await this.abortImmediately(operationId);
+			return;
+		}
 		const previous = this.executionTail;
 		let release!: () => void;
 		this.executionTail = new Promise<void>((resolve) => (release = resolve));
@@ -569,6 +573,15 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		} finally {
 			release();
 		}
+	}
+
+	private async abortImmediately(operationId: string): Promise<void> {
+		if (this.disposed) throw new Error("Session runtime is disposed");
+		const operation = this.operations.get(operationId);
+		if (!operation || (operation.state !== "accepted" && operation.state !== "running"))
+			throw new Error(`Operation ${operationId} is not active`);
+		const result = await this.definition.harness.abort();
+		if (!result.ok) throw result.error instanceof Error ? result.error : new Error(String(result.error));
 	}
 
 	private async runUnlocked(operationId: string, command: CommandV2): Promise<void> {
