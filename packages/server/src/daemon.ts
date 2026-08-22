@@ -145,6 +145,7 @@ export class ServerDaemon {
 			server = (this.options.createServer ?? defaultCreateServer)(this.options.service, {
 				path: this.options.socketPath,
 				...(this.options.serverId === undefined ? {} : { serverId: this.options.serverId }),
+				daemonInstanceId: this.daemonInstanceId,
 				...(this.options.agents === undefined ? {} : { agents: this.options.agents }),
 				...(this.options.inputs === undefined ? {} : { inputs: this.options.inputs }),
 				...(this.options.plans === undefined ? {} : { plans: this.options.plans }),

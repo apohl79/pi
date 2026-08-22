@@ -78,6 +78,7 @@ export interface PiServerV2Options {
 	maxFrameLength?: number;
 	handshakeTimeoutMs?: number;
 	serverId?: string;
+	daemonInstanceId?: string;
 	onError?: (error: Error) => void;
 	diagnostics?: ForensicRecorder;
 	diagnosticContent?: DiagnosticContentStore;
@@ -154,6 +155,7 @@ export class PiServerV2 {
 	private readonly maxFrameLength: number;
 	private readonly handshakeTimeoutMs: number;
 	private readonly onError: ((error: Error) => void) | undefined;
+	private readonly daemonInstanceId: string | undefined;
 	private readonly diagnostics: ForensicRecorder;
 	private readonly diagnosticContent: DiagnosticContentStore | undefined;
 	private readonly integrity: DiagnosticIntegrityProvider | undefined;
@@ -190,7 +192,19 @@ export class PiServerV2 {
 		this.maxFrameLength = options.maxFrameLength ?? DEFAULT_MAX_FRAME_LENGTH;
 		this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
 		this.onError = options.onError;
-		this.diagnostics = options.diagnostics ?? new InMemoryForensicRecorder();
+		this.daemonInstanceId = options.daemonInstanceId;
+		const diagnostics = options.diagnostics ?? new InMemoryForensicRecorder();
+		this.diagnostics =
+			this.daemonInstanceId === undefined
+				? diagnostics
+				: {
+						record: (event: Parameters<ForensicRecorder["record"]>[0]) =>
+							diagnostics.record({
+								...event,
+								...(event.daemonInstanceId === undefined ? { daemonInstanceId: this.daemonInstanceId } : {}),
+							}),
+						read: (afterSeq?: number) => diagnostics.read(afterSeq),
+					};
 		this.diagnosticContent = options.diagnosticContent;
 		this.integrity = options.integrity;
 		this.runtimeManifest = options.runtimeManifest ?? {
@@ -365,6 +379,7 @@ export class PiServerV2 {
 				spanId: id,
 				...(command.sessionId === undefined ? {} : { sessionId: command.sessionId }),
 				...(command.operationId === undefined ? {} : { operationId: command.operationId }),
+				...(this.daemonInstanceId === undefined ? {} : { daemonInstanceId: this.daemonInstanceId }),
 				payload: { command: command.command, requestId: id },
 			});
 			if (command.command === "session/create") return void (await this.createSession(state, id, command));
@@ -1667,6 +1682,7 @@ export class PiServerV2 {
 			spanId: id,
 			...(command.sessionId === undefined ? {} : { sessionId: command.sessionId }),
 			...(command.operationId === undefined ? {} : { operationId: command.operationId }),
+			...(this.daemonInstanceId === undefined ? {} : { daemonInstanceId: this.daemonInstanceId }),
 			payload: {
 				command: command.command,
 				requestId: id,
