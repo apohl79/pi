@@ -873,7 +873,20 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: { agents: [{ id: agent.id, state: "running" }] },
 		});
-		await client.request({ command: "agent/message", payload: { agentId: agent.id, message: "continue" } });
+		const messageEvent = client.next((message) => message.type === "event" && message.event === "agent_message");
+		await client.request({
+			command: "agent/message",
+			payload: { agentId: agent.id, message: `token=super-secret ${"continue ".repeat(1000)}` },
+		});
+		const receivedMessage = await messageEvent;
+		expect(receivedMessage).toMatchObject({
+			event: "agent_message",
+			payload: { agentId: agent.id, message: expect.stringContaining("token=[redacted]") },
+		});
+		if (receivedMessage.type === "event") {
+			const payload = receivedMessage.payload as { message?: unknown };
+			if (typeof payload.message === "string") expect(payload.message.length).toBeLessThanOrEqual(4096);
+		}
 		const interrupted = await client.request({ command: "agent/interrupt", payload: { agentId: agent.id } });
 		expect(interrupted).toMatchObject({ ok: true, result: { agent: { id: agent.id, state: "interrupted" } } });
 		await client.close();
