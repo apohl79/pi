@@ -37,17 +37,21 @@ interface AgentState {
 export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 	private readonly maxDepth: number;
 	private readonly maxActive: number;
+	private readonly maxActivePerParent: number;
 	private readonly agents = new Map<string, AgentState>();
 
-	constructor(options: { maxDepth?: number; maxActive?: number } = {}) {
+	constructor(options: { maxDepth?: number; maxActive?: number; maxActivePerParent?: number } = {}) {
 		this.maxDepth = options.maxDepth ?? 1;
 		this.maxActive = options.maxActive ?? 8;
+		this.maxActivePerParent = options.maxActivePerParent ?? 4;
 	}
 
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
 		const depth = request.parentPath.split("/").filter(Boolean).length - 1;
 		if (depth >= this.maxDepth) throw new Error(`Agent maximum depth ${this.maxDepth} exceeded`);
 		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
+		if (this.activeCountForParent(request.sessionId) >= this.maxActivePerParent)
+			throw new Error(`Agent active limit ${this.maxActivePerParent} exceeded for parent ${request.sessionId}`);
 		if (!/^[A-Za-z0-9._-]+$/.test(request.taskName))
 			throw new Error("Agent taskName contains unsupported characters");
 		const path = `${request.parentPath.replace(/\/$/, "")}/${request.taskName}`;
@@ -114,6 +118,11 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 
 	private activeCount(): number {
 		return [...this.agents.values()].filter((agent) => agent.state === "running").length;
+	}
+
+	private activeCountForParent(sessionId: string): number {
+		return [...this.agents.values()].filter((agent) => agent.sessionId === sessionId && agent.state === "running")
+			.length;
 	}
 
 	private snapshot(agent: AgentState): AgentSummary {

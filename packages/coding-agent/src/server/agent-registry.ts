@@ -49,12 +49,14 @@ interface ChildAgent {
 export interface CodingAgentV2AgentRegistryOptions {
 	readonly maxDepth?: number;
 	readonly maxActive?: number;
+	readonly maxActivePerParent?: number;
 }
 
 /** Executes server-owned child agents through the durable coding-agent service. */
 export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private readonly maxDepth: number;
 	private readonly maxActive: number;
+	private readonly maxActivePerParent: number;
 	private readonly agents = new Map<string, ChildAgent>();
 	private readonly service: CodingAgentV2Service;
 	private disposed = false;
@@ -64,6 +66,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		this.service = service;
 		this.maxDepth = options.maxDepth ?? 1;
 		this.maxActive = options.maxActive ?? 8;
+		this.maxActivePerParent = options.maxActivePerParent ?? 4;
 	}
 
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
@@ -71,6 +74,8 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		this.validateRequest(request);
 		await this.hydrate(request.sessionId);
 		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
+		if (this.activeCountForParent(request.sessionId) >= this.maxActivePerParent)
+			throw new Error(`Agent active limit ${this.maxActivePerParent} exceeded for parent ${request.sessionId}`);
 		if (!this.service.createSession) throw new Error("Coding-agent service does not support child sessions");
 		const model = await this.resolveModel(request);
 		const path = `${request.parentPath.replace(/\/$/, "")}/${request.taskName}`;
@@ -244,6 +249,12 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 
 	private activeCount(): number {
 		return [...this.agents.values()].filter((agent) => agent.state === "running").length;
+	}
+
+	private activeCountForParent(sessionId: string): number {
+		return [...this.agents.values()].filter(
+			(agent) => agent.parentSessionId === sessionId && agent.state === "running",
+		).length;
 	}
 
 	private async ensureAgent(agentId: string): Promise<void> {
