@@ -142,7 +142,10 @@ export class ProtocolTestClientV2 {
 	}
 
 	hello(lastEvent?: EventCursor): Promise<ServerMessageV2> {
-		const response = this.next((message) => message.type === "hello");
+		const response = this.next((message) => message.type === "hello" || message.type === "hello_error").then((message) => {
+			if (message.type === "hello_error") throw new Error(message.error.message);
+			return message;
+		});
 		void this.sendMessage({ type: "hello", version: PROTOCOL_V2_VERSION, lastEvent });
 		return response;
 	}
