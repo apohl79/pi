@@ -337,4 +337,62 @@ describe("coding-agent v2 service adapter", () => {
 			await env.cleanup();
 		}
 	});
+
+	test("redacts credentials and bounds transcript content", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-transcript-faux",
+			models: [{ id: "coding-agent-v2-transcript-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const session = new Session(new InMemorySessionStorage({ id: "transcript-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({ session, models, model: faux.getModel(), env, tools: [], activeToolNames: [] });
+		try {
+			await session.appendMessage({ role: "user", content: [{ type: "text", text: "Bearer secret-token\u0085" }], timestamp: 1 });
+			await session.appendMessage(
+				fauxAssistantMessage("password=super-secret", {
+					stopReason: "error",
+					errorMessage: "authorization: Bearer error-secret",
+					timestamp: 2,
+				}),
+			);
+			const service = createCodingAgentV2Service(models, [
+				{ metadata: { id: "transcript-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+			]);
+			const transcript = (await (await service.openSession("transcript-session")).snapshot()).transcript;
+			expect(transcript).toHaveLength(2);
+			expect(JSON.stringify(transcript)).not.toContain("secret-token");
+			expect(JSON.stringify(transcript)).not.toContain("super-secret");
+			expect(JSON.stringify(transcript)).not.toContain("error-secret");
+			expect(JSON.stringify(transcript)).not.toContain("\u0085");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("rejects non-object turn payloads", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-command-faux",
+			models: [{ id: "coding-agent-v2-command-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const session = new Session(new InMemorySessionStorage({ id: "command-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({ session, models, model: faux.getModel(), env, tools: [], activeToolNames: [] });
+		try {
+			const service = createCodingAgentV2Service(models, [
+				{ metadata: { id: "command-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+			]);
+			const runtime = await service.openSession("command-session");
+			await expect(
+				runtime.run("invalid-command", { command: "turn/start", sessionId: "command-session", payload: undefined }),
+			).rejects.toThrow("requires an object payload");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
 });
