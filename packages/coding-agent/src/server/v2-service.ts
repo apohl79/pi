@@ -161,6 +161,7 @@ export interface CodingAgentV2SessionStore {
 
 export interface CodingAgentV2Runtime {
 	snapshot(): Promise<SessionSnapshotV2>;
+	cancelQueued(entryId: string): Promise<void>;
 	accept(operationId: string): Promise<OperationAccepted>;
 	run(operationId: string, command: CommandV2): Promise<void>;
 	/** Attribute descendant provider usage to this session's durable goal. */
@@ -950,6 +951,11 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		if (generateNameAfterTurn) this.scheduleNameGeneration(_operationId);
 		if (runCommand === "turn/start" || runCommand === "turn/resume" || runCommand === "turn/followUp")
 			void this.definition.goalContinuation?.schedule().catch(() => undefined);
+	}
+
+	async cancelQueued(entryId: string): Promise<void> {
+		const result = await this.definition.harness.cancelQueued(entryId);
+		if (!result.ok) throw new Error(result.error.message);
 	}
 
 	async dispose(): Promise<void> {

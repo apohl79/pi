@@ -271,6 +271,7 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("turn/start"),
 	Type.Literal("turn/steer"),
 	Type.Literal("turn/followUp"),
+	Type.Literal("turn/queue/cancel"),
 	Type.Literal("turn/abort"),
 	Type.Literal("turn/resume"),
 	Type.Literal("turn/rollback"),

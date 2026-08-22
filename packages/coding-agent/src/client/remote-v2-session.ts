@@ -360,6 +360,17 @@ export class RemoteV2Session {
 		return this.#accept("turn/followUp", promptPayload(input, "Session follow-up"));
 	}
 
+	async cancelQueued(entryId: string): Promise<void> {
+		this.#assertControl();
+		if (!entryId) throw new Error("Queue entry ID cannot be empty");
+		const response = await this.#client.request({
+			command: "turn/queue/cancel",
+			sessionId: this.#requireHandle().sessionId,
+			payload: { entryId },
+		});
+		if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
+	}
+
 	async resume(): Promise<string> {
 		return this.#accept("turn/resume");
 	}
