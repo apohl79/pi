@@ -22,6 +22,7 @@ import type {
 	V2UsageLedger,
 	V2WebService,
 } from "@earendil-works/pi-server";
+import { hashV2PluginSet } from "@earendil-works/pi-server";
 import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import { loadSkillsFromDir } from "../core/skills.ts";
 import {
@@ -309,10 +310,15 @@ export async function createCodingAgentV2SqliteService(
 							? undefined
 							: { id: resolved.id, source: resolved.source, contentHash: resolved.contentHash };
 					};
+		const pluginSetHash =
+			options.pluginRegistry === undefined
+				? undefined
+				: async () => hashV2PluginSet(await options.pluginRegistry!.listPlugins(true));
 		return {
 			metadata: sessionMetadata(metadata),
 			harness: created.harness,
 			...(instructionProfile === undefined ? {} : { instructionProfile }),
+			...(pluginSetHash === undefined ? {} : { pluginSetHash }),
 			goals,
 			...(goalContinuation === undefined ? {} : { goalContinuation }),
 			...(inputRegistry === undefined ? {} : { inputs: inputRegistry }),

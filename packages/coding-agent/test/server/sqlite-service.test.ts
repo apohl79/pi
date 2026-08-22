@@ -35,6 +35,14 @@ describe("coding-agent SQLite v2 service", () => {
 		});
 		models.setProvider(faux.provider);
 		expect(faux.getModel().id).toBe("coding-agent-v2-sqlite-model");
+		const pluginRegistry = new InMemoryV2PluginRegistry();
+		await pluginRegistry.addMarketplace("local", "file:///tmp/marketplace");
+		await pluginRegistry.installPlugin({
+			name: "snapshot-plugin",
+			marketplace: "local",
+			version: "1.0.0",
+			manifest: { name: "snapshot-plugin", version: "1.0.0" },
+		});
 		const instructionResolver = new ModelInstructionResolver(
 			[
 				{
@@ -54,6 +62,7 @@ describe("coding-agent SQLite v2 service", () => {
 				models,
 				env,
 				model: faux.getModel(),
+				pluginRegistry,
 				harness: {
 					modelInstructions: {
 						resolver: instructionResolver,
@@ -82,6 +91,9 @@ describe("coding-agent SQLite v2 service", () => {
 				id: "sqlite-profile",
 				source: "text",
 			});
+			const enabledPluginSetHash = (await created.runtime.snapshot()).pluginSetHash;
+			await pluginRegistry.setEnabled("snapshot-plugin@local", false);
+			expect((await created.runtime.snapshot()).pluginSetHash).not.toBe(enabledPluginSetHash);
 			await created.runtime.run("model-switch", {
 				command: "session/model/set",
 				sessionId: "sqlite-session",

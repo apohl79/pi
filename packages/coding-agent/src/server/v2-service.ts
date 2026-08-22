@@ -30,6 +30,7 @@ export interface CodingAgentV2SessionDefinition {
 	inputs?: V2InputRegistry;
 	usage?: V2UsageLedger;
 	instructionProfile?: () => Promise<InstructionProfileSummary | undefined>;
+	pluginSetHash?: () => Promise<string>;
 }
 
 export interface CodingAgentV2Service {
@@ -389,10 +390,11 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.definition.usage?.aggregate({ sessionId: this.definition.metadata.id }),
 		]);
 		void leafId;
-		const [goal, persistedName, instructionProfile] = await Promise.all([
+		const [goal, persistedName, instructionProfile, pluginSetHash] = await Promise.all([
 			this.definition.goals?.read(),
 			this.definition.harness.session.getName(),
 			this.definition.instructionProfile?.(),
+			this.definition.pluginSetHash?.(),
 		]);
 		const effectiveName = persistedName ?? this.sessionName;
 		const cacheRead = Math.max(0, stats.cachedTokens);
@@ -445,7 +447,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				triggerTokens: Math.max(0, contextWindow - reserveTokens),
 				source: compactionSource,
 			},
-			pluginSetHash: "plugins-empty",
+			pluginSetHash: pluginSetHash ?? "plugins-empty",
 			diagnostics: { capture: "metadata", degraded: false, lastCriticalEventSeq: 0 },
 			persistence: { schemaVersion: 1, recoveryState: "clean" },
 			createdAt: this.definition.metadata.createdAt,

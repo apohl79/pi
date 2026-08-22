@@ -110,6 +110,14 @@ function manifestDigest(manifest: Record<string, unknown>): string {
 	return createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
 }
 
+export function hashV2PluginSet(plugins: readonly V2Plugin[]): string {
+	const active = plugins
+		.filter((plugin) => plugin.enabled)
+		.map((plugin) => ({ id: plugin.id, version: plugin.version, manifestDigest: plugin.manifestDigest }))
+		.sort((left, right) => left.id.localeCompare(right.id));
+	return createHash("sha256").update(JSON.stringify(active)).digest("hex");
+}
+
 function resourceCount(value: unknown): number {
 	return Array.isArray(value) ? value.length : value === undefined ? 0 : 1;
 }
