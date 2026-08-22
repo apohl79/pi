@@ -1409,9 +1409,46 @@ export class AgentHarness implements AgentLane {
 					}),
 				} as const;
 			}
-			const open = await this.openOperationsAcrossLanes();
+			const lanes = await this.durableSession.getLanes();
+			const openByLane = await Promise.all(
+				lanes.map(async (lane) => ({ lane: lane.lane, operations: await this.durableSession.findOpenOperations(lane.lane) })),
+			);
+			const open = openByLane.flatMap((entry) => entry.operations);
+			const duplicateLane = openByLane.find((entry) => entry.operations.length > 1);
+			if (duplicateLane) {
+				const operation = duplicateLane.operations[0]!;
+				return {
+					error: new LaneBusy({
+						lane: duplicateLane.lane,
+						operationId: operation.id,
+						operationKind: operation.intent.kind,
+						message: "Multiple open operations require recovery before resume",
+					}),
+				} as const;
+			}
+			if (open.length > 1) {
+				const operation = open[0]!;
+				return {
+					error: new LaneBusy({
+						lane: operation.lane,
+						operationId: operation.id,
+						operationKind: operation.intent.kind,
+						message: "Open operations in multiple lanes require recovery before resume",
+					}),
+				} as const;
+			}
 			const operation = open[0];
 			if (!operation) return { error: new NothingToResume({ lane: "main", message: "Nothing to resume" }) } as const;
+			if (operation.lane !== "main") {
+				return {
+					error: new LaneBusy({
+						lane: operation.lane,
+						operationId: operation.id,
+						operationKind: operation.intent.kind,
+						message: "Suspended operation requires a lane-specific harness",
+					}),
+				} as const;
+			}
 			const suspended = this.suspendedOperations.find(
 				(candidate) =>
 					candidate.id === operation.id &&
