@@ -417,6 +417,8 @@ export class AgentHarness implements AgentLane {
 	private readonly finishedOperations = new Set<string>();
 	private readonly finishingOperations = new Map<string, Promise<void>>();
 	private missingModels: string[] = [];
+	private missingTools: string[] = [];
+	private static readonly finishedOperationCacheLimit = 1024;
 
 	private constructor(options: AgentHarnessOptions) {
 		this.durableSession = options.session;
@@ -466,7 +468,11 @@ export class AgentHarness implements AgentLane {
 			}
 		}
 		const persistedTools = branchEntries.find((entry) => entry.type === "active_tools_change");
-		if (persistedTools?.type === "active_tools_change") harness.activeToolNames = [...persistedTools.activeToolNames];
+		if (persistedTools?.type === "active_tools_change") {
+			harness.activeToolNames = [...persistedTools.activeToolNames];
+			const availableTools = new Set(harness.tools.map((tool) => tool.name));
+			harness.missingTools = persistedTools.activeToolNames.filter((name) => !availableTools.has(name));
+		}
 		const lanes = await options.session.getLanes();
 		const suspended: SuspendedOperation[] = [];
 		for (const lane of lanes) {
@@ -480,7 +486,7 @@ export class AgentHarness implements AgentLane {
 					startedAt: operation.timestamp,
 					reason: "crash",
 					prompt: intent.kind === "run" ? structuredClone(intent.originalPrompt) : undefined,
-					missing: { tools: [], models: [...missingModels] },
+					missing: { tools: [...harness.missingTools], models: [...missingModels] },
 				});
 			}
 		}
@@ -499,9 +505,14 @@ export class AgentHarness implements AgentLane {
 	async prompt(message: AgentMessage | AgentMessage[]): Promise<RunResult>;
 	async prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<RunResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		if (this.missingModels.length > 0)
+		if (this.missingModels.length > 0 || this.missingTools.length > 0)
 			return ResultValue.err(
-				new MissingIdentities({ lane: "main", tools: [], models: [...this.missingModels], message: "Persisted model is unavailable" }),
+				new MissingIdentities({
+					lane: "main",
+					tools: [...this.missingTools],
+					models: [...this.missingModels],
+					message: this.missingModels.length > 0 ? "Persisted model is unavailable" : "Persisted tools are unavailable",
+				}),
 			);
 		const localRunId = this.durableSession.idGenerator.next();
 		const controller = new AbortController();
@@ -680,7 +691,7 @@ export class AgentHarness implements AgentLane {
 		const attempt = (async () => {
 			const existing = await this.durableSession.findRecords({ type: "operation_finished", runId, limit: 1 });
 			if (existing.length > 0) {
-				this.finishedOperations.add(runId);
+				this.rememberFinishedOperation(runId);
 				return;
 			}
 			let lastError: unknown;
@@ -713,7 +724,7 @@ export class AgentHarness implements AgentLane {
 				}
 			}
 			if (lastError !== undefined) throw lastError;
-			this.finishedOperations.add(runId);
+			this.rememberFinishedOperation(runId);
 		})();
 		this.finishingOperations.set(runId, attempt);
 		try {
@@ -721,6 +732,13 @@ export class AgentHarness implements AgentLane {
 		} finally {
 			if (this.finishingOperations.get(runId) === attempt) this.finishingOperations.delete(runId);
 		}
+	}
+
+	private rememberFinishedOperation(runId: string): void {
+		this.finishedOperations.add(runId);
+		if (this.finishedOperations.size <= AgentHarness.finishedOperationCacheLimit) return;
+		const oldest = this.finishedOperations.values().next().value as string | undefined;
+		if (oldest !== undefined) this.finishedOperations.delete(oldest);
 	}
 
 	private normalizePromptInput(
@@ -739,9 +757,14 @@ export class AgentHarness implements AgentLane {
 	}
 	async compact(_options?: { customInstructions?: string }): Promise<CompactionResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		if (this.missingModels.length > 0)
+		if (this.missingModels.length > 0 || this.missingTools.length > 0)
 			return ResultValue.err(
-				new MissingIdentities({ lane: "main", tools: [], models: [...this.missingModels], message: "Persisted model is unavailable" }),
+				new MissingIdentities({
+					lane: "main",
+					tools: [...this.missingTools],
+					models: [...this.missingModels],
+					message: this.missingModels.length > 0 ? "Persisted model is unavailable" : "Persisted tools are unavailable",
+				}),
 			);
 		const localRunId = this.durableSession.idGenerator.next();
 		const controller = new AbortController();
@@ -993,6 +1016,8 @@ export class AgentHarness implements AgentLane {
 			"main",
 		);
 		this.activeToolNames = activeToolNames;
+		const availableTools = new Set(this.tools.map((tool) => tool.name));
+		this.missingTools = activeToolNames.filter((name) => !availableTools.has(name));
 	}
 	async watch(): Promise<WatchHandle<LaneSnapshot>> {
 		return this.unavailable("watch");
@@ -1020,6 +1045,8 @@ export class AgentHarness implements AgentLane {
 		);
 		this.tools = nextTools;
 		this.activeToolNames = nextActiveNames;
+		const availableTools = new Set(nextTools.map((tool) => tool.name));
+		this.missingTools = nextActiveNames.filter((name) => !availableTools.has(name));
 	}
 	async getResources(): Promise<Resources> {
 		return {

@@ -52,6 +52,10 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 	private readonly metadata: JsonlSessionMetadata;
 	private state = new SessionState();
 	private tail: Promise<void> = Promise.resolve();
+	/** Number of complete physical lines already projected into `state` (header included). */
+	private persistedLineCount = 0;
+	private persistedSize = 0;
+	private persistedModifiedAt = 0;
 
 	constructor(fs: JsonlSessionRepoFileSystem, metadata: JsonlSessionMetadata) {
 		this.fs = fs;
@@ -65,7 +69,11 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 	): Promise<JsonlSessionStorage> {
 		fileResult(await fs.writeFile(path, encodeHeader(header)), `Failed to initialize session ${path}`);
 		const fileInfo = fileResult(await fs.fileInfo(path), `Failed to read session metadata ${path}`);
-		return new JsonlSessionStorage(fs, metadataFromHeader(header, path, fileInfo.mtimeMs));
+		const storage = new JsonlSessionStorage(fs, metadataFromHeader(header, path, fileInfo.mtimeMs));
+		storage.persistedLineCount = 1;
+		storage.persistedSize = new TextEncoder().encode(encodeHeader(header)).byteLength;
+		storage.persistedModifiedAt = fileInfo.mtimeMs;
+		return storage;
 	}
 
 	static async load(fs: JsonlSessionRepoFileSystem, path: string): Promise<JsonlSessionStorage> {
@@ -90,6 +98,10 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 					await publishFileAtomically(fs, path, async (tempPath) => {
 						fileResult(await fs.writeFile(tempPath, validPrefix), `Failed to stage torn-tail repair ${path}`);
 					});
+					storage.persistedLineCount = index;
+					storage.persistedSize = new TextEncoder().encode(validPrefix).byteLength;
+					const repairedInfo = fileResult(await fs.fileInfo(path), `Failed to read session metadata ${path}`);
+					storage.persistedModifiedAt = repairedInfo.mtimeMs;
 					return storage;
 				}
 				throw invalidFile(path, index + 1, mutationResult.error);
@@ -106,6 +118,9 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		if (!content.endsWith("\n")) {
 			fileResult(await fs.appendFile(path, "\n"), `Failed to repair unterminated session tail ${path}`);
 		}
+		storage.persistedLineCount = physicalLines.length;
+		storage.persistedSize = fileInfo.size + (content.endsWith("\n") ? 0 : 1);
+		storage.persistedModifiedAt = fileInfo.mtimeMs;
 		return storage;
 	}
 
@@ -269,10 +284,10 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 			JsonlSessionStorage.mutationTails.set(key, chain);
 			await predecessor;
 			try {
-				// Another instance may have appended since this instance was loaded. Reload while
-				// holding the process-wide path lock so admission and append observe one sequence.
-				const fresh = await JsonlSessionStorage.load(this.fs, key);
-				this.state = fresh.state;
+				// Another instance may have appended since this instance was loaded. Refresh only
+				// when file metadata changed; the common single-writer path no longer reparses the
+				// complete history for every append. External suffixes are projected incrementally.
+				await this.refreshFromDisk(key);
 				return await operation();
 			} finally {
 				release();
@@ -287,11 +302,18 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 	}
 
 	private async appendMutation(mutation: SessionMutation): Promise<void> {
+		const encoded = encodeMutation(mutation);
 		try {
 			fileResult(
-				await this.fs.appendFile(this.metadata.path, encodeMutation(mutation)),
+				await this.fs.appendFile(this.metadata.path, encoded),
 				`Failed to append session ${this.metadata.path}`,
 			);
+			this.persistedLineCount += 1;
+			this.persistedSize += new TextEncoder().encode(encoded).byteLength;
+			// Metadata refresh is only an optimization for detecting external writers;
+			// never turn a successful append into an error if that optional read fails.
+			const fileInfo = await this.fs.fileInfo(this.metadata.path);
+			if (fileInfo.ok) this.persistedModifiedAt = fileInfo.value.mtimeMs;
 		} catch (error) {
 			// An append may be durable even when the backend reports a transport
 			// error. Refresh local state so callers can detect the committed record
@@ -304,6 +326,39 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 			}
 			throw error;
 		}
+	}
+
+	private async refreshFromDisk(path: string): Promise<void> {
+		const fileInfo = fileResult(await this.fs.fileInfo(path), `Failed to read session metadata ${path}`);
+		if (fileInfo.size === this.persistedSize && fileInfo.mtimeMs === this.persistedModifiedAt) return;
+		const content = fileResult(await this.fs.readTextFile(path), `Failed to read session ${path}`);
+		const physicalLines = content.split("\n");
+		if (physicalLines.at(-1) === "") physicalLines.pop();
+		// A replacement/truncation (fork publication or recovery) cannot be safely
+		// applied as a suffix; use the canonical loader in that uncommon case.
+		if (physicalLines.length < this.persistedLineCount) {
+			const fresh = await JsonlSessionStorage.load(this.fs, path);
+			this.state = fresh.state;
+			this.persistedLineCount = fresh.persistedLineCount;
+			this.persistedSize = fresh.persistedSize;
+			this.persistedModifiedAt = fresh.persistedModifiedAt;
+			return;
+		}
+		for (let index = this.persistedLineCount; index < physicalLines.length; index++) {
+			const mutationResult = parseMutation(physicalLines[index]!);
+			if (!mutationResult.ok) {
+				const fresh = await JsonlSessionStorage.load(this.fs, path);
+				this.state = fresh.state;
+				this.persistedLineCount = fresh.persistedLineCount;
+				this.persistedSize = fresh.persistedSize;
+				this.persistedModifiedAt = fresh.persistedModifiedAt;
+				return;
+			}
+			this.applyMutation(mutationResult.value);
+		}
+		this.persistedLineCount = physicalLines.length;
+		this.persistedSize = fileInfo.size;
+		this.persistedModifiedAt = fileInfo.mtimeMs;
 	}
 
 	private applyMutation(mutation: SessionMutation): void {
