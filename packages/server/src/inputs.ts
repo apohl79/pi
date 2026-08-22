@@ -205,7 +205,9 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 		)?.request.id;
 	}
 
-	async takeRespondedForSession(sessionId: string): Promise<Readonly<Record<string, string>> | undefined> {
+	peekRespondedForSession(
+		sessionId: string,
+	): { requestId: string; answers: Readonly<Record<string, string>> } | undefined {
 		const state = [...this.requests.values()]
 			.reverse()
 			.find(
@@ -215,8 +217,19 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 					!this.consumedResponses.has(candidate.request.id),
 			);
 		if (!state) return undefined;
-		this.consumedResponses.add(state.request.id);
-		return structuredClone(state.request.answers ?? {});
+		return { requestId: state.request.id, answers: structuredClone(state.request.answers ?? {}) };
+	}
+
+	consumeResponded(requestId: string): void {
+		this.get(requestId);
+		this.consumedResponses.add(requestId);
+	}
+
+	async takeRespondedForSession(sessionId: string): Promise<Readonly<Record<string, string>> | undefined> {
+		const response = this.peekRespondedForSession(sessionId);
+		if (response === undefined) return undefined;
+		this.consumeResponded(response.requestId);
+		return response.answers;
 	}
 
 	private get(requestId: string): InputState {
@@ -243,11 +256,17 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 	}
 }
 
-type InputRecord = V2InputRequest;
+type InputRecord = V2InputRequest | { readonly kind: "consumed"; readonly requestId: string };
+
+function isConsumedInputRecord(value: unknown): value is { readonly kind: "consumed"; readonly requestId: string } {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	return (value as Record<string, unknown>).kind === "consumed";
+}
 
 /** Durable append-only structured-input requests for configured daemon restart recovery. */
 export class JsonlV2InputRegistry implements V2InputRegistry {
 	private readonly memory = new InMemoryV2InputRegistry();
+	private readonly consumed = new Set<string>();
 	private readonly path: string;
 	private loaded: Promise<void>;
 	private pendingWrite: Promise<void> = Promise.resolve();
@@ -309,7 +328,19 @@ export class JsonlV2InputRegistry implements V2InputRegistry {
 
 	async takeRespondedForSession(sessionId: string): Promise<Readonly<Record<string, string>> | undefined> {
 		await this.loaded;
-		return this.memory.takeRespondedForSession(sessionId);
+		const write = this.pendingWrite.then(async () => {
+			const response = this.memory.peekRespondedForSession(sessionId);
+			if (response === undefined) return undefined;
+			await this.append({ kind: "consumed", requestId: response.requestId });
+			this.memory.consumeResponded(response.requestId);
+			this.consumed.add(response.requestId);
+			return response.answers;
+		});
+		this.pendingWrite = write.then(
+			() => undefined,
+			() => undefined,
+		);
+		return structuredClone(await write);
 	}
 
 	private async mutate(
@@ -335,10 +366,18 @@ export class JsonlV2InputRegistry implements V2InputRegistry {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
 			throw error;
 		}
-		for (const line of contents.split("\n").filter(Boolean)) this.memory.restore(JSON.parse(line) as InputRecord);
+		for (const line of contents.split("\n").filter(Boolean)) {
+			const record: unknown = JSON.parse(line);
+			if (isConsumedInputRecord(record)) {
+				if (typeof record.requestId !== "string" || record.requestId.length === 0)
+					throw new Error("Input consumed record requestId is required");
+				this.consumed.add(record.requestId);
+				this.memory.consumeResponded(record.requestId);
+			} else this.memory.restore(record as V2InputRequest);
+		}
 	}
 
-	private append(request: V2InputRequest): Promise<void> {
+	private append(request: InputRecord): Promise<void> {
 		return (async () => {
 			await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
 			const handle = await open(this.path, "a", 0o600);

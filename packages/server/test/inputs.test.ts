@@ -54,6 +54,10 @@ describe("JsonlV2InputRegistry", () => {
 		expect(await second.read(pending.id)).toMatchObject({ sessionId: "session-1", status: "pending" });
 		expect(await second.pendingForSession("session-1")).toBe(pending.id);
 		expect(await second.read(answered.id)).toMatchObject({ status: "responded", answers: { mode: "Safe" } });
+		expect(await second.takeRespondedForSession("session-1")).toEqual({ mode: "Safe" });
+
+		const third = new JsonlV2InputRegistry(path);
+		expect(await third.takeRespondedForSession("session-1")).toBeUndefined();
 	});
 
 	test("does not publish a request when durable creation fails", async () => {
