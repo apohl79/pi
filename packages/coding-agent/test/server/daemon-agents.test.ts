@@ -389,6 +389,19 @@ describe("coding-agent daemon child agents", () => {
 				}
 				throw new Error("Timed out waiting for root turn completion");
 			};
+			const waitForOperation = async (operationId: string): Promise<void> => {
+				for (let attempt = 0; attempt < 50; attempt++) {
+					const operation = await client.request({ command: "operation/read", sessionId, operationId });
+					if (
+						operation.ok &&
+						"result" in operation &&
+						(operation.result as { operation?: { state?: string } }).operation?.state === "complete"
+					)
+						return;
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+				throw new Error("Timed out waiting for model-switch operation completion");
+			};
 			await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
 			await client.request({ command: "session/name/auto/set", sessionId, payload: { enabled: false } });
 			const first = await client.request({ command: "turn/start", sessionId, payload: { text: "root first" } });
@@ -416,7 +429,8 @@ describe("coding-agent daemon child agents", () => {
 				sessionId,
 				payload: { provider: "coding-agent-daemon-root-models-faux", id: "switched-root-model" },
 			});
-			expect(switched).toMatchObject({ ok: true });
+			if (!switched.ok || !("accepted" in switched)) throw new Error("Model switch was not accepted");
+			await waitForOperation(switched.accepted.operationId);
 			const switchedSnapshot = await client.request({ command: "session/read", sessionId });
 			if (!switchedSnapshot.ok || !("result" in switchedSnapshot)) throw new Error("Session read failed");
 			expect((switchedSnapshot.result as { session: { model: unknown } }).session.model).toEqual({
