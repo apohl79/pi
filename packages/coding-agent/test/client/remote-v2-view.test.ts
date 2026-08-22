@@ -70,4 +70,12 @@ describe("formatRemoteV2Session", () => {
 		expect(output).not.toContain("\u001b");
 		expect(output).not.toContain("\u0000");
 	});
+
+	test("normalizes transcript limits before slicing", () => {
+		const output = formatRemoteV2Session(
+			{ lifecycle: { status: "ready" }, snapshot },
+			{ maxTranscriptItems: Number.POSITIVE_INFINITY, maxTranscriptCharacters: -10 },
+		);
+		expect(output).not.toContain("assistant:");
+	});
 });

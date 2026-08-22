@@ -8,6 +8,27 @@ export interface RemoteV2SessionViewOptions {
 	readonly maxTranscriptCharacters?: number;
 }
 
+const DEFAULT_MAX_TRANSCRIPT_ITEMS = 48;
+const DEFAULT_MAX_TRANSCRIPT_CHARACTERS = 6_000;
+const MAX_TRANSCRIPT_ITEMS = 10_000;
+const MAX_TRANSCRIPT_CHARACTERS = 1_000_000;
+
+function normalizeLimit(value: number | undefined, fallback: number, maximum: number): number {
+	if (value === undefined || !Number.isFinite(value)) return fallback;
+	return Math.min(maximum, Math.max(0, Math.floor(value)));
+}
+
+function normalizeOptions(options: RemoteV2SessionViewOptions): Required<RemoteV2SessionViewOptions> {
+	return {
+		maxTranscriptItems: normalizeLimit(options.maxTranscriptItems, DEFAULT_MAX_TRANSCRIPT_ITEMS, MAX_TRANSCRIPT_ITEMS),
+		maxTranscriptCharacters: normalizeLimit(
+			options.maxTranscriptCharacters,
+			DEFAULT_MAX_TRANSCRIPT_CHARACTERS,
+			MAX_TRANSCRIPT_CHARACTERS,
+		),
+	};
+}
+
 /** Renderable TUI projection of one server-authoritative v2 session. */
 export class RemoteV2SessionView implements Component {
 	readonly #options: Required<RemoteV2SessionViewOptions>;
@@ -15,10 +36,7 @@ export class RemoteV2SessionView implements Component {
 	readonly #unsubscribe: () => void;
 
 	constructor(session: RemoteV2Session, options: RemoteV2SessionViewOptions = {}) {
-		this.#options = {
-			maxTranscriptItems: options.maxTranscriptItems ?? 48,
-			maxTranscriptCharacters: options.maxTranscriptCharacters ?? 6_000,
-		};
+		this.#options = normalizeOptions(options);
 		this.#state = session.state;
 		this.#unsubscribe = session.subscribe((state) => {
 			this.#state = state;
@@ -37,10 +55,11 @@ export class RemoteV2SessionView implements Component {
 }
 
 export function formatRemoteV2Session(state: RemoteV2SessionState, options: RemoteV2SessionViewOptions = {}): string {
+	const normalizedOptions = normalizeOptions(options);
 	const snapshot = state.snapshot;
 	if (!snapshot) return `Session ${state.lifecycle.status}`;
-	const maxItems = options.maxTranscriptItems ?? 48;
-	const maxCharacters = options.maxTranscriptCharacters ?? 6_000;
+	const maxItems = normalizedOptions.maxTranscriptItems;
+	const maxCharacters = normalizedOptions.maxTranscriptCharacters;
 	const model = `${snapshot.model.provider}/${snapshot.model.id}`;
 	const operation = state.lifecycle.status === "busy" ? ` operation=${state.lifecycle.operationId}` : "";
 	const lines = [`Session ${snapshot.id} · phase=${snapshot.phase} · model=${model}${operation}`];
