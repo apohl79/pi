@@ -80,19 +80,21 @@ export class ServerDaemon {
 	}
 
 	private async startInternal(): Promise<void> {
-		const server = (this.options.createServer ?? defaultCreateServer)(this.options.service, {
-			path: this.options.socketPath,
-			...(this.options.serverId === undefined ? {} : { serverId: this.options.serverId }),
-		});
+		let server: ServerDaemonServer | undefined;
 		try {
+			server = (this.options.createServer ?? defaultCreateServer)(this.options.service, {
+				path: this.options.socketPath,
+				...(this.options.serverId === undefined ? {} : { serverId: this.options.serverId }),
+			});
 			await server.start();
+			this.server = server;
+			this.state = "running";
 		} catch (error) {
-			await server.close().catch(() => {});
+			await server?.close().catch(() => {});
+			this.server = undefined;
 			this.state = "stopped";
 			throw error;
 		}
-		this.server = server;
-		this.state = "running";
 	}
 
 	private async stopInternal(server: ServerDaemonServer): Promise<void> {
