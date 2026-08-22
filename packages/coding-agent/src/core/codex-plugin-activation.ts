@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { cp, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type CodexPluginManifest, loadCodexPluginManifest } from "./codex-plugin.ts";
 
@@ -36,20 +36,45 @@ function manifestDigest(manifest: CodexPluginManifest): string {
 	return createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
 }
 
+async function rejectSymlinkEntries(root: string): Promise<void> {
+	const entries = await readdir(root, { withFileTypes: true });
+	for (const entry of entries) {
+		const path = join(root, entry.name);
+		if (entry.isSymbolicLink()) throw new CodexPluginActivationError("activation_failed", "Plugin source contains a symlink");
+		if (entry.isDirectory()) await rejectSymlinkEntries(path);
+	}
+}
+
 /** Stage and atomically activate a validated plugin version under a private cache root. */
 export class CodexPluginActivationStore {
 	private readonly cacheRoot: string;
+	private readonly activationTails = new Map<string, Promise<void>>();
 
 	constructor(cacheRoot: string) {
 		this.cacheRoot = cacheRoot;
 	}
 
 	async activate(options: CodexPluginActivationOptions): Promise<CodexPluginActivation> {
+		const previous = this.activationTails.get(options.id) ?? Promise.resolve();
+		let release!: () => void;
+		const current = new Promise<void>((resolve) => (release = resolve));
+		this.activationTails.set(options.id, current);
+		try {
+			await previous;
+			return await this.activateUnlocked(options);
+		} finally {
+			release();
+			if (this.activationTails.get(options.id) === current) this.activationTails.delete(options.id);
+		}
+	}
+
+	private async activateUnlocked(options: CodexPluginActivationOptions): Promise<CodexPluginActivation> {
 		if (options.id.trim().length === 0 || options.version.trim().length === 0)
 			throw new CodexPluginActivationError("invalid_manifest", "Plugin id and version are required");
 		if (options.version.includes("/") || options.version.includes("\\"))
 			throw new CodexPluginActivationError("invalid_manifest", "Plugin version must be a single path segment");
 		const sourceRoot = await realpath(options.sourceRoot);
+		await rejectSymlinkEntries(sourceRoot);
 		const loaded = await loadCodexPluginManifest(sourceRoot);
 		if (
 			!loaded.manifest ||
@@ -77,7 +102,9 @@ export class CodexPluginActivationStore {
 				`Plugin version is already active: ${options.id}@${options.version}`,
 			);
 		}
+		await mkdir(this.cacheRoot, { recursive: true, mode: 0o700 });
 		const stageRoot = join(this.cacheRoot, `.staging-${randomUUID()}`);
+		let versionInstalled = false;
 		try {
 			await mkdir(join(this.cacheRoot, key, "versions"), { recursive: true, mode: 0o700 });
 			await cp(sourceRoot, stageRoot, { recursive: true, force: false, errorOnExist: true });
@@ -89,6 +116,7 @@ export class CodexPluginActivationStore {
 			)
 				throw new CodexPluginActivationError("invalid_manifest", "Copied plugin manifest failed validation");
 			await rename(stageRoot, versionRoot);
+			versionInstalled = true;
 			const temporaryPointer = `${activePath}.${randomUUID()}.tmp`;
 			await writeFile(temporaryPointer, `${JSON.stringify({ version: options.version })}\n`, { mode: 0o600 });
 			await rename(temporaryPointer, activePath);
@@ -96,11 +124,12 @@ export class CodexPluginActivationStore {
 				id: options.id,
 				version: options.version,
 				root: versionRoot,
-				manifestDigest: manifestDigest(options.manifest),
+				manifestDigest: manifestDigest(staged.manifest),
 				...(previousVersion === undefined ? {} : { previousVersion }),
 			};
 		} catch (error) {
 			await rm(stageRoot, { recursive: true, force: true });
+			if (versionInstalled) await rm(versionRoot, { recursive: true, force: true });
 			if (error instanceof CodexPluginActivationError) throw error;
 			throw new CodexPluginActivationError(
 				"activation_failed",
