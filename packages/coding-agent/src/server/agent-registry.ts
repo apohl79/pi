@@ -17,12 +17,24 @@ interface ChildAgent {
 export interface CodingAgentV2AgentRegistryOptions {
 	readonly maxDepth?: number;
 	readonly maxActive?: number;
+	readonly maxMessageLength?: number;
+	readonly maxMessages?: number;
+}
+
+const DEFAULT_MAX_MESSAGE_LENGTH = 64 * 1024;
+const DEFAULT_MAX_MESSAGES = 1024;
+
+function validatePositiveLimit(name: string, value: number): number {
+	if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive safe integer`);
+	return value;
 }
 
 /** Executes server-owned child agents through the durable coding-agent service. */
 export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private readonly maxDepth: number;
 	private readonly maxActive: number;
+	private readonly maxMessageLength: number;
+	private readonly maxMessages: number;
 	private readonly agents = new Map<string, ChildAgent>();
 	private readonly service: CodingAgentV2Service;
 	private spawnTail: Promise<void> = Promise.resolve();
@@ -31,6 +43,8 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		this.service = service;
 		this.maxDepth = options.maxDepth ?? 1;
 		this.maxActive = options.maxActive ?? 8;
+		this.maxMessageLength = validatePositiveLimit("maxMessageLength", options.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH);
+		this.maxMessages = validatePositiveLimit("maxMessages", options.maxMessages ?? DEFAULT_MAX_MESSAGES);
 	}
 
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
@@ -103,8 +117,9 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	async message(agentId: string, message: string): Promise<void> {
-		if (message.trim().length === 0) throw new Error("Agent message must not be empty");
-		this.get(agentId).messages.push(message);
+		const agent = this.get(agentId);
+		this.validateMessage(message);
+		this.appendMessage(agent, message);
 	}
 
 	async followUp(agentId: string, message: string): Promise<AgentSummary> {
@@ -124,11 +139,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			try {
 				const operationId = agent.activeOperationId;
 				if (operationId === undefined) throw new Error(`Agent ${agentId} has no active operation`);
-				await agent.runtime.run(operationId, {
-					command: "turn/abort",
-					sessionId: agent.sessionId,
-					payload: {},
-				});
+				await agent.runtime.abort(operationId);
 			} finally {
 				agent.state = "interrupted";
 				this.resolveWaiters(agent);
@@ -161,7 +172,17 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		if (depth >= this.maxDepth) throw new Error(`Agent maximum depth ${this.maxDepth} exceeded`);
 		if (!/^[A-Za-z0-9._-]+$/.test(request.taskName))
 			throw new Error("Agent taskName contains unsupported characters");
-		if (request.taskMessage.trim().length === 0) throw new Error("Agent taskMessage must not be empty");
+		this.validateMessage(request.taskMessage, "Agent taskMessage");
+	}
+
+	private validateMessage(message: string, label = "Agent message"): void {
+		if (message.trim().length === 0) throw new Error(`${label} must not be empty`);
+		if (message.length > this.maxMessageLength) throw new Error(`${label} exceeds maximum length ${this.maxMessageLength}`);
+	}
+
+	private appendMessage(agent: ChildAgent, message: string): void {
+		if (agent.messages.length >= this.maxMessages) agent.messages.shift();
+		agent.messages.push(message);
 	}
 
 	private activeCount(): number {

@@ -263,6 +263,7 @@ export interface CodingAgentV2Runtime {
 	snapshot(): Promise<SessionSnapshotV2>;
 	accept(operationId: string): Promise<OperationAccepted>;
 	run(operationId: string, command: CommandV2): Promise<void>;
+	abort(operationId: string): Promise<void>;
 	dispose(): Promise<void>;
 }
 
@@ -573,6 +574,10 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		} finally {
 			release();
 		}
+	}
+
+	async abort(operationId: string): Promise<void> {
+		await this.abortImmediately(operationId);
 	}
 
 	private async abortImmediately(operationId: string): Promise<void> {
