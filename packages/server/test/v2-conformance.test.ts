@@ -14,7 +14,7 @@ import type {
 import { afterEach, describe, expect, test } from "vitest";
 import { InMemoryV2AgentRegistry } from "../src/agents.ts";
 import { InMemoryV2AppRegistry } from "../src/apps.ts";
-import { InMemoryV2BlobStore } from "../src/blobs.ts";
+import { FileV2BlobStore, InMemoryV2BlobStore } from "../src/blobs.ts";
 import {
 	type DiagnosticIntegrityCheck,
 	InMemoryForensicRecorder,
@@ -966,6 +966,31 @@ describe("PiServer v2 operation acceptance", () => {
 				payload: { data: "d29ybGQ=", encoding: "base64", mimeType: "text/plain" },
 			}),
 		).toMatchObject({ ok: false, error: { code: "request_failed", message: expect.stringContaining("Blob count") } });
+		await client.close();
+	});
+
+	test("rejects tampered disk-backed blobs through the v2 transport", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-blob-integrity-"));
+		directories.push(directory);
+		const blobDirectory = join(directory, "blobs");
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			blobs: new FileV2BlobStore(blobDirectory),
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const put = await client.request({
+			command: "blob/put",
+			payload: { data: "aGVsbG8=", encoding: "base64", mimeType: "text/plain" },
+		});
+		const digest = (put as unknown as { result: { blob: { digest: string } } }).result.blob.digest;
+		await writeFile(join(blobDirectory, `${digest}.blob`), "tampered");
+		expect(await client.request({ command: "blob/read", payload: { digest } })).toMatchObject({
+			ok: false,
+			error: { code: "request_failed", message: expect.stringContaining("digest mismatch") },
+		});
 		await client.close();
 	});
 
