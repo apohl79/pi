@@ -75,24 +75,14 @@ function validateEntry(entry: V2UsageLedgerEntry): V2UsageLedgerEntry {
 	if (!["agent", "compaction", "sessionName", "otherSideband"].includes(entry.purpose)) throw new Error("Usage purpose is invalid");
 	if (!["providerReported", "catalog", "subscription", "unknown"].includes(entry.pricing)) throw new Error("Usage pricing is invalid");
 	if (entry.priceSnapshot !== undefined) assertBoundedJson(entry.priceSnapshot);
-	for (const [key, value] of Object.entries(entry)) {
-		if (
-			[
-				"responseId",
-				"sessionId",
-				"agentId",
-				"operationId",
-				"turnId",
-				"goalId",
-				"purpose",
-				"provider",
-				"model",
-				"pricing",
-				"priceSnapshot",
-			].includes(key)
-		)
-			continue;
-		if (typeof value === "number" && (!Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER))
+	for (const key of ["input", "output", "cacheRead", "cacheWrite", "createdAt"] as const) {
+		const value = entry[key];
+		if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER)
+			throw new Error(`Usage field is invalid: ${key}`);
+	}
+	for (const key of ["reasoning", "costUsd", "imageUnits"] as const) {
+		const value = entry[key];
+		if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER))
 			throw new Error(`Usage field is invalid: ${key}`);
 	}
 	return structuredClone(entry);
