@@ -1,6 +1,11 @@
-import { mkdir, open, readFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, stat } from "node:fs/promises";
+import { constants } from "node:fs";
 import { dirname } from "node:path";
 import type { JsonValue } from "@earendil-works/pi-protocol";
+import { MAX_V2_ARRAY_ITEMS, MAX_V2_JSON_DEPTH, MAX_V2_STRING_LENGTH } from "@earendil-works/pi-protocol";
+
+const MAX_LEDGER_FILE_BYTES = 64 * 1024 * 1024;
+const MAX_IDENTITY_LENGTH = 256;
 
 export type V2UsagePurpose = "agent" | "compaction" | "sessionName" | "otherSideband";
 export type V2UsagePricing = "providerReported" | "catalog" | "subscription" | "unknown";
@@ -56,8 +61,14 @@ export interface V2UsageLedger {
 }
 
 function validateEntry(entry: V2UsageLedgerEntry): V2UsageLedgerEntry {
+	for (const [key, value] of Object.entries(entry))
+		if (typeof value === "string" && (value.length === 0 || value.length > MAX_IDENTITY_LENGTH))
+			throw new Error(`Usage identity field is invalid: ${key}`);
 	if (!entry.responseId || !entry.sessionId || !entry.agentId || !entry.operationId)
 		throw new Error("Usage ledger identity fields are required");
+	if (!["agent", "compaction", "sessionName", "otherSideband"].includes(entry.purpose)) throw new Error("Usage purpose is invalid");
+	if (!["providerReported", "catalog", "subscription", "unknown"].includes(entry.pricing)) throw new Error("Usage pricing is invalid");
+	assertBoundedJson(entry.priceSnapshot);
 	for (const [key, value] of Object.entries(entry)) {
 		if (
 			[
@@ -75,10 +86,30 @@ function validateEntry(entry: V2UsageLedgerEntry): V2UsageLedgerEntry {
 			].includes(key)
 		)
 			continue;
-		if (typeof value === "number" && (!Number.isFinite(value) || value < 0))
+		if (typeof value === "number" && (!Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER))
 			throw new Error(`Usage field is invalid: ${key}`);
 	}
 	return structuredClone(entry);
+}
+
+function assertBoundedJson(value: unknown, depth = 0): void {
+	if (value === undefined) return;
+	if (depth > MAX_V2_JSON_DEPTH) throw new Error("Price snapshot is too deeply nested");
+	if (typeof value === "string") {
+		if (value.length > MAX_V2_STRING_LENGTH) throw new Error("Price snapshot string is too long");
+	} else if (typeof value === "number") {
+		if (!Number.isFinite(value) || value < 0) throw new Error("Price snapshot number is invalid");
+	} else if (Array.isArray(value)) {
+		if (value.length > MAX_V2_ARRAY_ITEMS) throw new Error("Price snapshot array is too large");
+		value.forEach((item) => assertBoundedJson(item, depth + 1));
+	} else if (value !== null && typeof value === "object") {
+		const entries = Object.entries(value);
+		if (entries.length > MAX_V2_ARRAY_ITEMS) throw new Error("Price snapshot object is too large");
+		entries.forEach(([key, item]) => {
+			if (key.length > MAX_V2_STRING_LENGTH) throw new Error("Price snapshot key is too long");
+			assertBoundedJson(item, depth + 1);
+		});
+	}
 }
 
 function matches(entry: V2UsageLedgerEntry, filter: V2UsageFilter = {}): boolean {
@@ -105,6 +136,8 @@ function aggregateEntries(entries: readonly V2UsageLedgerEntry[]): V2UsageAggreg
 		imageUnits += entry.imageUnits ?? 0;
 		if (entry.costUsd === undefined) hasCost = false;
 		else costUsd += entry.costUsd;
+		if (![input, output, cacheRead, cacheWrite, reasoning, imageUnits, costUsd].every(Number.isFinite))
+			throw new Error("Usage aggregate exceeds numeric limits");
 		if (entry.pricing === "unknown") hasUnknown = true;
 		if (entry.pricing === "subscription") hasSubscription = true;
 	}
@@ -123,6 +156,11 @@ function aggregateEntries(entries: readonly V2UsageLedgerEntry[]): V2UsageAggreg
 
 export class InMemoryV2UsageLedger implements V2UsageLedger {
 	private readonly entries = new Map<string, V2UsageLedgerEntry>();
+
+	replace(entries: readonly V2UsageLedgerEntry[]): void {
+		this.entries.clear();
+		for (const entry of entries) this.entries.set(entry.responseId, structuredClone(entry));
+	}
 
 	async record(entry: V2UsageLedgerEntry): Promise<V2UsageLedgerEntry> {
 		const validated = validateEntry(entry);
@@ -154,31 +192,46 @@ export class JsonlV2UsageLedger implements V2UsageLedger {
 
 	private async ensureLoaded(): Promise<void> {
 		if (this.loaded) return;
-		this.loaded = true;
 		let contents: string;
 		try {
+			if ((await lstat(this.path)).isSymbolicLink()) throw new Error("Usage ledger path must not be a symlink");
+			if ((await stat(this.path)).size > MAX_LEDGER_FILE_BYTES) throw new Error("Usage ledger exceeds maximum size");
 			contents = await readFile(this.path, "utf8");
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") { this.loaded = true; return; }
 			throw error;
 		}
-		for (const line of contents.split("\n").filter(Boolean))
-			await this.memory.record(JSON.parse(line) as V2UsageLedgerEntry);
+		const recovered: V2UsageLedgerEntry[] = [];
+		for (const line of contents.split("\n").filter(Boolean)) recovered.push(validateEntry(JSON.parse(line) as V2UsageLedgerEntry));
+		this.memory.replace(recovered);
+		this.loaded = true;
 	}
 
 	async record(entry: V2UsageLedgerEntry): Promise<V2UsageLedgerEntry> {
 		const write = this.pending.then(async () => {
 			await this.ensureLoaded();
+			const before = await this.memory.read();
+			try {
 			const validated = await this.memory.record(entry);
 			await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
-			const handle = await open(this.path, "a", 0o600);
+			await chmod(dirname(this.path), 0o700);
+			try { if ((await lstat(this.path)).isSymbolicLink()) throw new Error("Usage ledger path must not be a symlink"); }
+			catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") { this.memory.replace(before); throw error; } }
+			const serialized = `${JSON.stringify(validated)}\n`;
+			try { if ((await stat(this.path)).size + Buffer.byteLength(serialized) > MAX_LEDGER_FILE_BYTES) throw new Error("Usage ledger exceeds maximum size"); }
+			catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") { this.memory.replace(before); throw error; } }
+			const handle = await open(this.path, constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
 			try {
-				await handle.write(`${JSON.stringify(validated)}\n`, undefined, "utf8");
+				await handle.write(serialized, undefined, "utf8");
 				await handle.sync();
 			} finally {
 				await handle.close();
 			}
 			return validated;
+			} catch (error) {
+				this.memory.replace(before);
+				throw error;
+			}
 		});
 		this.pending = write.then(
 			() => undefined,
