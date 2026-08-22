@@ -78,6 +78,18 @@ export interface RemoteV2FileRead {
 	readonly data: string;
 }
 
+export interface RemoteV2BlobStat {
+	readonly digest: string;
+	readonly mimeType: string;
+	readonly size: number;
+}
+
+export interface RemoteV2BlobRead {
+	readonly digest: string;
+	readonly encoding: "base64";
+	readonly data: string;
+}
+
 export interface RemoteV2WebResult {
 	readonly id: string;
 	readonly url?: string;
@@ -475,6 +487,28 @@ export class RemoteV2Session {
 		return { file: structuredClone(result.file), encoding: "base64", data: result.data };
 	}
 
+	async putBlob(data: string, mimeType: string, encoding: "utf8" | "base64" = "base64"): Promise<RemoteV2BlobStat> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({ command: "blob/put", payload: { data, mimeType, encoding } });
+		if (!isBlobStat(result.blob)) throw new Error("Invalid blob/put response");
+		return structuredClone(result.blob);
+	}
+
+	async readBlob(digest: string): Promise<RemoteV2BlobRead> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({ command: "blob/read", payload: { digest } });
+		if (result.digest !== digest || result.encoding !== "base64" || typeof result.data !== "string")
+			throw new Error("Invalid blob/read response");
+		return { digest, encoding: "base64", data: result.data };
+	}
+
+	async statBlob(digest: string): Promise<RemoteV2BlobStat> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({ command: "blob/stat", payload: { digest } });
+		if (!isBlobStat(result.blob) || result.blob.digest !== digest) throw new Error("Invalid blob/stat response");
+		return structuredClone(result.blob);
+	}
+
 	async webRequest(
 		operation: "search_query" | "open" | "click" | "find" | "screenshot" | "image_query",
 		options: {
@@ -720,6 +754,11 @@ function isFileCompletion(value: unknown): value is RemoteV2FileCompletion {
 		typeof record.path === "string" &&
 		(record.kind === "file" || record.kind === "directory")
 	);
+}
+
+function isBlobStat(value: unknown): value is RemoteV2BlobStat {
+	const record = asRecord(value);
+	return typeof record?.digest === "string" && typeof record.mimeType === "string" && typeof record.size === "number";
 }
 
 function isWebResult(value: unknown): value is RemoteV2WebResult {
