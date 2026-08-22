@@ -179,7 +179,7 @@ describe("formatRemoteV2Session", () => {
 			lifecycle: { status: "ready" },
 			snapshot: {
 				...snapshot,
-				usage: { ...snapshot.usage, input: 8, output: 3, cacheRead: 2, pricingState: "unknown" },
+				usage: { ...snapshot.usage, input: 8, output: 3, cacheRead: 2, costUsd: 12.5, pricingState: "unknown" },
 				persistence: { ...snapshot.persistence, recoveryState: "needsResolution" },
 				diagnostics: { ...snapshot.diagnostics, degraded: true },
 			},
@@ -187,5 +187,14 @@ describe("formatRemoteV2Session", () => {
 		expect(output).toContain("Usage input=8 output=3 cacheRead=2 cost=unknown");
 		expect(output).toContain("Persistence needsResolution");
 		expect(output).toContain("Diagnostics degraded");
+	});
+
+	test("shows subscription pricing without rendering a dollar amount", () => {
+		const output = formatRemoteV2Session({
+			lifecycle: { status: "ready" },
+			snapshot: { ...snapshot, usage: { ...snapshot.usage, costUsd: 12.5, pricingState: "subscription" } },
+		});
+		expect(output).toContain("cost=subscription");
+		expect(output).not.toContain("$12.500000");
 	});
 });
