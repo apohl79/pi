@@ -22,7 +22,13 @@ async function createRemoteRuntime(directory: string) {
 			{ id: "coding-agent-remote-interactive-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
 		],
 	});
+	const child = fauxProvider({
+		provider: "coding-agent-remote-interactive-child-faux",
+		models: [{ id: "child-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+	});
 	models.setProvider(faux.provider);
+	models.setProvider(child.provider);
+	child.setResponses([() => new Promise(() => {})]);
 	return createConfiguredCodingAgentDaemonRuntime({
 		agentDir: directory,
 		cwd: directory,
@@ -119,6 +125,41 @@ describe("production remote v2 interactive attachment", () => {
 				const result = await adapter.execute("/steer prioritize tests");
 				await attachment.session.waitForOperation(operationId(result));
 				expect(attachment.session.phase).toBe("idle");
+			} finally {
+				await adapter.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("interrupts a live child through the production remote command", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-remote-interactive-child-"));
+		directories.push(directory);
+		const runtime = await createRemoteRuntime(directory);
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			const sessionId = (created as unknown as { result: { session: { id: string } } }).result.session.id;
+			const attachment = await new RemoteV2SessionSelector(client).attachView(sessionId, { mode: "control" });
+			const adapter = new RemoteV2InteractiveAttachment(attachment);
+			try {
+				const child = await attachment.session.spawnAgent("stuck", "wait for cancellation", {
+					model: { provider: "coding-agent-remote-interactive-child-faux", id: "child-model" },
+				});
+				expect(child.state).toBe("running");
+				expect(await adapter.execute(`/interrupt-child ${child.id}`)).toEqual({
+					kind: "status",
+					text: "agent interrupted",
+				});
+				expect((await attachment.session.listAgents()).find((agent) => agent.id === child.id)?.state).toBe(
+					"interrupted",
+				);
 			} finally {
 				await adapter.dispose();
 			}
