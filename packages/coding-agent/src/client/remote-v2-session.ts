@@ -315,6 +315,11 @@ export class RemoteV2Session {
 		return this.#accept("goal/resume");
 	}
 
+	async readGoal(): Promise<Record<string, unknown> | undefined> {
+		const result = await this.#direct({ command: "goal/read", sessionId: this.#requireHandle().sessionId });
+		return result.goal === undefined ? undefined : record(result.goal, "goal/read");
+	}
+
 	async respondInput(requestId: string, answers: Readonly<Record<string, string>>): Promise<void> {
 		this.#assertControl();
 		const response = await this.#client.request({
@@ -335,6 +340,11 @@ export class RemoteV2Session {
 		if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
 	}
 
+	async readInputRequest(requestId: string): Promise<Record<string, unknown>> {
+		const result = await this.#direct({ command: "input/request/read", requestId });
+		return record(result.request, "input/request/read");
+	}
+
 	async updatePlan(items: readonly PlanItem[], version?: number): Promise<PlanSnapshot> {
 		this.#assertControl();
 		const response = await this.#client.request({
@@ -347,6 +357,13 @@ export class RemoteV2Session {
 		const plan = asRecord(response.result)?.plan;
 		if (!isPlanSnapshot(plan)) throw new Error("Invalid plan/update response");
 		return structuredClone(plan);
+	}
+
+	async readPlan(): Promise<PlanSnapshot | undefined> {
+		const result = await this.#direct({ command: "plan/read", sessionId: this.#requireHandle().sessionId });
+		if (result.plan === undefined) return undefined;
+		if (!isPlanSnapshot(result.plan)) throw new Error("Invalid plan/read response");
+		return structuredClone(result.plan);
 	}
 
 	async clearPlan(): Promise<void> {
