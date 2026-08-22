@@ -111,12 +111,20 @@ export async function createCodingAgentV2SqliteService(
 		const planRegistry = options.plans;
 		const agentRegistry =
 			typeof options.agentRegistry === "function" ? options.agentRegistry() : options.agentRegistry;
-		const threadContext = options.pluginRegistry
-			? (await options.pluginRegistry.listPlugins(true))
-					.filter((plugin) => plugin.enabled)
-					.flatMap((plugin) => plugin.threadContext ?? [])
-					.map((entry) => entry.text)
+		const activePlugins = options.pluginRegistry
+			? (await options.pluginRegistry.listPlugins(true)).filter((plugin) => plugin.enabled)
 			: [];
+		const threadMessages = await createPluginSamplingInput(
+			env,
+			activePlugins.map((plugin, activationOrder) => ({
+				pluginId: plugin.id,
+				activationOrder,
+				entries: plugin.threadContext ?? [],
+			})),
+		)({ model, systemPrompt: "", messages: [], tools: [] });
+		const threadContext = threadMessages.flatMap((message) =>
+			message.role === "user" && typeof message.content === "string" ? [message.content] : [],
+		);
 		const threadContextPrompt = threadContext.length > 0 ? threadContext.join("\n\n") : undefined;
 		const systemPromptOptions =
 			threadContextPrompt === undefined
