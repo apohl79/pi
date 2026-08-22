@@ -111,15 +111,17 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			parentSessionId: request.sessionId,
 			name: request.taskName,
 			model,
+			modelResolution: request.modelResolution,
 			...(request.role === undefined ? {} : { role: request.role }),
 			id: agentId,
 		});
+		const effectiveModel = (await created.runtime.snapshot()).model;
 		const summary: AgentSummary = {
 			id: agentId,
 			path,
 			taskName: request.taskName,
 			state: "running",
-			model,
+			model: effectiveModel,
 		};
 		const agent: ChildAgent = {
 			summary,

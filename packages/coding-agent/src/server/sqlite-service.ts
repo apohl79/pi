@@ -413,23 +413,24 @@ export async function createCodingAgentV2SqliteService(
 			const roleName = typeof payload.role === "string" ? payload.role : undefined;
 			const role = roleName === undefined ? undefined : options.agentRoles?.[roleName];
 			if (roleName !== undefined && role === undefined) throw new Error(`Unknown coding-agent role: ${roleName}`);
+			const modelResolution = payload.modelResolution === "inherited" ? "inherited" : "explicit";
 			const requestedModel =
 				typeof payload.model === "object" && payload.model !== null && !Array.isArray(payload.model)
 					? (payload.model as Record<string, unknown>)
 					: undefined;
+			const selectedModel =
+				role?.model !== undefined && modelResolution === "inherited" ? role.model : (requestedModel ?? role?.model);
 			const session = await options.repository.create({
 				cwd,
 				...(typeof payload.id === "string" ? { id: payload.id } : {}),
 				...(typeof payload.parentSessionId === "string" ? { parentSessionId: payload.parentSessionId } : {}),
-				...(requestedModel === undefined && role?.model === undefined
+				...(selectedModel === undefined
 					? roleName === undefined
 						? {}
 						: { metadata: { codingAgentRole: roleName } }
 					: {
 							metadata: {
-								...(requestedModel === undefined
-									? { codingAgentModel: role?.model }
-									: { codingAgentModel: requestedModel }),
+								codingAgentModel: selectedModel,
 								...(roleName === undefined ? {} : { codingAgentRole: roleName }),
 							},
 						}),
@@ -441,7 +442,6 @@ export async function createCodingAgentV2SqliteService(
 				await session.setName(name);
 				metadata.name = name;
 			}
-			const selectedModel = requestedModel ?? role?.model;
 			const modelOverride =
 				selectedModel &&
 				typeof selectedModel.provider === "string" &&
@@ -478,6 +478,7 @@ function createAgentTools(registry: V2AgentRegistry, sessionId: string, model: M
 				...(request.role === undefined ? {} : { role: request.role }),
 				...(request.forkTurns === undefined ? {} : { forkTurns: request.forkTurns }),
 				model: request.model ?? { provider: model.provider, id: model.id },
+				modelResolution: request.model === undefined ? "inherited" : "explicit",
 			}),
 		list: () => registry.list(sessionId),
 		wait: (agentId, timeoutMs) => registry.wait(agentId, timeoutMs),
