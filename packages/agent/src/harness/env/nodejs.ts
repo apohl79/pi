@@ -17,7 +17,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import {
@@ -89,7 +89,7 @@ async function openPinnedParent(root: string, target: string, createParents: boo
 	const relativeTarget = relative(rootPath, targetPath);
 	if (!relativeTarget || relativeTarget.startsWith("..") || relativeTarget.includes("\0"))
 		throw new FileError("permission_denied", `Path is outside execution root: ${targetPath}`, targetPath);
-	const components = relativeTarget.split(/[\\/]/).filter(Boolean);
+	const components = relativeTarget.split(sep).filter(Boolean);
 	components.pop();
 	const rootHandle = await open(rootPath, NO_FOLLOW_DIRECTORY_FLAGS);
 	let current = rootHandle;

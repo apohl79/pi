@@ -170,6 +170,22 @@ describe("AgentHarness tools", () => {
 			expect(getOrThrow(await context.env.readTextFile("added.txt"))).toBe("created\n");
 		});
 
+		it("preserves a POSIX backslash in a filename", async () => {
+			if (process.platform === "win32") return;
+			const context = createContext();
+			await createApplyPatchTool().execute(
+				"patch-backslash-filename",
+				{
+					patch: "*** Begin Patch\n*** Add File: literal\\name.txt\n+created\n*** End Patch",
+				},
+				undefined,
+				undefined,
+				context,
+			);
+
+			expect(getOrThrow(await context.env.readTextFile("literal\\name.txt"))).toBe("created\n");
+		});
+
 		it("rejects traversal paths before mutation", async () => {
 			const context = createContext();
 			await expect(
