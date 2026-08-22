@@ -323,6 +323,7 @@ export class PiClientV2 {
 class SessionHandle implements PiSessionV2Handle {
 	private leaseMode: V2SessionLeaseMode;
 	private detached = false;
+	private readonly subscriptions = new Set<() => void>();
 
 	constructor(client: PiClientV2, sessionId: string, mode: V2SessionLeaseMode) {
 		this.client = client;
@@ -360,13 +361,20 @@ class SessionHandle implements PiSessionV2Handle {
 		if (this.detached) return;
 		commandResult(await this.client.request({ command: "session/detach", sessionId: this.sessionId }));
 		this.detached = true;
+		for (const unsubscribe of this.subscriptions) unsubscribe();
+		this.subscriptions.clear();
 	}
 
 	onEvent(listener: (event: EventEnvelopeV2) => void): () => void {
 		this.assertAttached();
-		return this.client.onEvent((event) => {
+		const unsubscribe = this.client.onEvent((event) => {
 			if (event.sessionId === this.sessionId) listener(event);
 		});
+		this.subscriptions.add(unsubscribe);
+		return () => {
+			this.subscriptions.delete(unsubscribe);
+			unsubscribe();
+		};
 	}
 
 	private assertAttached(): void {
