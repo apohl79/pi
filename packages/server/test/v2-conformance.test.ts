@@ -10,7 +10,7 @@ import type {
 	SessionSnapshotV2,
 	UsageAggregate,
 } from "@earendil-works/pi-protocol";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { InMemoryV2AgentRegistry } from "../src/agents.ts";
 import { InMemoryV2BlobStore } from "../src/blobs.ts";
 import { InMemoryForensicRecorder } from "../src/diagnostics.ts";
@@ -90,7 +90,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 		this.current = sessionSnapshot(id);
 	}
 
-	snapshot(): SessionSnapshotV2 {
+	async snapshot(): Promise<SessionSnapshotV2> {
 		return structuredClone(this.current);
 	}
 
@@ -480,6 +480,7 @@ describe("PiServer v2 operation acceptance", () => {
 		await second.hello({ sessionId: "session-1", eventSeq: 2 });
 		const replay = await second.next((message) => message.type === "event" && message.event === "operation_terminal");
 		expect(replay).toMatchObject({ operationId, payload: { state: "complete" } });
+		await second.request({ command: "session/attach", sessionId: "session-1" });
 		const operation = await second.request({ command: "operation/read", operationId, sessionId: "session-1" });
 		expect(operation).toMatchObject({ ok: true, result: { operation: { operationId, state: "complete" } } });
 		await second.close();
@@ -496,6 +497,7 @@ describe("PiServer v2 operation acceptance", () => {
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
 		const started = await client.request({
 			command: "process/start",
 			sessionId: "session-1",
@@ -548,6 +550,7 @@ describe("PiServer v2 operation acceptance", () => {
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
 		const spawned = await client.request({
 			command: "agent/spawn",
 			sessionId: "session-1",
@@ -573,6 +576,7 @@ describe("PiServer v2 operation acceptance", () => {
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
 		const updated = await client.request({
 			command: "plan/update",
 			sessionId: "session-1",
@@ -599,6 +603,7 @@ describe("PiServer v2 operation acceptance", () => {
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
 		const session = await client.request({ command: "session/read", sessionId: "session-1" });
 		expect(session).toMatchObject({ result: { session: { queues: { pendingInputRequestId: request.id } } } });
 		const read = await client.request({ command: "input/request/read", payload: { requestId: request.id } });
