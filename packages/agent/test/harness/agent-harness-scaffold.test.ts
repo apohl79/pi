@@ -244,7 +244,18 @@ describe("AgentHarness v2 scaffold", () => {
 		models.setProvider(faux.provider);
 		faux.setResponses([
 			fauxAssistantMessage(
-				'upstream failed: {"api_key":"secret-value"}; Authorization: Bearer bearer-secret; sk-short-secret',
+				[
+					{
+						type: "text",
+						text: 'upstream failed: {"api_key":"secret-value"}; Authorization: Bearer bearer-secret; sk-short-secret',
+					},
+					{
+						type: "toolCall",
+						id: "failed-tool-call",
+						name: "request",
+						arguments: { api_key: "tool-secret", nested: { authorization: "Bearer tool-bearer" } },
+					},
+				],
 				{
 					stopReason: "error",
 					errorMessage: 'request failed: {"api-key":"json-secret"} Bearer bearer-error sk-project-secret',
@@ -266,6 +277,10 @@ describe("AgentHarness v2 scaffold", () => {
 			.join(" ");
 		expect(text).toContain("upstream failed");
 		expect(text).not.toMatch(/secret-value|bearer-secret|short-secret/);
+		const toolCall = assistant.message.content.find((part) => part.type === "toolCall");
+		expect(toolCall?.type).toBe("toolCall");
+		if (toolCall?.type !== "toolCall") return;
+		expect(JSON.stringify(toolCall.arguments)).not.toMatch(/tool-secret|tool-bearer/);
 		expect(assistant.message.errorMessage).toContain("request failed");
 		expect(assistant.message.errorMessage).not.toMatch(/json-secret|bearer-error|project-secret/);
 		expect(assistant.message.errorMessage!.length).toBeLessThanOrEqual(512);

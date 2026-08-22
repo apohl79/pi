@@ -152,6 +152,9 @@ function sanitizeTranscriptMessage(message: AgentMessage): AgentMessage {
 				? message.content.map((part) => {
 						if (part.type === "text") return { ...part, text: sanitizeErrorMessage(part.text, "") };
 						if (part.type === "thinking") return { ...part, thinking: sanitizeErrorMessage(part.thinking, "") };
+						if (part.type === "toolCall") {
+							return { ...part, arguments: sanitizeErrorDetails(part.arguments) as Record<string, unknown> };
+						}
 						return part;
 				  })
 				: message.content;

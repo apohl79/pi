@@ -521,6 +521,39 @@ describe("JSONL v4 per-session storage", () => {
 		expect(entries.map((entry) => entry.type === "custom" && entry.customType)).toEqual(["new", "tail"]);
 	});
 
+	it("uses unchanged file metadata without rereading the session", async () => {
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+		const session = await new JsonlSessionRepo({ fs: env, sessionsRoot: root }).create({
+			id: "metadata-fast-path",
+			cwd: root,
+		});
+		const readTextFile = vi.spyOn(env, "readTextFile");
+
+		await session.appendCustomEntry("first");
+
+		expect(readTextFile).not.toHaveBeenCalled();
+	});
+
+	it("keeps a durable append successful when metadata refresh fails", async () => {
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+		const session = await new JsonlSessionRepo({ fs: env, sessionsRoot: root }).create({
+			id: "metadata-refresh-failure",
+			cwd: root,
+		});
+		const metadata = await session.getMetadata();
+		const existingInfo = await env.fileInfo(metadata.path);
+		vi.spyOn(env, "fileInfo").mockResolvedValueOnce(existingInfo).mockRejectedValueOnce(new Error("metadata unavailable"));
+
+		const entry = await session.appendCustomEntry("committed");
+
+		expect(entry.id).toBe("committed");
+		expect((await session.findEntries({ order: "oldestFirst" })).map((candidate) => candidate.id)).toEqual([
+			"committed",
+		]);
+	});
+
 	it("does not advance state or poison the write queue after an append failure", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });

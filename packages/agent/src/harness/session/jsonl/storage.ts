@@ -346,8 +346,12 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 			this.persistedLineHashes.push(lineHash(encoded.trimEnd()));
 			// Metadata refresh is only an optimization for detecting external writers;
 			// never turn a successful append into an error if that optional read fails.
-			const fileInfo = await this.fs.fileInfo(this.metadata.path);
-			if (fileInfo.ok) this.persistedModifiedAt = fileInfo.value.mtimeMs;
+			try {
+				const fileInfo = await this.fs.fileInfo(this.metadata.path);
+				if (fileInfo.ok) this.persistedModifiedAt = fileInfo.value.mtimeMs;
+			} catch {
+				// The append already committed; retain the locally projected metadata.
+			}
 		} catch (error) {
 			// An append may be durable even when the backend reports a transport
 			// error. Refresh local state so callers can detect the committed record
@@ -371,6 +375,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 
 	private async refreshFromDisk(path: string): Promise<void> {
 		const fileInfo = fileResult(await this.fs.fileInfo(path), `Failed to read session metadata ${path}`);
+		if (fileInfo.size === this.persistedSize && fileInfo.mtimeMs === this.persistedModifiedAt) return;
 		const content = fileResult(await this.fs.readTextFile(path), `Failed to read session ${path}`);
 		const physicalLines = content.split("\n");
 		if (physicalLines.at(-1) === "") physicalLines.pop();
