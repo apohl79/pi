@@ -225,6 +225,43 @@ describe("CodingAgentV2AgentRegistry", () => {
 		).rejects.toThrow("for parent root");
 	});
 
+	test("enforces active limits when a terminal child receives a follow-up", async () => {
+		const firstRuntime = new FixtureRuntime();
+		const secondRuntime = new FixtureRuntime();
+		secondRuntime.blocked = true;
+		let childNumber = 0;
+		const registry = new CodingAgentV2AgentRegistry(
+			{
+				listSessions: async () => [],
+				listModels: async () => [],
+				openSession: async () => firstRuntime,
+				createSession: async () => ({
+					sessionId: `child-session-${++childNumber}`,
+					runtime: childNumber === 1 ? firstRuntime : secondRuntime,
+				}),
+			},
+			{ maxActive: 1 },
+		);
+		const first = await registry.spawn({
+			sessionId: "parent-session",
+			parentPath: "/root",
+			taskName: "first",
+			taskMessage: "finish first",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		await registry.wait(first.id);
+		await registry.spawn({
+			sessionId: "parent-session",
+			parentPath: "/root",
+			taskName: "second",
+			taskMessage: "keep the slot",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		await expect(registry.followUp(first.id, "must wait")).rejects.toThrow("active limit 1");
+		secondRuntime.release();
+		await registry.dispose();
+	});
+
 	test("bounds queued child messages", async () => {
 		const { registry } = fixture();
 		const agent = await registry.spawn({

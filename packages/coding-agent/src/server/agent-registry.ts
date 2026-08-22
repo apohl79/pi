@@ -213,6 +213,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		await this.ensureAgent(agentId);
 		const agent = this.get(agentId);
 		if (agent.state === "complete" || agent.state === "interrupted" || agent.state === "failed") {
+			this.ensureActiveCapacity(agent);
 			const previousState = agent.state;
 			agent.state = "running";
 			await this.persist(agent);
@@ -383,6 +384,12 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private activeCountForParent(parentPath: string): number {
 		return [...this.agents.values()].filter((agent) => agent.parentPath === parentPath && agent.state === "running")
 			.length;
+	}
+
+	private ensureActiveCapacity(agent: ChildAgent): void {
+		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
+		if (this.activeCountForParent(agent.parentPath) >= this.maxActivePerParent)
+			throw new Error(`Agent active limit ${this.maxActivePerParent} exceeded for parent ${agent.parentPath}`);
 	}
 
 	private async ensureAgent(agentId: string): Promise<void> {
