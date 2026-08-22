@@ -647,8 +647,26 @@ export class AgentHarness implements AgentLane {
 		images?: ImageContent[],
 	): AgentMessage[] {
 		if (Array.isArray(input)) return structuredClone(input);
-		if (typeof input !== "string") return [structuredClone(input)];
-		return [{ role: "user", content: [{ type: "text", text: input }, ...(images ?? [])], timestamp: Date.now() }];
+		const expand = (text: string): string => {
+			const command = /^(?:\/)(\S+)(?:\s+([\s\S]*))?$/.exec(text);
+			const template = command
+				? this.resources.promptTemplates?.find((candidate) => candidate.name === command[1])
+				: undefined;
+			return template === undefined
+				? text
+				: formatPromptTemplateInvocation(template, command?.[2]?.split(/\s+/u) ?? []);
+		};
+		if (typeof input !== "string") {
+			const message = structuredClone(input);
+			if (message.role === "user" && Array.isArray(message.content)) {
+				message.content = message.content.map((part) =>
+					part.type === "text" ? { ...part, text: expand(part.text) } : part,
+				);
+			}
+			return [message];
+		}
+		const text = expand(input);
+		return [{ role: "user", content: [{ type: "text", text }, ...(images ?? [])], timestamp: Date.now() }];
 	}
 	async skill(name: string, additionalInstructions?: string): Promise<RunResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));

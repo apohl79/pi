@@ -5,6 +5,7 @@ import {
 	type ExecutionEnv,
 	type GoalContinuationScheduler,
 	GoalManager,
+	loadPromptTemplates,
 	type SamplingInput,
 	type SamplingInputContext,
 	type Session,
@@ -139,6 +140,24 @@ export async function createCodingAgentV2SqliteService(
 				),
 			)
 		).flat();
+		const pluginPromptTemplates = (
+			await Promise.all(
+				activePlugins.flatMap((plugin) =>
+					plugin.root === undefined
+						? []
+						: plugin.resources.commands.map(async (commandPath) => {
+								const root = resolve(plugin.root!);
+								const path = resolve(root, commandPath);
+								if (path !== root && !path.startsWith(`${root}/`)) return [];
+								const loaded = await loadPromptTemplates(env, path);
+								return loaded.promptTemplates.map((template) => ({
+									...template,
+									name: `${plugin.id}:${template.name}`,
+								}));
+							}),
+				),
+			)
+		).flat();
 		const threadMessages = await createPluginSamplingInput(
 			env,
 			activePlugins.map((plugin, activationOrder) => ({
@@ -152,6 +171,14 @@ export async function createCodingAgentV2SqliteService(
 		);
 		const threadContextPrompt = threadContext.length > 0 ? threadContext.join("\n\n") : undefined;
 		const baseSystemPromptOptions = options.harness?.systemPromptOptions;
+		const baseResources = options.harness?.resources;
+		const resources =
+			pluginPromptTemplates.length === 0
+				? baseResources
+				: {
+						...baseResources,
+						promptTemplates: [...(baseResources?.promptTemplates ?? []), ...pluginPromptTemplates],
+					};
 		const systemPromptOptions =
 			threadContextPrompt === undefined
 				? pluginSkills.length === 0
@@ -195,6 +222,7 @@ export async function createCodingAgentV2SqliteService(
 			env,
 			...(compaction === undefined ? {} : { compaction }),
 			goals,
+			...(resources === undefined ? {} : { resources }),
 			samplingInputFactory,
 			sessionFile: metadata.path,
 			...(inputRegistry === undefined
