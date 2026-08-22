@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import {
 	type AgentHarness,
 	type CompactionSettings,
@@ -27,6 +26,7 @@ import type {
 } from "@earendil-works/pi-server";
 import { hashV2PluginSet } from "@earendil-works/pi-server";
 import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
+import { resolveCodexPluginResourceOnDisk } from "../core/codex-plugin.ts";
 import { loadSkillsFromDir } from "../core/skills.ts";
 import {
 	type CodingAgentAgentTools,
@@ -220,10 +220,9 @@ export async function createCodingAgentV2SqliteService(
 					plugin.root === undefined
 						? []
 						: plugin.resources.skills.map(async (skillPath) => {
-								const root = resolve(plugin.root!);
-								const path = resolve(root, skillPath);
-								if (path !== root && !path.startsWith(`${root}/`)) return [];
-								const loaded = loadSkillsFromDir({ dir: path, source: plugin.id });
+								const resolved = await resolveCodexPluginResourceOnDisk(plugin.root!, skillPath);
+								if (!resolved.ok) return [];
+								const loaded = loadSkillsFromDir({ dir: resolved.path, source: plugin.id });
 								return loaded.skills.map((skill) => ({ ...skill, name: `${plugin.id}:${skill.name}` }));
 							}),
 				),
@@ -235,10 +234,9 @@ export async function createCodingAgentV2SqliteService(
 					plugin.root === undefined
 						? []
 						: plugin.resources.commands.map(async (commandPath) => {
-								const root = resolve(plugin.root!);
-								const path = resolve(root, commandPath);
-								if (path !== root && !path.startsWith(`${root}/`)) return [];
-								const loaded = await loadPromptTemplates(env, path);
+								const resolved = await resolveCodexPluginResourceOnDisk(plugin.root!, commandPath);
+								if (!resolved.ok) return [];
+								const loaded = await loadPromptTemplates(env, resolved.path);
 								return loaded.promptTemplates.map((template) => ({
 									...template,
 									name: `${plugin.id}:${template.name}`,
