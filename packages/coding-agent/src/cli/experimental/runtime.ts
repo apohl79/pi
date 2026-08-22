@@ -58,9 +58,11 @@ function resolveRemoteModel(options: Args, models: readonly ModelMetadata[]): Mo
 	const slash = requested?.indexOf("/") ?? -1;
 	const provider = options.provider ?? (slash > 0 ? requested?.slice(0, slash) : undefined);
 	const id = slash > 0 ? requested?.slice(slash + 1) : requested;
-	if (provider === undefined || id === undefined || id.length === 0)
-		throw new Error("Server-default model selection requires --model <provider>/<model> or --provider with --model");
-	const match = models.find((model) => model.provider === provider && model.id === id);
+	if (id === undefined || id.length === 0) throw new Error("Server-default model selection requires --model <model>");
+	const matches = models.filter((model) => (provider === undefined || model.provider === provider) && model.id === id);
+	if (matches.length > 1 && provider === undefined)
+		throw new Error(`Model id is ambiguous: ${id}; specify --provider`);
+	const match = matches[0];
 	if (match === undefined) throw new Error(`Model not found: ${provider}/${id}`);
 	return { provider: match.provider, id: match.id };
 }

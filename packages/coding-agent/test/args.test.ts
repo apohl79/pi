@@ -25,6 +25,7 @@ describe("parseArgs", () => {
 		test("rejects client-local file and legacy runtime options", () => {
 			expect(isServerDefaultCompatible(parseArgs(["@README.md"]))).toBe(false);
 			expect(isServerDefaultCompatible(parseArgs(["--system-prompt", "custom"]))).toBe(false);
+			expect(isServerDefaultCompatible(parseArgs(["--provider", "faux"]))).toBe(false);
 		});
 	});
 	describe("--version flag", () => {

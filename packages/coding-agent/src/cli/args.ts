@@ -72,6 +72,7 @@ export function normalizeSessionName(value: string): string | undefined {
 /** Return whether parsed options are supported by the server-default runner. */
 export function isServerDefaultCompatible(options: Args): boolean {
 	return (
+		!(options.provider !== undefined && options.model === undefined) &&
 		options.apiKey === undefined &&
 		options.systemPrompt === undefined &&
 		options.appendSystemPrompt === undefined &&
