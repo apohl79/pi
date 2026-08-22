@@ -793,7 +793,28 @@ export class AgentHarness implements AgentLane {
 					this.models.streamSimple(model, context, { ...options, ...requestOptionsPatch }),
 			);
 			let finalEntryId: string | undefined;
-			const transcriptMessages = newMessages.map(sanitizeTranscriptMessage);
+			const transcriptMessages: AgentMessage[] = [];
+			for (const message of newMessages.map(sanitizeTranscriptMessage)) {
+				if (message.role !== "assistant") {
+					transcriptMessages.push(message);
+					continue;
+				}
+				const result = await this.runLifecycleHook("after_response", {
+					operationId: runId,
+					message: durableClone(message),
+				});
+				if (
+					result !== null &&
+					typeof result === "object" &&
+					"message" in result &&
+					result.message !== null &&
+					typeof result.message === "object" &&
+					"role" in result.message &&
+					result.message.role === "assistant"
+				)
+					transcriptMessages.push(sanitizeTranscriptMessage(result.message as AssistantMessage));
+				else transcriptMessages.push(message);
+			}
 			for (const message of transcriptMessages) {
 				finalEntryId = await this.session.appendMessage(durableClone(message));
 				if (message.role === "assistant" && message.stopReason !== "pending") {
@@ -819,10 +840,6 @@ export class AgentHarness implements AgentLane {
 				finalMessage.stopReason === "error"
 			) {
 				if (controller.signal.aborted || finalMessage.stopReason === "aborted") {
-					await this.runLifecycleHook("after_response", {
-						operationId: runId,
-						message: durableClone(finalMessage),
-					});
 					await this.appendOperationFinished({
 						type: "operation_finished",
 						id: this.durableSession.idGenerator.next(),
@@ -851,7 +868,6 @@ export class AgentHarness implements AgentLane {
 					code: "run_error",
 					message: sanitizeErrorMessage(finalMessage.errorMessage, "Provider request failed"),
 				};
-				await this.runLifecycleHook("after_response", { operationId: runId, message: durableClone(finalMessage) });
 				await this.appendOperationFinished({
 					type: "operation_finished",
 					id: this.durableSession.idGenerator.next(),
@@ -878,7 +894,6 @@ export class AgentHarness implements AgentLane {
 					error,
 				});
 			}
-			await this.runLifecycleHook("after_response", { operationId: runId, message: durableClone(finalMessage) });
 			await this.appendOperationFinished({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
