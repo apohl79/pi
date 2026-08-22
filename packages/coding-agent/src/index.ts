@@ -22,6 +22,8 @@ export {
 	sessionStatus,
 } from "./client/remote-v2-selector.ts";
 export {
+	type RemoteV2PluginInstallOptions,
+	type RemoteV2PluginUpgradeOptions,
 	type RemoteV2PromptContent,
 	type RemoteV2PromptPart,
 	RemoteV2Session,

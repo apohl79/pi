@@ -138,6 +138,11 @@ export interface RemoteV2PluginInstallOptions {
 	readonly scope?: "user" | "project";
 }
 
+export interface RemoteV2PluginUpgradeOptions {
+	readonly manifest?: Record<string, unknown>;
+	readonly root?: string;
+}
+
 export interface RemoteV2AppAuthOptions extends Record<string, unknown> {
 	readonly id: string;
 }
@@ -709,8 +714,15 @@ export class RemoteV2Session {
 		await this.#direct({ command: "plugin/uninstall", payload: { id } });
 	}
 
-	async upgradePlugin(id: string, version: string): Promise<Record<string, unknown>> {
-		const result = await this.#direct({ command: "plugin/upgrade", payload: { id, version } });
+	async upgradePlugin(
+		id: string,
+		version: string,
+		options: RemoteV2PluginUpgradeOptions = {},
+	): Promise<Record<string, unknown>> {
+		const result = await this.#direct({
+			command: "plugin/upgrade",
+			payload: { id, version, ...options } as unknown as JsonValue,
+		});
 		return record(result.plugin, "plugin/upgrade");
 	}
 
