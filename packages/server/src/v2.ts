@@ -17,7 +17,7 @@ import {
 	type SessionSnapshotV2,
 } from "@earendil-works/pi-protocol";
 import { InMemoryV2AgentRegistry, type V2AgentRegistry } from "./agents.ts";
-import { InMemoryV2AppRegistry, type V2AppRegistry } from "./apps.ts";
+import { InMemoryV2AppRegistry, type V2App, type V2AppRegistry } from "./apps.ts";
 import { InMemoryV2BlobStore, type V2BlobStore } from "./blobs.ts";
 import type { ByteConnection, ByteConnectionHandler } from "./connection.ts";
 import {
@@ -1093,13 +1093,24 @@ export class PiServerV2 {
 	}
 
 	private async listApps(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		await this.sendResponse(state, id, { command: command.command, apps: await this.apps.list() });
+		const installed = (await this.plugins.listPlugins(true))
+			.filter((plugin) => plugin.enabled)
+			.flatMap((plugin) => plugin.appDescriptors ?? []);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			apps: [...(await this.apps.list()), ...installed],
+		});
 	}
 
 	private async readApp(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		if (typeof payload.id !== "string") throw new Error("app/read requires id");
-		const app = await this.apps.read(payload.id);
+		const app =
+			(await this.apps.read(payload.id)) ??
+			((await this.plugins.listPlugins(true))
+				.filter((plugin) => plugin.enabled)
+				.flatMap((plugin) => plugin.appDescriptors ?? [])
+				.find((candidate) => candidate.id === payload.id) as V2App | undefined);
 		if (!app) throw new Error(`Unknown app: ${payload.id}`);
 		await this.sendResponse(state, id, { command: command.command, app });
 	}

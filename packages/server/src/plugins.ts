@@ -12,6 +12,15 @@ export type V2PluginSamplingEntry = Readonly<{
 	conditionShell?: string;
 }>;
 
+export type V2PluginApp = Readonly<{
+	id: string;
+	name: string;
+	description?: string;
+	auth: "unsupported" | "unauthenticated" | "authenticated" | "pending";
+	enabled: boolean;
+	metadata?: Readonly<Record<string, unknown>>;
+}>;
+
 export type V2Marketplace = Readonly<{
 	name: string;
 	source: string;
@@ -34,6 +43,7 @@ export type V2Plugin = Readonly<{
 		apps: number;
 		hooks: number;
 	}>;
+	appDescriptors?: readonly V2PluginApp[];
 	sampling: readonly V2PluginSamplingEntry[];
 }>;
 
@@ -73,6 +83,28 @@ function manifestDigest(manifest: Record<string, unknown>): string {
 
 function resourceCount(value: unknown): number {
 	return Array.isArray(value) ? value.length : value === undefined ? 0 : 1;
+}
+
+function appDescriptors(pluginId: string, value: unknown, enabled: boolean): readonly V2PluginApp[] {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((raw) => {
+		if (!raw || typeof raw !== "object" || Array.isArray(raw) || typeof raw.id !== "string") return [];
+		const id = raw.id.trim();
+		if (id.length === 0) return [];
+		const auth = raw.auth;
+		return [
+			{
+				id: `${pluginId}:${id}`,
+				name: typeof raw.name === "string" && raw.name.trim().length > 0 ? raw.name : id,
+				...(typeof raw.description === "string" ? { description: raw.description } : {}),
+				auth: auth === "authenticated" || auth === "pending" || auth === "unauthenticated" ? auth : "unsupported",
+				enabled,
+				...(raw.metadata && typeof raw.metadata === "object" && !Array.isArray(raw.metadata)
+					? { metadata: raw.metadata as Record<string, unknown> }
+					: {}),
+			},
+		];
+	});
 }
 
 const samplingSlots = new Set<V2PluginSamplingEntry["slot"]>([
@@ -118,7 +150,7 @@ function samplingEntries(manifest: Record<string, unknown>): readonly V2PluginSa
 }
 
 function normalizePlugin(plugin: V2Plugin): V2Plugin {
-	return { ...plugin, sampling: plugin.sampling ?? [] };
+	return { ...plugin, appDescriptors: plugin.appDescriptors ?? [], sampling: plugin.sampling ?? [] };
 }
 
 export class InMemoryV2PluginRegistry implements V2PluginRegistry {
@@ -216,6 +248,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 				apps: resourceCount(manifest.apps),
 				hooks: resourceCount(manifest.hooks),
 			},
+			appDescriptors: appDescriptors(id, manifest.apps, true),
 			sampling: samplingEntries(manifest),
 		};
 		this.plugins.set(id, plugin);
@@ -229,7 +262,12 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 	async setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin> {
 		const existing = this.plugins.get(requireName(id, "plugin id"));
 		if (!existing) throw new Error(`Unknown plugin: ${id}`);
-		const updated = { ...existing, enabled, ...(scope === undefined ? {} : { scope }) };
+		const updated = {
+			...existing,
+			enabled,
+			appDescriptors: (existing.appDescriptors ?? []).map((app) => ({ ...app, enabled })),
+			...(scope === undefined ? {} : { scope }),
+		};
 		this.plugins.set(id, updated);
 		return structuredClone(updated);
 	}
