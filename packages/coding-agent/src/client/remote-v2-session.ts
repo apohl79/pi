@@ -43,6 +43,7 @@ export interface RemoteV2SpawnAgentOptions {
 	readonly role?: string;
 	readonly model?: ModelRef;
 	readonly parentPath?: string;
+	readonly forkTurns?: "none" | "all" | number;
 }
 
 export interface RemoteV2ProcessOutput {
@@ -475,6 +476,7 @@ export class RemoteV2Session {
 				taskMessage,
 				...(options.role === undefined ? {} : { role: options.role }),
 				...(options.parentPath === undefined ? {} : { parentPath: options.parentPath }),
+				...(options.forkTurns === undefined ? {} : { forkTurns: options.forkTurns }),
 				...(options.model === undefined ? {} : { model: options.model }),
 			},
 		});

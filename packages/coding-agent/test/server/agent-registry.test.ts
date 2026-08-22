@@ -13,7 +13,13 @@ class FixtureRuntime implements CodingAgentV2Runtime {
 	private releasePromise: Promise<void> | undefined;
 	private releaseBlocked: (() => void) | undefined;
 	async snapshot(): Promise<SessionSnapshotV2> {
-		return { model: { provider: "parent-provider", id: "parent-model" } } as SessionSnapshotV2;
+		return {
+			model: { provider: "parent-provider", id: "parent-model" },
+			transcript: [
+				{ id: "old", role: "user", content: [{ type: "text", text: "old context" }], timestamp: 1 },
+				{ id: "recent", role: "user", content: [{ type: "text", text: "recent context" }], timestamp: 2 },
+			],
+		} as SessionSnapshotV2;
 	}
 	async accept(operationId: string): Promise<OperationAccepted> {
 		return { operationId, sessionRevision: 1, eventSeq: 1 };
@@ -209,6 +215,22 @@ describe("CodingAgentV2AgentRegistry", () => {
 			type: "custom",
 			customType: "agent_registry_state",
 			data: { state: "failed" },
+		});
+	});
+
+	test("snapshots bounded parent context into a forked child turn", async () => {
+		const { registry, runtime } = fixture();
+		const agent = await registry.spawn({
+			sessionId: "parent-session",
+			parentPath: "root",
+			taskName: "worker",
+			taskMessage: "continue the task",
+			forkTurns: 1,
+			model: { provider: "inherit", id: "inherit" },
+		});
+		await registry.wait(agent.id);
+		expect(runtime.commands[0]?.payload).toEqual({
+			text: '[forked context]\nuser: [{"type":"text","text":"recent context"}]\n\ncontinue the task',
 		});
 	});
 });

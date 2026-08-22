@@ -7,6 +7,7 @@ export interface V2AgentRequest {
 	readonly taskName: string;
 	readonly taskMessage: string;
 	readonly role?: string;
+	readonly forkTurns?: "none" | "all" | number;
 	readonly model: { readonly provider: string; readonly id: string };
 }
 
@@ -47,6 +48,13 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
+		if (
+			request.forkTurns !== undefined &&
+			request.forkTurns !== "none" &&
+			request.forkTurns !== "all" &&
+			(!Number.isInteger(request.forkTurns) || request.forkTurns < 1 || request.forkTurns > 32)
+		)
+			throw new Error("forkTurns must be none, all, or an integer from 1 to 32");
 		const depth = request.parentPath.split("/").filter(Boolean).length - 1;
 		if (depth >= this.maxDepth) throw new Error(`Agent maximum depth ${this.maxDepth} exceeded`);
 		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
