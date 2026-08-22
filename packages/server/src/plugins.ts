@@ -36,6 +36,8 @@ export type V2PluginHook = Readonly<{
 	enabled: boolean;
 }>;
 
+export type V2PluginInterface = Readonly<Record<string, unknown>>;
+
 export type V2PluginDiagnostic = Readonly<{
 	code: "unsupported_mcp_resource";
 	severity: "warning";
@@ -66,6 +68,7 @@ export type V2Plugin = Readonly<{
 	}>;
 	appDescriptors?: readonly V2PluginApp[];
 	hookDescriptors?: readonly V2PluginHook[];
+	interface?: V2PluginInterface;
 	diagnostics?: readonly V2PluginDiagnostic[];
 	threadContext?: readonly V2PluginSamplingEntry[];
 	sampling: readonly V2PluginSamplingEntry[];
@@ -109,6 +112,12 @@ function manifestDigest(manifest: Record<string, unknown>): string {
 
 function resourceCount(value: unknown): number {
 	return Array.isArray(value) ? value.length : value === undefined ? 0 : 1;
+}
+
+function interfaceMetadata(value: unknown): V2PluginInterface | undefined {
+	return value !== null && typeof value === "object" && !Array.isArray(value)
+		? (structuredClone(value) as V2PluginInterface)
+		: undefined;
 }
 
 function appDescriptors(pluginId: string, value: unknown, enabled: boolean): readonly V2PluginApp[] {
@@ -315,6 +324,9 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 			},
 			appDescriptors: appDescriptors(id, manifest.apps, true),
 			hookDescriptors: hookDescriptors(id, manifest.hooks, true),
+			...(interfaceMetadata(manifest.interface) === undefined
+				? {}
+				: { interface: interfaceMetadata(manifest.interface) }),
 			diagnostics: manifestDiagnostics(manifest),
 			threadContext: contextEntries(manifest, "thread"),
 			sampling: contextEntries(manifest, "sampling"),
