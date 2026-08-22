@@ -1289,6 +1289,7 @@ export class AgentHarness implements AgentLane {
 				}),
 			);
 		}
+		await this.runLifecycleHook("before_resume", { operationId: operation.id, kind: operation.intent.kind });
 		await this.appendOperationFinished({
 			type: "operation_finished",
 			id: this.durableSession.idGenerator.next(),
