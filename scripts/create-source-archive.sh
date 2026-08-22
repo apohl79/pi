@@ -111,12 +111,13 @@ archive_mtime="$(git show -s --format=%ct "$commit")"
 # exact fork commit in the temporary archive index so build-binaries.sh can
 # compile runtime identity even when CI cannot pass workflow-scoped metadata.
 identity_file="$(mktemp "${output}.identity.XXXXXX")"
+upstream_base_commit="$(git show "${commit}:FORK_DELTA.md" | sed -n 's/^- Initial pinned upstream base: //p' | head -n 1)"
 printf '%s\n' \
     '/** Generated for this source archive; build-binaries.sh restores it after compilation. */' \
     'export const BUILD_IDENTITY = {' \
     "    buildVersion: \"${version}\"," \
     "    forkCommit: \"${commit}\"," \
-    "    upstreamBaseCommit: \"$(sed -n 's/^- Initial pinned upstream base: //p' FORK_DELTA.md | head -n 1)\"," \
+    "    upstreamBaseCommit: \"${upstream_base_commit}\"," \
     '    configHash: undefined,' \
     '} as const;' > "$identity_file"
 identity_blob="$(git hash-object -w "$identity_file")"
