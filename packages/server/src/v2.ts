@@ -494,7 +494,7 @@ export class PiServerV2 {
 	private async readSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("session/read requires sessionId");
 		const runtime = this.requireAttached(state, command.sessionId);
-		await this.sendResponse(state, id, {
+		await this.sendBoundedPluginResponse(state, id, {
 			command: command.command,
 			session: toProtocolJsonValue(await this.snapshotForSession(command.sessionId, runtime)),
 		});
@@ -523,7 +523,7 @@ export class PiServerV2 {
 			...(typeof payload.pty === "boolean" ? { pty: payload.pty } : {}),
 		});
 		this.processSessions.set(process.processId, command.sessionId);
-		await this.sendResponse(state, id, {
+		await this.sendBoundedPluginResponse(state, id, {
 			command: command.command,
 			process: process as unknown as Record<string, unknown>,
 		});
@@ -873,6 +873,7 @@ export class PiServerV2 {
 	}
 
 	private async addMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
 		const payload = objectPayload(command);
 		if (typeof payload.name !== "string" || typeof payload.source !== "string")
 			throw new Error("marketplace/add requires name and source");
@@ -883,13 +884,15 @@ export class PiServerV2 {
 	}
 
 	private async listMarketplaces(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		await this.sendResponse(state, id, {
+		this.requireControl(state, command);
+		await this.sendBoundedPluginResponse(state, id, {
 			command: command.command,
-			marketplaces: await this.plugins.listMarketplaces(),
+			marketplaces: (await this.plugins.listMarketplaces()).slice(0, MAX_V2_ARRAY_ITEMS),
 		});
 	}
 
 	private async upgradeMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
 		const payload = objectPayload(command);
 		if (typeof payload.name !== "string") throw new Error("marketplace/upgrade requires name");
 		await this.sendResponse(state, id, {
@@ -899,6 +902,7 @@ export class PiServerV2 {
 	}
 
 	private async removeMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
 		const payload = objectPayload(command);
 		if (typeof payload.name !== "string") throw new Error("marketplace/remove requires name");
 		await this.plugins.removeMarketplace(payload.name);
@@ -906,22 +910,25 @@ export class PiServerV2 {
 	}
 
 	private async listPlugins(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
 		const payload = objectPayload(command);
-		await this.sendResponse(state, id, {
+		await this.sendBoundedPluginResponse(state, id, {
 			command: command.command,
-			plugins: await this.plugins.listPlugins(payload.installedOnly === true),
+			plugins: (await this.plugins.listPlugins(payload.installedOnly === true)).slice(0, MAX_V2_ARRAY_ITEMS),
 		});
 	}
 
 	private async readPlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
 		const payload = objectPayload(command);
 		if (typeof payload.id !== "string") throw new Error("plugin/read requires id");
 		const plugin = await this.plugins.readPlugin(payload.id);
 		if (!plugin) throw new Error(`Unknown plugin: ${payload.id}`);
-		await this.sendResponse(state, id, { command: command.command, plugin });
+		await this.sendBoundedPluginResponse(state, id, { command: command.command, plugin });
 	}
 
 	private async installPlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
 		const payload = objectPayload(command);
 		if (
 			typeof payload.name !== "string" ||
@@ -946,6 +953,7 @@ export class PiServerV2 {
 	}
 
 	private async uninstallPlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
 		const payload = objectPayload(command);
 		if (typeof payload.id !== "string") throw new Error("plugin/uninstall requires id");
 		await this.plugins.uninstallPlugin(payload.id);
@@ -958,6 +966,7 @@ export class PiServerV2 {
 		command: CommandV2,
 		enabled: boolean,
 	): Promise<void> {
+		this.requireControl(state, command);
 		const payload = objectPayload(command);
 		if (typeof payload.id !== "string") throw new Error(`${command.command} requires id`);
 		await this.sendResponse(state, id, {
@@ -968,6 +977,23 @@ export class PiServerV2 {
 				payload.scope === "user" || payload.scope === "project" ? payload.scope : undefined,
 			),
 		});
+	}
+
+	private requireControl(state: V2ConnectionState, command: CommandV2): void {
+		if (!command.sessionId) throw new Error(`${command.command} requires sessionId`);
+		this.requireAttached(state, command.sessionId);
+	}
+
+	private async sendBoundedPluginResponse(state: V2ConnectionState, id: string, result: Record<string, unknown>): Promise<void> {
+		try {
+			encodeServerMessageV2(
+				{ type: "response", id, ok: true, result: toProtocolJsonValue(result) },
+				{ maxFrameLength: this.maxFrameLength },
+			);
+		} catch {
+			throw new Error("Plugin response exceeds the maximum frame size");
+		}
+		await this.sendResponse(state, id, result);
 	}
 
 	private async diagnosticEvents(afterSeq = 0): Promise<Awaited<ReturnType<ForensicRecorder["read"]>>> {

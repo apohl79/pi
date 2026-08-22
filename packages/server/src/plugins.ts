@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { MAX_V2_ARRAY_ITEMS, MAX_V2_JSON_DEPTH, MAX_V2_STRING_LENGTH } from "@earendil-works/pi-protocol";
 
 export type V2PluginScope = "user" | "project";
 
@@ -47,8 +48,41 @@ export interface V2PluginRegistry {
 
 function requireName(value: string, field: string): string {
 	const normalized = value.trim();
-	if (normalized.length === 0) throw new Error(`${field} must not be empty`);
+	if (normalized.length === 0 || normalized.length > MAX_V2_STRING_LENGTH)
+		throw new Error(`${field} must be non-empty and bounded`);
 	return normalized;
+}
+
+function assertBoundedManifest(value: unknown, depth = 0): asserts value is Record<string, unknown> {
+	if (depth > MAX_V2_JSON_DEPTH || typeof value !== "object" || value === null || Array.isArray(value))
+		throw new Error("Plugin manifest must be a bounded object");
+	const entries = Object.entries(value);
+	if (entries.length > MAX_V2_ARRAY_ITEMS) throw new Error("Plugin manifest has too many properties");
+	for (const [key, child] of entries) {
+		if (key.length > MAX_V2_STRING_LENGTH) throw new Error("Plugin manifest key is too long");
+		if (typeof child === "string") {
+			if (child.length > MAX_V2_STRING_LENGTH) throw new Error("Plugin manifest string is too long");
+		} else if (Array.isArray(child)) {
+			if (child.length > MAX_V2_ARRAY_ITEMS) throw new Error("Plugin manifest array is too large");
+			child.forEach((item) => assertBoundedValue(item, depth + 1));
+		} else if (typeof child === "object" && child !== null) {
+			assertBoundedManifest(child, depth + 1);
+		}
+	}
+}
+
+function assertBoundedValue(value: unknown, depth: number): void {
+	if (depth > MAX_V2_JSON_DEPTH) throw new Error("Plugin manifest is too deeply nested");
+	if (typeof value === "string") {
+		if (value.length > MAX_V2_STRING_LENGTH) throw new Error("Plugin manifest string is too long");
+	} else if (typeof value === "number") {
+		if (!Number.isFinite(value)) throw new Error("Plugin manifest number is invalid");
+	} else if (value !== null && typeof value !== "boolean" && value !== undefined && !Array.isArray(value) && typeof value !== "object") {
+		throw new Error("Plugin manifest value is invalid");
+	} else if (Array.isArray(value)) {
+		if (value.length > MAX_V2_ARRAY_ITEMS) throw new Error("Plugin manifest array is too large");
+		value.forEach((item) => assertBoundedValue(item, depth + 1));
+	} else if (typeof value === "object" && value !== null) assertBoundedManifest(value, depth + 1);
 }
 
 function manifestDigest(manifest: Record<string, unknown>): string {
@@ -112,6 +146,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		const name = requireName(input.name, "plugin name");
 		const marketplace = requireName(input.marketplace, "marketplace name");
 		const version = requireName(input.version, "plugin version");
+		assertBoundedManifest(input.manifest);
 		if (!this.marketplaces.has(marketplace)) throw new Error(`Unknown marketplace: ${marketplace}`);
 		const id = `${name}@${marketplace}`;
 		if (this.plugins.has(id)) throw new Error(`Plugin already installed: ${id}`);
