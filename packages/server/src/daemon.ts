@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { V2AgentRegistry } from "./agents.ts";
 import type { V2AppRegistry } from "./apps.ts";
 import type { V2BlobStore } from "./blobs.ts";
@@ -56,7 +58,16 @@ export interface ServerDaemonOptions {
 	readonly integrity?: DiagnosticIntegrityProvider;
 	readonly runtimeManifest?: DiagnosticRuntimeManifest;
 	readonly usage?: V2UsageLedger;
+	/** Optional durable marker used to distinguish clean and unclean daemon generations. */
+	readonly lifecycleMarkerPath?: string;
 	readonly createServer?: (service: PiServerServiceV2, options: UnixServerOptions) => ServerDaemonServer;
+}
+
+interface DaemonLifecycleMarker {
+	schemaVersion: 1;
+	daemonInstanceId: string;
+	state: "running" | "clean";
+	timestamp: number;
 }
 
 /** Owns one restartable server instance and exposes a small daemon lifecycle seam. */
@@ -117,6 +128,15 @@ export class ServerDaemon {
 
 	private async startInternal(): Promise<void> {
 		this.daemonInstanceId = randomUUID();
+		const previousMarker = await this.readLifecycleMarker();
+		if (previousMarker?.state === "running")
+			await this.recordDiagnostic(
+				"daemon_unclean_shutdown",
+				{ previousDaemonInstanceId: previousMarker.daemonInstanceId },
+				"error",
+				"error",
+			);
+		await this.writeLifecycleMarker("running");
 		await this.recordDiagnostic("daemon_starting", { socketPath: this.options.socketPath }, "started");
 		let server: ServerDaemonServer;
 		try {
@@ -169,10 +189,44 @@ export class ServerDaemon {
 		try {
 			await server.close();
 		} finally {
+			await this.writeLifecycleMarker("clean");
 			this.server = undefined;
 			this.state = "stopped";
 			await this.recordDiagnostic("daemon_stopped", { serverId: server.id }, "ok");
 		}
+	}
+
+	private async readLifecycleMarker(): Promise<DaemonLifecycleMarker | undefined> {
+		if (this.options.lifecycleMarkerPath === undefined) return undefined;
+		try {
+			const value = JSON.parse(
+				await readFile(this.options.lifecycleMarkerPath, "utf8"),
+			) as Partial<DaemonLifecycleMarker>;
+			if (
+				value.schemaVersion !== 1 ||
+				typeof value.daemonInstanceId !== "string" ||
+				(value.state !== "running" && value.state !== "clean") ||
+				!Number.isSafeInteger(value.timestamp)
+			)
+				return undefined;
+			return value as DaemonLifecycleMarker;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+			return undefined;
+		}
+	}
+
+	private async writeLifecycleMarker(state: DaemonLifecycleMarker["state"]): Promise<void> {
+		if (this.options.lifecycleMarkerPath === undefined) return;
+		const path = this.options.lifecycleMarkerPath;
+		await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+		const temporary = `${path}.${process.pid}.tmp`;
+		await writeFile(
+			temporary,
+			`${JSON.stringify({ schemaVersion: 1, daemonInstanceId: this.daemonInstanceId, state, timestamp: Date.now() })}\n`,
+			{ mode: 0o600 },
+		);
+		await rename(temporary, path);
 	}
 
 	private async recordDiagnostic(
