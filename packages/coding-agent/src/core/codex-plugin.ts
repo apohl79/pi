@@ -262,7 +262,19 @@ function marketplaceSource(value: unknown): CodexMarketplaceSource | undefined {
 
 export function parseCodexMarketplaceManifest(input: unknown): CodexMarketplaceParseResult {
 	const diagnostics: CodexPluginDiagnostic[] = [];
-	assertBoundedJson(input);
+	try {
+		assertBoundedJson(input);
+	} catch (error) {
+		return {
+			diagnostics: [
+				{
+					code: "invalid_manifest",
+					severity: "error",
+					message: error instanceof Error ? error.message : "Marketplace manifest exceeds supported bounds",
+				},
+			],
+		};
+	}
 	if (!isRecord(input) || !Array.isArray(input.plugins)) {
 		return {
 			diagnostics: [
@@ -298,7 +310,19 @@ export function parseCodexMarketplaceManifest(input: unknown): CodexMarketplaceP
 
 export function parseCodexPluginManifest(input: unknown): CodexPluginParseResult {
 	const diagnostics: CodexPluginDiagnostic[] = [];
-	assertBoundedJson(input);
+	try {
+		assertBoundedJson(input);
+	} catch (error) {
+		return {
+			diagnostics: [
+				{
+					code: "invalid_manifest",
+					severity: "error",
+					message: error instanceof Error ? error.message : "Plugin manifest exceeds supported bounds",
+				},
+			],
+		};
+	}
 	if (!isRecord(input)) {
 		return {
 			diagnostics: [{ code: "invalid_manifest", severity: "error", message: "Plugin manifest must be an object" }],
