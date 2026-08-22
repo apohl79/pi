@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { V2AgentRegistry } from "./agents.ts";
 import type { V2AppRegistry } from "./apps.ts";
 import type { V2BlobStore } from "./blobs.ts";
@@ -63,6 +64,7 @@ export class ServerDaemon {
 	private state: ServerDaemonState = "stopped";
 	private server?: ServerDaemonServer;
 	private transition?: Promise<void>;
+	private daemonInstanceId = "";
 	private readonly options: ServerDaemonOptions;
 
 	constructor(options: ServerDaemonOptions) {
@@ -114,6 +116,7 @@ export class ServerDaemon {
 	}
 
 	private async startInternal(): Promise<void> {
+		this.daemonInstanceId = randomUUID();
 		await this.recordDiagnostic("daemon_starting", { socketPath: this.options.socketPath }, "started");
 		let server: ServerDaemonServer;
 		try {
@@ -178,7 +181,9 @@ export class ServerDaemon {
 		outcome: "started" | "ok" | "error",
 		severity: "debug" | "info" | "warn" | "error" = "info",
 	): Promise<void> {
-		await this.options.diagnostics?.record({ kind, payload, outcome, severity }).catch(() => {});
+		await this.options.diagnostics
+			?.record({ kind, payload, outcome, severity, daemonInstanceId: this.daemonInstanceId })
+			.catch(() => {});
 	}
 }
 
