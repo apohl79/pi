@@ -193,6 +193,7 @@ describe("verifyDiagnosticBundle", () => {
 		const projections = {
 			sessions: [{ id: "session-1" }],
 			operations: [{ operationId: "operation-1", state: "complete" }],
+			operationEvents: [{ event: "operation_accepted", operationId: "operation-1", seq: 2 }],
 			usage: { aggregate: { responses: 1 }, entries: [] },
 			plugins: { marketplaces: [], plugins: [] },
 			blobs: [{ digest: "a".repeat(64), mimeType: "text/plain", size: 1 }],
@@ -211,6 +212,13 @@ describe("verifyDiagnosticBundle", () => {
 		expect(verifyDiagnosticBundle({ manifest, events, projections: { sessions: [] } })).toMatchObject({
 			valid: false,
 		});
+		expect(
+			verifyDiagnosticBundle({
+				manifest,
+				events,
+				projections: { ...projections, operationEvents: "invalid" },
+			}),
+		).toMatchObject({ valid: false });
 		expect(
 			verifyDiagnosticBundle({
 				manifest,

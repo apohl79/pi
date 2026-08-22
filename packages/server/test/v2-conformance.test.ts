@@ -260,6 +260,15 @@ describe("PiServer v2 operation acceptance", () => {
 			state: "complete",
 			accepted: { operationId: "operation-1", sessionRevision: 2, eventSeq: 2 },
 		});
+		await operationStore.appendEvent({
+			type: "event",
+			sessionId: "session-1",
+			seq: 2,
+			revision: 2,
+			operationId: "operation-1",
+			event: "operation_accepted",
+			payload: { command: "turn/start" },
+		});
 		const usage = new InMemoryV2UsageLedger();
 		await usage.record({
 			responseId: "response-1",
@@ -355,6 +364,7 @@ describe("PiServer v2 operation acceptance", () => {
 			result: {
 				events: [{ kind: "boot", payload: { token: "[REDACTED]" } }, { kind: "boot-follow-up" }],
 				operations: [{ operationId: "operation-1", sessionId: "session-1", state: "complete" }],
+				operationEvents: [{ event: "operation_accepted", operationId: "operation-1", seq: 2 }],
 				usage: {
 					aggregate: { responses: 1, input: 3, output: 2, costUsd: 0.01 },
 					entries: [{ responseId: "response-1", operationId: "operation-1" }],
@@ -366,6 +376,7 @@ describe("PiServer v2 operation acceptance", () => {
 			result: {
 				events: [],
 				operations: [{ operationId: "operation-1" }],
+				operationEvents: [{ event: "operation_accepted", operationId: "operation-1" }],
 				usage: { aggregate: { responses: 1 }, entries: [{ operationId: "operation-1" }] },
 			},
 		});
@@ -379,6 +390,7 @@ describe("PiServer v2 operation acceptance", () => {
 					projections: {
 						sessions: [],
 						operations: [{ operationId: "operation-1", sessionId: "session-1", state: "complete" }],
+						operationEvents: [{ event: "operation_accepted", operationId: "operation-1", seq: 2 }],
 						usage: {
 							aggregate: { responses: 1, input: 3, output: 2, costUsd: 0.01 },
 							entries: [{ responseId: "response-1", operationId: "operation-1" }],

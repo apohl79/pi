@@ -958,6 +958,11 @@ export class PiServerV2 {
 			operationId === undefined
 				? await this.usage.aggregate(sessionId === undefined ? {} : { sessionId })
 				: aggregateV2UsageEntries(usageEntries);
+		const operationEvents = operationState.events.filter(
+			(event) =>
+				(sessionId === undefined || event.sessionId === sessionId) &&
+				(operationId === undefined || event.operationId === operationId),
+		);
 		await this.sendResponse(state, id, {
 			command: command.command,
 			events: events.filter(
@@ -966,6 +971,7 @@ export class PiServerV2 {
 					(typeof payload.operationId !== "string" || event.operationId === payload.operationId),
 			),
 			operations: operations.map((operation) => toProtocolJsonValue(operation)),
+			operationEvents: operationEvents.map((event) => toProtocolJsonValue(event)),
 			usage: toProtocolJsonValue({ aggregate: usageAggregate, entries: usageEntries }),
 		});
 	}
@@ -1057,6 +1063,11 @@ export class PiServerV2 {
 				(sessionId === undefined || operation.sessionId === sessionId) &&
 				(operationId === undefined || operation.operationId === operationId),
 		);
+		const operationEvents = operationState.events.filter(
+			(event) =>
+				(sessionId === undefined || event.sessionId === sessionId) &&
+				(operationId === undefined || event.operationId === operationId),
+		);
 		const usageEntries =
 			operationId === undefined
 				? allUsageEntries
@@ -1068,6 +1079,7 @@ export class PiServerV2 {
 		return {
 			sessions: sessions.map((session) => toProtocolJsonValue(session)),
 			operations: operations.map((operation) => toProtocolJsonValue(operation)),
+			operationEvents: operationEvents.map((event) => toProtocolJsonValue(event)),
 			usage: toProtocolJsonValue({ aggregate: usageAggregate, entries: usageEntries }),
 			plugins: toProtocolJsonValue({ marketplaces, plugins }),
 			blobs: blobs.map((blob) => toProtocolJsonValue(blob)),
