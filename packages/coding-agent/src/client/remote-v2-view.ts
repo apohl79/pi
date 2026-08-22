@@ -1,6 +1,7 @@
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { type Component, Text } from "@earendil-works/pi-tui";
 import type { RemoteV2Session, RemoteV2SessionState } from "./remote-v2-session.ts";
+import { stripAnsi } from "../utils/ansi.ts";
 
 export interface RemoteV2SessionViewOptions {
 	readonly maxTranscriptItems?: number;
@@ -45,7 +46,7 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	const lines = [`Session ${snapshot.id} · phase=${snapshot.phase} · model=${model}${operation}`];
 	let characters = 0;
 	for (const item of snapshot.transcript.slice(-maxItems)) {
-		const text = transcriptText(item);
+		const text = sanitizeTranscriptText(transcriptText(item));
 		if (!text) continue;
 		const line = `${item.role}: ${text}`;
 		if (characters + line.length > maxCharacters) {
@@ -57,6 +58,10 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 		characters += line.length;
 	}
 	return lines.join("\n");
+}
+
+function sanitizeTranscriptText(value: string): string {
+	return stripAnsi(value).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, "");
 }
 
 function transcriptText(item: TranscriptItem): string {

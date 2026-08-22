@@ -56,4 +56,18 @@ describe("formatRemoteV2Session", () => {
 	test("renders detached state without fabricating a snapshot", () => {
 		expect(formatRemoteV2Session({ lifecycle: { status: "detached" } }, options)).toBe("Session detached");
 	});
+
+	test("strips ANSI and control characters from remote transcript text", () => {
+		const unsafe = structuredClone(snapshot);
+		unsafe.transcript = [
+			{
+				...unsafe.transcript[1]!,
+				content: [{ type: "text", text: "\u001b[31mred\u001b[0m\u0000\u0007 text" }],
+			},
+		];
+		const output = formatRemoteV2Session({ lifecycle: { status: "ready" }, snapshot: unsafe }, options);
+		expect(output).toContain("assistant: red text");
+		expect(output).not.toContain("\u001b");
+		expect(output).not.toContain("\u0000");
+	});
 });
