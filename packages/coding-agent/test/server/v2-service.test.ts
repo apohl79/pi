@@ -265,6 +265,49 @@ describe("coding-agent v2 service adapter", () => {
 		}
 	});
 
+	test("persists the automatic naming setting across runtime recreation", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-auto-name-faux",
+			models: [{ id: "coding-agent-v2-auto-name-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("turn response"), fauxAssistantMessage("should not be sampled")]);
+		const session = new Session(new InMemorySessionStorage({ id: "auto-name-setting-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		try {
+			const definition = {
+				metadata: { id: "auto-name-setting-session", createdAt: 1, updatedAt: 1 },
+				harness: created.harness,
+			};
+			const first = await createCodingAgentV2Service(models, [definition]).openSession("auto-name-setting-session");
+			await first.run("disable-auto-name", {
+				command: "session/name/auto/set",
+				sessionId: "auto-name-setting-session",
+				payload: { enabled: false },
+			});
+			const recreated = await createCodingAgentV2Service(models, [definition], { fastModel: faux.getModel() });
+			const second = await recreated.openSession("auto-name-setting-session");
+			await second.run("turn", {
+				command: "turn/start",
+				sessionId: "auto-name-setting-session",
+				payload: { text: "work" },
+			});
+			expect((await second.snapshot()).name).toBeUndefined();
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("maps a durable harness to an accepted and executable turn runtime", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
