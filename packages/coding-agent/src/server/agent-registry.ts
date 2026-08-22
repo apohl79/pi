@@ -172,6 +172,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			throw new Error("Agent message inbox limit exceeded");
 		agent.inbox.push(message);
 		await this.persist(agent);
+		this.recordDiagnostic("agent_message_queued", agent, undefined, { characters: message.length });
 	}
 
 	async followUp(agentId: string, message: string): Promise<AgentSummary> {
@@ -179,8 +180,10 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		await this.ensureAgent(agentId);
 		const agent = this.get(agentId);
 		if (agent.state === "complete" || agent.state === "interrupted" || agent.state === "failed") {
+			const previousState = agent.state;
 			agent.state = "running";
 			await this.persist(agent);
+			this.recordDiagnostic("agent_followup_queued", agent, previousState, { characters: message.length });
 			void this.run(agent, "turn/start", message);
 		} else {
 			const characters = agent.followUps.reduce((total, item) => total + item.length, 0);
@@ -191,6 +194,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				throw new Error("Agent follow-up queue limit exceeded");
 			agent.followUps.push(message);
 			await this.persist(agent);
+			this.recordDiagnostic("agent_followup_queued", agent, undefined, { characters: message.length });
 		}
 		return this.snapshot(agent);
 	}
