@@ -60,9 +60,12 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	if (!snapshot) return `Session ${state.lifecycle.status}`;
 	const maxItems = normalizedOptions.maxTranscriptItems;
 	const maxCharacters = normalizedOptions.maxTranscriptCharacters;
-	const model = `${snapshot.model.provider}/${snapshot.model.id}`;
-	const operation = state.lifecycle.status === "busy" ? ` operation=${state.lifecycle.operationId}` : "";
-	const lines = [`Session ${snapshot.id} · phase=${snapshot.phase} · model=${model}${operation}`];
+	const model = `${sanitizeTranscriptText(snapshot.model.provider)}/${sanitizeTranscriptText(snapshot.model.id)}`;
+	const operation =
+		state.lifecycle.status === "busy" ? ` operation=${sanitizeTranscriptText(state.lifecycle.operationId)}` : "";
+	const lines = [
+		`Session ${sanitizeTranscriptText(snapshot.id)} · phase=${sanitizeTranscriptText(snapshot.phase)} · model=${model}${operation}`,
+	];
 	let characters = 0;
 	const transcript = maxItems === 0 ? [] : snapshot.transcript.slice(-maxItems);
 	for (const item of transcript) {

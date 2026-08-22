@@ -87,4 +87,17 @@ describe("formatRemoteV2Session", () => {
 		expect(output).not.toContain("assistant:");
 		expect(output).not.toContain("user:");
 	});
+
+	test("sanitizes remote-derived header fields", () => {
+		const unsafe = structuredClone(snapshot);
+		unsafe.id = "session-\u001b[31m1";
+		unsafe.phase = "turn\u0000";
+		unsafe.model = { provider: "faux\u0007", id: "model\u001b[0m" };
+		const output = formatRemoteV2Session(
+			{ lifecycle: { status: "busy", operationId: "op-\u001b[2K1", command: "turn/start" }, snapshot: unsafe },
+			options,
+		);
+		expect(output).toContain("Session session-1 · phase=turn · model=faux/model operation=op-1");
+		expect(output).not.toMatch(/[\u0000\u0007\u001b]/);
+	});
 });
