@@ -1190,8 +1190,13 @@ export class PiServerV2 {
 				: allCapsules.filter((capsule) => capsuleEventIds.has(capsule.eventId));
 		const integrity = this.integrity === undefined ? undefined : await this.integrity();
 		const projections = await this.diagnosticProjections(sessionId, operationId);
+		const decryptionRequested = payload.decryptContent === true;
+		const decryptionUnavailable =
+			decryptionRequested && this.diagnosticContent?.decrypt === undefined && capsules.length > 0;
 		const decryptedCapsules =
-			payload.decryptContent === true ? await this.diagnosticCapsulesForDecryption(capsules) : undefined;
+			decryptionRequested && capsules.length > 0 && !decryptionUnavailable
+				? await this.diagnosticCapsulesForDecryption(capsules)
+				: undefined;
 		const serializedEvents = JSON.stringify(events);
 		const serializedCapsules = JSON.stringify(capsules);
 		const serializedProjections = JSON.stringify(projections);
@@ -1211,7 +1216,14 @@ export class PiServerV2 {
 							...(operationId === undefined ? {} : { operationId }),
 						},
 					}),
-			...(state.clientDiagnostics === undefined ? { unavailable: ["client-diagnostic-spool"] } : {}),
+			...(state.clientDiagnostics === undefined || decryptionUnavailable
+				? {
+						unavailable: [
+							...(state.clientDiagnostics === undefined ? ["client-diagnostic-spool"] : []),
+							...(decryptionUnavailable ? ["diagnostic-content-decryption"] : []),
+						],
+					}
+				: {}),
 		};
 		await this.sendResponse(state, id, {
 			command: command.command,
