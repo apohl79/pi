@@ -1302,6 +1302,9 @@ export class AgentHarness implements AgentLane {
 			},
 			this.name,
 		);
+		const settings = resolveCompactionSettings(this.compactionSettings, model.provider, model.id);
+		const stats = await this.session.getStats();
+		if (shouldCompact(stats.totalTokens, model.contextWindow ?? 128_000, settings)) await this.compact();
 	}
 	async getThinkingLevel(): Promise<ThinkingLevel> {
 		return this.thinkingLevel;

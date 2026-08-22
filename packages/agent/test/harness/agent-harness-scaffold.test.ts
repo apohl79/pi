@@ -180,6 +180,44 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("preflights compaction before switching to a smaller model", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-model-switch-faux",
+			models: [
+				{ id: "large-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+				{ id: "small-model", reasoning: false, contextWindow: 100, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			{
+				...fauxAssistantMessage("large response"),
+				usage: { ...usage, input: 100, totalTokens: 100 },
+			},
+		]);
+		const session = createSession("model-switch-preflight");
+		const largeModel = faux.getModel("large-model");
+		const smallModel = faux.getModel("small-model");
+		if (!largeModel || !smallModel) throw new Error("Expected faux model catalog entries");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: largeModel,
+			compaction: { enabled: true, reserveTokens: 99, keepRecentTokens: 1 },
+		});
+		await harness.prompt("history that should exceed the smaller model threshold");
+		faux.setResponses([fauxAssistantMessage("switch summary"), fauxAssistantMessage("small response")]);
+		await harness.setModel(smallModel);
+		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		expect(entries.some((entry) => entry.type === "compaction" && entry.summary.includes("switch summary"))).toBe(
+			true,
+		);
+		const result = await harness.prompt("continue on the small model");
+		expect(result).toMatchObject({ ok: true, value: { kind: "completed" } });
+		await harness.close();
+	});
+
 	it("discovers unfinished operations for crash recovery", async () => {
 		const session = createSession();
 		const { harness, suspended } = await AgentHarness.create({
