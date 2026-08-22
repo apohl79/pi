@@ -407,9 +407,31 @@ class LifecycleRegistry implements Hooks, Events {
 	}
 
 	async runHook(name: HookName, event: unknown): Promise<unknown> {
-		let result: unknown;
-		for (const registration of this.hooks.get(name) ?? []) result = await registration.handler(event);
-		return result;
+		let currentEvent = event;
+		let aggregate: unknown;
+		for (const registration of this.hooks.get(name) ?? []) {
+			const result = await registration.handler(currentEvent);
+			if (result === undefined) continue;
+			if (
+				result !== null &&
+				typeof result === "object" &&
+				!Array.isArray(result) &&
+				aggregate !== null &&
+				typeof aggregate === "object" &&
+				!Array.isArray(aggregate)
+			) {
+				aggregate = mergeHookObjects(aggregate, result);
+				if (currentEvent !== null && typeof currentEvent === "object" && !Array.isArray(currentEvent))
+					currentEvent = mergeHookObjects(currentEvent, result);
+			} else {
+				aggregate = result;
+				if (result !== null && typeof result === "object" && !Array.isArray(result)) {
+					if (currentEvent !== null && typeof currentEvent === "object" && !Array.isArray(currentEvent))
+						currentEvent = mergeHookObjects(currentEvent, result);
+				}
+			}
+		}
+		return aggregate;
 	}
 
 	hasHook(name: HookName): boolean {
@@ -426,6 +448,23 @@ class LifecycleRegistry implements Hooks, Events {
 			if (listeners.size === 0) this.events.delete(type);
 		};
 	}
+}
+
+function mergeHookObjects(left: object, right: object): Record<string, unknown> {
+	const merged: Record<string, unknown> = { ...left };
+	for (const [key, value] of Object.entries(right)) {
+		const previous = merged[key];
+		merged[key] =
+			previous !== null &&
+			value !== null &&
+			typeof previous === "object" &&
+			!Array.isArray(previous) &&
+			typeof value === "object" &&
+			!Array.isArray(value)
+				? mergeHookObjects(previous, value)
+				: value;
+	}
+	return merged;
 }
 
 export type HarnessTool = AgentTool & { replay?: "never" | "safe" };

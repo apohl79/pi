@@ -656,10 +656,10 @@ describe("AgentHarness v2 scaffold", () => {
 			models: [{ id: "before-request-model", contextWindow: 4096, maxTokens: 256 }],
 		});
 		models.setProvider(faux.provider);
-		let metadata: SimpleStreamOptions["metadata"];
+		let observedOptions: Pick<SimpleStreamOptions, "metadata" | "maxTokens"> | undefined;
 		faux.setResponses([
 			(_context, options) => {
-				metadata = options?.metadata;
+				observedOptions = { metadata: options?.metadata, maxTokens: options?.maxTokens };
 				return fauxAssistantMessage("patched");
 			},
 		]);
@@ -669,10 +669,15 @@ describe("AgentHarness v2 scaffold", () => {
 			model: faux.getModel(),
 		});
 		harness.hooks.on("before_request", () => ({ streamOptions: { metadata: { hook: "patched" } } }));
+		harness.hooks.on("before_request", (event) => ({
+			streamOptions: {
+				maxTokens: (event as { streamOptions: SimpleStreamOptions }).streamOptions.maxTokens ?? 42,
+			},
+		}));
 
 		await harness.prompt("hello");
 
-		expect(metadata).toEqual({ hook: "patched" });
+		expect(observedOptions).toEqual({ metadata: { hook: "patched" }, maxTokens: 42 });
 		await harness.close();
 	});
 
