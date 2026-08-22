@@ -44,6 +44,7 @@ function isWithin(root: string, target: string): boolean {
 function validatePath(root: string, target: string): void {
 	if (!isWithin(root, target))
 		throw new Error(`apply_patch path escapes execution root: ${target}`);
+	if (target === root) throw new Error(`apply_patch refuses to mutate execution root: ${target}`);
 }
 
 /**
@@ -101,7 +102,10 @@ function applyUpdate(original: string, path: string, lines: readonly string[]): 
 			.filter((line) => line.startsWith(" ") || line.startsWith("+"))
 			.map((line) => line.slice(1));
 		if (hunkLines.some((line) => !/^[ +-]/.test(line))) throw new Error(`Invalid hunk line in ${path}`);
-		const explicitStart = match[1] === undefined ? undefined : Number(match[1]) - 1;
+		// Unified diff line numbers are one-based, except the valid `-0,0` header
+		// used for insertion into an empty file (or at the beginning of a file).
+		const explicitStart =
+			match[1] === undefined ? undefined : Number(match[1]) === 0 ? 0 : Number(match[1]) - 1;
 		const offset = explicitStart ?? findSequence(content, oldLines);
 		if (offset < 0 || content.slice(offset, offset + oldLines.length).join("\n") !== oldLines.join("\n"))
 			throw new Error(`Patch hunk did not apply cleanly to ${path}`);
@@ -110,6 +114,27 @@ function applyUpdate(original: string, path: string, lines: readonly string[]): 
 	for (const replacement of replacements.sort((left, right) => right.offset - left.offset))
 		content.splice(replacement.offset, replacement.count, ...replacement.newLines);
 	return content.join("\n");
+}
+
+async function writeAtomically(
+	env: ExecutionToolContext["env"],
+	root: string,
+	target: string,
+	content: string,
+	signal?: AbortSignal,
+): Promise<void> {
+	// Stage in a filesystem-provided temporary file and replace the destination
+	// with rename. Unlike writeFile(target), rename replaces a symlink at the
+	// destination rather than following it. Revalidate the addressed path at
+	// the mutation boundary to catch parent symlink changes during preparation.
+	const temporary = getOrThrow(await env.createTempFile({ prefix: "pi-apply-patch-", abortSignal: signal }));
+	try {
+		getOrThrow(await env.writeFile(temporary, content, signal));
+		await validateMutationPath(env, root, target, signal);
+		getOrThrow(await env.renameFile(temporary, target, signal));
+	} finally {
+		await env.remove(temporary, { force: true, abortSignal: signal });
+	}
 }
 
 function findSequence(content: readonly string[], expected: readonly string[]): number {
@@ -142,12 +167,13 @@ export function createApplyPatchTool<TContext extends ExecutionToolContext = Exe
 					if (operation.kind === "add") {
 						if (operation.lines.some((line) => !line.startsWith("+")))
 							throw new Error(`Added file ${operation.path} contains a non-addition line`);
-						getOrThrow(
-							await env.writeFile(
-								absolutePath,
-								`${operation.lines.map((line) => line.slice(1)).join("\n")}\n`,
-								signal,
-							),
+						getOrThrow(await env.createDir(dirname(absolutePath), { recursive: true, abortSignal: signal }));
+						await writeAtomically(
+							env,
+							root,
+							absolutePath,
+							`${operation.lines.map((line) => line.slice(1)).join("\n")}\n`,
+							signal,
 						);
 					} else if (operation.kind === "delete") {
 						getOrThrow(await env.remove(absolutePath, { force: false, abortSignal: signal }));
@@ -155,12 +181,12 @@ export function createApplyPatchTool<TContext extends ExecutionToolContext = Exe
 						const original = getOrThrow(await env.readTextFile(absolutePath, signal));
 						const { bom, text } = stripBom(original);
 						const ending = detectLineEnding(text);
-						getOrThrow(
-							await env.writeFile(
-								absolutePath,
-								bom + restoreLineEndings(applyUpdate(normalizeToLF(text), operation.path, operation.lines), ending),
-								signal,
-							),
+						await writeAtomically(
+							env,
+							root,
+							absolutePath,
+							bom + restoreLineEndings(applyUpdate(normalizeToLF(text), operation.path, operation.lines), ending),
+							signal,
 						);
 					}
 				});

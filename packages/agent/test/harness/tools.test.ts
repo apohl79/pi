@@ -206,6 +206,21 @@ describe("AgentHarness tools", () => {
 			);
 			expect(getOrThrow(await context.env.readTextFile("crlf.txt"))).toBe("ONE\r\ntwo\r\n");
 		});
+
+		it("accepts zero-start unified hunks for insertion at the beginning", async () => {
+			const context = createContext();
+			getOrThrow(await context.env.writeFile("insert.txt", "two\n"));
+			await createApplyPatchTool().execute(
+				"patch-zero-start",
+				{
+					patch: "*** Begin Patch\n*** Update File: insert.txt\n@@ -0,0 +1,1 @@\n+one\n*** End Patch",
+				},
+				undefined,
+				undefined,
+				context,
+			);
+			expect(getOrThrow(await context.env.readTextFile("insert.txt"))).toBe("one\ntwo\n");
+		});
 	});
 
 	describe("read", () => {
