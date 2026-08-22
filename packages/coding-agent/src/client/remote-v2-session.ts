@@ -17,7 +17,7 @@ import type {
 	SessionSnapshotV2 as ProtocolSnapshot,
 	ThinkingLevel as ProtocolThinkingLevel,
 } from "@earendil-works/pi-protocol";
-import { SessionSnapshotV2Schema } from "@earendil-works/pi-protocol";
+import { AgentSummarySchema, PlanSnapshotSchema, SessionSnapshotV2Schema } from "@earendil-works/pi-protocol";
 import { Check } from "typebox/value";
 
 export type RemoteV2SessionLifecycle =
@@ -1075,32 +1075,11 @@ function isSnapshot(value: unknown): value is ProtocolSnapshot {
 }
 
 function isPlanSnapshot(value: unknown): value is PlanSnapshot {
-	const record = asRecord(value);
-	return (
-		record?.version !== undefined &&
-		typeof record.version === "number" &&
-		Array.isArray(record.items) &&
-		record.items.every((item) => {
-			const entry = asRecord(item);
-			return (
-				typeof entry?.step === "string" &&
-				(entry.status === "pending" || entry.status === "in_progress" || entry.status === "completed")
-			);
-		})
-	);
+	return Check(PlanSnapshotSchema, value);
 }
 
 function isAgentSummary(value: unknown): value is AgentSummary {
-	const record = asRecord(value);
-	const model = asRecord(record?.model);
-	return (
-		typeof record?.id === "string" &&
-		typeof record.path === "string" &&
-		typeof record.taskName === "string" &&
-		["idle", "running", "awaitingInput", "complete", "failed", "interrupted"].includes(record.state as string) &&
-		typeof model?.provider === "string" &&
-		typeof model.id === "string"
-	);
+	return Check(AgentSummarySchema, value);
 }
 
 function isProcessOutput(value: unknown): value is RemoteV2ProcessOutput {
