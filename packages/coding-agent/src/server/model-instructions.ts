@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, realpath } from "node:fs/promises";
+import { open, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 
 export interface ModelInstructionProfile {
@@ -27,6 +27,16 @@ export interface ModelInstructionResolverOptions {
 	readonly maxBytes?: number;
 }
 
+const DEFAULT_MAX_BYTES = 64 * 1024;
+const MAX_MAX_BYTES = 16 * 1024 * 1024;
+
+function validateMaxBytes(value: number | undefined): number {
+	const maxBytes = value ?? DEFAULT_MAX_BYTES;
+	if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_MAX_BYTES)
+		throw new Error(`maxBytes must be a positive safe integer no larger than ${MAX_MAX_BYTES}`);
+	return maxBytes;
+}
+
 export class ModelInstructionResolver {
 	private readonly profiles: readonly ModelInstructionProfile[];
 	private readonly cwd: string;
@@ -37,7 +47,7 @@ export class ModelInstructionResolver {
 		this.profiles = profiles;
 		this.cwd = resolve(options.cwd);
 		this.trustedRoots = (options.trustedRoots ?? [this.cwd]).map((root) => resolve(root));
-		this.maxBytes = options.maxBytes ?? 64 * 1024;
+		this.maxBytes = validateMaxBytes(options.maxBytes);
 		for (const profile of profiles) {
 			const hasText = profile.text !== undefined;
 			const hasFile = profile.file !== undefined;
@@ -80,7 +90,17 @@ export class ModelInstructionResolver {
 		if (!this.isTrusted(requestedPath)) throw new Error(`Model profile file escapes trusted roots: ${file}`);
 		const path = await realpath(requestedPath);
 		if (!this.isTrusted(path)) throw new Error(`Model profile file resolves outside trusted roots: ${file}`);
-		return readFile(path, "utf8");
+		const metadata = await stat(path);
+		if (metadata.size > this.maxBytes) throw new Error(`Model profile file exceeds ${this.maxBytes}-byte limit`);
+		const handle = await open(path, "r");
+		try {
+			const buffer = Buffer.allocUnsafe(this.maxBytes + 1);
+			const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+			if (bytesRead > this.maxBytes) throw new Error(`Model profile file exceeds ${this.maxBytes}-byte limit`);
+			return buffer.subarray(0, bytesRead).toString("utf8");
+		} finally {
+			await handle.close();
+		}
 	}
 
 	private isTrusted(path: string): boolean {
