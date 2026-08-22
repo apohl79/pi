@@ -18,6 +18,51 @@ afterEach(async () => {
 });
 
 describe("coding-agent daemon plugin end-to-end compatibility", () => {
+	test("installs a marketplace plugin without an inline manifest", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-marketplace-install-"));
+		directories.push(directory);
+		const pluginRoot = join(directory, "plugins", "reviewer");
+		await mkdir(join(pluginRoot, ".codex-plugin"), { recursive: true });
+		const manifest = { name: "reviewer", version: "1.0.0", skills: [], commands: [] };
+		await writeFile(join(pluginRoot, ".codex-plugin", "plugin.json"), JSON.stringify(manifest));
+		await mkdir(join(directory, ".agents", "plugins"), { recursive: true });
+		await writeFile(
+			join(directory, ".agents", "plugins", "marketplace.json"),
+			JSON.stringify({ plugins: [{ name: "reviewer", source: "plugins/reviewer" }] }),
+		);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-marketplace-faux",
+			models: [{ id: "marketplace-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const socketPath = join(directory, "server.sock");
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath,
+			harness: { tools: [], activeToolNames: [] },
+			pluginAcquisition: { baseRoot: directory },
+			write: () => {},
+		});
+		const client = new PiClientV2({ transportFactory: createUnixTransportFactory({ path: socketPath }) });
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			await client.request({ command: "marketplace/add", payload: { name: "local", source: directory } });
+			const installed = await client.request({
+				command: "plugin/install",
+				payload: { name: "reviewer", marketplace: "local", version: "1.0.0" },
+			});
+			expect(installed).toMatchObject({ ok: true, result: { plugin: { id: "reviewer@local", version: "1.0.0" } } });
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
 	test("exercises every supported resource while leaving MCP inactive", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-plugin-e2e-"));
 		directories.push(directory);

@@ -1300,18 +1300,17 @@ export class PiServerV2 {
 			typeof payload.name !== "string" ||
 			typeof payload.marketplace !== "string" ||
 			typeof payload.version !== "string" ||
-			typeof payload.manifest !== "object" ||
-			payload.manifest === null ||
-			Array.isArray(payload.manifest)
+			(payload.manifest !== undefined &&
+				(typeof payload.manifest !== "object" || payload.manifest === null || Array.isArray(payload.manifest)))
 		)
-			throw new Error("plugin/install requires name, marketplace, version, and manifest");
+			throw new Error("plugin/install requires name, marketplace, and version");
 		await this.sendResponse(state, id, {
 			command: command.command,
 			plugin: await this.plugins.installPlugin({
 				name: payload.name,
 				marketplace: payload.marketplace,
 				version: payload.version,
-				manifest: payload.manifest as Record<string, unknown>,
+				...(payload.manifest === undefined ? {} : { manifest: payload.manifest as Record<string, unknown> }),
 				...(typeof payload.root === "string" ? { root: payload.root } : {}),
 				...(payload.scope === "user" || payload.scope === "project" ? { scope: payload.scope } : {}),
 			}),

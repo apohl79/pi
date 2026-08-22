@@ -79,6 +79,15 @@ export type V2PluginRegistryState = Readonly<{
 	plugins: readonly V2Plugin[];
 }>;
 
+export type V2PluginInstallInput = Readonly<{
+	name: string;
+	marketplace: string;
+	version: string;
+	manifest?: Record<string, unknown>;
+	root?: string;
+	scope?: V2PluginScope;
+}>;
+
 export interface V2PluginRegistry {
 	listMarketplaces(): Promise<readonly V2Marketplace[]>;
 	addMarketplace(name: string, source: string): Promise<V2Marketplace>;
@@ -86,14 +95,7 @@ export interface V2PluginRegistry {
 	upgradeMarketplace(name: string): Promise<V2Marketplace>;
 	listPlugins(installedOnly?: boolean): Promise<readonly V2Plugin[]>;
 	readPlugin(id: string): Promise<V2Plugin | undefined>;
-	installPlugin(input: {
-		name: string;
-		marketplace: string;
-		version: string;
-		manifest: Record<string, unknown>;
-		root?: string;
-		scope?: V2PluginScope;
-	}): Promise<V2Plugin>;
+	installPlugin(input: V2PluginInstallInput): Promise<V2Plugin>;
 	upgradePlugin(id: string, version: string, manifest?: Record<string, unknown>, root?: string): Promise<V2Plugin>;
 	uninstallPlugin(id: string): Promise<void>;
 	setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin>;
@@ -355,14 +357,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		return this.plugins.has(id) ? structuredClone(normalizePlugin(this.plugins.get(id)!)) : undefined;
 	}
 
-	async installPlugin(input: {
-		name: string;
-		marketplace: string;
-		version: string;
-		manifest: Record<string, unknown>;
-		root?: string;
-		scope?: V2PluginScope;
-	}): Promise<V2Plugin> {
+	async installPlugin(input: V2PluginInstallInput): Promise<V2Plugin> {
 		const name = requireName(input.name, "plugin name");
 		const marketplace = requireName(input.marketplace, "marketplace name");
 		const version = requireName(input.version, "plugin version");
@@ -370,6 +365,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		const id = `${name}@${marketplace}`;
 		if (this.plugins.has(id)) throw new Error(`Plugin already installed: ${id}`);
 		const manifest = input.manifest;
+		if (manifest === undefined) throw new Error("Plugin manifest is required by this registry");
 		const plugin: V2Plugin = {
 			id,
 			name,
