@@ -235,6 +235,65 @@ function normalizePlugin(plugin: V2Plugin): V2Plugin {
 	};
 }
 
+function validatePluginState(value: unknown): asserts value is V2PluginRegistryState {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		throw new Error("Plugin registry file is invalid");
+	const state = value as Record<string, unknown>;
+	if (!Array.isArray(state.marketplaces) || !Array.isArray(state.plugins))
+		throw new Error("Plugin registry file is invalid");
+	for (const marketplace of state.marketplaces) {
+		if (
+			typeof marketplace !== "object" ||
+			marketplace === null ||
+			Array.isArray(marketplace) ||
+			!typeNonEmpty((marketplace as Record<string, unknown>).name) ||
+			!typeNonEmpty((marketplace as Record<string, unknown>).source) ||
+			!Number.isFinite((marketplace as Record<string, unknown>).addedAt)
+		)
+			throw new Error("Plugin registry marketplace record is invalid");
+	}
+	for (const plugin of state.plugins) {
+		if (typeof plugin !== "object" || plugin === null || Array.isArray(plugin))
+			throw new Error("Plugin registry plugin record is invalid");
+		const record = plugin as Record<string, unknown>;
+		if (
+			!typeNonEmpty(record.id) ||
+			!typeNonEmpty(record.name) ||
+			!typeNonEmpty(record.marketplace) ||
+			!typeNonEmpty(record.version) ||
+			!typeNonEmpty(record.manifestDigest) ||
+			typeof record.enabled !== "boolean" ||
+			(record.scope !== "user" && record.scope !== "project") ||
+			(record.provenance !== "manifest" && record.provenance !== "package")
+		)
+			throw new Error("Plugin registry plugin record is invalid");
+		const resources = record.resources;
+		const resourceRecord = resources as Record<string, unknown>;
+		const skills = resourceRecord.skills;
+		const commands = resourceRecord.commands;
+		const apps = resourceRecord.apps;
+		const hooks = resourceRecord.hooks;
+		if (
+			typeof resources !== "object" ||
+			resources === null ||
+			Array.isArray(resources) ||
+			!Array.isArray(skills) ||
+			!Array.isArray(commands) ||
+			!skills.every((item): item is string => typeof item === "string") ||
+			!commands.every((item): item is string => typeof item === "string") ||
+			!Number.isSafeInteger(apps) ||
+			(apps as number) < 0 ||
+			!Number.isSafeInteger(hooks) ||
+			(hooks as number) < 0
+		)
+			throw new Error("Plugin registry plugin resources are invalid");
+	}
+}
+
+function typeNonEmpty(value: unknown): value is string {
+	return typeof value === "string" && value.trim().length > 0;
+}
+
 export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 	private readonly marketplaces = new Map<string, V2Marketplace>();
 	private readonly plugins = new Map<string, V2Plugin>();
@@ -425,17 +484,8 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 		this.loaded = true;
 		try {
 			const value: unknown = JSON.parse(await readFile(this.filePath, "utf8"));
-			if (!value || typeof value !== "object" || !Array.isArray((value as { marketplaces?: unknown }).marketplaces))
-				throw new Error("Plugin registry file is invalid");
-			const state = value as V2PluginRegistryState;
-			for (const marketplace of state.marketplaces) {
-				if (!marketplace || typeof marketplace.name !== "string" || typeof marketplace.source !== "string")
-					throw new Error("Plugin registry marketplace record is invalid");
-			}
-			for (const plugin of state.plugins ?? []) {
-				if (!plugin || typeof plugin.id !== "string" || typeof plugin.name !== "string")
-					throw new Error("Plugin registry plugin record is invalid");
-			}
+			validatePluginState(value);
+			const state = value;
 			this.memory.replace(state);
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
