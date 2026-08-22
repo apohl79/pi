@@ -12,7 +12,7 @@ describe("coding-agent v2 service adapter", () => {
 		const models = createModels();
 		const faux = fauxProvider({
 			provider: "coding-agent-v2-faux",
-			models: [{ id: "coding-agent-v2-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			models: [{ id: "coding-agent-v2-model", reasoning: true, contextWindow: 32_000, maxTokens: 1_000 }],
 		});
 		models.setProvider(faux.provider);
 		faux.setResponses([fauxAssistantMessage("adapter response")]);
