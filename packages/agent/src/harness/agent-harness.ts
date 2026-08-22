@@ -1029,7 +1029,15 @@ export class AgentHarness implements AgentLane {
 				runId,
 				outcome: "completed",
 			});
-			await this.runLifecycleHook("before_run_end", { operationId: runId, outcome: "completed" });
+			const runEnd = await this.runLifecycleHook("before_run_end", { operationId: runId, outcome: "completed" });
+			if (
+				runEnd !== null &&
+				typeof runEnd === "object" &&
+				"followUp" in runEnd &&
+				typeof runEnd.followUp === "string" &&
+				runEnd.followUp.length > 0
+			)
+				await this.nextRun(runEnd.followUp);
 			this.lifecycle.emit("operation_finished", { operationId: runId, outcome: "completed" });
 			this.watchBus.emit({
 				type: "run_end",

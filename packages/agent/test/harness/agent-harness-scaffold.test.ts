@@ -651,6 +651,32 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("queues before_run_end follow-ups after normal completion", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "before-run-end-faux",
+			models: [{ id: "before-run-end-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("done")]);
+		const { harness } = await AgentHarness.create({
+			session: createSession("before-run-end"),
+			models,
+			model: faux.getModel(),
+		});
+		harness.hooks.on("before_run_end", () => ({ followUp: "continue later" }));
+
+		await harness.prompt("hello");
+
+		const queues = await harness.getQueueSnapshot();
+		expect(queues.nextRun).toHaveLength(1);
+		expect(queues.nextRun[0]?.message).toMatchObject({
+			role: "user",
+			content: [{ type: "text", text: "continue later" }],
+		});
+		await harness.close();
+	});
+
 	it("applies transform_context hooks before provider conversion", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
