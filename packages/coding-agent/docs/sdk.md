@@ -41,6 +41,35 @@ npm install @earendil-works/pi-coding-agent
 
 The SDK is included in the main package. No separate installation needed.
 
+### Server-backed client
+
+For a detachable, server-owned session, import the remote client surface from
+`@earendil-works/pi-coding-agent/client`. The daemon owns turns, tools, and
+durable state; the client only holds the connection and session lease.
+
+```typescript
+import {
+  PiClientV2,
+  RemoteV2Session,
+  createUnixTransportFactory,
+} from "@earendil-works/pi-coding-agent/client";
+
+const client = new PiClientV2({
+  transportFactory: createUnixTransportFactory({ path: "/tmp/pi.sock" }),
+});
+await client.connect();
+const session = await RemoteV2Session.create(client, { cwd: process.cwd() }, { mode: "control" });
+
+const operationId = await session.submit("Inspect the repository");
+await session.waitForOperation(operationId);
+await session.dispose();
+client.dispose();
+```
+
+Use the CLI or `createConfiguredCodingAgentDaemonRuntime()` to own the local
+daemon lifecycle. Use `--no-server` or `createAgentSession()` for direct-mode
+embedding when server ownership is not required.
+
 ## Core Concepts
 
 ### createAgentSession()
