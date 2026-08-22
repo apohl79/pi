@@ -145,7 +145,12 @@ restore_build_identity() {
 }
 trap restore_build_identity EXIT
 
-build_identity_version="${PI_BUILD_VERSION:-${RELEASE_TAG:-dev}}"
+if [[ -n "${PI_BUILD_VERSION:-}" ]]; then
+	build_identity_version="$PI_BUILD_VERSION"
+else
+	build_identity_version="${RELEASE_TAG:-dev}"
+	build_identity_version="${build_identity_version#v}"
+fi
 build_identity_fork="${PI_FORK_COMMIT:-$(git rev-parse --verify HEAD 2>/dev/null || true)}"
 build_identity_upstream="${PI_UPSTREAM_BASE_COMMIT:-}"
 if [[ -z "$build_identity_upstream" && -f FORK_DELTA.md ]]; then
