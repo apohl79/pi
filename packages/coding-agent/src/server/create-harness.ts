@@ -161,6 +161,9 @@ const spawnAgentSchema = Type.Object({
 	taskMessage: Type.String({ minLength: 1 }),
 	model: Type.Optional(Type.Object({ provider: Type.String({ minLength: 1 }), id: Type.String({ minLength: 1 }) })),
 	role: Type.Optional(Type.String({ minLength: 1 })),
+	forkTurns: Type.Optional(
+		Type.Union([Type.Literal("none"), Type.Literal("all"), Type.Integer({ minimum: 1, maximum: 32 })]),
+	),
 });
 const listAgentsSchema = Type.Object({});
 const waitAgentSchema = Type.Object({
