@@ -14,6 +14,7 @@ import type { SessionMetadataV2 } from "@earendil-works/pi-protocol";
 import type {
 	ForensicRecorder,
 	V2AgentRegistry,
+	V2BlobStore,
 	V2ImageService,
 	V2InputRegistry,
 	V2PlanRegistry,
@@ -66,6 +67,7 @@ export interface CodingAgentV2SqliteServiceOptions {
 	processes?: V2ProcessRegistry;
 	web?: V2WebService;
 	images?: V2ImageService;
+	blobs?: V2BlobStore;
 	plans?: V2PlanRegistry;
 	agentRegistry?: V2AgentRegistry | (() => V2AgentRegistry | undefined);
 	harness?: Omit<CreateCodingAgentHarnessOptions, "session" | "models" | "model" | "env" | "sessionFile">;
@@ -446,7 +448,29 @@ export async function createCodingAgentV2SqliteService(
 							lastCriticalEventSeq: critical.at(-1)?.seq ?? 0,
 						};
 					};
-		const queues = async () => created.harness.getQueueSnapshot();
+		const queueWithReferences = async (items: Awaited<ReturnType<AgentHarness["getQueueSnapshot"]>>["steer"]) =>
+			Promise.all(
+				items.map(async (item) => {
+					if (options.blobs === undefined || item.message.role !== "user" || !Array.isArray(item.message.content))
+						return item;
+					const content = [];
+					for (const part of item.message.content) {
+						if (part.type === "text") content.push({ type: "text" as const, text: part.text });
+						else if (part.type === "image") {
+							const blob = await options.blobs.put(Buffer.from(part.data, "base64"), part.mimeType);
+							content.push({ type: "image" as const, digest: blob.digest, mimeType: blob.mimeType });
+						}
+					}
+					return { ...item, content };
+				}),
+			);
+		const queues = async () => {
+			const snapshot = await created.harness.getQueueSnapshot();
+			return {
+				steer: await queueWithReferences(snapshot.steer),
+				followUp: await queueWithReferences(snapshot.followUp),
+			};
+		};
 		return {
 			metadata: sessionMetadata(metadata),
 			harness: created.harness,
