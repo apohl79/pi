@@ -13,7 +13,7 @@ afterEach(async () => {
 	await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-function createModelsWithChildResponse() {
+function createModelsWithChildResponse(childPrompts?: string[]) {
 	const models = createModels();
 	const parent = fauxProvider({
 		provider: "coding-agent-daemon-restart-parent-faux",
@@ -25,7 +25,12 @@ function createModelsWithChildResponse() {
 	});
 	models.setProvider(parent.provider);
 	models.setProvider(child.provider);
-	child.setResponses([fauxAssistantMessage("child survived restart")]);
+	child.setResponses([
+		(context) => {
+			childPrompts?.push(JSON.stringify(context.messages));
+			return fauxAssistantMessage("child survived restart");
+		},
+	]);
 	return { models, parent };
 }
 
@@ -36,8 +41,9 @@ function resultOf<T>(response: unknown): T {
 async function spawnCompletedChild(
 	directory: string,
 	socketPath: string,
+	childPrompts?: string[],
 ): Promise<{ sessionId: string; agentId: string }> {
-	const { models, parent } = createModelsWithChildResponse();
+	const { models, parent } = createModelsWithChildResponse(childPrompts);
 	const runtime = await createConfiguredCodingAgentDaemonRuntime({
 		agentDir: directory,
 		cwd: directory,
@@ -67,6 +73,64 @@ async function spawnCompletedChild(
 		const waited = await client.request({ command: "agent/wait", payload: { agentId } });
 		expect(waited).toMatchObject({ ok: true, result: { agent: { id: agentId, state: "complete" } } });
 		return { sessionId, agentId };
+	} finally {
+		client.dispose();
+		await runtime.close();
+	}
+}
+
+async function sendMessageBeforeRestart(
+	directory: string,
+	socketPath: string,
+	sessionId: string,
+	agentId: string,
+): Promise<void> {
+	const { models, parent } = createModelsWithChildResponse();
+	const runtime = await createConfiguredCodingAgentDaemonRuntime({
+		agentDir: directory,
+		cwd: directory,
+		models,
+		model: parent.getModel(),
+		socketPath,
+		harness: { tools: [], activeToolNames: [] },
+		write: () => {},
+	});
+	const client = new PiClientV2({ transportFactory: createUnixTransportFactory({ path: socketPath }) });
+	try {
+		await runtime.daemon.start();
+		await client.connect();
+		await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+		await client.request({ command: "agent/message", payload: { agentId, message: "survive the daemon restart" } });
+	} finally {
+		client.dispose();
+		await runtime.close();
+	}
+}
+
+async function followUpAfterRestart(
+	directory: string,
+	socketPath: string,
+	sessionId: string,
+	agentId: string,
+	childPrompts: string[],
+): Promise<void> {
+	const { models, parent } = createModelsWithChildResponse(childPrompts);
+	const runtime = await createConfiguredCodingAgentDaemonRuntime({
+		agentDir: directory,
+		cwd: directory,
+		models,
+		model: parent.getModel(),
+		socketPath,
+		harness: { tools: [], activeToolNames: [] },
+		write: () => {},
+	});
+	const client = new PiClientV2({ transportFactory: createUnixTransportFactory({ path: socketPath }) });
+	try {
+		await runtime.daemon.start();
+		await client.connect();
+		await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+		await client.request({ command: "agent/followUp", payload: { agentId, message: "continue after restart" } });
+		await client.request({ command: "agent/wait", payload: { agentId } });
 	} finally {
 		client.dispose();
 		await runtime.close();
@@ -117,5 +181,16 @@ describe("coding-agent daemon child durability", () => {
 				],
 			},
 		});
+	});
+
+	test("rehydrates a queued child message after daemon restart", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-agent-message-restart-"));
+		directories.push(directory);
+		const socketPath = join(directory, "server.sock");
+		const childPrompts: string[] = [];
+		const { sessionId, agentId } = await spawnCompletedChild(directory, socketPath, childPrompts);
+		await sendMessageBeforeRestart(directory, socketPath, sessionId, agentId);
+		await followUpAfterRestart(directory, socketPath, sessionId, agentId, childPrompts);
+		expect(childPrompts).toEqual(expect.arrayContaining([expect.stringContaining("survive the daemon restart")]));
 	});
 });
