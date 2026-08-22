@@ -184,8 +184,14 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	);
 	if (snapshot.persistence.recoveryState !== "clean") lines.push(`Persistence ${snapshot.persistence.recoveryState}`);
 	if (snapshot.diagnostics.degraded) lines.push("Diagnostics degraded");
-	for (const agent of snapshot.agents.slice(0, options.maxAgentItems ?? 12))
-		lines.push(`Agent ${agent.path} · ${agent.state} · ${agent.model.provider}/${agent.model.id}`);
+	for (const agent of snapshot.agents.slice(0, options.maxAgentItems ?? 12)) {
+		const usage = agent.usage;
+		const usageText =
+			usage === undefined
+				? ""
+				: ` · ↓${usage.input} ↑${usage.output}${usage.costUsd === undefined ? "" : ` $${usage.costUsd.toFixed(2)}`}`;
+		lines.push(`Agent ${agent.path} · ${agent.state} · ${agent.model.provider}/${agent.model.id}${usageText}`);
+	}
 	if (snapshot.goal) {
 		const maxGoalCharacters = options.maxGoalCharacters ?? 240;
 		lines.push(`Goal ${snapshot.goal.status} · ${snapshot.goal.objective.slice(0, maxGoalCharacters)}`);
