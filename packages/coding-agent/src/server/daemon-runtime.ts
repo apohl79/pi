@@ -12,7 +12,6 @@ import {
 	JsonlForensicRecorder,
 	JsonlV2InputRegistry,
 	JsonlV2PlanRegistry,
-	JsonlV2UsageLedger,
 	JsonV2PluginRegistry,
 	LocalDiagnosticCapsuleStore,
 	LocalV2FileReferenceService,
@@ -42,6 +41,7 @@ import { createCodingAgentV2AgentRegistry } from "./agent-registry.ts";
 import { createRuntimeManifest } from "./runtime-manifest.ts";
 import { SqliteV2OperationStore } from "./sqlite-operation-store.ts";
 import { type CodingAgentV2SqliteServiceOptions, createCodingAgentV2SqliteService } from "./sqlite-service.ts";
+import { SqliteV2UsageLedger } from "./sqlite-usage-ledger.ts";
 
 export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOptions, "repository"> & {
 	repository: SqliteSessionRepository;
@@ -245,7 +245,11 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 	});
 	try {
 		const usage =
-			options.usage ?? new JsonlV2UsageLedger(options.usageStorePath ?? join(options.agentDir, "usage.jsonl"));
+			options.usage ??
+			new SqliteV2UsageLedger(
+				createNodeSqliteFactory(),
+				options.usageStorePath ?? join(options.agentDir, "usage.sqlite"),
+			);
 		const pluginRegistry = options.pluginRegistry ?? new JsonV2PluginRegistry(join(options.agentDir, "plugins.json"));
 		const operationStore =
 			options.operationStore ??
@@ -367,6 +371,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			close: async () => {
 				await runtime.close();
 				if (operationStore instanceof SqliteV2OperationStore) await operationStore.close();
+				if (usage instanceof SqliteV2UsageLedger) await usage.close();
 				await repository.close();
 				await env.cleanup();
 			},
