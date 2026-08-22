@@ -55,6 +55,7 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
+		const parentPath = request.parentPath.replace(/\/$/, "");
 		if (
 			request.forkTurns !== undefined &&
 			request.forkTurns !== "none" &&
@@ -62,14 +63,14 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 			(!Number.isInteger(request.forkTurns) || request.forkTurns < 1 || request.forkTurns > 32)
 		)
 			throw new Error("forkTurns must be none, all, or an integer from 1 to 32");
-		const depth = request.parentPath.split("/").filter(Boolean).length - 1;
+		const depth = parentPath.split("/").filter(Boolean).length - 1;
 		if (depth >= this.maxDepth) throw new Error(`Agent maximum depth ${this.maxDepth} exceeded`);
 		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
-		if (this.activeCountForParent(request.parentPath) >= this.maxActivePerParent)
-			throw new Error(`Agent active limit ${this.maxActivePerParent} exceeded for parent ${request.parentPath}`);
+		if (this.activeCountForParent(parentPath) >= this.maxActivePerParent)
+			throw new Error(`Agent active limit ${this.maxActivePerParent} exceeded for parent ${parentPath}`);
 		if (!/^[A-Za-z0-9._-]+$/.test(request.taskName))
 			throw new Error("Agent taskName contains unsupported characters");
-		const path = `${request.parentPath.replace(/\/$/, "")}/${request.taskName}`;
+		const path = `${parentPath}/${request.taskName}`;
 		if ([...this.agents.values()].some((agent) => agent.summary.path === path))
 			throw new Error(`Agent path ${path} already exists`);
 		const summary: AgentSummary = {
@@ -83,7 +84,7 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 		this.agents.set(summary.id, {
 			summary,
 			sessionId: request.sessionId,
-			parentPath: request.parentPath,
+			parentPath,
 			state: summary.state,
 			messages: [request.taskMessage],
 		});
