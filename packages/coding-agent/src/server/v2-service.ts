@@ -10,6 +10,7 @@ import type {
 	AgentSummary,
 	CommandNameV2,
 	CommandV2,
+	CompactionPolicy,
 	DiagnosticsSnapshot,
 	InstructionProfileSummary,
 	ModelMetadata,
@@ -364,6 +365,24 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		if (delta > 0) await this.definition.goals.recordUsage(delta);
 	}
 
+	private async compactionPolicySnapshot(): Promise<CompactionPolicy> {
+		const [model, settings, source] = await Promise.all([
+			this.definition.harness.getModel(),
+			this.definition.harness.getCompactionSettings(),
+			this.definition.harness.getCompactionPolicySource(),
+		]);
+		const contextWindow = Math.max(1, model.contextWindow);
+		const reserveTokens = Math.max(0, settings.reserveTokens);
+		return {
+			enabled: settings.enabled,
+			contextWindow,
+			reserveTokens,
+			keepRecentTokens: Math.max(0, settings.keepRecentTokens),
+			triggerTokens: Math.max(0, contextWindow - reserveTokens),
+			source,
+		};
+	}
+
 	private async recordUsageLedger(operationId: string, beforeEntryIds: ReadonlySet<string>): Promise<void> {
 		const ledger = this.definition.usage;
 		if (!ledger) return;
@@ -515,6 +534,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async accept(_operationId: string): Promise<OperationAccepted> {
+		const policy = await this.compactionPolicySnapshot();
 		this.revision += 1;
 		this.eventSeq += 1;
 		this.phase = "turn";
@@ -523,6 +543,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			kind: "pending",
 			state: "accepted",
 			acceptedSeq: this.eventSeq,
+			compactionPolicy: policy,
 		};
 		return { operationId: _operationId, sessionRevision: this.revision, eventSeq: this.eventSeq };
 	}
@@ -545,6 +566,9 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			kind: runCommand,
 			state: "running",
 			acceptedSeq: this.activeOperation?.acceptedSeq ?? this.eventSeq,
+			...(this.activeOperation?.compactionPolicy === undefined
+				? {}
+				: { compactionPolicy: this.activeOperation.compactionPolicy }),
 		};
 		await extensionHost?.onOperationAccepted({ id: _operationId, type: runCommand });
 		try {
