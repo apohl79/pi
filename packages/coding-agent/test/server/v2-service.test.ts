@@ -257,6 +257,13 @@ describe("coding-agent v2 service adapter", () => {
 			});
 			expect((await runtime.snapshot()).name).toBe("Fix durable session resume");
 			expect((await runtime.snapshot()).nameSource).toBe("generated");
+			await expect(
+				runtime.run("invalid-generated", {
+					command: "session/name/generate",
+					sessionId: "naming-session",
+					payload: { name: "answer." },
+				}),
+			).rejects.toThrow("safe bounded name");
 			await runtime.run("explicit", {
 				command: "session/name/set",
 				sessionId: "naming-session",
