@@ -65,6 +65,8 @@ type V2ConnectionState = {
 	sessions: Map<string, PiSessionRuntimeV2>;
 	/** Session IDs whose attach response has committed the connection's ownership. */
 	attachedSessions: Set<string>;
+	/** Number of in-flight attach requests for each session on this connection. */
+	pendingAttachCounts: Map<string, number>;
 	visibleSessions: Set<string>;
 	ready: boolean;
 	handshakePromise?: Promise<void>;
@@ -263,6 +265,7 @@ export class PiServerV2 {
 			decoder: new FrameDecoder({ maxFrameLength: this.maxFrameLength }),
 			sessions: new Map<string, PiSessionRuntimeV2>(),
 			attachedSessions: new Set<string>(),
+			pendingAttachCounts: new Map<string, number>(),
 			visibleSessions: new Set<string>(),
 			attachingSessions: new Map<string, Promise<PiSessionRuntimeV2>>(),
 			ready: false,
@@ -418,7 +421,7 @@ export class PiServerV2 {
 				runtime = await opening;
 			}
 			if (!runtime) throw new Error("Session runtime is unavailable");
-			this.retainAttach(runtime);
+			this.retainAttach(state, command.sessionId, runtime);
 			if (state.closed || state.connection.closed) return;
 			state.sessions.set(command.sessionId, runtime);
 			const isCurrentAttachment = (): boolean =>
@@ -443,13 +446,13 @@ export class PiServerV2 {
 				existing === undefined &&
 				state.sessions.get(command.sessionId) === runtime &&
 				!state.attachedSessions.has(command.sessionId) &&
-				!this.hasOtherPendingAttach(runtime)
+				!this.hasOtherPendingAttach(state, command.sessionId)
 			) {
 				state.sessions.delete(command.sessionId);
 			}
 			throw error;
 		} finally {
-			if (runtime !== undefined) await this.releaseAttach(runtime);
+			if (runtime !== undefined) await this.releaseAttach(state, command.sessionId, runtime);
 		}
 	}
 
@@ -916,9 +919,10 @@ export class PiServerV2 {
 		state.closed = true;
 		clearTimeout(state.handshakeTimeout);
 		state.disconnectPromise = (async () => {
-			const runtimes = new Set(state.sessions.values());
-			state.sessions.clear();
-			state.attachedSessions.clear();
+		const runtimes = new Set(state.sessions.values());
+		state.sessions.clear();
+		state.attachedSessions.clear();
+		state.pendingAttachCounts.clear();
 			const disposals = Array.from(runtimes)
 				.filter(
 					(runtime) =>
@@ -965,11 +969,15 @@ export class PiServerV2 {
 		return (this.activeOperations.get(runtime) ?? 0) > 0;
 	}
 
-	private retainAttach(runtime: PiSessionRuntimeV2): void {
+	private retainAttach(state: V2ConnectionState, sessionId: string, runtime: PiSessionRuntimeV2): void {
 		this.pendingAttaches.set(runtime, (this.pendingAttaches.get(runtime) ?? 0) + 1);
+		state.pendingAttachCounts.set(sessionId, (state.pendingAttachCounts.get(sessionId) ?? 0) + 1);
 	}
 
-	private async releaseAttach(runtime: PiSessionRuntimeV2): Promise<void> {
+	private async releaseAttach(state: V2ConnectionState, sessionId: string, runtime: PiSessionRuntimeV2): Promise<void> {
+		const sessionCount = state.pendingAttachCounts.get(sessionId);
+		if (sessionCount === undefined || sessionCount <= 1) state.pendingAttachCounts.delete(sessionId);
+		else state.pendingAttachCounts.set(sessionId, sessionCount - 1);
 		const count = this.pendingAttaches.get(runtime);
 		if (count === undefined) return;
 		if (count <= 1) this.pendingAttaches.delete(runtime);
@@ -986,8 +994,8 @@ export class PiServerV2 {
 		return (this.pendingAttaches.get(runtime) ?? 0) > 0;
 	}
 
-	private hasOtherPendingAttach(runtime: PiSessionRuntimeV2): boolean {
-		return (this.pendingAttaches.get(runtime) ?? 0) > 1;
+	private hasOtherPendingAttach(state: V2ConnectionState, sessionId: string): boolean {
+		return (state.pendingAttachCounts.get(sessionId) ?? 0) > 1;
 	}
 
 	private async disposeRuntime(runtime: PiSessionRuntimeV2): Promise<void> {
