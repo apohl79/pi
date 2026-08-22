@@ -224,6 +224,7 @@ describe("PiServer v2 operation acceptance", () => {
 		);
 		expect(replayed).toMatchObject({ type: "event", sessionId: "session-1", seq: 2 });
 		await secondClient.request({ command: "session/attach", sessionId: "session-1" });
+		expect(runtime.runEntered).toBe(true);
 		runtime.release.resolve(undefined);
 		await runtime.started.promise;
 		const terminal = await secondClient.next(
