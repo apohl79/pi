@@ -990,25 +990,58 @@ export class AgentHarness implements AgentLane {
 	async getModel(): Promise<Model<Api>> {
 		return this.model;
 	}
+	private async appendConfigurationEntry<TEntry extends Entry>(
+		entry: ProvisionedEntry<TEntry>,
+		apply: (committed: TEntry) => void,
+	): Promise<void> {
+		let committed: TEntry;
+		try {
+			committed = await this.durableSession.appendEntry(entry, "main");
+		} catch (error) {
+			// The backend may have committed the append before reporting a transport
+			// failure. Reconcile the in-memory view before propagating that failure so
+			// callers do not observe durable state and stale harness configuration.
+			try {
+				const recovered = await this.durableSession.getEntry(entry.id);
+				if (recovered?.type === entry.type) apply(recovered as TEntry);
+			} catch {
+				// Preserve the original append error when recovery is unavailable.
+			}
+			throw error;
+		}
+		apply(committed);
+	}
 	async setModel(model: Model<Api>): Promise<void> {
 		if (this.closed) throw new HarnessClosed();
-		await this.durableSession.appendEntry(
+		await this.appendConfigurationEntry(
 			{ type: "model_change", id: this.durableSession.idGenerator.next(), provider: model.provider, modelId: model.id },
-			"main",
+			(committed) => {
+				if (committed.type !== "model_change") return;
+				const committedModel = this.models.getModel(committed.provider, committed.modelId);
+				if (committedModel) {
+					this.model = committedModel;
+					this.missingModels = [];
+				} else if (committed.provider === model.provider && committed.modelId === model.id) {
+					this.model = model;
+					this.missingModels = [];
+				} else {
+					this.missingModels = [`${committed.provider}/${committed.modelId}`];
+				}
+			},
 		);
-		this.model = model;
-		this.missingModels = [];
 	}
 	async getThinkingLevel(): Promise<ThinkingLevel> {
 		return this.thinkingLevel;
 	}
 	async setThinkingLevel(level: ThinkingLevel): Promise<void> {
 		if (this.closed) throw new HarnessClosed();
-		await this.durableSession.appendEntry(
+		await this.appendConfigurationEntry(
 			{ type: "thinking_level_change", id: this.durableSession.idGenerator.next(), thinkingLevel: level },
-			"main",
+			(committed) => {
+				if (committed.type !== "thinking_level_change") return;
+				this.thinkingLevel = committed.thinkingLevel as ThinkingLevel;
+			},
 		);
-		this.thinkingLevel = level;
 	}
 	async getActiveTools(): Promise<string[]> {
 		return [...this.activeToolNames];
@@ -1016,13 +1049,15 @@ export class AgentHarness implements AgentLane {
 	async setActiveTools(names: string[]): Promise<void> {
 		if (this.closed) throw new HarnessClosed();
 		const activeToolNames = [...names];
-		await this.durableSession.appendEntry(
+		await this.appendConfigurationEntry(
 			{ type: "active_tools_change", id: this.durableSession.idGenerator.next(), activeToolNames },
-			"main",
+			(committed) => {
+				if (committed.type !== "active_tools_change") return;
+				this.activeToolNames = [...committed.activeToolNames];
+				const availableTools = new Set(this.tools.map((tool) => tool.name));
+				this.missingTools = this.activeToolNames.filter((name) => !availableTools.has(name));
+			},
 		);
-		this.activeToolNames = activeToolNames;
-		const availableTools = new Set(this.tools.map((tool) => tool.name));
-		this.missingTools = activeToolNames.filter((name) => !availableTools.has(name));
 	}
 	async watch(): Promise<WatchHandle<LaneSnapshot>> {
 		return this.unavailable("watch");
@@ -1044,14 +1079,16 @@ export class AgentHarness implements AgentLane {
 		if (this.closed) throw new HarnessClosed();
 		const nextTools = [...tools];
 		const nextActiveNames = [...(activeNames ?? tools.map((tool) => tool.name))];
-		await this.durableSession.appendEntry(
+		await this.appendConfigurationEntry(
 			{ type: "active_tools_change", id: this.durableSession.idGenerator.next(), activeToolNames: nextActiveNames },
-			"main",
+			(committed) => {
+				if (committed.type !== "active_tools_change") return;
+				this.tools = nextTools;
+				this.activeToolNames = [...committed.activeToolNames];
+				const availableTools = new Set(nextTools.map((tool) => tool.name));
+				this.missingTools = this.activeToolNames.filter((name) => !availableTools.has(name));
+			},
 		);
-		this.tools = nextTools;
-		this.activeToolNames = nextActiveNames;
-		const availableTools = new Set(nextTools.map((tool) => tool.name));
-		this.missingTools = nextActiveNames.filter((name) => !availableTools.has(name));
 	}
 	async getResources(): Promise<Resources> {
 		return {

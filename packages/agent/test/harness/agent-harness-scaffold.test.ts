@@ -1,6 +1,6 @@
 import { createModels, fauxAssistantMessage, fauxProvider, type Usage } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	AgentHarness,
 	HarnessClosed,
@@ -141,6 +141,31 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(await harness.getSteeringMode()).toBe("all");
 		await harness.setFollowUpMode("all");
 		expect(await harness.getFollowUpMode()).toBe("all");
+	});
+
+	it("reconciles configuration when a durable append reports failure after commit", async () => {
+		const session = createSession("append-then-throws");
+		const harness = await createHarness(session);
+		const appendEntry = session.appendEntry.bind(session);
+		vi.spyOn(session, "appendEntry").mockImplementation(async (entry, lane) => {
+			await appendEntry(entry, lane);
+			throw new Error("reported after commit");
+		});
+
+		const model = getModel("anthropic", "claude-sonnet-4-5");
+		await expect(harness.setModel(model)).rejects.toThrow("reported after commit");
+		expect(await harness.getModel()).toBe(model);
+
+		await expect(harness.setThinkingLevel("high")).rejects.toThrow("reported after commit");
+		expect(await harness.getThinkingLevel()).toBe("high");
+
+		await expect(harness.setActiveTools(["durable-tool"])).rejects.toThrow("reported after commit");
+		expect(await harness.getActiveTools()).toEqual(["durable-tool"]);
+
+		const tool = { name: "durable-tool", label: "Durable tool" } as HarnessTool;
+		await expect(harness.setTools([tool])).rejects.toThrow("reported after commit");
+		expect(await harness.getTools()).toEqual([tool]);
+		expect(await harness.getActiveTools()).toEqual(["durable-tool"]);
 	});
 
 	it("rejects every unfinished public operation explicitly", async () => {
