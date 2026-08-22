@@ -32,7 +32,7 @@ export interface V2FileReferenceOptions {
 	readonly maxReadBytes?: number;
 }
 
-type FileScope = "project" | "relative" | "home" | "absolute";
+type FileScope = "project" | "relative" | "server" | "home" | "absolute";
 
 const DEFAULT_MAX_READ_BYTES = 8 * 1024 * 1024;
 
@@ -46,13 +46,19 @@ function scopeOf(reference: string): FileScope {
 		? "home"
 		: isAbsolute(reference)
 			? "absolute"
-			: reference.startsWith("project:")
-				? "project"
-				: "relative";
+			: reference.startsWith("server:")
+				? "server"
+				: reference.startsWith("project:")
+					? "project"
+					: "relative";
 }
 
 function projectReference(reference: string): string {
 	return reference.startsWith("project:") ? reference.slice("project:".length) : reference;
+}
+
+function serverReference(reference: string): string {
+	return reference.startsWith("server:") ? reference.slice("server:".length) : reference;
 }
 
 function isWithin(root: string, candidate: string): boolean {
@@ -108,7 +114,14 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 		void sessionId;
 		const clean = cleanReference(prefix);
 		const scope = scopeOf(clean);
-		const logical = scope === "project" ? projectReference(clean) : scope === "home" ? clean.slice(2) : clean;
+		const logical =
+			scope === "project"
+				? projectReference(clean)
+				: scope === "server"
+					? serverReference(clean)
+					: scope === "home"
+						? clean.slice(2)
+						: clean;
 		const base = scope === "project" ? this.projectRoot : scope === "home" ? this.homeDirectory : this.cwd;
 		const candidate = isAbsolute(logical) ? logical : resolve(base, logical);
 		const directory = await this.directoryForCompletion(candidate);
@@ -159,7 +172,13 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 	private async authorize(reference: string): Promise<string> {
 		const scope = scopeOf(reference);
 		const logical =
-			scope === "project" ? projectReference(reference) : scope === "home" ? reference.slice(2) : reference;
+			scope === "project"
+				? projectReference(reference)
+				: scope === "server"
+					? serverReference(reference)
+					: scope === "home"
+						? reference.slice(2)
+						: reference;
 		const base = scope === "project" ? this.projectRoot : scope === "home" ? this.homeDirectory : this.cwd;
 		if (scope === "absolute" && !this.allowAbsolute) throw new Error("Absolute file references are disabled");
 		const candidate = scope === "absolute" ? resolve(reference) : resolve(base, logical);
