@@ -1,6 +1,7 @@
-import { readFile, realpath } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { MAX_V2_ARRAY_ITEMS, MAX_V2_JSON_DEPTH, MAX_V2_STRING_LENGTH } from "@earendil-works/pi-protocol";
 
 export type CodexPluginJson = null | boolean | number | string | CodexPluginJson[] | { [key: string]: CodexPluginJson };
 
@@ -105,12 +106,40 @@ export async function resolveCodexPluginResourceOnDisk(
 	}
 }
 
-async function readJson(path: string): Promise<unknown | undefined> {
+const MAX_MANIFEST_BYTES = MAX_V2_STRING_LENGTH;
+
+function assertBoundedJson(value: unknown, depth = 0): void {
+	if (depth > MAX_V2_JSON_DEPTH) throw new Error("Manifest nesting exceeds the supported depth");
+	if (typeof value === "string") {
+		if (value.length > MAX_V2_STRING_LENGTH) throw new Error("Manifest string exceeds the supported length");
+	} else if (typeof value === "number") {
+		if (!Number.isFinite(value)) throw new Error("Manifest number is invalid");
+	} else if (Array.isArray(value)) {
+		if (value.length > MAX_V2_ARRAY_ITEMS) throw new Error("Manifest array exceeds the supported size");
+		value.forEach((item) => assertBoundedJson(item, depth + 1));
+	} else if (isRecord(value)) {
+		const entries = Object.entries(value);
+		if (entries.length > MAX_V2_ARRAY_ITEMS) throw new Error("Manifest object exceeds the supported size");
+		for (const [key, child] of entries) {
+			if (key.length > MAX_V2_STRING_LENGTH) throw new Error("Manifest key exceeds the supported length");
+			assertBoundedJson(child, depth + 1);
+		}
+	}
+}
+
+type JsonReadResult = { kind: "ok"; value: unknown } | { kind: "missing" | "malformed" };
+
+async function readJson(path: string): Promise<JsonReadResult> {
 	try {
-		return JSON.parse(await readFile(path, "utf8")) as unknown;
+		const metadata = await stat(path);
+		if (!metadata.isFile() || metadata.size > MAX_MANIFEST_BYTES) return { kind: "malformed" };
+		const canonical = await realpath(path);
+		const value = JSON.parse(await readFile(canonical, "utf8")) as unknown;
+		assertBoundedJson(value);
+		return { kind: "ok", value };
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-		throw error;
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
+		return { kind: "malformed" };
 	}
 }
 
@@ -130,7 +159,13 @@ export async function loadCodexPluginManifest(root: string): Promise<CodexPlugin
 			diagnostics: [{ code: "invalid_manifest", severity: "error", message: manifestPath.message }],
 		};
 	}
-	return { root: canonicalRoot, ...parseCodexPluginManifest(await readJson(manifestPath.path)) };
+	const parsed = await readJson(manifestPath.path);
+	if (parsed.kind !== "ok")
+		return {
+			root: canonicalRoot,
+			diagnostics: [{ code: "invalid_manifest", severity: "error", message: "Codex plugin manifest is malformed" }],
+		};
+	return { root: canonicalRoot, ...parseCodexPluginManifest(parsed.value) };
 }
 
 /** Discover a marketplace manifest at a supported Codex marketplace location. */
@@ -146,10 +181,17 @@ export async function loadCodexMarketplaceManifest(
 				root: canonicalRoot,
 				diagnostics: [{ code: "invalid_manifest", severity: "error", message: candidate.message }],
 			};
+		const parsed = await readJson(candidate.path);
+		if (parsed.kind !== "ok")
+			return {
+				root: canonicalRoot,
+				path: candidate.path,
+				diagnostics: [{ code: "invalid_manifest", severity: "error", message: "Codex marketplace manifest is malformed" }],
+			};
 		return {
 			root: canonicalRoot,
 			path: candidate.path,
-			...parseCodexMarketplaceManifest(await readJson(candidate.path)),
+			...parseCodexMarketplaceManifest(parsed.value),
 		};
 	}
 	return {
