@@ -732,9 +732,12 @@ export class RemoteV2Session {
 		};
 	}
 
-	async diagnosticsStatus(): Promise<RemoteV2DiagnosticsStatus> {
+	async diagnosticsStatus(options: { readonly sessionId?: string } = {}): Promise<RemoteV2DiagnosticsStatus> {
 		this.#assertNotDisposed();
-		const result = await this.#direct({ command: "diagnostics/status" });
+		const result = await this.#direct({
+			command: "diagnostics/status",
+			...(options.sessionId === undefined ? {} : { payload: options as JsonValue }),
+		});
 		if (
 			(result.capture !== "metadata" && result.capture !== "encrypted") ||
 			typeof result.degraded !== "boolean" ||
