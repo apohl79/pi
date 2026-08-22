@@ -1139,7 +1139,6 @@ export class AgentHarness implements AgentLane {
 				}),
 			);
 		}
-		const lanes = await this.durableSession.getLanes();
 		const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
 		const userEntries = entries.filter(
 			(entry): entry is Extract<Entry, { type: "message" }> =>
@@ -1152,9 +1151,14 @@ export class AgentHarness implements AgentLane {
 		}
 		const target = turns === userEntries.length ? null : userEntries[userEntries.length - turns]!.parentId;
 		const previousTarget = await this.durableSession.getLeafId();
+		const rollbackId = this.durableSession.idGenerator.next();
 		await this.durableSession.moveLane("main", target);
 		try {
-			await this.durableSession.appendCustomEntry("conversation_rollback", { removedTurns: turns, targetId: target });
+			await this.durableSession.appendCustomEntry("conversation_rollback", {
+				rollbackId,
+				removedTurns: turns,
+				targetId: target,
+			});
 		} catch (error) {
 			const committed = (await this.durableSession.findEntriesOnBranch({ order: "newestFirst", limit: 1 })).some(
 				(entry) =>
@@ -1162,10 +1166,14 @@ export class AgentHarness implements AgentLane {
 					entry.customType === "conversation_rollback" &&
 					typeof entry.data === "object" &&
 					entry.data !== null &&
-					(entry.data as { targetId?: unknown }).targetId === target,
+					(entry.data as { rollbackId?: unknown }).rollbackId === rollbackId,
 			);
-			if (!committed) await this.durableSession.moveLane("main", previousTarget).catch(() => undefined);
-			else return ResultValue.ok({ targetId: target, removedTurns: turns });
+			if (committed) return ResultValue.ok({ targetId: target, removedTurns: turns });
+			try {
+				await this.durableSession.moveLane("main", previousTarget);
+			} catch (restoreError) {
+				throw new Error("Rollback reconciliation failed: lane restoration was not confirmed", { cause: restoreError });
+			}
 			throw error;
 		}
 		return ResultValue.ok({ targetId: target, removedTurns: turns });
