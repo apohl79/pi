@@ -57,10 +57,12 @@ export interface V2InputRegistry {
 	cancel(requestId: string): Promise<V2InputRequest>;
 	wait(requestId: string): Promise<V2InputRequest>;
 	pendingForSession(sessionId: string): Promise<string | undefined>;
+	takeRespondedForSession(sessionId: string): Promise<Readonly<Record<string, string>> | undefined>;
 }
 
 export class InMemoryV2InputRegistry implements V2InputRegistry {
 	private readonly requests = new Map<string, InputState>();
+	private readonly consumedResponses = new Set<string>();
 
 	async create(
 		sessionId: string,
@@ -143,6 +145,20 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 		)?.request.id;
 	}
 
+	async takeRespondedForSession(sessionId: string): Promise<Readonly<Record<string, string>> | undefined> {
+		const state = [...this.requests.values()]
+			.reverse()
+			.find(
+				(candidate) =>
+					candidate.request.sessionId === sessionId &&
+					candidate.request.status === "responded" &&
+					!this.consumedResponses.has(candidate.request.id),
+			);
+		if (!state) return undefined;
+		this.consumedResponses.add(state.request.id);
+		return structuredClone(state.request.answers ?? {});
+	}
+
 	private get(requestId: string): InputState {
 		const state = this.requests.get(requestId);
 		if (!state) throw new Error(`Unknown input request ${requestId}`);
@@ -222,6 +238,11 @@ export class JsonlV2InputRegistry implements V2InputRegistry {
 	async pendingForSession(sessionId: string): Promise<string | undefined> {
 		await this.loaded;
 		return this.memory.pendingForSession(sessionId);
+	}
+
+	async takeRespondedForSession(sessionId: string): Promise<Readonly<Record<string, string>> | undefined> {
+		await this.loaded;
+		return this.memory.takeRespondedForSession(sessionId);
 	}
 
 	private async mutate(operation: () => Promise<V2InputRequest>): Promise<V2InputRequest> {

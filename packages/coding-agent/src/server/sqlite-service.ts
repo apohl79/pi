@@ -145,6 +145,8 @@ export async function createCodingAgentV2SqliteService(
 				? {}
 				: {
 						requestUserInput: async (request, signal) => {
+							const recovered = await inputRegistry.takeRespondedForSession(metadata.id);
+							if (recovered !== undefined) return recovered;
 							const pending = await inputRegistry.create(
 								metadata.id,
 								request.questions,
