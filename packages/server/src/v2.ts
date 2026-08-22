@@ -177,6 +177,7 @@ export class PiServerV2 {
 	private readonly eventHistory = new Map<string, EventEnvelopeV2[]>();
 	private readonly agentWatches = new Set<string>();
 	private readonly operations = new Map<string, OperationRecordV2>();
+	private readonly pendingRequests = new Map<string, CommandV2>();
 	private readonly disposedRuntimes = new WeakSet<PiSessionRuntimeV2>();
 	private closing = false;
 	private started = false;
@@ -353,7 +354,19 @@ export class PiServerV2 {
 	}
 
 	private async handleRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const requestKey = `${state.id}:${id}`;
+		this.pendingRequests.set(requestKey, command);
 		try {
+			await this.recordProtocolDiagnostic({
+				kind: "protocol_command_received",
+				severity: "debug",
+				outcome: "started",
+				traceId: command.operationId ?? command.requestId ?? id,
+				spanId: id,
+				...(command.sessionId === undefined ? {} : { sessionId: command.sessionId }),
+				...(command.operationId === undefined ? {} : { operationId: command.operationId }),
+				payload: { command: command.command, requestId: id },
+			});
 			if (command.command === "session/create") return void (await this.createSession(state, id, command));
 			if (command.command === "session/delete") return void (await this.deleteSession(state, id, command));
 			if (command.command === "session/list")
@@ -547,7 +560,7 @@ export class PiServerV2 {
 			...(env === undefined ? {} : { env }),
 			...(typeof payload.pty === "boolean" ? { pty: payload.pty } : {}),
 		});
-		await this.diagnostics.record({
+		await this.recordProtocolDiagnostic({
 			kind: "process_started",
 			severity: "info",
 			outcome: "started",
@@ -1620,17 +1633,53 @@ export class PiServerV2 {
 		);
 	}
 
-	private sendResponse(state: V2ConnectionState, id: string, result: Record<string, unknown>): Promise<void> {
-		return this.send(state, { type: "response", id, ok: true, result: toProtocolJsonValue(result) });
+	private async sendResponse(state: V2ConnectionState, id: string, result: Record<string, unknown>): Promise<void> {
+		await this.recordCommandOutcome(state, id, "ok");
+		await this.send(state, { type: "response", id, ok: true, result: toProtocolJsonValue(result) });
 	}
 
 	private async sendError(state: V2ConnectionState, id: string, code: string, message: string): Promise<void> {
+		await this.recordCommandOutcome(state, id, "error", { code, message });
 		if (state.closed) return;
 		try {
 			await this.send(state, { type: "response", id, ok: false, error: { code, message } });
 		} catch {
 			// The request may finish after the client has disconnected; no response can be delivered.
 			this.disconnect(state);
+		}
+	}
+
+	private async recordCommandOutcome(
+		state: V2ConnectionState,
+		id: string,
+		outcome: "ok" | "error",
+		error?: { code: string; message: string },
+	): Promise<void> {
+		const key = `${state.id}:${id}`;
+		const command = this.pendingRequests.get(key);
+		if (command === undefined) return;
+		this.pendingRequests.delete(key);
+		await this.recordProtocolDiagnostic({
+			kind: "protocol_command_completed",
+			severity: outcome === "ok" ? "debug" : "error",
+			outcome,
+			traceId: command.operationId ?? command.requestId ?? id,
+			spanId: id,
+			...(command.sessionId === undefined ? {} : { sessionId: command.sessionId }),
+			...(command.operationId === undefined ? {} : { operationId: command.operationId }),
+			payload: {
+				command: command.command,
+				requestId: id,
+				...(error === undefined ? {} : { errorCode: error.code, error: error.message }),
+			},
+		});
+	}
+
+	private async recordProtocolDiagnostic(event: Parameters<ForensicRecorder["record"]>[0]): Promise<void> {
+		try {
+			await this.diagnostics.record(event);
+		} catch (error) {
+			this.onError?.(error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 

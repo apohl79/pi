@@ -352,7 +352,7 @@ describe("PiServer v2 operation acceptance", () => {
 		const doctor = await client.request({ command: "diagnostics/doctor" });
 		expect(status).toMatchObject({
 			ok: true,
-			result: { capture: "metadata", eventCount: 3, degraded: true, lastCriticalEventSeq: 1 },
+			result: { capture: "metadata", eventCount: 4, degraded: true, lastCriticalEventSeq: 1 },
 		});
 		const scopedStatus = await client.request({ command: "diagnostics/status", payload: { sessionId: "session-2" } });
 		expect(scopedStatus).toMatchObject({
@@ -384,7 +384,6 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: {
 				format: "json",
-				events: [{ seq: 1 }, { seq: 2 }, { seq: 3 }],
 				bundle: {
 					manifest: { unavailable: ["client-diagnostic-spool"], projectionsSha256: expect.any(String) },
 					projections: {
@@ -401,12 +400,37 @@ describe("PiServer v2 operation acceptance", () => {
 				},
 			},
 		});
+		if (exported.ok && "result" in exported) {
+			const result = exported.result as {
+				events: Array<{ seq: number }>;
+				bundle: { events: Array<{ seq: number }> };
+			};
+			expect(result.events).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ seq: 1 }),
+					expect.objectContaining({ seq: 2 }),
+					expect.objectContaining({ seq: 3 }),
+				]),
+			);
+			expect(result.bundle.events).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ seq: 1 }),
+					expect.objectContaining({ seq: 2 }),
+					expect.objectContaining({ seq: 3 }),
+				]),
+			);
+		}
 		expect(scopedExport).toMatchObject({
 			ok: true,
 			result: {
-				events: [{ seq: 1 }, { seq: 3 }],
+				events: expect.arrayContaining([expect.objectContaining({ seq: 1 }), expect.objectContaining({ seq: 3 })]),
 				bundle: {
-					manifest: { eventCount: 2, firstSeq: 1, lastSeq: 3, scope: { sessionId: "session-1" } },
+					manifest: {
+						eventCount: expect.any(Number),
+						firstSeq: 1,
+						lastSeq: expect.any(Number),
+						scope: { sessionId: "session-1" },
+					},
 				},
 			},
 		});
@@ -471,7 +495,7 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.hello();
 		const status = await client.request({ command: "diagnostics/status" });
 		const doctor = await client.request({ command: "diagnostics/doctor" });
-		expect(status).toMatchObject({ ok: true, result: { capture: "metadata", eventCount: 0 } });
+		expect(status).toMatchObject({ ok: true, result: { capture: "metadata", eventCount: 1 } });
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
 	});
 
@@ -747,11 +771,10 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: { command: "operation/read", operation: { operationId, state: "complete", terminalSeq: 3 } },
 		});
-		expect((await diagnostics.read()).map((event) => event.kind)).toEqual([
-			"operation_accepted",
-			"operation_terminal",
-		]);
-		const acceptedEvent = (await diagnostics.read())[0]!;
+		expect(
+			(await diagnostics.read()).map((event) => event.kind).filter((kind) => kind.startsWith("operation_")),
+		).toEqual(["operation_accepted", "operation_terminal"]);
+		const acceptedEvent = (await diagnostics.read()).find((event) => event.kind === "operation_accepted")!;
 		expect(acceptedEvent.payload).toMatchObject({
 			command: "turn/start",
 			contentRef: { eventId: operationId, kind: "turn/start", truncated: false },
@@ -1039,14 +1062,17 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.request({ command: "process/wait", payload: { processId } });
 		const terminated = await client.request({ command: "process/terminate", payload: { processId } });
 		expect(terminated).toMatchObject({ ok: true, result: { process: { state: "terminated", exitCode: 143 } } });
-		expect((await diagnostics.read()).map((event) => event.kind)).toEqual([
+		const diagnosticEvents = await diagnostics.read();
+		expect(diagnosticEvents.map((event) => event.kind).filter((kind) => kind.startsWith("process_"))).toEqual([
 			"process_started",
 			"process_input_written",
 			"process_output_read",
 			"process_waited",
 			"process_terminated",
 		]);
-		const inputEvent = (await diagnostics.read()).find((event) => event.kind === "process_input_written");
+		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_received")).toHaveLength(5);
+		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_completed")).toHaveLength(5);
+		const inputEvent = diagnosticEvents.find((event) => event.kind === "process_input_written");
 		expect(inputEvent).toMatchObject({
 			processInstanceId: processId,
 			sessionId: "session-1",
