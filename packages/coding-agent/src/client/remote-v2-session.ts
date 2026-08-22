@@ -17,6 +17,8 @@ import type {
 	SessionSnapshotV2 as ProtocolSnapshot,
 	ThinkingLevel as ProtocolThinkingLevel,
 } from "@earendil-works/pi-protocol";
+import { SessionSnapshotV2Schema } from "@earendil-works/pi-protocol";
+import { Check } from "typebox/value";
 
 export type RemoteV2SessionLifecycle =
 	| { readonly status: "unbound" }
@@ -1069,11 +1071,7 @@ function records(value: unknown, command: string): readonly Record<string, unkno
 }
 
 function isSnapshot(value: unknown): value is ProtocolSnapshot {
-	return (
-		asRecord(value)?.id !== undefined &&
-		asRecord(value)?.revision !== undefined &&
-		asRecord(value)?.phase !== undefined
-	);
+	return Check(SessionSnapshotV2Schema, value);
 }
 
 function isPlanSnapshot(value: unknown): value is PlanSnapshot {
