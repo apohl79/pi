@@ -61,6 +61,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
 		if (this.disposed) throw new Error("Coding-agent child registry is disposed");
 		this.validateRequest(request);
+		await this.hydrate(request.sessionId);
 		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
 		if (!this.service.createSession) throw new Error("Coding-agent service does not support child sessions");
 		const model = await this.resolveModel(request);
@@ -255,9 +256,10 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			const snapshot = await runtime.snapshot();
 			const persisted = await this.readState(runtime);
 			const taskName = metadata.sessionName ?? metadata.id;
+			const parentPath = this.agents.get(metadata.parentSessionId)?.summary.path ?? "/root";
 			const summary: AgentSummary = {
 				id: metadata.id,
-				path: `${parentSessionId}/${taskName}`,
+				path: `${parentPath}/${taskName}`,
 				taskName,
 				state: snapshot.phase === "idle" ? "complete" : "running",
 				model: snapshot.model,

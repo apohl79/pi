@@ -161,6 +161,37 @@ async function listAfterRestart(directory: string, socketPath: string, sessionId
 	}
 }
 
+async function spawnDuplicateAfterRestart(directory: string, socketPath: string, sessionId: string): Promise<unknown> {
+	const { models, parent } = createModelsWithChildResponse();
+	const runtime = await createConfiguredCodingAgentDaemonRuntime({
+		agentDir: directory,
+		cwd: directory,
+		models,
+		model: parent.getModel(),
+		socketPath,
+		harness: { tools: [], activeToolNames: [] },
+		write: () => {},
+	});
+	const client = new PiClientV2({ transportFactory: createUnixTransportFactory({ path: socketPath }) });
+	try {
+		await runtime.daemon.start();
+		await client.connect();
+		await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+		return await client.request({
+			command: "agent/spawn",
+			sessionId,
+			payload: {
+				taskName: "durable-child",
+				taskMessage: "do not duplicate this child",
+				model: { provider: "coding-agent-daemon-restart-child-faux", id: "child-model" },
+			},
+		});
+	} finally {
+		client.dispose();
+		await runtime.close();
+	}
+}
+
 describe("coding-agent daemon child durability", () => {
 	test("rehydrates a completed child agent after daemon restart", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-agent-restart-"));
@@ -181,6 +212,7 @@ describe("coding-agent daemon child durability", () => {
 				],
 			},
 		});
+		expect(await spawnDuplicateAfterRestart(directory, socketPath, sessionId)).toMatchObject({ ok: false });
 	});
 
 	test("rehydrates a queued child message after daemon restart", async () => {
