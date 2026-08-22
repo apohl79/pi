@@ -516,9 +516,12 @@ export class AgentHarness implements AgentLane {
 			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 			await this.durableSession.appendRecord(started);
 		} catch (error) {
-			release();
 			const raced = await this.durableSession.findOpenOperations("main", { limit: 1 }).catch(() => []);
-			if (raced.length > 0)
+			if (raced.length > 0 && raced[0]!.id === runId) {
+				// Some remote stores can commit before reporting a transport error.
+				// Continue the operation when our own start is durably visible.
+			} else if (raced.length > 0) {
+				release();
 				return ResultValue.err(
 					new LaneBusy({
 						lane: "main",
@@ -527,7 +530,10 @@ export class AgentHarness implements AgentLane {
 						message: "Lane is busy",
 					}),
 				);
-			throw error;
+			} else {
+				release();
+				throw error;
+			}
 		}
 		try {
 			const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
@@ -739,7 +745,7 @@ export class AgentHarness implements AgentLane {
 				});
 			} catch (error) {
 				const raced = await this.durableSession.findOpenOperations("main", { limit: 1 }).catch(() => []);
-				if (raced.length > 0) {
+				if (raced.length > 0 && raced[0]!.id !== runId) {
 					return ResultValue.err(
 						new LaneBusy({
 							lane: "main",
