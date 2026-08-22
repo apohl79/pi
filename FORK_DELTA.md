@@ -54,7 +54,11 @@ Configured daemon builds read release metadata from `PI_BUILD_VERSION`,
 `PI_FORK_COMMIT`, `PI_UPSTREAM_BASE_COMMIT`, and `PI_CONFIG_HASH`. Release and
 CI jobs must inject the first three values so exported diagnostic bundles can
 be attributed to an exact fork build and upstream base; local development may
-omit them and retains only host/runtime identity.
+omit them and retains only host/runtime identity. Standalone builders normalize
+the conventional leading `v` from `RELEASE_TAG`, preserve explicit
+`PI_BUILD_VERSION`, derive archive identity from the selected Git ref, and
+encode generated literals safely before compilation. The runtime-manifest
+contract test protects blank-environment fallback to compiled identity.
 
 ## Update policy
 
