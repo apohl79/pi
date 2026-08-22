@@ -781,7 +781,9 @@ export class AgentHarness implements AgentLane {
 						}),
 					);
 				}
-				throw error;
+				if (raced.length === 0) throw error;
+				// The append may have committed before the backend reported an error.
+				// Continue the operation when our own start is durably visible.
 			}
 			startedPersisted = true;
 			const result = await compact(

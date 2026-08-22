@@ -72,13 +72,14 @@ describe("AgentHarness v2 scaffold", () => {
 
 		const recorded = createSession("recorded");
 		await recorded.appendRecord(operationStarted("run"));
-		await expect(
-			AgentHarness.create({
-				session: recorded,
-				models: createModels(),
-				model: getModel("google", "gemini-2.5-flash"),
-			}),
-		).rejects.toMatchObject({ name: "HarnessNotImplemented", operation: "create.restore" });
+		const restored = await AgentHarness.create({
+			session: recorded,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+		});
+		expect(restored.suspended).toHaveLength(1);
+		expect(restored.suspended[0]).toMatchObject({ kind: "run", id: "run", reason: "crash" });
+		await restored.harness.close();
 	});
 
 	it("keeps scaffold-safe configuration as defensive copies", async () => {
