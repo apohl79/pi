@@ -504,6 +504,91 @@ describe("coding-agent daemon runtime", () => {
 		}
 	});
 
+	test("keeps an explicit name when fast-model generation races it", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-session-name-race-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-session-name-race-faux",
+			models: [
+				{
+					id: "coding-agent-daemon-session-name-race-model",
+					reasoning: false,
+					contextWindow: 32_000,
+					maxTokens: 1_000,
+				},
+			],
+		});
+		models.setProvider(faux.provider);
+		let releaseNaming!: () => void;
+		const namingReleased = new Promise<void>((resolve) => {
+			releaseNaming = resolve;
+		});
+		let namingStarted!: () => void;
+		const namingStartedSignal = new Promise<void>((resolve) => {
+			namingStarted = resolve;
+		});
+		faux.setResponses([
+			fauxAssistantMessage("turn response"),
+			async () => {
+				namingStarted();
+				await namingReleased;
+				return fauxAssistantMessage("stale generated title");
+			},
+		]);
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			fastModel: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
+			const sessionId = (created.result as { session: { id: string } }).session.id;
+			await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			const accepted = await client.request({ command: "turn/start", sessionId, payload: { text: "race naming" } });
+			expect(accepted).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+			await namingStartedSignal;
+			const explicit = await client.request({
+				command: "session/name/set",
+				sessionId,
+				payload: { name: "Manual title" },
+			});
+			expect(explicit).toMatchObject({ ok: true });
+			releaseNaming();
+			for (let attempt = 0; attempt < 50; attempt++) {
+				const read = await client.request({ command: "session/read", sessionId });
+				if (
+					read.ok &&
+					"result" in read &&
+					(read.result as { session: { name?: string; nameSource?: string; phase: string } }).session.name ===
+						"Manual title" &&
+					(read.result as { session: { name?: string; nameSource?: string; phase: string } }).session.phase ===
+						"idle"
+				)
+					break;
+				if (attempt === 49) throw new Error("Timed out waiting for explicit name to win race");
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			const usage = await client.request({ command: "usage/read", payload: { sessionId, purpose: "sessionName" } });
+			expect(usage).toMatchObject({ result: { aggregate: { responses: 1 } } });
+		} finally {
+			releaseNaming();
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
 	test("runs server-default print mode through the production daemon", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-daemon-print-e2e-"));
 		directories.push(directory);
