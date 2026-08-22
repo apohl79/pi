@@ -947,6 +947,18 @@ export class RemoteV2Session {
 		this.#emit();
 	}
 
+	async delete(): Promise<void> {
+		this.#assertControl();
+		const handle = this.#requireHandle();
+		await this.#client.deleteSession(handle.sessionId);
+		this.#unsubscribe?.();
+		this.#unsubscribe = undefined;
+		this.#handle = undefined;
+		this.#lifecycle = { status: "disposed" };
+		this.#emit();
+		this.#listeners.clear();
+	}
+
 	async dispose(): Promise<void> {
 		if (this.#lifecycle.status === "disposed") return;
 		let detachFailed = false;
