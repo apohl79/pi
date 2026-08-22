@@ -4,7 +4,7 @@ import {
 	type ServerMessageV2,
 	type ServerSnapshotV2,
 } from "@earendil-works/pi-protocol";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { ByteTransport, ByteTransportHandlers } from "../src/transport.ts";
 import { PiClientV2 } from "../src/v2.ts";
 
@@ -87,5 +87,26 @@ describe("PiClientV2 resilience", () => {
 		expect(listenerErrors).toEqual([new Error("consumer failure")]);
 		expect(client.connected).toBe(true);
 		client.disconnect();
+	});
+
+	test("closes a transport that resolves after disconnect", async () => {
+		let resolveTransport: ((transport: ByteTransport) => void) | undefined;
+		const factory = () =>
+			new Promise<ByteTransport>((resolve) => {
+				resolveTransport = resolve;
+			});
+		const client = new PiClientV2({ transportFactory: factory });
+		const connecting = client.connect();
+		const disconnected = connecting.catch((error: unknown) => error);
+		await Promise.resolve();
+		const close = vi.fn();
+		const transport: ByteTransport = { send: async () => {}, close };
+		expect(resolveTransport).toBeDefined();
+		client.disconnect();
+		resolveTransport?.(transport);
+
+		expect(await disconnected).toEqual(new Error("PiClientV2 transport closed"));
+		expect(close).toHaveBeenCalledOnce();
+		expect(client.connected).toBe(false);
 	});
 });
