@@ -160,6 +160,7 @@ export const InstructionProfileSummarySchema = StrictObject({
 	source: Type.Union([Type.Literal("text"), Type.Literal("file")]),
 	contentHash: IdSchema,
 });
+export type InstructionProfileSummary = Static<typeof InstructionProfileSummarySchema>;
 
 export const CompactionPolicySchema = StrictObject({
 	enabled: Type.Boolean(),
