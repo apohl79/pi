@@ -122,6 +122,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			taskName: request.taskName,
 			state: "running",
 			model: effectiveModel,
+			startedAt: Date.now(),
 			usage: (await created.runtime.snapshot()).usage,
 		};
 		const agent: ChildAgent = {
@@ -395,6 +396,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				taskName,
 				state: persisted?.state ?? (snapshot.phase === "idle" ? "complete" : "running"),
 				model: snapshot.model,
+				startedAt: metadata.createdAt,
 				usage: snapshot.usage,
 			};
 			this.agents.set(metadata.id, {

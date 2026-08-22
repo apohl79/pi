@@ -186,11 +186,14 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	if (snapshot.diagnostics.degraded) lines.push("Diagnostics degraded");
 	for (const agent of snapshot.agents.slice(0, options.maxAgentItems ?? 12)) {
 		const usage = agent.usage;
+		const duration = agent.startedAt === undefined ? "" : ` · ${formatAgentDuration(agent.startedAt)}`;
 		const usageText =
 			usage === undefined
 				? ""
 				: ` · ↓${usage.input} ↑${usage.output}${usage.costUsd === undefined ? "" : ` $${usage.costUsd.toFixed(2)}`}`;
-		lines.push(`Agent ${agent.path} · ${agent.state} · ${agent.model.provider}/${agent.model.id}${usageText}`);
+		lines.push(
+			`Agent ${agent.path} · ${agent.state} · ${agent.model.provider}/${agent.model.id}${duration}${usageText}`,
+		);
 	}
 	if (snapshot.goal) {
 		const maxGoalCharacters = options.maxGoalCharacters ?? 240;
@@ -217,6 +220,13 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 		characters += line.length;
 	}
 	return lines.join("\n");
+}
+
+function formatAgentDuration(startedAt: number): string {
+	const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1_000));
+	return `${Math.floor(elapsedSeconds / 60)
+		.toString()
+		.padStart(2, "0")}:${(elapsedSeconds % 60).toString().padStart(2, "0")}`;
 }
 
 export function createRemoteV2StatuslinePayload(
