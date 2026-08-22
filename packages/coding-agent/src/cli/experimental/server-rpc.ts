@@ -35,6 +35,7 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 			previousSnapshot = snapshot;
 		},
 	);
+	let activeBashProcessId: string | undefined;
 
 	const input = options.input ?? process.stdin;
 	const stopReading = attachJsonlLineReader(input, (line) => {
@@ -82,6 +83,24 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 			case "abort":
 				await session.abort();
 				return success(id, "abort");
+			case "bash": {
+				const process = await session.startProcess(command.command, { cwd: options.cwd, pty: false });
+				activeBashProcessId = process.processId;
+				const completed = process.state === "running" ? await session.waitProcess(process.processId) : process;
+				activeBashProcessId = undefined;
+				return success(id, "bash", {
+					output: completed.output,
+					exitCode: completed.exitCode,
+					cancelled: completed.state === "terminated",
+					truncated: completed.truncated,
+				});
+			}
+			case "abort_bash":
+				if (activeBashProcessId !== undefined) {
+					await session.terminateProcess(activeBashProcessId);
+					activeBashProcessId = undefined;
+				}
+				return success(id, "abort_bash");
 			case "get_state":
 				return success(id, "get_state", stateFor(session.snapshot));
 			case "set_model":

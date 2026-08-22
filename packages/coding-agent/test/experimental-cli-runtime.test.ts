@@ -177,6 +177,47 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>)
 							result: { blob: { digest: "image-digest", mimeType: "image/png", size: 3 } },
 						}),
 					);
+				} else if (message.request.command === "process/start") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: {
+								process: {
+									processId: "process-1",
+									sessionId: "session-1",
+									command: "printf hello",
+									pty: false,
+									state: "running",
+									output: "",
+									cursor: 0,
+									truncated: false,
+								},
+							},
+						}),
+					);
+				} else if (message.request.command === "process/wait") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: {
+								process: {
+									processId: "process-1",
+									sessionId: "session-1",
+									command: "printf hello",
+									pty: false,
+									state: "exited",
+									exitCode: 0,
+									output: "hello",
+									cursor: 5,
+									truncated: false,
+								},
+							},
+						}),
+					);
 				}
 			},
 			close: () => {},
@@ -329,6 +370,29 @@ describe("experimental CLI runtime", () => {
 			command: "get_available_thinking_levels",
 			success: true,
 			data: { levels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
+		});
+		runtime.close();
+	});
+
+	test("maps RPC bash execution to the server-owned process registry", async () => {
+		const server = clientFactory();
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: () => {},
+			rpcInput: Readable.from(['{"id":"bash-1","type":"bash","command":"printf hello"}\n']),
+			rpcOutput: (value) => output.push(value),
+		});
+		await runtime.runRpc({ messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(output).toContainEqual({
+			id: "bash-1",
+			type: "response",
+			command: "bash",
+			success: true,
+			data: { output: "hello", exitCode: 0, cancelled: false, truncated: false },
 		});
 		runtime.close();
 	});
