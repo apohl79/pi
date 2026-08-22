@@ -36,10 +36,19 @@ describe("coding-agent SQLite v2 service", () => {
 				models,
 				env,
 				model: faux.getModel(),
+				compaction: (selectedModel) => ({
+					enabled: true,
+					reserveTokens: selectedModel.id === "coding-agent-v2-sqlite-model" ? 123 : 456,
+					keepRecentTokens: 789,
+				}),
 				harness: { tools: [], activeToolNames: [] },
 			});
 			const created = await service.createSession!({ id: "sqlite-session", cwd: directory, name: "SQLite session" });
 			expect(created.sessionId).toBe("sqlite-session");
+			expect((await created.runtime.snapshot()).compactionPolicy).toMatchObject({
+				reserveTokens: 123,
+				keepRecentTokens: 789,
+			});
 			expect(await service.listSessions()).toMatchObject([{ id: "sqlite-session", sessionName: "SQLite session" }]);
 			await service.openSession("sqlite-session");
 			await service.deleteSession!("sqlite-session");
