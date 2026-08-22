@@ -1244,6 +1244,36 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.close();
 	});
 
+	test("closes process stdin through the v2 protocol", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-process-eof-"));
+		directories.push(directory);
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			processes: new InMemoryV2ProcessRegistry(),
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const started = await client.request({
+			command: "process/start",
+			sessionId: "session-1",
+			payload: { command: "demo" },
+		});
+		const processId = (started as unknown as { result: { process: { processId: string } } }).result.process.processId;
+		const closed = await client.request({
+			command: "process/write",
+			payload: { processId, input: "input", eof: true },
+		});
+		expect(closed).toMatchObject({ ok: true, result: { output: { output: "input", cursor: 5 } } });
+		const rejected = await client.request({
+			command: "process/write",
+			payload: { processId, input: "later" },
+		});
+		expect(rejected).toMatchObject({ ok: false, error: { message: expect.stringContaining("input is closed") } });
+		await client.close();
+	});
+
 	test("keeps process writes and termination under the session controller", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-process-leases-"));
 		directories.push(directory);

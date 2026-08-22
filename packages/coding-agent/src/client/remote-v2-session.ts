@@ -568,12 +568,16 @@ export class RemoteV2Session {
 		return structuredClone(result.process);
 	}
 
-	async writeProcess(processId: string, input: string): Promise<RemoteV2ProcessOutput> {
+	async writeProcess(
+		processId: string,
+		input: string,
+		options: { readonly eof?: boolean } = {},
+	): Promise<RemoteV2ProcessOutput> {
 		this.#assertControl();
 		const result = await this.#direct({
 			command: "process/write",
 			sessionId: this.#handle!.sessionId,
-			payload: { processId, input },
+			payload: { processId, input, ...(options.eof === undefined ? {} : { eof: options.eof }) },
 		});
 		if (!isProcessOutput(result.output)) throw new Error("Invalid process/write response");
 		return structuredClone(result.output);

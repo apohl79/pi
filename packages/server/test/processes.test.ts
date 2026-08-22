@@ -15,6 +15,14 @@ describe("InMemoryV2ProcessRegistry", () => {
 		expect(await registry.wait(started.processId)).toMatchObject({ state: "terminated" });
 	});
 
+	test("closes in-memory stdin when EOF is requested", async () => {
+		const registry = new InMemoryV2ProcessRegistry();
+		const started = await registry.start({ sessionId: "session-eof", command: "demo" });
+
+		await registry.write(started.processId, "input", { eof: true });
+		await expect(registry.write(started.processId, "later")).rejects.toThrow("input is closed");
+	});
+
 	test("marks running in-memory processes lost after an unclean daemon generation", async () => {
 		const registry = new InMemoryV2ProcessRegistry();
 		const started = await registry.start({ sessionId: "session-recovery", command: "demo" });
@@ -60,6 +68,18 @@ describe("InMemoryV2ProcessRegistry", () => {
 		expect(completed).toMatchObject({ output: "🙂z", cursor: 5, exitCode: 0 });
 		expect(await registry.read(started.processId, 0)).toMatchObject({ output: "🙂z", cursor: 5 });
 		expect(await registry.read(started.processId, 1)).toMatchObject({ output: "z", cursor: 5 });
+	});
+
+	test("sends EOF to a node-backed process", async () => {
+		const registry = new NodeV2ProcessRegistry();
+		const started = await registry.start({
+			sessionId: "session-node-eof",
+			command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("process.stdin.on('data', d => process.stdout.write(d));")}`,
+		});
+
+		await registry.write(started.processId, "hello", { eof: true });
+		expect(await registry.wait(started.processId)).toMatchObject({ state: "exited", output: "hello" });
+		await expect(registry.write(started.processId, "later")).rejects.toThrow("input is closed");
 	});
 
 	test("terminates a detached Node process through its process group", async () => {

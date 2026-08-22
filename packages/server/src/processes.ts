@@ -20,6 +20,10 @@ export interface V2ProcessOutput {
 	readonly truncated: boolean;
 }
 
+export interface V2ProcessWriteOptions {
+	readonly eof?: boolean;
+}
+
 export interface V2ProcessSnapshot extends V2ProcessOutput {
 	readonly processId: string;
 	readonly sessionId: string;
@@ -32,7 +36,7 @@ export interface V2ProcessSnapshot extends V2ProcessOutput {
 export interface V2ProcessRegistry {
 	start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot>;
 	getSnapshot(processId: string): Promise<V2ProcessSnapshot>;
-	write(processId: string, input: string): Promise<V2ProcessOutput>;
+	write(processId: string, input: string, options?: V2ProcessWriteOptions): Promise<V2ProcessOutput>;
 	read(processId: string, cursor: number): Promise<V2ProcessOutput>;
 	wait(processId: string): Promise<V2ProcessSnapshot>;
 	terminate(processId: string): Promise<V2ProcessSnapshot>;
@@ -54,6 +58,7 @@ interface ProcessState {
 	exitCode?: number;
 	output: string;
 	totalBytes: number;
+	inputClosed?: boolean;
 }
 
 export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
@@ -78,11 +83,13 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 		return this.snapshot(process);
 	}
 
-	async write(processId: string, input: string): Promise<V2ProcessOutput> {
+	async write(processId: string, input: string, options: V2ProcessWriteOptions = {}): Promise<V2ProcessOutput> {
 		const process = this.get(processId);
 		if (process.state !== "running") throw new Error(`Process ${processId} is not running`);
+		if (process.inputClosed) throw new Error(`Process ${processId} input is closed`);
 		const cursor = process.totalBytes;
 		this.append(process, input);
+		if (options.eof) process.inputClosed = true;
 		return this.read(processId, cursor);
 	}
 
@@ -272,11 +279,16 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		return Promise.resolve(this.snapshot(state));
 	}
 
-	async write(processId: string, input: string): Promise<V2ProcessOutput> {
+	async write(processId: string, input: string, options: V2ProcessWriteOptions = {}): Promise<V2ProcessOutput> {
 		const process = this.get(processId);
 		if (process.state !== "running" || !process.child.stdin) throw new Error(`Process ${processId} is not running`);
+		if (process.inputClosed) throw new Error(`Process ${processId} input is closed`);
 		const cursor = process.totalBytes;
 		process.child.stdin.write(input);
+		if (options.eof) {
+			process.inputClosed = true;
+			process.child.stdin.end();
+		}
 		return this.read(processId, cursor);
 	}
 
@@ -407,9 +419,9 @@ export class JsonlV2ProcessRegistry implements V2ProcessRegistry {
 		}
 	}
 
-	async write(processId: string, input: string): Promise<V2ProcessOutput> {
+	async write(processId: string, input: string, options?: V2ProcessWriteOptions): Promise<V2ProcessOutput> {
 		await this.ready;
-		const output = await this.delegate.write(processId, input);
+		const output = await this.delegate.write(processId, input, options);
 		await this.persist(await this.delegate.getSnapshot(processId));
 		return output;
 	}

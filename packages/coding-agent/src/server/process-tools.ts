@@ -17,6 +17,7 @@ const execCommandSchema = Type.Object({
 const writeStdinSchema = Type.Object({
 	session_id: Type.String({ minLength: 1 }),
 	chars: Type.Optional(Type.String()),
+	eof: Type.Optional(Type.Boolean()),
 	cursor: Type.Optional(Type.Integer({ minimum: 0 })),
 	yield_time_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_INITIAL_YIELD_MS })),
 	max_output_tokens: Type.Optional(Type.Integer({ minimum: 1, maximum: DEFAULT_OUTPUT_TOKENS })),
@@ -94,9 +95,9 @@ export function createProcessTools(
 		parameters: writeStdinSchema,
 		execute: async (_toolCallId, input) => {
 			const output =
-				input.chars === undefined
+				input.chars === undefined && input.eof !== true
 					? await processes.read(input.session_id, input.cursor ?? 0)
-					: await processes.write(input.session_id, input.chars);
+					: await processes.write(input.session_id, input.chars ?? "", { eof: input.eof });
 			await waitForYield(processes, input.session_id, input.yield_time_ms);
 			const process = await processes.getSnapshot(input.session_id);
 			const capped = capOutput(output.output, input.max_output_tokens);
