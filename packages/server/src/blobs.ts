@@ -31,17 +31,27 @@ function assertMimeType(mimeType: string): void {
 
 export class InMemoryV2BlobStore implements V2BlobStore {
 	private readonly maxBytes: number;
+	private readonly maxTotalBytes: number;
+	private readonly maxBlobs: number;
 	private readonly blobs = new Map<string, { readonly data: Uint8Array; readonly mimeType: string }>();
 
-	constructor(options: { maxBytes?: number } = {}) {
+	constructor(options: { maxBytes?: number; maxTotalBytes?: number; maxBlobs?: number } = {}) {
 		this.maxBytes = options.maxBytes ?? 16 * 1024 * 1024;
+		this.maxTotalBytes = options.maxTotalBytes ?? 256 * 1024 * 1024;
+		this.maxBlobs = options.maxBlobs ?? 1024;
 	}
 
 	async put(data: Uint8Array, mimeType: string): Promise<V2BlobStat> {
 		assertMimeType(mimeType);
 		if (data.byteLength > this.maxBytes) throw new Error(`Blob exceeds maximum size of ${this.maxBytes} bytes`);
 		const digest = digestOf(data);
-		if (!this.blobs.has(digest)) this.blobs.set(digest, { data: data.slice(), mimeType });
+		if (!this.blobs.has(digest)) {
+			if (this.blobs.size >= this.maxBlobs) throw new Error(`Blob count exceeds maximum of ${this.maxBlobs}`);
+			const totalBytes = [...this.blobs.values()].reduce((total, blob) => total + blob.data.byteLength, 0);
+			if (totalBytes + data.byteLength > this.maxTotalBytes)
+				throw new Error(`Blob storage exceeds maximum of ${this.maxTotalBytes} bytes`);
+			this.blobs.set(digest, { data: data.slice(), mimeType });
+		}
 		return this.stat(digest);
 	}
 
@@ -61,19 +71,39 @@ export class InMemoryV2BlobStore implements V2BlobStore {
 export class FileV2BlobStore implements V2BlobStore {
 	private readonly root: string;
 	private readonly maxBytes: number;
+	private readonly maxTotalBytes: number;
+	private readonly maxBlobs: number;
+	private writeQueue = Promise.resolve();
 
-	constructor(root: string, options: { maxBytes?: number } = {}) {
+	constructor(root: string, options: { maxBytes?: number; maxTotalBytes?: number; maxBlobs?: number } = {}) {
 		this.root = root;
 		this.maxBytes = options.maxBytes ?? 256 * 1024 * 1024;
+		this.maxTotalBytes = options.maxTotalBytes ?? 512 * 1024 * 1024;
+		this.maxBlobs = options.maxBlobs ?? 4096;
 	}
 
 	async put(data: Uint8Array, mimeType: string): Promise<V2BlobStat> {
+		const result = this.writeQueue.then(async () => this.putSerialized(data, mimeType));
+		this.writeQueue = result.then(
+			() => undefined,
+			() => undefined,
+		);
+		return result;
+	}
+
+	private async putSerialized(data: Uint8Array, mimeType: string): Promise<V2BlobStat> {
 		assertMimeType(mimeType);
 		if (data.byteLength > this.maxBytes) throw new Error(`Blob exceeds maximum size of ${this.maxBytes} bytes`);
 		const digest = digestOf(data);
 		await mkdir(this.root, { recursive: true });
 		const dataPath = join(this.root, `${digest}.blob`);
 		const metadataPath = join(this.root, `${digest}.json`);
+		if (!(await this.exists(metadataPath))) {
+			const usage = await this.storageUsage();
+			if (usage.blobs >= this.maxBlobs) throw new Error(`Blob count exceeds maximum of ${this.maxBlobs}`);
+			if (usage.bytes + data.byteLength > this.maxTotalBytes)
+				throw new Error(`Blob storage exceeds maximum of ${this.maxTotalBytes} bytes`);
+		}
 		if (!(await this.exists(dataPath))) {
 			const tempPath = join(this.root, `${digest}.${randomUUID()}.tmp`);
 			await writeFile(tempPath, data);
@@ -84,6 +114,17 @@ export class FileV2BlobStore implements V2BlobStore {
 				encoding: "utf8",
 			});
 		return this.stat(digest);
+	}
+
+	private async storageUsage(): Promise<{ blobs: number; bytes: number }> {
+		const entries = (await readdir(this.root)).filter((entry) => entry.endsWith(".json"));
+		let bytes = 0;
+		for (const entry of entries) {
+			const metadata = JSON.parse(await readFile(join(this.root, entry), "utf8")) as V2BlobStat;
+			if (typeof metadata.size !== "number" || metadata.size < 0) throw new Error("Blob metadata size is invalid");
+			bytes += metadata.size;
+		}
+		return { blobs: entries.length, bytes };
 	}
 
 	async read(digest: string): Promise<Uint8Array> {
