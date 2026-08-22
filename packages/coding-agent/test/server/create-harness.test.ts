@@ -74,6 +74,24 @@ describe("coding-agent Harness construction", () => {
 		expect(await resolver.resolve({ provider: "openai", id: "gpt-5" })).toBeUndefined();
 	});
 
+	test("resolves file-backed profiles through canonical trusted roots", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-model-profile-success-"));
+		try {
+			await writeFile(join(directory, "profile.md"), "Use deterministic edits.");
+			const resolver = new ModelInstructionResolver(
+				[{ id: "file-profile", provider: "openai", model: "gpt-5", mode: "append", file: "profile.md" }],
+				{ cwd: directory },
+			);
+			expect(await resolver.resolve({ provider: "openai", id: "gpt-5" })).toMatchObject({
+				id: "file-profile",
+				source: "file",
+				text: "Use deterministic edits.",
+			});
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("reports model profile identity when a file cannot be read", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-model-profile-file-"));
 		try {

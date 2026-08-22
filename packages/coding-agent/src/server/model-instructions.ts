@@ -87,7 +87,7 @@ export class ModelInstructionResolver {
 				`Model profile ${profileId} file cannot be read: ${file} (${error instanceof Error ? error.message : String(error)})`,
 			);
 		}
-		if (!this.isTrusted(path))
+		if (!(await this.isTrustedCanonical(path)))
 			throw new Error(`Model profile ${profileId} file resolves outside trusted roots: ${file}`);
 		let size: number;
 		try {
@@ -108,9 +108,24 @@ export class ModelInstructionResolver {
 	}
 
 	private isTrusted(path: string): boolean {
-		return this.trustedRoots.some((root) => {
-			const pathFromRoot = relative(root, path);
-			return pathFromRoot === "" || (!pathFromRoot.startsWith("..") && !isAbsolute(pathFromRoot));
-		});
+		return this.trustedRoots.some((root) => this.isWithinRoot(root, path));
+	}
+
+	private async isTrustedCanonical(path: string): Promise<boolean> {
+		const roots = await Promise.all(
+			this.trustedRoots.map(async (root) => {
+				try {
+					return await realpath(root);
+				} catch {
+					return root;
+				}
+			}),
+		);
+		return roots.some((root) => this.isWithinRoot(root, path));
+	}
+
+	private isWithinRoot(root: string, path: string): boolean {
+		const pathFromRoot = relative(root, path);
+		return pathFromRoot === "" || (!pathFromRoot.startsWith("..") && !isAbsolute(pathFromRoot));
 	}
 }
