@@ -116,8 +116,18 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			},
 		};
 	} catch (error) {
-		await repository.close();
-		await env.cleanup();
-		throw error;
+		const errors: unknown[] = [error];
+		try {
+			await repository.close();
+		} catch (cleanupError) {
+			errors.push(cleanupError);
+		}
+		try {
+			await env.cleanup();
+		} catch (cleanupError) {
+			errors.push(cleanupError);
+		}
+		if (errors.length === 1) throw error;
+		throw new AggregateError(errors, "Failed to create configured daemon runtime");
 	}
 }
