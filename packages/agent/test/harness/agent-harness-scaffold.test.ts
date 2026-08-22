@@ -146,10 +146,8 @@ describe("AgentHarness v2 scaffold", () => {
 		const harness = await createHarness();
 		let callbackCalled = false;
 		const unfinished: [string, () => unknown | Promise<unknown>][] = [
-			["prompt", () => harness.prompt("hello")],
 			["skill", () => harness.skill("skill")],
 			["promptFromTemplate", () => harness.promptFromTemplate("template")],
-			["compact", () => harness.compact()],
 			["navigateTree", () => harness.navigateTree(null)],
 			["resume", () => harness.resume()],
 			["abort", () => harness.abort()],
@@ -187,11 +185,12 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(() => harness.events.on("event", () => {})).toThrow(HarnessNotImplemented);
 	});
 
-	it("reports HarnessClosed for unfinished operations after close", async () => {
+	it("reports the closed state for operations after close", async () => {
 		const harness = await createHarness();
 		await harness.close();
 
-		await expect(harness.prompt("hello")).rejects.toBeInstanceOf(HarnessClosed);
+		await expect(harness.prompt("hello")).resolves.toMatchObject({ ok: false, error: { name: "Closed" } });
+		await expect(harness.compact()).resolves.toMatchObject({ ok: false, error: { name: "Closed" } });
 		await expect(harness.waitForIdle()).rejects.toBeInstanceOf(HarnessClosed);
 		expect(() => harness.hooks.on("before_run", () => {})).toThrow(HarnessClosed);
 		expect(() => harness.events.on("event", () => {})).toThrow(HarnessClosed);

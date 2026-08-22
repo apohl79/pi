@@ -46,9 +46,11 @@ async function publishFileAtomically(
 }
 
 export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
+	/** Serialize mutations across independently loaded storage instances in this process. */
+	private static readonly mutationTails = new Map<string, Promise<void>>();
 	private readonly fs: JsonlSessionRepoFileSystem;
 	private readonly metadata: JsonlSessionMetadata;
-	private readonly state = new SessionState();
+	private state = new SessionState();
 	private tail: Promise<void> = Promise.resolve();
 
 	constructor(fs: JsonlSessionRepoFileSystem, metadata: JsonlSessionMetadata) {
@@ -256,7 +258,27 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 	}
 
 	private enqueue<T>(operation: () => Promise<T>): Promise<T> {
-		const result = this.tail.then(operation);
+		const result = this.tail.then(async () => {
+			const key = this.metadata.path;
+			const predecessor = JsonlSessionStorage.mutationTails.get(key) ?? Promise.resolve();
+			let release!: () => void;
+			const lock = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const chain = predecessor.then(() => lock);
+			JsonlSessionStorage.mutationTails.set(key, chain);
+			await predecessor;
+			try {
+				// Another instance may have appended since this instance was loaded. Reload while
+				// holding the process-wide path lock so admission and append observe one sequence.
+				const fresh = await JsonlSessionStorage.load(this.fs, key);
+				this.state = fresh.state;
+				return await operation();
+			} finally {
+				release();
+				if (JsonlSessionStorage.mutationTails.get(key) === chain) JsonlSessionStorage.mutationTails.delete(key);
+			}
+		});
 		this.tail = result.then(
 			() => undefined,
 			() => undefined,
@@ -265,10 +287,23 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 	}
 
 	private async appendMutation(mutation: SessionMutation): Promise<void> {
-		fileResult(
-			await this.fs.appendFile(this.metadata.path, encodeMutation(mutation)),
-			`Failed to append session ${this.metadata.path}`,
-		);
+		try {
+			fileResult(
+				await this.fs.appendFile(this.metadata.path, encodeMutation(mutation)),
+				`Failed to append session ${this.metadata.path}`,
+			);
+		} catch (error) {
+			// An append may be durable even when the backend reports a transport
+			// error. Refresh local state so callers can detect the committed record
+			// and safely retry idempotent operations.
+			try {
+				const fresh = await JsonlSessionStorage.load(this.fs, this.metadata.path);
+				this.state = fresh.state;
+			} catch {
+				// Preserve the original append error when the recovery read fails.
+			}
+			throw error;
+		}
 	}
 
 	private applyMutation(mutation: SessionMutation): void {
