@@ -557,6 +557,14 @@ export class AgentHarness implements AgentLane {
 	async prompt(message: AgentMessage | AgentMessage[]): Promise<RunResult>;
 	async prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<RunResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		if (typeof input === "string" && input.length > MAX_DURABLE_COMPACTION_TEXT_LENGTH)
+			return ResultValue.err(
+				new InvalidMessage({
+					lane: "main",
+					reason: "prompt_too_large",
+					message: `Prompt exceeds ${MAX_DURABLE_COMPACTION_TEXT_LENGTH} characters`,
+				}),
+			);
 		if (this.missingModels.length > 0 || this.missingTools.length > 0)
 			return ResultValue.err(
 				new MissingIdentities({
@@ -901,13 +909,63 @@ export class AgentHarness implements AgentLane {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
 		const skill = this.resources.skills?.find((candidate) => candidate.name === name);
 		if (!skill) return ResultValue.err(new UnknownSkill({ name, message: `Unknown skill: ${name}` }));
-		return this.prompt(formatSkillInvocation(skill, additionalInstructions));
+		if (skill.content.length > MAX_DURABLE_COMPACTION_TEXT_LENGTH)
+			return ResultValue.err(
+				new InvalidMessage({
+					lane: "main",
+					reason: "skill_content_too_large",
+					message: `Skill content exceeds ${MAX_DURABLE_COMPACTION_TEXT_LENGTH} characters`,
+				}),
+			);
+		if (additionalInstructions !== undefined && additionalInstructions.length > MAX_DURABLE_COMPACTION_TEXT_LENGTH)
+			return ResultValue.err(
+				new InvalidMessage({
+					lane: "main",
+					reason: "skill_instructions_too_large",
+					message: `Skill instructions exceed ${MAX_DURABLE_COMPACTION_TEXT_LENGTH} characters`,
+				}),
+			);
+		const prompt = formatSkillInvocation(skill, additionalInstructions);
+		if (prompt.length > MAX_DURABLE_COMPACTION_TEXT_LENGTH)
+			return ResultValue.err(
+				new InvalidMessage({
+					lane: "main",
+					reason: "skill_prompt_too_large",
+					message: `Skill prompt exceeds ${MAX_DURABLE_COMPACTION_TEXT_LENGTH} characters`,
+				}),
+			);
+		return this.prompt(prompt);
 	}
 	async promptFromTemplate(name: string, args: string[] = []): Promise<RunResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
 		const template = this.resources.promptTemplates?.find((candidate) => candidate.name === name);
 		if (!template) return ResultValue.err(new UnknownTemplate({ name, message: `Unknown prompt template: ${name}` }));
-		return this.prompt(formatPromptTemplateInvocation(template, args));
+		if (template.content.length > MAX_DURABLE_COMPACTION_TEXT_LENGTH)
+			return ResultValue.err(
+				new InvalidMessage({
+					lane: "main",
+					reason: "template_content_too_large",
+					message: `Prompt template content exceeds ${MAX_DURABLE_COMPACTION_TEXT_LENGTH} characters`,
+				}),
+			);
+		if (args.length > 64 || args.some((argument) => argument.length > MAX_DURABLE_COMPACTION_TEXT_LENGTH))
+			return ResultValue.err(
+				new InvalidMessage({
+					lane: "main",
+					reason: "template_arguments_too_large",
+					message: "Prompt template arguments exceed configured limits",
+				}),
+			);
+		const prompt = formatPromptTemplateInvocation(template, args);
+		if (prompt.length > MAX_DURABLE_COMPACTION_TEXT_LENGTH)
+			return ResultValue.err(
+				new InvalidMessage({
+					lane: "main",
+					reason: "template_prompt_too_large",
+					message: `Prompt template exceeds ${MAX_DURABLE_COMPACTION_TEXT_LENGTH} characters`,
+				}),
+			);
+		return this.prompt(prompt);
 	}
 	async compact(_options?: { customInstructions?: string }): Promise<CompactionResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
