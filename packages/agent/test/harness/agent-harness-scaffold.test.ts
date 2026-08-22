@@ -218,6 +218,37 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("includes system prompt and tool overhead in model-switch preflight", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-model-switch-overhead-faux",
+			models: [
+				{ id: "large-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+				{ id: "small-model", reasoning: false, contextWindow: 100, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("large response"), fauxAssistantMessage("switch summary")]);
+		const session = createSession("model-switch-overhead");
+		const largeModel = faux.getModel("large-model");
+		const smallModel = faux.getModel("small-model");
+		if (!largeModel || !smallModel) throw new Error("Expected faux model catalog entries");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: largeModel,
+			compaction: { enabled: true, reserveTokens: 10, keepRecentTokens: 1 },
+			systemPrompt: "x".repeat(1_000),
+		});
+		await harness.prompt("short history");
+		await harness.setModel(smallModel);
+		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		expect(entries.some((entry) => entry.type === "compaction" && entry.summary.includes("switch summary"))).toBe(
+			true,
+		);
+		await harness.close();
+	});
+
 	it("discovers unfinished operations for crash recovery", async () => {
 		const session = createSession();
 		const { harness, suspended } = await AgentHarness.create({

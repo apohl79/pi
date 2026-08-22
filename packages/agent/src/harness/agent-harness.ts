@@ -565,6 +565,22 @@ export class AgentHarness implements AgentLane {
 		return this.session.getLeafId();
 	}
 
+	private async estimateProviderRequestOverhead(): Promise<number> {
+		const systemPrompt =
+			typeof this.systemPromptSource === "function"
+				? await this.systemPromptSource()
+				: (this.systemPromptSource ?? "");
+		const promptMessages: AgentMessage[] = [{ role: "user", content: systemPrompt, timestamp: 0 }];
+		if (Array.isArray(this.samplingInput)) promptMessages.push(...this.samplingInput);
+		const tools = this.tools
+			.filter((tool) => this.activeToolNames.includes(tool.name))
+			.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
+		return (
+			promptMessages.reduce((total, message) => total + estimateTokens(message), 0) +
+			Math.ceil((JSON.stringify(tools)?.length ?? 0) / 4)
+		);
+	}
+
 	async prompt(text: string, images?: ImageContent[]): Promise<RunResult>;
 	async prompt(message: AgentMessage | AgentMessage[]): Promise<RunResult>;
 	async prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<RunResult> {
@@ -583,7 +599,10 @@ export class AgentHarness implements AgentLane {
 		const prompts = this.normalizePromptInput(input, images);
 		const compactionSettings = resolveCompactionSettings(this.compactionSettings, this.model.provider, this.model.id);
 		const stats = await this.session.getStats();
-		const contextTokens = stats.totalTokens + prompts.reduce((total, message) => total + estimateTokens(message), 0);
+		const contextTokens =
+			stats.totalTokens +
+			prompts.reduce((total, message) => total + estimateTokens(message), 0) +
+			(await this.estimateProviderRequestOverhead());
 		if (shouldCompact(contextTokens, this.model.contextWindow ?? 128_000, compactionSettings)) {
 			await this.compact();
 		}
@@ -1304,7 +1323,9 @@ export class AgentHarness implements AgentLane {
 		);
 		const settings = resolveCompactionSettings(this.compactionSettings, model.provider, model.id);
 		const stats = await this.session.getStats();
-		if (shouldCompact(stats.totalTokens, model.contextWindow ?? 128_000, settings)) await this.compact();
+		const requestOverhead = await this.estimateProviderRequestOverhead();
+		if (shouldCompact(stats.totalTokens + requestOverhead, model.contextWindow ?? 128_000, settings))
+			await this.compact();
 	}
 	async getThinkingLevel(): Promise<ThinkingLevel> {
 		return this.thinkingLevel;
