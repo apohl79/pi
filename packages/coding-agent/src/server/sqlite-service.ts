@@ -1,10 +1,11 @@
-import { type ExecutionEnv, GoalManager, type Session } from "@earendil-works/pi-agent-core";
+import { type ExecutionEnv, GoalContinuationScheduler, GoalManager, type Session } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { SessionMetadataV2 } from "@earendil-works/pi-protocol";
 import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import { type CreateCodingAgentHarnessOptions, createCodingAgentHarness } from "./create-harness.ts";
 import {
 	type CodingAgentV2Service,
+	type CodingAgentV2Runtime,
 	type CodingAgentV2SessionDefinition,
 	type CodingAgentV2SessionStore,
 	createCodingAgentV2ServiceFromStore,
@@ -41,6 +42,8 @@ export async function createCodingAgentV2SqliteService(
 			modelOverride ?? (typeof options.model === "function" ? await options.model(metadata) : options.model);
 		const env = typeof options.env === "function" ? await options.env(metadata) : options.env;
 		const goals = new GoalManager(session);
+		let runtime: CodingAgentV2Runtime | undefined;
+		let continuationSequence = 0;
 		const created = await createCodingAgentHarness({
 			...options.harness,
 			session,
@@ -50,7 +53,32 @@ export async function createCodingAgentV2SqliteService(
 			goals,
 			sessionFile: metadata.path,
 		});
-		return { metadata: sessionMetadata(metadata), harness: created.harness, goals };
+		const goalContinuation = new GoalContinuationScheduler({
+			goals,
+			waitForIdle: async (callback) => {
+				await created.harness.waitForIdle();
+				await callback();
+			},
+			continueGoal: async (goal) => {
+				if (!runtime) throw new Error("Goal continuation runtime is not ready");
+				const operationId = `goal-continuation-${goal.id}-${++continuationSequence}`;
+				await runtime.accept(operationId);
+				await runtime.run(operationId, {
+					command: "turn/followUp",
+					sessionId: metadata.id,
+					payload: { text: `Continue working toward the goal: ${goal.objective}` },
+				});
+			},
+		});
+		return {
+			metadata: sessionMetadata(metadata),
+			harness: created.harness,
+			goals,
+			goalContinuation,
+			onRuntimeReady: (value) => {
+				runtime = value;
+			},
+		};
 	};
 	const store: CodingAgentV2SessionStore = {
 		list: async () => {
