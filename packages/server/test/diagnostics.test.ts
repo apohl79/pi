@@ -158,6 +158,32 @@ describe("verifyDiagnosticBundle", () => {
 			eventsSha256: createHash("sha256").update(serialized).digest("hex"),
 		};
 		expect(verifyDiagnosticBundle({ manifest, events })).toEqual({ valid: true });
+		const capsules = [
+			{
+				schemaVersion: 1,
+				eventId: "event-1",
+				kind: "prompt",
+				keyId: "key-1",
+				nonce: "nonce",
+				ciphertext: "ciphertext",
+				authTag: "tag",
+				plaintextSha256: "a".repeat(64),
+				byteLength: 1,
+				originalByteLength: 1,
+				truncated: false,
+			},
+		];
+		const capsulesSha256 = createHash("sha256").update(JSON.stringify(capsules)).digest("hex");
+		expect(verifyDiagnosticBundle({ manifest: { ...manifest, capsulesSha256 }, events, capsules })).toEqual({
+			valid: true,
+		});
+		expect(
+			verifyDiagnosticBundle({
+				manifest: { ...manifest, capsulesSha256 },
+				events,
+				capsules: [{ ...capsules[0], ciphertext: "changed" }],
+			}),
+		).toMatchObject({ valid: false });
 		expect(
 			verifyDiagnosticBundle({
 				manifest,
