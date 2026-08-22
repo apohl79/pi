@@ -12,6 +12,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import { runAgentLoop } from "../agent-loop.ts";
 import type {
+	AfterToolCallResult,
 	AgentMessage,
 	AgentTool,
 	QueueMode,
@@ -807,6 +808,28 @@ export class AgentHarness implements AgentLane {
 						}
 						await this.park({ kind: "execute_tool", toolCallId: toolCall.id, toolName: toolCall.name });
 						return undefined;
+					},
+					afterToolCall: async ({ toolCall, args, result, isError }) => {
+						const hookResult = await this.runLifecycleHook("after_tool", {
+							operationId: runId,
+							toolCallId: toolCall.id,
+							toolName: toolCall.name,
+							args: durableClone(args),
+							content: durableClone(result.content),
+							details: durableClone(result.details),
+							isError,
+							usage: result.usage === undefined ? undefined : durableClone(result.usage),
+						});
+						if (hookResult === null || typeof hookResult !== "object") return undefined;
+						const patch: AfterToolCallResult = {};
+						if ("content" in hookResult && Array.isArray(hookResult.content)) patch.content = hookResult.content;
+						if ("details" in hookResult) patch.details = hookResult.details;
+						if ("isError" in hookResult && typeof hookResult.isError === "boolean")
+							patch.isError = hookResult.isError;
+						if ("usage" in hookResult) patch.usage = hookResult.usage as Usage;
+						if ("terminate" in hookResult && typeof hookResult.terminate === "boolean")
+							patch.terminate = hookResult.terminate;
+						return patch;
 					},
 					convertToLlm:
 						this.toProviderMessages ??
