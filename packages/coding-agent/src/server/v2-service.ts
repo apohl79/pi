@@ -41,6 +41,8 @@ function redactText(value: string): string {
 		.replace(/\b(?:sk|rk|pk)-[A-Za-z0-9][A-Za-z0-9_-]{8,}\b/gi, "[redacted]")
 		.replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, "[redacted]")
 		.replace(/\bgh[pour]_[A-Za-z0-9]{20,}\b/g, "[redacted]")
+		.replace(/\bghs_[A-Za-z0-9_]{20,}\b/g, "[redacted]")
+		.replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "[redacted]")
 		.replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, "[redacted]")
 		.replace(/([\"']?(?:api[_ -]?key|access[_ -]?token|token|secret|password|authorization|credential)[\"']?)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)/gi, "$1=[redacted]")
 		.replace(/[\u0000-\u001f\u007f]/g, " ")
@@ -436,13 +438,15 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 
 	async accept(operationId: string): Promise<OperationAccepted> {
 		return this.withMutation(async () => {
+			const validatedOperationId = boundedRequired(operationId, 256);
+			if (!validatedOperationId) throw new Error("Operation ID must be a non-empty bounded string");
 			this.restoreOperationState(await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }));
-			if (this.operations.has(operationId)) throw new Error(`Operation ${operationId} was already accepted`);
+			if (this.operations.has(validatedOperationId)) throw new Error(`Operation ${validatedOperationId} was already accepted`);
 			const active = [...this.operations.values()].find((operation) => operation.state === "accepted" || operation.state === "running" || operation.state === "suspended");
 			if (active) throw new Error(`Session is busy with ${active.operationId}`);
-			const accepted = { operationId, sessionRevision: this.revision + 1, eventSeq: this.eventSeq + 1 };
-			await this.persistOperation({ operationId, state: "accepted", kind: "turn", acceptedSeq: accepted.eventSeq, revision: accepted.sessionRevision, eventSeq: accepted.eventSeq });
-			this.freshOperationId = operationId;
+			const accepted = { operationId: validatedOperationId, sessionRevision: this.revision + 1, eventSeq: this.eventSeq + 1 };
+			await this.persistOperation({ operationId: validatedOperationId, state: "accepted", kind: "turn", acceptedSeq: accepted.eventSeq, revision: accepted.sessionRevision, eventSeq: accepted.eventSeq });
+			this.freshOperationId = validatedOperationId;
 			return accepted;
 		});
 	}
