@@ -5,6 +5,7 @@ import type { V2FileReferenceService } from "./files.ts";
 export type V2ImageGenerationRequest = Readonly<{
 	prompt: string;
 	sourceDigest?: string;
+	sourceOperationId?: string;
 }>;
 
 export type V2GeneratedImage = Readonly<{
@@ -13,6 +14,7 @@ export type V2GeneratedImage = Readonly<{
 	size: number;
 	provider: string;
 	model: string;
+	sourceOperationId?: string;
 	dimensions?: Readonly<{ width: number; height: number }>;
 	promptHash: string;
 	costUsd?: number;
@@ -25,6 +27,7 @@ export interface V2ImageGenerationAdapter {
 			mimeType: string;
 			provider: string;
 			model: string;
+			sourceOperationId?: string;
 			dimensions?: Readonly<{ width: number; height: number }>;
 			costUsd?: number;
 		}>
@@ -83,6 +86,7 @@ export class BlobV2ImageService implements V2ImageService {
 			size: blob.size,
 			provider: generated.provider,
 			model: generated.model,
+			...(request.sourceOperationId === undefined ? {} : { sourceOperationId: request.sourceOperationId }),
 			...(generated.dimensions ? { dimensions: generated.dimensions } : {}),
 			promptHash: promptHash(request.prompt),
 			...(generated.costUsd === undefined ? {} : { costUsd: generated.costUsd }),
