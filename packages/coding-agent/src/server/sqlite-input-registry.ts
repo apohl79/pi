@@ -21,6 +21,7 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 	#loaded = false;
 	readonly #responded = new Map<string, string[]>();
 	readonly #consumed = new Set<string>();
+	readonly #requests = new Map<string, V2InputRequest>();
 
 	constructor(databaseFactory: SqliteDatabaseFactory, databasePath: string) {
 		this.#databaseFactory = databaseFactory;
@@ -36,6 +37,7 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 			await this.#ensureLoaded();
 			const request = await this.#memory.create(sessionId, questions, autoResolutionMs);
 			await this.#save(request);
+			this.#requests.set(request.id, request);
 			return request;
 		});
 	}
@@ -69,16 +71,15 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 	takeRespondedForSession(sessionId: string): Promise<Readonly<Record<string, string>> | undefined> {
 		return this.#enqueue(async () => {
 			await this.#ensureLoaded();
-			const answers = await this.#memory.takeRespondedForSession(sessionId);
-			if (answers === undefined) return undefined;
 			const requestId = [...(this.#responded.get(sessionId) ?? [])].reverse().find((id) => !this.#consumed.has(id));
-			if (requestId !== undefined) {
-				this.#consumed.add(requestId);
-				(await this.#database())
-					.prepare("INSERT OR IGNORE INTO v2_input_consumed (request_id) VALUES (?)")
-					.run(requestId);
-			}
-			return answers;
+			if (requestId === undefined) return undefined;
+			const request = this.#requests.get(requestId);
+			if (request?.status !== "responded") return undefined;
+			this.#consumed.add(requestId);
+			(await this.#database())
+				.prepare("INSERT OR IGNORE INTO v2_input_consumed (request_id) VALUES (?)")
+				.run(requestId);
+			return structuredClone(request.answers ?? {});
 		});
 	}
 
@@ -95,6 +96,7 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 			await this.#ensureLoaded();
 			const request = await operation();
 			await this.#save(request);
+			this.#requests.set(request.id, request);
 			if (request.status === "responded") {
 				const ids = this.#responded.get(request.sessionId) ?? [];
 				if (!ids.includes(request.id)) ids.push(request.id);
@@ -121,6 +123,7 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 		for (const row of requests) {
 			const request = parseJson(row.value);
 			this.#memory.restore(request);
+			this.#requests.set(request.id, request);
 			if (request.status === "responded") {
 				const ids = this.#responded.get(request.sessionId) ?? [];
 				ids.push(request.id);
@@ -135,7 +138,6 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 			);
 			if (request.status === "responded") {
 				this.#consumed.add(request.id);
-				await this.#memory.takeRespondedForSession(request.sessionId);
 			}
 		}
 	}
