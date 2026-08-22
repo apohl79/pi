@@ -739,6 +739,7 @@ export class PiServerV2 {
 
 	private async completeFiles(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("filesystem/complete requires sessionId");
+		this.requireAttached(state, command.sessionId);
 		const payload = objectPayload(command);
 		const prefix = typeof payload.prefix === "string" ? payload.prefix : "";
 		await this.sendResponse(state, id, {
@@ -749,6 +750,7 @@ export class PiServerV2 {
 
 	private async resolveFile(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("filesystem/reference/resolve requires sessionId");
+		this.requireAttached(state, command.sessionId);
 		await this.sendResponse(state, id, {
 			command: command.command,
 			file: await this.files.resolve(command.sessionId, referenceFrom(command, objectPayload(command))),
@@ -757,6 +759,7 @@ export class PiServerV2 {
 
 	private async readFile(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("filesystem/reference/read requires sessionId");
+		this.requireAttached(state, command.sessionId);
 		const result = await this.files.read(command.sessionId, referenceFrom(command, objectPayload(command)));
 		await this.sendResponse(state, id, {
 			command: command.command,
