@@ -441,6 +441,10 @@ export {
 	type ServerRuntimeOperation,
 } from "./server/extension-host.ts";
 export {
+	type CodingAgentV2SqliteServiceOptions,
+	createCodingAgentV2SqliteService,
+} from "./server/sqlite-service.ts";
+export {
 	type CodingAgentV2Runtime,
 	type CodingAgentV2Service,
 	type CodingAgentV2ServiceOptions,
