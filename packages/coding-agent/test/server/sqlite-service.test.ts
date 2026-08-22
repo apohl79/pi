@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
-import { InMemoryV2PluginRegistry } from "@earendil-works/pi-server";
+import { InMemoryV2AgentRegistry, InMemoryV2PluginRegistry } from "@earendil-works/pi-server";
 import { createNodeSqliteFactory, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import { afterEach, describe, expect, test } from "vitest";
 import { ModelInstructionResolver } from "../../src/server/model-instructions.ts";
@@ -36,6 +36,7 @@ describe("coding-agent SQLite v2 service", () => {
 		models.setProvider(faux.provider);
 		expect(faux.getModel().id).toBe("coding-agent-v2-sqlite-model");
 		const pluginRegistry = new InMemoryV2PluginRegistry();
+		const agentRegistry = new InMemoryV2AgentRegistry();
 		await pluginRegistry.addMarketplace("local", "file:///tmp/marketplace");
 		await pluginRegistry.installPlugin({
 			name: "snapshot-plugin",
@@ -63,6 +64,7 @@ describe("coding-agent SQLite v2 service", () => {
 				env,
 				model: faux.getModel(),
 				pluginRegistry,
+				agentRegistry,
 				harness: {
 					modelInstructions: {
 						resolver: instructionResolver,
@@ -94,6 +96,14 @@ describe("coding-agent SQLite v2 service", () => {
 			const enabledPluginSetHash = (await created.runtime.snapshot()).pluginSetHash;
 			await pluginRegistry.setEnabled("snapshot-plugin@local", false);
 			expect((await created.runtime.snapshot()).pluginSetHash).not.toBe(enabledPluginSetHash);
+			await agentRegistry.spawn({
+				sessionId: "sqlite-session",
+				parentPath: "/sqlite-session",
+				taskName: "research",
+				taskMessage: "Inspect the fixtures",
+				model: { provider: faux.getModel().provider, id: faux.getModel().id },
+			});
+			expect((await created.runtime.snapshot()).agents).toHaveLength(1);
 			await created.runtime.run("model-switch", {
 				command: "session/model/set",
 				sessionId: "sqlite-session",
