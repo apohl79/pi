@@ -566,21 +566,28 @@ export class AgentHarness implements AgentLane {
 			);
 		const localRunId = this.durableSession.idGenerator.next();
 		const controller = new AbortController();
-		if (this.activeOperation) {
-			return ResultValue.err(
-				new LaneBusy({
-					lane: "main",
-					operationId: this.activeOperation.id,
-					operationKind: this.activeOperation.kind,
-					message: "Lane is busy",
-				}),
-			);
-		}
 		let resolveDone!: () => void;
 		const done = new Promise<void>((resolve) => {
 			resolveDone = resolve;
 		});
-		this.activeOperation = { id: localRunId, kind: "run", controller, done, resolveDone };
+		const busy = await this.withLifecycleLock(async () => {
+			if (this.closed) return { operationId: localRunId, operationKind: "run" as const, message: "Harness is closed" };
+			if (this.activeOperation)
+				return {
+					operationId: this.activeOperation.id,
+					operationKind: this.activeOperation.kind,
+					message: "Lane is busy",
+				};
+			const open = await this.openOperationsAcrossLanes();
+			if (open.length > 0)
+				return { operationId: open[0]!.id, operationKind: open[0]!.intent.kind, message: "Lane is busy" };
+			this.activeOperation = { id: localRunId, kind: "run", controller, done, resolveDone };
+			return undefined;
+		});
+		if (busy) {
+			if (busy.message === "Harness is closed") return ResultValue.err(new Closed({ message: busy.message }));
+			return ResultValue.err(new LaneBusy(busy));
+		}
 		let released = false;
 		const release = () => {
 			if (released) return;
@@ -588,24 +595,6 @@ export class AgentHarness implements AgentLane {
 			resolveDone();
 			if (this.activeOperation?.id === localRunId) this.activeOperation = undefined;
 		};
-		let open: OperationStartedRecord[];
-		try {
-			open = await this.durableSession.findOpenOperations("main", { limit: 1 });
-		} catch (error) {
-			release();
-			throw error;
-		}
-		if (open.length > 0) {
-			release();
-			return ResultValue.err(
-				new LaneBusy({
-					lane: "main",
-					operationId: open[0]!.id,
-					operationKind: open[0]!.intent.kind,
-					message: "Lane is busy",
-				}),
-			);
-		}
 		let prompts: AgentMessage[];
 		try {
 			prompts = this.normalizePromptInput(input, images);
@@ -836,6 +825,14 @@ export class AgentHarness implements AgentLane {
 			.catch(() => undefined)
 			.then(operation)
 			.finally(release);
+	}
+
+	private async openOperationsAcrossLanes(): Promise<OperationStartedRecord[]> {
+		const lanes = await this.durableSession.getLanes();
+		const operations = await Promise.all(
+			lanes.map((lane) => this.durableSession.findOpenOperations(lane.lane, { limit: 1 })),
+		);
+		return operations.flat();
 	}
 
 	private rememberFinishedOperation(runId: string): void {
@@ -1115,13 +1112,23 @@ export class AgentHarness implements AgentLane {
 		return this.unavailable("navigateTree");
 	}
 	async rollback(turns: number): Promise<RollbackResult> {
+		return this.withLifecycleLock(async () => {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
 		if (!Number.isInteger(turns) || turns < 1) {
 			return ResultValue.err(
 				new InvalidRollback({ lane: "main", message: "Rollback requires a positive turn count" }),
 			);
 		}
-		const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+		if (this.activeOperation)
+			return ResultValue.err(
+				new LaneBusy({
+					lane: "main",
+					operationId: this.activeOperation.id,
+					operationKind: this.activeOperation.kind,
+					message: "Lane is busy",
+				}),
+			);
+		const open = await this.openOperationsAcrossLanes();
 		if (open.length > 0) {
 			return ResultValue.err(
 				new LaneBusy({
@@ -1133,11 +1140,6 @@ export class AgentHarness implements AgentLane {
 			);
 		}
 		const lanes = await this.durableSession.getLanes();
-		if (lanes.some((lane) => lane.lane !== "main" && lane.leafId !== null)) {
-			return ResultValue.err(
-				new InvalidRollback({ lane: "main", message: "Rollback requires no active descendant lanes" }),
-			);
-		}
 		const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
 		const userEntries = entries.filter(
 			(entry): entry is Extract<Entry, { type: "message" }> =>
@@ -1149,9 +1151,25 @@ export class AgentHarness implements AgentLane {
 			);
 		}
 		const target = turns === userEntries.length ? null : userEntries[userEntries.length - turns]!.parentId;
+		const previousTarget = await this.durableSession.getLeafId();
 		await this.durableSession.moveLane("main", target);
-		await this.durableSession.appendCustomEntry("conversation_rollback", { removedTurns: turns, targetId: target });
+		try {
+			await this.durableSession.appendCustomEntry("conversation_rollback", { removedTurns: turns, targetId: target });
+		} catch (error) {
+			const committed = (await this.durableSession.findEntriesOnBranch({ order: "newestFirst", limit: 1 })).some(
+				(entry) =>
+					entry.type === "custom" &&
+					entry.customType === "conversation_rollback" &&
+					typeof entry.data === "object" &&
+					entry.data !== null &&
+					(entry.data as { targetId?: unknown }).targetId === target,
+			);
+			if (!committed) await this.durableSession.moveLane("main", previousTarget).catch(() => undefined);
+			else return ResultValue.ok({ targetId: target, removedTurns: turns });
+			throw error;
+		}
 		return ResultValue.ok({ targetId: target, removedTurns: turns });
+		});
 	}
 	async resume(): Promise<ResumeResult> {
 		return this.unavailable("resume");
