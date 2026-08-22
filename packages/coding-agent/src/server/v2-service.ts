@@ -312,6 +312,20 @@ function requireText(command: CommandV2, payload: Record<string, unknown>): stri
 	return payload.text;
 }
 
+function commandInput(command: CommandV2): AgentMessage {
+	const payload = requirePayload(command);
+	if (payload.content === undefined) return { role: "user", content: [{ type: "text", text: requireText(command, payload) }], timestamp: Date.now() };
+	if (!Array.isArray(payload.content) || payload.content.length === 0) throw new Error("turn content must be a non-empty array");
+	const content = payload.content.map((part, index) => {
+		if (typeof part !== "object" || part === null || Array.isArray(part)) throw new Error(`turn content item ${index} must be an object`);
+		const item = part as Record<string, unknown>;
+		if (item.type === "text" && typeof item.text === "string") return { type: "text", text: item.text };
+		if (item.type === "image" && typeof item.data === "string" && typeof item.mimeType === "string" && item.mimeType.startsWith("image/")) return { type: "image", data: item.data, mimeType: item.mimeType };
+		throw new Error(`turn content item ${index} must be text or resolved image data`);
+	});
+	return { role: "user", content, timestamp: Date.now() };
+}
+
 function requireBoundedNonEmptyString(command: CommandV2, value: unknown, field: string): string {
 	if (typeof value !== "string" || value.trim().length === 0 || value.length > MAX_V2_STRING_LENGTH)
 		throw new Error(`${command.command} requires bounded non-empty ${field}`);
@@ -598,7 +612,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			return result.value as T;
 		};
 		if (runCommand === "turn/start") {
-			const outcome = unwrap(await harness.prompt(requireText(command, requirePayload(command))));
+			const outcome = unwrap(await harness.prompt(commandInput(command)));
 			if ("kind" in outcome) {
 				if (outcome.kind === "failed") { terminalOutcome = "failed"; throw new Error(outcome.error.message); }
 				if (outcome.kind === "aborted") terminalOutcome = "aborted";
@@ -611,8 +625,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				if (outcome.kind === "aborted") terminalOutcome = "aborted";
 				if (outcome.kind === "suspended") terminalOutcome = "suspended";
 			}
-		} else if (runCommand === "turn/steer") unwrap(await harness.steer(requireText(command, requirePayload(command))));
-		else if (runCommand === "turn/followUp") unwrap(await harness.followUp(requireText(command, requirePayload(command))));
+		} else if (runCommand === "turn/steer") unwrap(await harness.steer(commandInput(command)));
+		else if (runCommand === "turn/followUp") unwrap(await harness.followUp(commandInput(command)));
 		else if (runCommand === "turn/abort") {
 			unwrap(await harness.abort());
 			terminalOutcome = "aborted";
