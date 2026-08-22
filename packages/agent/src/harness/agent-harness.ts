@@ -96,6 +96,18 @@ function durableClone<T>(value: T): T {
 	return JSON.parse(encoded) as T;
 }
 
+function sanitizeErrorMessage(value: unknown, fallback: string): string {
+	const raw = value instanceof Error ? value.message : String(value);
+	const sanitized = raw
+		.replace(/Bearer\s+[^\s]+/gi, "Bearer [redacted]")
+		.replace(/(api[_ -]?key|token|secret|password)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+		.replace(/[\u0000-\u001f\u007f]/g, " ")
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, 512);
+	return sanitized || fallback;
+}
+
 export interface OperationError {
 	code: string;
 	message: string;
@@ -337,6 +349,10 @@ export class AgentHarness implements AgentLane {
 	private steeringMode: QueueMode;
 	private followUpMode: QueueMode;
 	private closed = false;
+	private activeOperation:
+		| { id: string; kind: "run" | "compaction"; controller: AbortController }
+		| undefined;
+	private readonly finishedOperations = new Set<string>();
 
 	private constructor(options: AgentHarnessOptions) {
 		this.durableSession = options.session;
@@ -418,8 +434,31 @@ export class AgentHarness implements AgentLane {
 	async prompt(message: AgentMessage | AgentMessage[]): Promise<RunResult>;
 	async prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<RunResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+		const localRunId = this.durableSession.idGenerator.next();
+		const controller = new AbortController();
+		if (this.activeOperation) {
+			return ResultValue.err(
+				new LaneBusy({
+					lane: "main",
+					operationId: this.activeOperation.id,
+					operationKind: this.activeOperation.kind,
+					message: "Lane is busy",
+				}),
+			);
+		}
+		this.activeOperation = { id: localRunId, kind: "run", controller };
+		const release = () => {
+			if (this.activeOperation?.id === localRunId) this.activeOperation = undefined;
+		};
+		let open: OperationStartedRecord[];
+		try {
+			open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+		} catch (error) {
+			release();
+			throw error;
+		}
 		if (open.length > 0) {
+			release();
 			return ResultValue.err(
 				new LaneBusy({
 					lane: "main",
@@ -429,8 +468,14 @@ export class AgentHarness implements AgentLane {
 				}),
 			);
 		}
-		const prompts = this.normalizePromptInput(input, images);
-		const runId = this.durableSession.idGenerator.next();
+		let prompts: AgentMessage[];
+		try {
+			prompts = this.normalizePromptInput(input, images);
+		} catch (error) {
+			release();
+			throw error;
+		}
+		const runId = localRunId;
 		const started: NewRecord<OperationStartedRecord> = {
 			type: "operation_started",
 			id: runId,
@@ -446,7 +491,13 @@ export class AgentHarness implements AgentLane {
 				})),
 			},
 		};
-		await this.durableSession.appendRecord(started);
+		try {
+			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
+			await this.durableSession.appendRecord(started);
+		} catch (error) {
+			release();
+			throw error;
+		}
 		try {
 			const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
 			const persisted = buildSessionContext(entries);
@@ -471,23 +522,20 @@ export class AgentHarness implements AgentLane {
 							)),
 				},
 				async () => {},
-				undefined,
+					controller.signal,
 				this.models.streamSimple.bind(this.models),
 			);
 			let finalEntryId: string | undefined;
+			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 			for (const message of newMessages) {
+				if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 				finalEntryId = await this.durableSession.appendMessage(durableClone(message));
 			}
 			const finalMessage = newMessages.at(-1);
 			if (!finalEntryId || !finalMessage || finalMessage.role !== "assistant")
 				throw new Error("Agent loop produced no assistant message");
-			await this.durableSession.appendRecord({
-				type: "operation_finished",
-				id: this.durableSession.idGenerator.next(),
-				lane: "main",
-				runId,
-				outcome: "completed",
-			});
+			await this.finishOperation(runId, "completed");
+			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 			return ResultValue.ok({
 				runId,
 				kind: "completed",
@@ -496,21 +544,40 @@ export class AgentHarness implements AgentLane {
 				finalMessage,
 			});
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			await this.durableSession.appendRecord({
-				type: "operation_finished",
-				id: this.durableSession.idGenerator.next(),
-				lane: "main",
-				runId,
-				outcome: "failed",
-				error: { code: "run_failed", message },
-			});
+			const message = sanitizeErrorMessage(error, "Run failed");
+			await this.finishOperation(runId, "failed", { code: "run_failed", message });
+			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 			return ResultValue.ok({
 				kind: "failed",
 				runId,
 				leafId: (await this.durableSession.getLeafId()) ?? "",
 				error: { code: "run_failed", message },
 			});
+		} finally {
+			release();
+		}
+	}
+
+	private async finishOperation(
+		runId: string,
+		outcome: OperationFinishedRecord["outcome"],
+		error?: OperationFinishedRecord["error"],
+	): Promise<void> {
+		if (this.finishedOperations.has(runId)) return;
+		this.finishedOperations.add(runId);
+		try {
+			const existing = await this.durableSession.findRecords({ type: "operation_finished", runId, limit: 1 });
+			if (existing.length > 0) return;
+			await this.durableSession.appendRecord({
+				type: "operation_finished",
+				id: this.durableSession.idGenerator.next(),
+				lane: "main",
+				runId,
+				outcome,
+				...(error ? { error } : {}),
+			});
+		} catch {
+			// A terminal record is best effort. Never replace the operation's original result.
 		}
 	}
 
@@ -530,8 +597,31 @@ export class AgentHarness implements AgentLane {
 	}
 	async compact(_options?: { customInstructions?: string }): Promise<CompactionResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+		const localRunId = this.durableSession.idGenerator.next();
+		const controller = new AbortController();
+		if (this.activeOperation) {
+			return ResultValue.err(
+				new LaneBusy({
+					lane: "main",
+					operationId: this.activeOperation.id,
+					operationKind: this.activeOperation.kind,
+					message: "Lane is busy",
+				}),
+			);
+		}
+		this.activeOperation = { id: localRunId, kind: "compaction", controller };
+		const release = () => {
+			if (this.activeOperation?.id === localRunId) this.activeOperation = undefined;
+		};
+		let open: OperationStartedRecord[];
+		try {
+			open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+		} catch (error) {
+			release();
+			throw error;
+		}
 		if (open.length > 0) {
+			release();
 			return ResultValue.err(
 				new LaneBusy({
 					lane: "main",
@@ -541,9 +631,16 @@ export class AgentHarness implements AgentLane {
 				}),
 			);
 		}
-		const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
-		const preparation = prepareCompaction(entries, this.compactionSettings);
+		let preparation: ReturnType<typeof prepareCompaction>;
+		try {
+			const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
+			preparation = prepareCompaction(entries, this.compactionSettings);
+		} catch (error) {
+			release();
+			throw error;
+		}
 		if (!preparation.ok) {
+			release();
 			return ResultValue.ok({
 				runId: this.durableSession.idGenerator.next(),
 				kind: "failed",
@@ -551,36 +648,37 @@ export class AgentHarness implements AgentLane {
 				error: { code: preparation.error.code, message: preparation.error.message },
 			});
 		}
-		if (!preparation.value)
+		if (!preparation.value) {
+			release();
 			return ResultValue.err(new NothingToCompact({ lane: "main", message: "Nothing to compact" }));
-		const runId = this.durableSession.idGenerator.next();
+		}
+		const runId = localRunId;
 		const resultEntryId = this.durableSession.idGenerator.next();
-		await this.durableSession.appendRecord({
-			type: "operation_started",
-			id: runId,
-			lane: "main",
-			sourceLeafId: await this.durableSession.getLeafId(),
-			intent: { kind: "compaction", resultEntryId, customInstructions: _options?.customInstructions },
-		});
 		try {
+			await this.durableSession.appendRecord({
+				type: "operation_started",
+				id: runId,
+				lane: "main",
+				sourceLeafId: await this.durableSession.getLeafId(),
+				intent: { kind: "compaction", resultEntryId, customInstructions: _options?.customInstructions },
+			});
+			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 			const result = await compact(
 				preparation.value,
 				this.models,
 				this.model,
 				_options?.customInstructions,
-				undefined,
+				controller.signal,
 				this.thinkingLevel,
 				this.retryPolicy,
 			);
 			if (!result.ok) {
-				await this.durableSession.appendRecord({
-					type: "operation_finished",
-					id: this.durableSession.idGenerator.next(),
-					lane: "main",
+				await this.finishOperation(
 					runId,
-					outcome: result.error.code === "aborted" ? "aborted" : "failed",
-					error: { code: result.error.code, message: result.error.message },
-				});
+					result.error.code === "aborted" ? "aborted" : "failed",
+					{ code: result.error.code, message: sanitizeErrorMessage(result.error.message, "Compaction failed") },
+				);
+				if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 				if (result.error.code === "aborted") {
 					return ResultValue.ok({
 						runId,
@@ -592,9 +690,10 @@ export class AgentHarness implements AgentLane {
 					runId,
 					kind: "failed",
 					leafId: (await this.durableSession.getLeafId()) ?? "",
-					error: { code: result.error.code, message: result.error.message },
+					error: { code: result.error.code, message: sanitizeErrorMessage(result.error.message, "Compaction failed") },
 				});
 			}
+			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 			const entry = await this.durableSession.appendEntry<CompactionEntry>(
 				{
 					type: "compaction",
@@ -607,13 +706,8 @@ export class AgentHarness implements AgentLane {
 				},
 				"main",
 			);
-			await this.durableSession.appendRecord({
-				type: "operation_finished",
-				id: this.durableSession.idGenerator.next(),
-				lane: "main",
-				runId,
-				outcome: "completed",
-			});
+			await this.finishOperation(runId, "completed");
+			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 			return ResultValue.ok({
 				runId,
 				kind: "completed",
@@ -621,21 +715,17 @@ export class AgentHarness implements AgentLane {
 				entry,
 			});
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			await this.durableSession.appendRecord({
-				type: "operation_finished",
-				id: this.durableSession.idGenerator.next(),
-				lane: "main",
-				runId,
-				outcome: "failed",
-				error: { code: "compaction_failed", message },
-			});
+			const message = sanitizeErrorMessage(error, "Compaction failed");
+			await this.finishOperation(runId, "failed", { code: "compaction_failed", message });
+			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 			return ResultValue.ok({
 				runId,
 				kind: "failed",
 				leafId: (await this.durableSession.getLeafId()) ?? "",
 				error: { code: "compaction_failed", message },
 			});
+		} finally {
+			release();
 		}
 	}
 	async navigateTree(_targetId: string | null, _options?: NavigateOptions): Promise<NavigationResult> {
@@ -687,19 +777,35 @@ export class AgentHarness implements AgentLane {
 		return this.model;
 	}
 	async setModel(model: Model<Api>): Promise<void> {
+		if (this.closed) throw new HarnessClosed();
+		await this.durableSession.appendEntry(
+			{ type: "model_change", id: this.durableSession.idGenerator.next(), provider: model.provider, modelId: model.id },
+			"main",
+		);
 		this.model = model;
 	}
 	async getThinkingLevel(): Promise<ThinkingLevel> {
 		return this.thinkingLevel;
 	}
 	async setThinkingLevel(level: ThinkingLevel): Promise<void> {
+		if (this.closed) throw new HarnessClosed();
+		await this.durableSession.appendEntry(
+			{ type: "thinking_level_change", id: this.durableSession.idGenerator.next(), thinkingLevel: level },
+			"main",
+		);
 		this.thinkingLevel = level;
 	}
 	async getActiveTools(): Promise<string[]> {
 		return [...this.activeToolNames];
 	}
 	async setActiveTools(names: string[]): Promise<void> {
-		this.activeToolNames = [...names];
+		if (this.closed) throw new HarnessClosed();
+		const activeToolNames = [...names];
+		await this.durableSession.appendEntry(
+			{ type: "active_tools_change", id: this.durableSession.idGenerator.next(), activeToolNames },
+			"main",
+		);
+		this.activeToolNames = activeToolNames;
 	}
 	async watch(): Promise<WatchHandle<LaneSnapshot>> {
 		return this.unavailable("watch");
@@ -718,8 +824,15 @@ export class AgentHarness implements AgentLane {
 		return [...this.tools];
 	}
 	async setTools(tools: HarnessTool[], activeNames?: string[]): Promise<void> {
-		this.tools = [...tools];
-		this.activeToolNames = [...(activeNames ?? tools.map((tool) => tool.name))];
+		if (this.closed) throw new HarnessClosed();
+		const nextTools = [...tools];
+		const nextActiveNames = [...(activeNames ?? tools.map((tool) => tool.name))];
+		await this.durableSession.appendEntry(
+			{ type: "active_tools_change", id: this.durableSession.idGenerator.next(), activeToolNames: nextActiveNames },
+			"main",
+		);
+		this.tools = nextTools;
+		this.activeToolNames = nextActiveNames;
 	}
 	async getResources(): Promise<Resources> {
 		return {
@@ -768,5 +881,6 @@ export class AgentHarness implements AgentLane {
 	}
 	async close(): Promise<void> {
 		this.closed = true;
+		this.activeOperation?.controller.abort();
 	}
 }
