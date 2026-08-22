@@ -37,6 +37,7 @@ describe("coding-agent v2 service adapter", () => {
 		models.setProvider(faux.provider);
 		faux.setResponses([fauxAssistantMessage("parent response"), fauxAssistantMessage("second response")]);
 		const session = new Session(new InMemorySessionStorage({ id: "completion-queue-session", createdAt: 1 }));
+		const diagnostics = new InMemoryForensicRecorder();
 		await session.appendCustomEntry("agent_completion", {
 			version: 1,
 			agentId: "child-1",
@@ -57,7 +58,11 @@ describe("coding-agent v2 service adapter", () => {
 		});
 		try {
 			const service = createCodingAgentV2Service(models, [
-				{ metadata: { id: "completion-queue-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+				{
+					metadata: { id: "completion-queue-session", createdAt: 1, updatedAt: 1 },
+					harness: created.harness,
+					forensicRecorder: diagnostics,
+				},
 			]);
 			const runtime = await service.openSession("completion-queue-session");
 			await runtime.run("completion-turn-1", {
@@ -72,6 +77,7 @@ describe("coding-agent v2 service adapter", () => {
 			expect(firstUser).toBeDefined();
 			expect(JSON.stringify(firstUser?.message)).toContain("/root/worker (complete)");
 			expect((await session.findEntries({ customType: "agent_completion_consumed" })).length).toBe(1);
+			expect((await diagnostics.read()).map((event) => event.kind)).toEqual(["agent_completion_delivered"]);
 			await runtime.run("completion-turn-2", {
 				command: "turn/start",
 				sessionId: "completion-queue-session",
