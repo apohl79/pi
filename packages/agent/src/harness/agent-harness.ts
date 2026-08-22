@@ -728,7 +728,7 @@ export class AgentHarness implements AgentLane {
 				}),
 			);
 		}
-		const prompts = this.normalizePromptInput(input, images);
+		let prompts = this.normalizePromptInput(input, images);
 		const compactionSettings = resolveCompactionSettings(this.compactionSettings, this.model.provider, this.model.id);
 		const stats = await this.session.getStats();
 		const preflightEntries = await this.session.findEntriesOnBranch({ order: "oldestFirst" });
@@ -742,6 +742,22 @@ export class AgentHarness implements AgentLane {
 			await this.compact();
 		}
 		const runId = this.durableSession.idGenerator.next();
+		let systemPrompt =
+			typeof this.systemPromptSource === "function"
+				? await this.systemPromptSource()
+				: (this.systemPromptSource ?? "");
+		const beforeRun = await this.runLifecycleHook("before_run", {
+			operationId: runId,
+			prompts: durableClone(prompts),
+			systemPrompt,
+			resources: durableClone(this.resources),
+		});
+		if (beforeRun !== null && typeof beforeRun === "object") {
+			if ("messages" in beforeRun && Array.isArray(beforeRun.messages))
+				prompts = [...prompts, ...(beforeRun.messages as AgentMessage[])];
+			if ("systemPrompt" in beforeRun && typeof beforeRun.systemPrompt === "string")
+				systemPrompt = beforeRun.systemPrompt;
+		}
 		const started: NewRecord<OperationStartedRecord> = {
 			type: "operation_started",
 			id: runId,
@@ -763,13 +779,8 @@ export class AgentHarness implements AgentLane {
 		const controller = new AbortController();
 		this.activeRun = { id: runId, controller };
 		try {
-			await this.runLifecycleHook("before_run", { operationId: runId, prompts: durableClone(prompts) });
 			const entries = await this.session.findEntriesOnBranch({ order: "oldestFirst" });
 			const persisted = buildSessionContext(entries);
-			const systemPrompt =
-				typeof this.systemPromptSource === "function"
-					? await this.systemPromptSource()
-					: (this.systemPromptSource ?? "");
 			const activeTools = this.tools.filter((tool) => this.activeToolNames.includes(tool.name));
 			let assistantAttempt = 0;
 			let requestOptionsPatch: Partial<SimpleStreamOptions> = {};

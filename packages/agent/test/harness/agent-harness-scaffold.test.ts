@@ -611,6 +611,46 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("applies before_run prompt and system prompt contributions before acceptance", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "before-run-faux",
+			models: [{ id: "before-run-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		let observedSystemPrompt = "";
+		faux.setResponses([
+			(context) => {
+				observedSystemPrompt = context.systemPrompt ?? "";
+				return fauxAssistantMessage("done");
+			},
+		]);
+		const session = createSession("before-run");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			systemPrompt: "base system",
+		});
+		harness.hooks.on("before_run", () => ({
+			messages: [{ role: "user", content: [{ type: "text", text: "hook prompt" }], timestamp: 1 }],
+			systemPrompt: "hook system",
+		}));
+
+		await harness.prompt("hello");
+
+		expect(observedSystemPrompt).toBe("hook system");
+		expect(
+			(await session.findEntriesOnBranch({ order: "oldestFirst" })).some(
+				(entry) =>
+					entry.type === "message" &&
+					entry.message.role === "user" &&
+					JSON.stringify(entry.message.content).includes("hook prompt"),
+			),
+		).toBe(true);
+		await harness.close();
+	});
+
 	it("applies transform_context hooks before provider conversion", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
