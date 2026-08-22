@@ -655,10 +655,21 @@ export class InMemoryForensicRecorder implements ForensicRecorder {
 	}
 
 	async record(input: ForensicEventInput): Promise<ForensicEvent> {
-		const event = materializeEvent(input, this.nextSeq++, Date.now(), this.processInstanceId);
-		this.events.push(event);
-		if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
+		const event = this.prepare(input);
+		this.commit(event);
 		return structuredClone(event);
+	}
+
+	/** Materializes the next event without publishing it to the recorder. */
+	prepare(input: ForensicEventInput): ForensicEvent {
+		return materializeEvent(input, this.nextSeq, Date.now(), this.processInstanceId);
+	}
+
+	/** Publishes a previously prepared event after its durable side effect succeeds. */
+	commit(event: ForensicEvent): void {
+		this.events.push(event);
+		this.nextSeq = Math.max(this.nextSeq, event.seq + 1);
+		if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
 	}
 
 	async read(afterSeq = 0): Promise<ForensicEvent[]> {

@@ -33,6 +33,14 @@ describe("diagnostic timeline clock evidence", () => {
 });
 
 describe("InMemoryForensicRecorder", () => {
+	test("can prepare evidence without publishing it", async () => {
+		const recorder = new InMemoryForensicRecorder();
+		const prepared = recorder.prepare({ kind: "accepted" });
+		expect(await recorder.read()).toEqual([]);
+		recorder.commit(prepared);
+		expect(await recorder.read()).toEqual([prepared]);
+	});
+
 	test("assigns correlated sequence numbers and redacts credential fields", async () => {
 		const recorder = new InMemoryForensicRecorder({ maxEvents: 2 });
 		await recorder.record({
