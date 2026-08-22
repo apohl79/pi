@@ -129,7 +129,7 @@ export class RemoteV2Session {
 	}
 
 	async abort(): Promise<string> {
-		return this.#accept("turn/abort");
+		return this.#accept("turn/abort", undefined, true);
 	}
 
 	async setModel(model: ModelRef): Promise<string> {
@@ -160,8 +160,8 @@ export class RemoteV2Session {
 		this.#listeners.clear();
 	}
 
-	#accept(command: CommandV2["command"], payload?: JsonValue): Promise<string> {
-		this.#assertControl();
+	#accept(command: CommandV2["command"], payload?: JsonValue, allowBusy = false): Promise<string> {
+		this.#assertControl(allowBusy);
 		const request = this.#client.request({
 			command,
 			sessionId: this.#handle!.sessionId,
@@ -214,12 +214,12 @@ export class RemoteV2Session {
 		if (!this.#handle) throw new Error("Session is not open");
 		return this.#handle;
 	}
-	#assertControl(): void {
+	#assertControl(allowBusy = false): void {
 		this.#assertNotDisposed();
 		if (this.#lifecycle.status === "detached" || !this.#handle) throw new Error("Session is not open");
 		const handle = this.#requireHandle();
 		if (handle.mode !== "control") throw new Error("Session requires a control lease");
-		if (this.#lifecycle.status === "busy") throw new Error("Session operation is already in progress");
+		if (!allowBusy && this.#lifecycle.status === "busy") throw new Error("Session operation is already in progress");
 	}
 	#assertNotDisposed(): void {
 		if (this.#lifecycle.status === "disposed") throw new Error("Remote v2 session is disposed");
