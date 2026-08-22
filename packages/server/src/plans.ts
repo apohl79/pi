@@ -1,4 +1,12 @@
-import type { PlanItem, PlanSnapshot } from "@earendil-works/pi-protocol";
+export type PlanItem = Readonly<{
+	step: string;
+	status: "pending" | "in_progress" | "completed";
+}>;
+
+export type PlanSnapshot = Readonly<{
+	version: number;
+	items: readonly PlanItem[];
+}>;
 
 export interface V2PlanRegistry {
 	read(sessionId: string): Promise<PlanSnapshot | undefined>;
