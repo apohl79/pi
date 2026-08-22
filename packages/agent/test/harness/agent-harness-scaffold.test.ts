@@ -745,6 +745,28 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("cancels an active run when the harness closes", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "close-active-run-faux",
+			models: [{ id: "close-active-run-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("should not complete")]);
+		const { harness } = await AgentHarness.create({
+			session: createSession("close-active-run"),
+			models,
+			model: faux.getModel(),
+			drive: "manual",
+		});
+
+		const run = harness.prompt("close me");
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		await harness.close();
+
+		expect(await run).toMatchObject({ ok: true, value: { kind: "aborted" } });
+	});
+
 	it("keeps scaffold-safe configuration as defensive copies", async () => {
 		const harness = await createHarness();
 		const model = getModel("anthropic", "claude-sonnet-4-5");

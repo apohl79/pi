@@ -1749,6 +1749,7 @@ export class AgentHarness implements AgentLane {
 		return this.watchBus.watch(() => snapshot);
 	}
 	async close(): Promise<void> {
+		this.activeRun?.controller.abort();
 		this.manualAction?.reject(new HarnessClosed());
 		this.manualAction = undefined;
 		this.closed = true;
