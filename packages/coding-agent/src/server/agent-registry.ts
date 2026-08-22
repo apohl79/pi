@@ -6,6 +6,7 @@ import type { CodingAgentV2Runtime, CodingAgentV2Service } from "./v2-service.ts
 const MAX_AGENT_INBOX_MESSAGES = 32;
 const MAX_AGENT_INBOX_CHARACTERS = 16_000;
 const AGENT_REGISTRY_STATE = "agent_registry_state";
+const AGENT_COMPLETION = "agent_completion";
 
 interface PersistedAgentState {
 	readonly version: 1;
@@ -192,6 +193,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			} finally {
 				agent.state = "interrupted";
 				await this.persist(agent);
+				await this.queueCompletion(agent);
 				this.resolveWaiters(agent);
 			}
 		}
@@ -208,6 +210,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				if (agent.state !== "running" && agent.state !== "awaitingInput") return;
 				agent.state = "interrupted";
 				await this.persist(agent);
+				await this.queueCompletion(agent);
 			}),
 		);
 		await Promise.allSettled(agents.map((agent) => agent.runtime.dispose()));
@@ -233,13 +236,27 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				agent.state = "running";
 				await this.persist(agent);
 				void this.run(agent, "turn/start", next);
-			}
+			} else await this.queueCompletion(agent);
 		} catch {
 			agent.state = "failed";
 			await this.persist(agent);
+			await this.queueCompletion(agent);
 		} finally {
 			if (agent.state !== "running") this.resolveWaiters(agent);
 		}
+	}
+
+	private async queueCompletion(agent: ChildAgent): Promise<void> {
+		const parent = await this.service.openSession(agent.parentSessionId);
+		if (!parent.appendCustomEntry) return;
+		await parent.appendCustomEntry(AGENT_COMPLETION, {
+			version: 1,
+			agentId: agent.summary.id,
+			path: agent.summary.path,
+			taskName: agent.summary.taskName,
+			state: agent.state,
+			model: agent.summary.model,
+		});
 	}
 
 	private validateRequest(request: V2AgentRequest): void {
