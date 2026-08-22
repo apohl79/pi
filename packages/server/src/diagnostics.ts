@@ -738,10 +738,9 @@ export class JsonlForensicRecorder implements ForensicRecorder {
 	async record(input: ForensicEventInput): Promise<ForensicEvent> {
 		const write = this.pendingWrite.then(async () => {
 			await this.ensureLoaded();
-			const event = materializeEvent(input, this.nextSeq++, Date.now(), this.processInstanceId);
+			const event = materializeEvent(input, this.nextSeq, Date.now(), this.processInstanceId);
 			const wasFull = this.events.length >= this.maxEvents;
-			this.events.push(event);
-			if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
+			const retainedEvents = [...this.events, event].slice(-this.maxEvents);
 			await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
 			const line = `${JSON.stringify(event)}\n`;
 			if (!wasFull && this.currentBytes > 0 && this.currentBytes + Buffer.byteLength(line) > this.maxBytes) {
@@ -758,13 +757,15 @@ export class JsonlForensicRecorder implements ForensicRecorder {
 				this.currentBytes += Buffer.byteLength(line);
 			} else {
 				const temporary = `${this.path}.${process.pid}.tmp`;
-				const contents = `${this.events.map((item) => JSON.stringify(item)).join("\n")}\n`;
+				const contents = `${retainedEvents.map((item) => JSON.stringify(item)).join("\n")}\n`;
 				await writeFile(temporary, contents, {
 					mode: 0o600,
 				});
 				await rename(temporary, this.path);
 				this.currentBytes = Buffer.byteLength(contents);
 			}
+			this.events.splice(0, this.events.length, ...retainedEvents);
+			this.nextSeq = event.seq + 1;
 			return event;
 		});
 		this.pendingWrite = write.then(
