@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Usage } from "@earendil-works/pi-ai";
@@ -489,6 +489,36 @@ describe("JSONL v4 per-session storage", () => {
 			}),
 		).rejects.toMatchObject({ code: "invalid_payload" });
 		expect(await session.findRecords()).toEqual([]);
+	});
+
+	it("rejects oversized persisted compaction replay payloads", async () => {
+		const root = createTempDir();
+		const session = await createRepository(root).create({ id: "compaction-bounds", cwd: root });
+		await expect(
+			session.appendEntry(
+				{
+					type: "compaction",
+					id: "oversized",
+					summary: "summary",
+					retainedTail: [userMessage("x".repeat(300_000))],
+					tokensBefore: 1,
+				},
+				"main",
+			),
+		).rejects.toMatchObject({ code: "invalid_payload" });
+		expect(await session.findEntries()).toEqual([]);
+	});
+
+	it("refreshes state when an external replacement keeps size and line count", async () => {
+		const root = createTempDir();
+		const session = await createRepository(root).create({ id: "same-shape", cwd: root });
+		await session.appendCustomEntry("old");
+		const metadata = await session.getMetadata();
+		const original = readFileSync(metadata.path, "utf8");
+		writeFileSync(metadata.path, original.replace('"old"', '"new"'));
+		await session.appendCustomEntry("tail");
+		const entries = await session.findEntries({ order: "oldestFirst" });
+		expect(entries.map((entry) => entry.type === "custom" && entry.customType)).toEqual(["new", "tail"]);
 	});
 
 	it("does not advance state or poison the write queue after an append failure", async () => {

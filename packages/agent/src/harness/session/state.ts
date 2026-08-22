@@ -1,5 +1,4 @@
 import {
-	MAX_DURABLE_COMPACTION_TEXT_LENGTH,
 	type BranchBounds,
 	type Entry,
 	type EntryOrder,
@@ -9,6 +8,11 @@ import {
 	type LaneRecord,
 	type LogItem,
 	type LogOptions,
+	MAX_DURABLE_COMPACTION_TAIL_BYTES,
+	MAX_DURABLE_COMPACTION_TAIL_MESSAGES,
+	MAX_DURABLE_COMPACTION_TEXT_LENGTH,
+	MAX_DURABLE_EXTENSION_PAYLOAD_BYTES,
+	MAX_DURABLE_EXTENSION_PAYLOAD_DEPTH,
 	type OperationStartedRecord,
 	type RecordQuery,
 	SessionError,
@@ -26,6 +30,67 @@ type InvalidMutation = (message: string) => never;
 
 function invalidMutation(message: string): never {
 	throw new SessionError("invalid_entry", `Invalid session mutation: ${message}`);
+}
+
+function assertBoundedJson(
+	value: unknown,
+	label: string,
+	maxBytes = MAX_DURABLE_EXTENSION_PAYLOAD_BYTES,
+	invalid: InvalidMutation = invalidMutation,
+): void {
+	const active = new WeakSet<object>();
+	const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+	let bytes = 0;
+	while (stack.length > 0) {
+		const { value: candidate, depth } = stack.pop()!;
+		if (candidate === null || typeof candidate === "boolean") {
+			bytes += 5;
+		} else if (typeof candidate === "string") {
+			bytes += new TextEncoder().encode(candidate).byteLength;
+		} else if (typeof candidate === "number") {
+			if (!Number.isFinite(candidate)) invalid(`${label} contains a non-finite number`);
+			bytes += 16;
+		} else if (typeof candidate === "object") {
+			if (depth >= MAX_DURABLE_EXTENSION_PAYLOAD_DEPTH) invalid(`${label} exceeds maximum nesting depth`);
+			if (active.has(candidate)) invalid(`${label} contains a cycle`);
+			active.add(candidate);
+			if (Array.isArray(candidate)) {
+				bytes += 2;
+				for (let index = candidate.length - 1; index >= 0; index--)
+					stack.push({ value: candidate[index], depth: depth + 1 });
+			} else {
+				for (const [key, item] of Object.entries(candidate)) {
+					bytes += new TextEncoder().encode(key).byteLength + 4;
+					stack.push({ value: item, depth: depth + 1 });
+				}
+			}
+			active.delete(candidate);
+		} else {
+			invalid(`${label} contains unsupported data`);
+		}
+		if (bytes > maxBytes) invalid(`${label} exceeds ${maxBytes} bytes`);
+	}
+}
+
+export function assertBoundedEntryPayload(entry: Entry, invalid: InvalidMutation = invalidMutation): void {
+	if (entry.type === "compaction") {
+		if (typeof entry.summary !== "string" || entry.summary.length > MAX_DURABLE_COMPACTION_TEXT_LENGTH)
+			invalid("compaction summary is invalid or too large");
+		if (!Array.isArray(entry.retainedTail)) invalid("compaction retainedTail is not an array");
+		if (entry.retainedTail.length > MAX_DURABLE_COMPACTION_TAIL_MESSAGES) {
+			invalid(`compaction retainedTail exceeds ${MAX_DURABLE_COMPACTION_TAIL_MESSAGES} messages`);
+		}
+		assertBoundedJson(entry.retainedTail, "compaction retainedTail", MAX_DURABLE_COMPACTION_TAIL_BYTES, invalid);
+		if (entry.details !== undefined) assertBoundedJson(entry.details, "compaction details", undefined, invalid);
+		if (entry.usage !== undefined) assertBoundedJson(entry.usage, "compaction usage", undefined, invalid);
+	} else if (entry.type === "branch_summary") {
+		if (typeof entry.summary !== "string" || entry.summary.length > MAX_DURABLE_COMPACTION_TEXT_LENGTH)
+			invalid("branch summary is invalid or too large");
+		if (entry.details !== undefined) assertBoundedJson(entry.details, "branch summary details", undefined, invalid);
+		if (entry.usage !== undefined) assertBoundedJson(entry.usage, "branch summary usage", undefined, invalid);
+	} else if (entry.type === "custom" && entry.data !== undefined) {
+		assertBoundedJson(entry.data, "custom entry data", undefined, invalid);
+	}
 }
 
 function assertValidLimit(limit: number | undefined): void {
@@ -106,6 +171,7 @@ export class SessionState {
 
 		switch (mutation.kind) {
 			case "entry": {
+				assertBoundedEntryPayload(mutation.entry);
 				if (this.usedIds.has(mutation.entry.id)) invalid(`contains duplicate id ${mutation.entry.id}`);
 				if (mutation.lane !== undefined) {
 					const leafId = this.lanes.get(mutation.lane);

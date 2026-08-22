@@ -1,7 +1,7 @@
 import { uuidv7 } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "../../types.ts";
+import { assertBoundedEntryPayload } from "./state.ts";
 import {
-	MAX_DURABLE_COMPACTION_TEXT_LENGTH,
 	type BranchBounds,
 	type Entry,
 	type EntryQuery,
@@ -10,17 +10,18 @@ import {
 	type LaneRecord,
 	type LogItem,
 	type LogOptions,
+	MAX_DURABLE_COMPACTION_TEXT_LENGTH,
 	type NewRecord,
 	type OperationStartedRecord,
 	type ProvisionedEntry,
 	type RecordBase,
 	type RecordQuery,
+	SessionError,
 	type SessionMetadata,
 	type SessionStats,
 	type SessionStorage,
 	type SessionTree,
 } from "./types.ts";
-import { SessionError } from "./types.ts";
 
 type JsonValidationFrame = { value: unknown } | { exit: object };
 
@@ -286,6 +287,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> implem
 
 	private async commitEntry<TEntry extends Entry>(entry: ProvisionedEntry<TEntry>, lane: string): Promise<TEntry> {
 		assertJsonSerializable(entry);
+		assertBoundedEntryPayload(entry as unknown as Entry, (reason) => invalidPayload(reason));
 		return this.storage.appendEntry(entry, lane);
 	}
 
