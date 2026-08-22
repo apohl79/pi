@@ -44,7 +44,9 @@ describe("CodingAgentV2AgentRegistry", () => {
 		expect(await registry.list("child-session")).toEqual([]);
 		expect((await registry.wait(agent.id)).state).toBe("complete");
 		expect(runtime.commands[0]?.command).toBe("turn/start");
-		await registry.followUp(agent.id, "continue with the tests");
+		const followUp = registry.followUp(agent.id, "continue with the tests");
+		await expect(registry.followUp(agent.id, "duplicate follow-up")).rejects.toThrow("active agent");
+		await followUp;
 		expect((await registry.wait(agent.id)).state).toBe("complete");
 		expect(runtime.commands[1]?.command).toBe("turn/followUp");
 		// A completed child is stable until a follow-up is requested.

@@ -12,6 +12,8 @@ interface ChildAgent {
 	messages: string[];
 	waiters: Array<() => void>;
 	activeOperationId?: string;
+	activeOperationAccepted: boolean;
+	abortRequested: boolean;
 }
 
 export interface CodingAgentV2AgentRegistryOptions {
@@ -86,6 +88,8 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			state: "running",
 			messages: [request.taskMessage],
 			waiters: [],
+			activeOperationAccepted: false,
+			abortRequested: false,
 		};
 		this.agents.set(summary.id, agent);
 		void this.run(agent, "turn/start", request.taskMessage);
@@ -123,25 +127,23 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	async followUp(agentId: string, message: string): Promise<AgentSummary> {
-		if (message.trim().length === 0) throw new Error("Agent message must not be empty");
 		const agent = this.get(agentId);
-		if (agent.state === "running" || agent.state === "awaitingInput")
+		this.validateMessage(message);
+		if (agent.state === "running" || agent.state === "awaitingInput" || agent.activeOperationId !== undefined)
 			throw new Error(`Cannot follow up active agent ${agentId}`);
-		await this.message(agentId, message);
-		if (agent.state === "complete" || agent.state === "interrupted" || agent.state === "failed") {
-			agent.state = "running";
-			void this.run(agent, "turn/followUp", message);
-		}
+		agent.state = "running";
+		this.appendMessage(agent, message);
+		void this.run(agent, "turn/followUp", message);
 		return this.snapshot(agent);
 	}
 
 	async interrupt(agentId: string): Promise<AgentSummary> {
 		const agent = this.get(agentId);
 		if (agent.state === "running" || agent.state === "awaitingInput") {
+			agent.abortRequested = true;
 			try {
 				const operationId = agent.activeOperationId;
-				if (operationId === undefined) throw new Error(`Agent ${agentId} has no active operation`);
-				await agent.runtime.abort(operationId);
+				if (operationId !== undefined && agent.activeOperationAccepted) await agent.runtime.abort(operationId);
 			} finally {
 				agent.state = "interrupted";
 				this.resolveWaiters(agent);
@@ -154,7 +156,13 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		try {
 			const operationId = randomUUID();
 			agent.activeOperationId = operationId;
+			agent.activeOperationAccepted = false;
 			await agent.runtime.accept(operationId);
+			agent.activeOperationAccepted = true;
+			if (agent.abortRequested || agent.state === "interrupted") {
+				await agent.runtime.abort(operationId);
+				return;
+			}
 			await agent.runtime.run(operationId, {
 				command,
 				sessionId: agent.sessionId,
@@ -165,6 +173,8 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			if (agent.state !== "interrupted") agent.state = "failed";
 		} finally {
 			agent.activeOperationId = undefined;
+			agent.activeOperationAccepted = false;
+			agent.abortRequested = false;
 			this.resolveWaiters(agent);
 		}
 	}
