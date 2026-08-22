@@ -28,6 +28,7 @@ boundary is introduced.
 | Area | Classification | Why the existing surface is insufficient |
 | --- | --- | --- |
 | Protocol v2 schemas, CBOR framing, operation/event cursors | Fork core | Stock Pi has no durable daemon command model or event-cursor contract. |
+| Remote snapshot and event-boundary validation | Fork core | A detached client must reject stale or malformed server state at the protocol boundary; a client-side extension cannot make authoritative cursor ordering, recovery snapshots, and typed event payloads safe. Compatibility is covered by the remote v2 session recovery, cursor, event, and response-validation fixtures. |
 | Server daemon lifecycle, leases, reconnect, and platform transport (Unix sockets / Windows named pipes) | Fork core | A client-only extension cannot own process lifecycle, authentication, reconnect recovery, or the server-owned cross-platform byte transport. |
 | Durable daemon lifecycle and crash-recovery markers | Fork core | The stock extension surface has no authoritative daemon-generation boundary or durable clean-shutdown state; startup must classify unclean ownership and expose that decision through server diagnostics. |
 | Server-default RPC compatibility bridge | Fork core | Normal CLI RPC must enter the daemon-owned session boundary for durable state and operation ownership; the legacy direct RPC entry point remains available for v1 compatibility. |
