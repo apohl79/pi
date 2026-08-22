@@ -28,6 +28,65 @@ describe("coding-agent v2 service adapter", () => {
 		);
 	});
 
+	test("delivers durable child completions on the parent next turn", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-completion-queue-faux",
+			models: [{ id: "completion-queue-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("parent response"), fauxAssistantMessage("second response")]);
+		const session = new Session(new InMemorySessionStorage({ id: "completion-queue-session", createdAt: 1 }));
+		await session.appendCustomEntry("agent_completion", {
+			version: 1,
+			agentId: "child-1",
+			path: "/root/worker",
+			taskName: "worker",
+			state: "complete",
+			model: { provider: "child-provider", id: "child-model" },
+		});
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+			systemPrompt: "completion queue",
+		});
+		try {
+			const service = createCodingAgentV2Service(models, [
+				{ metadata: { id: "completion-queue-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+			]);
+			const runtime = await service.openSession("completion-queue-session");
+			await runtime.run("completion-turn-1", {
+				command: "turn/start",
+				sessionId: "completion-queue-session",
+				payload: { text: "continue" },
+			});
+			const messages = (await session.findEntries({ order: "oldestFirst" })).filter(
+				(entry): entry is Extract<typeof entry, { type: "message" }> => entry.type === "message",
+			);
+			const firstUser = messages.find((entry) => entry.message.role === "user");
+			expect(firstUser).toBeDefined();
+			expect(JSON.stringify(firstUser?.message)).toContain("/root/worker (complete)");
+			expect((await session.findEntries({ customType: "agent_completion_consumed" })).length).toBe(1);
+			await runtime.run("completion-turn-2", {
+				command: "turn/start",
+				sessionId: "completion-queue-session",
+				payload: { text: "continue again" },
+			});
+			const updatedMessages = (await session.findEntries({ order: "oldestFirst" })).filter(
+				(entry): entry is Extract<typeof entry, { type: "message" }> => entry.type === "message",
+			);
+			expect(JSON.stringify(updatedMessages.at(-2)?.message)).not.toContain("[child agent completions]");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("projects a pending structured input request as awaitingInput", async () => {
 		const models = createModels();
 		const session = new Session(new InMemorySessionStorage({ id: "awaiting-input-session", createdAt: 1 }));
