@@ -45,6 +45,46 @@ function validateQuestions(questions: readonly V2InputQuestion[]): void {
 	}
 }
 
+function validateRestoredRequest(value: unknown): asserts value is V2InputRequest {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		throw new Error("Input record must be an object");
+	const record = value as Record<string, unknown>;
+	if (typeof record.id !== "string" || record.id.trim().length === 0) throw new Error("Input record id is required");
+	if (typeof record.sessionId !== "string" || record.sessionId.trim().length === 0)
+		throw new Error("Input record sessionId is required");
+	if (!(typeof record.status === "string" && ["pending", "responded", "cancelled", "expired"].includes(record.status)))
+		throw new Error("Input record status is invalid");
+	if (!Array.isArray(record.questions)) throw new Error("Input record questions are required");
+	for (const question of record.questions) {
+		if (typeof question !== "object" || question === null || Array.isArray(question))
+			throw new Error("Input record question must be an object");
+		const candidate = question as Record<string, unknown>;
+		if (typeof candidate.id !== "string" || typeof candidate.prompt !== "string")
+			throw new Error("Input record question id and prompt are required");
+		if (candidate.allowFreeform !== undefined && typeof candidate.allowFreeform !== "boolean")
+			throw new Error("Input record question allowFreeform is invalid");
+		if (candidate.options !== undefined) {
+			if (!Array.isArray(candidate.options)) throw new Error("Input record question options are invalid");
+			for (const option of candidate.options) {
+				if (typeof option !== "object" || option === null || Array.isArray(option))
+					throw new Error("Input record option must be an object");
+				const item = option as Record<string, unknown>;
+				if (typeof item.label !== "string" || (item.value !== undefined && typeof item.value !== "string"))
+					throw new Error("Input record option label and value are invalid");
+			}
+		}
+	}
+	validateQuestions(record.questions as readonly V2InputQuestion[]);
+	if (record.answers !== undefined) {
+		if (typeof record.answers !== "object" || record.answers === null || Array.isArray(record.answers))
+			throw new Error("Input record answers are invalid");
+		if (!Object.values(record.answers).every((answer) => typeof answer === "string"))
+			throw new Error("Input record answers must be strings");
+	}
+	if (record.deadlineAt !== undefined && (!Number.isInteger(record.deadlineAt) || (record.deadlineAt as number) < 0))
+		throw new Error("Input record deadlineAt is invalid");
+}
+
 function validateDeadline(autoResolutionMs: number | undefined): void {
 	if (autoResolutionMs !== undefined && (!Number.isInteger(autoResolutionMs) || autoResolutionMs < 0))
 		throw new Error("autoResolutionMs must be non-negative");
@@ -97,6 +137,7 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 
 	/** Rehydrates a request from a durable registry without creating a new id. */
 	restore(request: V2InputRequest): void {
+		validateRestoredRequest(request);
 		validateQuestions(request.questions);
 		const state: InputState = { request: structuredClone(request), waiters: [] };
 		this.requests.set(request.id, state);

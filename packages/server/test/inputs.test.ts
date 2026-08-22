@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -34,6 +34,14 @@ describe("InMemoryV2InputRegistry", () => {
 });
 
 describe("JsonlV2InputRegistry", () => {
+	test("rejects malformed persisted request records", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-input-registry-invalid-"));
+		const path = join(directory, "inputs.jsonl");
+		await writeFile(path, `${JSON.stringify({ id: "request-1", sessionId: "session-1", status: "pending" })}\n`);
+		const registry = new JsonlV2InputRegistry(path);
+		await expect(registry.read("request-1")).rejects.toThrow("Input record questions are required");
+	});
+
 	test("restores pending and terminal requests after reopening", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-input-registry-"));
 		const path = join(directory, "inputs.jsonl");
