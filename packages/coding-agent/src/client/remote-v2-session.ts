@@ -90,6 +90,13 @@ export interface RemoteV2BlobRead {
 	readonly data: string;
 }
 
+export interface RemoteV2DiagnosticsStatus {
+	readonly capture: "metadata" | "encrypted";
+	readonly degraded: boolean;
+	readonly lastCriticalEventSeq: number;
+	readonly eventCount: number;
+}
+
 export interface RemoteV2WebResult {
 	readonly id: string;
 	readonly url?: string;
@@ -507,6 +514,61 @@ export class RemoteV2Session {
 		const result = await this.#direct({ command: "blob/stat", payload: { digest } });
 		if (!isBlobStat(result.blob) || result.blob.digest !== digest) throw new Error("Invalid blob/stat response");
 		return structuredClone(result.blob);
+	}
+
+	async diagnosticsStatus(): Promise<RemoteV2DiagnosticsStatus> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({ command: "diagnostics/status" });
+		if (
+			(result.capture !== "metadata" && result.capture !== "encrypted") ||
+			typeof result.degraded !== "boolean" ||
+			typeof result.lastCriticalEventSeq !== "number" ||
+			typeof result.eventCount !== "number"
+		)
+			throw new Error("Invalid diagnostics/status response");
+		return {
+			capture: result.capture,
+			degraded: result.degraded,
+			lastCriticalEventSeq: result.lastCriticalEventSeq,
+			eventCount: result.eventCount,
+		};
+	}
+
+	async diagnosticsTimeline(
+		options: { readonly afterSeq?: number; readonly sessionId?: string; readonly operationId?: string } = {},
+	): Promise<readonly Record<string, unknown>[]> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({ command: "diagnostics/timeline", payload: options });
+		if (!Array.isArray(result.events) || !result.events.every((event) => asRecord(event) !== undefined))
+			throw new Error("Invalid diagnostics/timeline response");
+		return result.events.map((event) => structuredClone(asRecord(event)!));
+	}
+
+	async diagnosticsExport(decryptContent = false): Promise<Record<string, unknown>> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({ command: "diagnostics/export", payload: { decryptContent } });
+		const bundle = asRecord(result.bundle);
+		if (bundle === undefined || asRecord(bundle.manifest) === undefined)
+			throw new Error("Invalid diagnostics/export response");
+		return structuredClone(bundle);
+	}
+
+	async diagnosticsVerify(bundle?: Record<string, unknown>): Promise<Record<string, unknown>> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({
+			command: "diagnostics/verify",
+			...(bundle ? { payload: { bundle: bundle as JsonValue } } : {}),
+		});
+		if (typeof result.valid !== "boolean") throw new Error("Invalid diagnostics/verify response");
+		return structuredClone(result);
+	}
+
+	async diagnosticsDoctor(repairSafe = false): Promise<Record<string, unknown>> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({ command: "diagnostics/doctor", payload: { repairSafe } });
+		if (typeof result.ok !== "boolean" || !Array.isArray(result.checks))
+			throw new Error("Invalid diagnostics/doctor response");
+		return structuredClone(result);
 	}
 
 	async webRequest(
