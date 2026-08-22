@@ -84,7 +84,9 @@ export const ThinkingContentSchema = StrictObject({
 export const ImageContentSchema = StrictObject({
 	type: Type.Literal("image"),
 	data: Type.String(),
-	mimeType: Type.String({ minLength: 1 }),
+	mimeType: Type.String({
+		pattern: "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$",
+	}),
 });
 export const ToolCallContentSchema = StrictObject({
 	type: Type.Literal("toolCall"),

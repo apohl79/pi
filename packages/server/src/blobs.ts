@@ -30,7 +30,8 @@ function assertDigest(digest: string): void {
 }
 
 function assertMimeType(mimeType: string): void {
-	if (mimeType.trim().length === 0 || mimeType.includes("\n")) throw new Error("Blob MIME type is invalid");
+	if (!/^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$/u.test(mimeType))
+		throw new Error("Blob MIME type is invalid");
 }
 
 export class InMemoryV2BlobStore implements V2BlobStore {

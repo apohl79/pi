@@ -9,6 +9,7 @@ import {
 	encodeCbor,
 	encodeClientMessageV2,
 	FrameDecoder,
+	ImageContentSchema,
 	isClientMessageV2,
 	isServerMessageV2,
 	OperationAcceptedSchema,
@@ -244,6 +245,17 @@ describe("protocol v2 contract", () => {
 				payload: { recoveryState: "clean" },
 			}),
 		).toBe(true);
+	});
+
+	test("accepts safe MIME tokens and rejects parameters or control characters", () => {
+		expect(Check(ImageContentSchema, { type: "image", data: "abc", mimeType: "image/png" })).toBe(true);
+		expect(Check(ImageContentSchema, { type: "image", data: "abc", mimeType: "image/svg+xml" })).toBe(true);
+		expect(Check(ImageContentSchema, { type: "image", data: "abc", mimeType: "text/plain; charset=utf-8" })).toBe(
+			false,
+		);
+		expect(Check(ImageContentSchema, { type: "image", data: "abc", mimeType: "text/plain\nX-Injected: yes" })).toBe(
+			false,
+		);
 	});
 
 	test("round-trips v2 messages through framed CBOR", () => {
