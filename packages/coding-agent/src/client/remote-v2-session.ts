@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type {
 	CreateSessionV2Options,
+	ForkSessionV2Options,
 	PiClientV2,
 	PiSessionV2Handle,
 	V2SessionLeaseMode,
@@ -238,6 +239,16 @@ export class RemoteV2Session {
 	): Promise<RemoteV2Session> {
 		const created = await client.createSession(options);
 		return RemoteV2Session.open(client, created.id, sessionOptions);
+	}
+
+	async fork(options: ForkSessionV2Options = {}): Promise<RemoteV2Session> {
+		this.#assertControl();
+		const sourceSessionId = this.#requireHandle().sessionId;
+		const forked = await this.#client.forkSession(sourceSessionId, options);
+		return RemoteV2Session.open(this.#client, forked.id, {
+			mode: this.#mode,
+			onListenerError: this.#onListenerError,
+		});
 	}
 
 	get id(): string | undefined {

@@ -487,6 +487,22 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("forks through the server-owned session boundary and opens the child", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		pair.overrideNextResult("session/fork", { session: { ...snapshot(), id: "session-2" } });
+		const forked = await session.fork({ name: "branch", scope: "branch", position: "at" });
+		expect(forked.id).toBe("session-2");
+		expect(pair.requests.find((request) => request.command === "session/fork")).toMatchObject({
+			sessionId: "session-1",
+			payload: { name: "branch", scope: "branch", position: "at" },
+		});
+		await forked.dispose();
+		await session.dispose();
+	});
+
 	test("opens, reads authoritative state, and publishes terminal snapshots", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });
