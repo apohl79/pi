@@ -539,6 +539,23 @@ describe("JSONL v4 per-session storage", () => {
 		]);
 	});
 
+	it("refreshes after an in-place replacement with unchanged size and mtime", async () => {
+		const root = createTempDir();
+		const session = await createRepository(root).create({ id: "same-inode-metadata", cwd: root });
+		await session.appendCustomEntry("old");
+		const metadata = await session.getMetadata();
+		const originalInfo = statSync(metadata.path);
+		const original = readFileSync(metadata.path, "utf8");
+		writeFileSync(metadata.path, original.replace('"old"', '"new"'));
+		utimesSync(metadata.path, originalInfo.atime, originalInfo.mtime);
+
+		await session.appendCustomEntry("tail");
+		expect((await session.findEntries({ order: "oldestFirst" })).map((entry) => entry.type === "custom" && entry.customType)).toEqual([
+			"new",
+			"tail",
+		]);
+	});
+
 	it("rolls back a partially applied external suffix after semantic failure", async () => {
 		const root = createTempDir();
 		const session = await createRepository(root).create({ id: "suffix-rollback", cwd: root });

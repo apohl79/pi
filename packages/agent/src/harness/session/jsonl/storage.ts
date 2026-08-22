@@ -21,8 +21,10 @@ import { encodeHeader, encodeMutation, metadataFromHeader, parseHeader, parseMut
 import { fileResult, invalidFile, JsonlDecodeError } from "./errors.ts";
 import type { JsonlSessionMetadata, JsonlSessionRepoFileSystem, JsonlV4Header } from "./types.ts";
 
-function lineHash(line: string): string {
-	return createHash("sha256").update(line).digest("hex");
+const ROOT_FINGERPRINT_LINES = 8;
+
+function rootFingerprint(lines: readonly string[]): string {
+	return createHash("sha256").update(JSON.stringify(lines.slice(0, ROOT_FINGERPRINT_LINES))).digest("hex");
 }
 
 /**
@@ -62,8 +64,8 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 	private persistedSize = 0;
 	private persistedModifiedAt = 0;
 	private persistedIdentity: string | undefined;
-	/** Fingerprints let refresh detect same-size/same-line-count file replacement. */
-	private persistedLineHashes: string[] = [];
+	/** A bounded prefix fingerprint catches replacement even when file metadata is unchanged. */
+	private persistedRootLines: string[] = [];
 
 	constructor(fs: JsonlSessionRepoFileSystem, metadata: JsonlSessionMetadata) {
 		this.fs = fs;
@@ -82,7 +84,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		storage.persistedSize = new TextEncoder().encode(encodeHeader(header)).byteLength;
 		storage.persistedModifiedAt = fileInfo.mtimeMs;
 		storage.persistedIdentity = fileInfo.identity;
-		storage.persistedLineHashes = [lineHash(encodeHeader(header).trimEnd())];
+		storage.persistedRootLines = [encodeHeader(header).trimEnd()];
 		return storage;
 	}
 
@@ -119,7 +121,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 					const repairedInfo = fileResult(await fs.fileInfo(path), `Failed to read session metadata ${path}`);
 					storage.persistedModifiedAt = repairedInfo.mtimeMs;
 					storage.persistedIdentity = repairedInfo.identity;
-					storage.persistedLineHashes = physicalLines.slice(0, index).map(lineHash);
+					storage.persistedRootLines = physicalLines.slice(0, ROOT_FINGERPRINT_LINES);
 					return storage;
 				}
 				throw invalidFile(path, index + 1, mutationResult.error);
@@ -140,7 +142,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		storage.persistedSize = fileInfo.size + (content.endsWith("\n") ? 0 : 1);
 		storage.persistedModifiedAt = fileInfo.mtimeMs;
 		storage.persistedIdentity = fileInfo.identity;
-		storage.persistedLineHashes = physicalLines.map(lineHash);
+		storage.persistedRootLines = physicalLines.slice(0, ROOT_FINGERPRINT_LINES);
 		return storage;
 	}
 
@@ -347,7 +349,9 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 			);
 			this.persistedLineCount += 1;
 			this.persistedSize += new TextEncoder().encode(encoded).byteLength;
-			this.persistedLineHashes.push(lineHash(encoded.trimEnd()));
+			if (this.persistedRootLines.length < ROOT_FINGERPRINT_LINES) {
+				this.persistedRootLines.push(encoded.trimEnd());
+			}
 			// Metadata refresh is only an optimization for detecting external writers;
 			// never turn a successful append into an error if that optional read fails.
 			try {
@@ -373,7 +377,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 				this.persistedSize = fresh.persistedSize;
 				this.persistedModifiedAt = fresh.persistedModifiedAt;
 				this.persistedIdentity = fresh.persistedIdentity;
-				this.persistedLineHashes = fresh.persistedLineHashes;
+				this.persistedRootLines = fresh.persistedRootLines;
 			} catch {
 				// Preserve the original append error when the recovery read fails.
 			}
@@ -383,7 +387,13 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 
 	private async refreshFromDisk(path: string): Promise<void> {
 		const fileInfo = fileResult(await this.fs.fileInfo(path), `Failed to read session metadata ${path}`);
+		const rootLines = fileResult(
+			await this.fs.readTextLines(path, { maxLines: ROOT_FINGERPRINT_LINES }),
+			`Failed to read session root ${path}`,
+		);
+		const rootUnchanged = rootFingerprint(rootLines) === rootFingerprint(this.persistedRootLines);
 		if (
+			rootUnchanged &&
 			fileInfo.size === this.persistedSize &&
 			fileInfo.mtimeMs === this.persistedModifiedAt &&
 			(fileInfo.identity === undefined || this.persistedIdentity === undefined || fileInfo.identity === this.persistedIdentity)
@@ -391,18 +401,16 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		const content = fileResult(await this.fs.readTextFile(path), `Failed to read session ${path}`);
 		const physicalLines = content.split("\n");
 		if (physicalLines.at(-1) === "") physicalLines.pop();
-		const currentLineHashes = physicalLines.map(lineHash);
-		const prefixUnchanged = this.persistedLineHashes.every((hash, index) => currentLineHashes[index] === hash);
 		// A replacement/truncation (fork publication or recovery) cannot be safely
 		// applied as a suffix; use the canonical loader in that uncommon case.
-		if (physicalLines.length < this.persistedLineCount || !prefixUnchanged) {
+		if (physicalLines.length < this.persistedLineCount || !rootUnchanged) {
 			const fresh = await JsonlSessionStorage.loadUnlocked(this.fs, path);
 			this.state = fresh.state;
 			this.persistedLineCount = fresh.persistedLineCount;
 			this.persistedSize = fresh.persistedSize;
 			this.persistedModifiedAt = fresh.persistedModifiedAt;
 			this.persistedIdentity = fresh.persistedIdentity;
-			this.persistedLineHashes = fresh.persistedLineHashes;
+			this.persistedRootLines = fresh.persistedRootLines;
 			return;
 		}
 		const suffix: SessionMutation[] = [];
@@ -415,7 +423,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 				this.persistedSize = fresh.persistedSize;
 				this.persistedModifiedAt = fresh.persistedModifiedAt;
 				this.persistedIdentity = fresh.persistedIdentity;
-				this.persistedLineHashes = fresh.persistedLineHashes;
+				this.persistedRootLines = fresh.persistedRootLines;
 				return;
 			}
 			suffix.push(mutationResult.value);
@@ -431,7 +439,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		this.persistedSize = fileInfo.size;
 		this.persistedModifiedAt = fileInfo.mtimeMs;
 		this.persistedIdentity = fileInfo.identity;
-		this.persistedLineHashes = currentLineHashes;
+		this.persistedRootLines = physicalLines.slice(0, ROOT_FINGERPRINT_LINES);
 	}
 
 	private applyMutation(mutation: SessionMutation): void {
