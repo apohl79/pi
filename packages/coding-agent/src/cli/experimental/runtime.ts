@@ -1,5 +1,6 @@
 import type { PiClientV2, PiSessionV2Handle } from "@earendil-works/pi-client";
 import type { ExperimentalCliContext } from "./cli.ts";
+import type { AuthInput } from "./auth.ts";
 import type { AttachCommand } from "./commands/attach.ts";
 import type { ClientCommand } from "./commands/client.ts";
 import type { ServerCommand } from "./commands/server.ts";
@@ -15,7 +16,7 @@ export type ExperimentalDaemonController = {
 export type ExperimentalCliRuntimeOptions = {
 	daemon: ExperimentalDaemonController;
 	defaultConnect: TransportAddress;
-	createClient(address: TransportAddress): PiClientV2;
+	createClient(address: TransportAddress, auth?: AuthInput): PiClientV2;
 	write(value: unknown): void;
 	onAttach?(handle: PiSessionV2Handle): void | Promise<void>;
 };
@@ -26,8 +27,8 @@ export type ExperimentalCliRuntime = ExperimentalCliContext & {
 
 export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOptions): ExperimentalCliRuntime {
 	const clients = new Set<PiClientV2>();
-	const connect = (address: TransportAddress): PiClientV2 => {
-		const client = options.createClient(address);
+	const connect = (address: TransportAddress, auth?: AuthInput): PiClientV2 => {
+		const client = options.createClient(address, auth);
 		clients.add(client);
 		return client;
 	};
@@ -46,7 +47,7 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 		options.write(result);
 	};
 	const runClient = async (command: ClientCommand): Promise<void> => {
-		const client = connect(addressFor(command.connect));
+		const client = connect(addressFor(command.connect), command.auth);
 		try {
 			const snapshot = await client.connect();
 			options.write(snapshot);
@@ -55,7 +56,7 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 		}
 	};
 	const runSessions = async (command: SessionsCommand): Promise<void> => {
-		const client = connect(addressFor(command.connect));
+		const client = connect(addressFor(command.connect), command.auth);
 		try {
 			await client.connect();
 			options.write(await client.listSessions());
@@ -65,15 +66,20 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 	};
 	const runAttach = async (command: AttachCommand): Promise<void> => {
 		if (command.sessionId === undefined) throw new Error("attach requires a session id");
-		const client = connect(addressFor(command.connect));
-		await client.connect();
-		const handle = await client.openSession(command.sessionId);
-		if (options.onAttach === undefined) {
-			options.write(await handle.read());
-			closeClient(client);
-			return;
+		const client = connect(addressFor(command.connect), command.auth);
+		let handedOff = false;
+		try {
+			await client.connect();
+			const handle = await client.openSession(command.sessionId);
+			if (options.onAttach === undefined) {
+				options.write(await handle.read());
+				return;
+			}
+			await options.onAttach(handle);
+			handedOff = true;
+		} finally {
+			if (!handedOff) closeClient(client);
 		}
-		await options.onAttach(handle);
 	};
 	return {
 		runPi: async () => {
