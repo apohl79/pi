@@ -45,6 +45,7 @@ interface ChildAgent {
 	followUps: string[];
 	waiters: Array<() => void>;
 	persistence: Promise<void>;
+	completionQueued: boolean;
 }
 
 export interface CodingAgentV2AgentRegistryOptions {
@@ -112,6 +113,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			followUps: [],
 			waiters: [],
 			persistence: Promise.resolve(),
+			completionQueued: false,
 		};
 		this.agents.set(summary.id, agent);
 		await this.persist(agent);
@@ -247,16 +249,23 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	private async queueCompletion(agent: ChildAgent): Promise<void> {
+		if (agent.completionQueued) return;
+		agent.completionQueued = true;
 		const parent = await this.service.openSession(agent.parentSessionId);
 		if (!parent.appendCustomEntry) return;
-		await parent.appendCustomEntry(AGENT_COMPLETION, {
-			version: 1,
-			agentId: agent.summary.id,
-			path: agent.summary.path,
-			taskName: agent.summary.taskName,
-			state: agent.state,
-			model: agent.summary.model,
-		});
+		try {
+			await parent.appendCustomEntry(AGENT_COMPLETION, {
+				version: 1,
+				agentId: agent.summary.id,
+				path: agent.summary.path,
+				taskName: agent.summary.taskName,
+				state: agent.state,
+				model: agent.summary.model,
+			});
+		} catch (error) {
+			agent.completionQueued = false;
+			throw error;
+		}
 	}
 
 	private validateRequest(request: V2AgentRequest): void {
@@ -348,6 +357,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				followUps: persisted?.followUps.slice() ?? [],
 				waiters: [],
 				persistence: Promise.resolve(),
+				completionQueued: false,
 			});
 		}
 	}
