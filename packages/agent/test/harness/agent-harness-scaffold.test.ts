@@ -249,6 +249,37 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("includes request-only sampling input in model-switch preflight", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-model-switch-sampling-faux",
+			models: [
+				{ id: "large-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+				{ id: "small-model", reasoning: false, contextWindow: 100, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("large response"), fauxAssistantMessage("sampling summary")]);
+		const session = createSession("model-switch-sampling");
+		const largeModel = faux.getModel("large-model");
+		const smallModel = faux.getModel("small-model");
+		if (!largeModel || !smallModel) throw new Error("Expected faux model catalog entries");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: largeModel,
+			compaction: { enabled: true, reserveTokens: 10, keepRecentTokens: 1 },
+			samplingInput: () => [{ role: "user", content: "x".repeat(1_000), timestamp: 1 }],
+		});
+		await harness.prompt("short history");
+		await harness.setModel(smallModel);
+		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		expect(entries.some((entry) => entry.type === "compaction" && entry.summary.includes("sampling summary"))).toBe(
+			true,
+		);
+		await harness.close();
+	});
+
 	it("discovers unfinished operations for crash recovery", async () => {
 		const session = createSession();
 		const { harness, suspended } = await AgentHarness.create({
