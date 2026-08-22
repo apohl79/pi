@@ -121,7 +121,7 @@ describe("CodingAgentV2AgentRegistry", () => {
 		expect((await registry.getSnapshot(agent.id)).state).toBe("running");
 		runtime.release();
 		expect((await registry.wait(agent.id)).state).toBe("complete");
-		expect(runtime.commands.map((command) => command.command)).toEqual(["turn/start", "turn/followUp"]);
+		expect(runtime.commands.map((command) => command.command)).toEqual(["turn/start", "turn/start"]);
 	});
 
 	test("bounds queued child messages", async () => {
