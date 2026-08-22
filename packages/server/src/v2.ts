@@ -151,6 +151,7 @@ export class PiServerV2 {
 	private readonly inputSessions = new Map<string, string>();
 	private readonly disposedRuntimes = new WeakSet<PiSessionRuntimeV2>();
 	private readonly activeOperations = new Map<PiSessionRuntimeV2, number>();
+	private readonly pendingAttaches = new Map<string, number>();
 	private startPromise?: Promise<this>;
 	private closePromise?: Promise<void>;
 	private closing = false;
@@ -397,35 +398,40 @@ export class PiServerV2 {
 
 	private async attach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("session/attach requires sessionId");
-		this.requireVisibleSession(state, command.sessionId);
-		const existing = state.sessions.get(command.sessionId);
-		let runtime = existing;
-		if (!runtime) {
-			let opening = state.attachingSessions.get(command.sessionId);
-			if (!opening) {
-				opening = this.service.openSession(command.sessionId);
-				state.attachingSessions.set(command.sessionId, opening);
-				void opening.finally(() => state.attachingSessions.delete(command.sessionId)).catch(() => undefined);
-			}
-			runtime = await opening;
-		}
+		this.retainAttach(command.sessionId);
 		try {
-			if (!runtime) throw new Error("Session runtime is unavailable");
-			if (state.closed || state.connection.closed) {
-				if (!existing) await this.disposeRuntime(runtime);
-				return;
+			this.requireVisibleSession(state, command.sessionId);
+			const existing = state.sessions.get(command.sessionId);
+			let runtime = existing;
+			if (!runtime) {
+				let opening = state.attachingSessions.get(command.sessionId);
+				if (!opening) {
+					opening = this.service.openSession(command.sessionId);
+					state.attachingSessions.set(command.sessionId, opening);
+					void opening.finally(() => state.attachingSessions.delete(command.sessionId)).catch(() => undefined);
+				}
+				runtime = await opening;
 			}
-			state.sessions.set(command.sessionId, runtime);
-			await this.sendResponse(state, id, {
-				command: command.command,
-				session: toProtocolJsonValue(await this.snapshotForSession(command.sessionId, runtime)),
-			});
-		} catch (error) {
-			if (!existing) {
-				state.sessions.delete(command.sessionId);
-				await this.disposeRuntime(runtime).catch((disposeError: unknown) => this.reportError(disposeError instanceof Error ? disposeError : new Error(String(disposeError))));
+			try {
+				if (!runtime) throw new Error("Session runtime is unavailable");
+				if (state.closed || state.connection.closed) {
+					if (!existing) await this.disposeRuntime(runtime);
+					return;
+				}
+				state.sessions.set(command.sessionId, runtime);
+				await this.sendResponse(state, id, {
+					command: command.command,
+					session: toProtocolJsonValue(await this.snapshotForSession(command.sessionId, runtime)),
+				});
+			} catch (error) {
+				if (!existing) {
+					if (state.sessions.get(command.sessionId) === runtime) state.sessions.delete(command.sessionId);
+					await this.disposeRuntime(runtime).catch((disposeError: unknown) => this.reportError(disposeError instanceof Error ? disposeError : new Error(String(disposeError))));
+				}
+				throw error;
 			}
-			throw error;
+		} finally {
+			this.releaseAttach(command.sessionId);
 		}
 	}
 
@@ -700,7 +706,7 @@ export class PiServerV2 {
 		this.requireAttached(state, command.sessionId);
 		const runtime = state.sessions.get(command.sessionId);
 		state.sessions.delete(command.sessionId);
-		if (runtime && !this.hasRuntimeReference(runtime) && !this.hasActiveOperation(runtime)) await this.disposeRuntime(runtime);
+		if (runtime && !this.hasRuntimeReference(runtime) && !this.hasActiveOperation(runtime) && !this.hasPendingAttach(command.sessionId)) await this.disposeRuntime(runtime);
 		await this.sendResponse(state, id, { command: command.command, sessionId: command.sessionId });
 	}
 
@@ -731,7 +737,7 @@ export class PiServerV2 {
 			accepted = await runtime.accept(operationId);
 		} catch (error) {
 			this.releaseOperation(runtime);
-			if (!this.hasRuntimeReference(runtime) && !this.hasActiveOperation(runtime)) {
+			if (!this.hasRuntimeReference(runtime) && !this.hasActiveOperation(runtime) && !this.hasPendingAttach(command.sessionId)) {
 				try {
 					await this.disposeRuntime(runtime);
 				} catch (disposeError) {
@@ -785,7 +791,7 @@ export class PiServerV2 {
 			await this.finalizeOperation(runtime, sessionId, operationId, "failed", safeOperationError(error));
 		} finally {
 			this.releaseOperation(runtime);
-			if (!this.hasRuntimeReference(runtime) && !this.hasActiveOperation(runtime)) await this.disposeRuntime(runtime);
+			if (!this.hasRuntimeReference(runtime) && !this.hasActiveOperation(runtime) && !this.hasPendingAttach(sessionId)) await this.disposeRuntime(runtime);
 		}
 	}
 
@@ -933,6 +939,20 @@ export class PiServerV2 {
 
 	private hasActiveOperation(runtime: PiSessionRuntimeV2): boolean {
 		return (this.activeOperations.get(runtime) ?? 0) > 0;
+	}
+
+	private retainAttach(sessionId: string): void {
+		this.pendingAttaches.set(sessionId, (this.pendingAttaches.get(sessionId) ?? 0) + 1);
+	}
+
+	private releaseAttach(sessionId: string): void {
+		const count = this.pendingAttaches.get(sessionId);
+		if (count === undefined || count <= 1) this.pendingAttaches.delete(sessionId);
+		else this.pendingAttaches.set(sessionId, count - 1);
+	}
+
+	private hasPendingAttach(sessionId: string): boolean {
+		return (this.pendingAttaches.get(sessionId) ?? 0) > 0;
 	}
 
 	private async disposeRuntime(runtime: PiSessionRuntimeV2): Promise<void> {
