@@ -68,6 +68,17 @@ function commandPayload(command: CommandV2): Record<string, unknown> {
 		: {};
 }
 
+function messageText(message: unknown): string {
+	if (typeof message !== "object" || message === null) return String(message ?? "");
+	const content = (message as { content?: unknown }).content;
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((part): part is { type: "text"; text: string } => typeof part === "object" && part !== null && (part as { type?: unknown }).type === "text" && typeof (part as { text?: unknown }).text === "string")
+		.map((part) => part.text)
+		.join("");
+}
+
 class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	private revision = 1;
 	private eventSeq = 1;
@@ -118,8 +129,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			thinkingLevel,
 			transcript,
 			queues: {
-				steer: lane.queues.steer.map((item) => ({ id: item.entryId, content: [{ type: "text", text: JSON.stringify(item.message) }], createdAt: 0 })),
-				followUp: lane.queues.followUp.map((item) => ({ id: item.entryId, content: [{ type: "text", text: JSON.stringify(item.message) }], createdAt: 0 })),
+				steer: lane.queues.steer.map((item) => ({ id: item.entryId, content: [{ type: "text", text: messageText(item.message) }], createdAt: 0 })),
+				followUp: lane.queues.followUp.map((item) => ({ id: item.entryId, content: [{ type: "text", text: messageText(item.message) }], createdAt: 0 })),
 			},
 			...(goal === undefined ? {} : { goal }),
 			agents: [],
@@ -219,6 +230,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				this.sessionName = generated;
 				this.nameSource = "generated";
 				this.nameRevision += 1;
+				await harness.session.setName(this.sessionName);
 			}
 		} else if (runCommand === "session/name/auto/set") {
 			if (typeof payload.enabled !== "boolean") throw new Error("session/name/auto/set requires enabled");
