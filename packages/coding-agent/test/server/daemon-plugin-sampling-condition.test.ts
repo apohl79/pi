@@ -132,6 +132,7 @@ async function runConditionalSamplingScenario(): Promise<{
 		if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
 		const sessionId = (created.result as { session: { id: string } }).session.id;
 		await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+		await client.request({ command: "session/name/auto/set", sessionId, payload: { enabled: false } });
 		await client.request({ command: "turn/start", sessionId, payload: { text: "enabled request" } });
 		await waitForTurn(client, sessionId);
 		await unlink(marker);
