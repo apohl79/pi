@@ -115,11 +115,18 @@ describe("remote v2 interactive command boundary", () => {
 		expect(parseRemoteV2Command("/thinking high")).toEqual({ name: "thinking", level: "high" });
 		expect(parseRemoteV2Command("/goal ship the feature")).toEqual({ name: "goal", objective: "ship the feature" });
 		expect(parseRemoteV2Command("/goal-pause")).toEqual({ name: "goal-pause" });
+		expect(parseRemoteV2Command('/input request-1 {"choice":"yes"}')).toEqual({
+			name: "input",
+			requestId: "request-1",
+			answers: { choice: "yes" },
+		});
+		expect(parseRemoteV2Command("/input-cancel request-1")).toEqual({ name: "input-cancel", requestId: "request-1" });
 		expect(parseRemoteV2Command("/name Project work")).toEqual({ name: "name", value: "Project work" });
 		expect(parseRemoteV2Command("/name --clear")).toEqual({ name: "name", clear: true });
 		expect(parseRemoteV2Command("/name --generate")).toEqual({ name: "name", generate: true });
 		expect(parseRemoteV2Command("/name-auto off")).toEqual({ name: "name-auto", enabled: false });
 		expect(() => parseRemoteV2Command("/rollback 0")).toThrow("positive integer");
+		expect(() => parseRemoteV2Command('/input request-1 {"choice":true}')).toThrow("only strings");
 	});
 
 	test("dispatches remote actions through the attached controller and shares cleanup", async () => {
@@ -135,6 +142,14 @@ describe("remote v2 interactive command boundary", () => {
 			kind: "operation",
 			operationId: "operation-1",
 		});
+		expect(await adapter.execute('/input request-1 {"choice":"yes"}')).toEqual({
+			kind: "status",
+			text: "input answered",
+		});
+		expect(await adapter.execute("/input-cancel request-1")).toEqual({
+			kind: "status",
+			text: "input cancelled",
+		});
 		expect(await adapter.execute("/detach")).toEqual({ kind: "detached" });
 		expect(commands).toEqual([
 			"session/attach",
@@ -144,6 +159,8 @@ describe("remote v2 interactive command boundary", () => {
 			"session/attach",
 			"session/thinking/set",
 			"goal/create",
+			"input/request/respond",
+			"input/request/cancel",
 			"session/detach",
 		]);
 		await adapter.dispose();
