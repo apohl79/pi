@@ -133,6 +133,11 @@ describe("coding-agent v2 service adapter", () => {
 						{
 							entryId: "queued-steer",
 							message: { role: "user", content: [{ type: "text", text: "queued" }], timestamp: 7 },
+							content: [
+								{ type: "text", text: "queued" },
+								{ type: "image", digest: "sha256:queued-image", mimeType: "image/png" },
+								{ type: "blob", digest: "sha256:queued-blob", mimeType: "application/octet-stream" },
+							],
 						},
 					],
 					followUp: [],
@@ -145,7 +150,18 @@ describe("coding-agent v2 service adapter", () => {
 				phase: "awaitingInput",
 				diagnostics: { capture: "metadata", degraded: true, lastCriticalEventSeq: 1 },
 				plan: { version: 1, items: [{ step: "Inspect queue", status: "in_progress" }] },
-				queues: { steer: [{ id: "queued-steer", content: [{ type: "text", text: "queued" }] }] },
+				queues: {
+					steer: [
+						{
+							id: "queued-steer",
+							content: [
+								{ type: "text", text: "queued" },
+								{ type: "image", digest: "sha256:queued-image", mimeType: "image/png" },
+								{ type: "blob", digest: "sha256:queued-blob", mimeType: "application/octet-stream" },
+							],
+						},
+					],
+				},
 			});
 		} finally {
 			await inputs.cancel(request.id);

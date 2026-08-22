@@ -108,9 +108,16 @@ export interface CodingAgentV2SessionDefinition {
 	plan?: () => Promise<PlanSnapshot | undefined>;
 	diagnostics?: () => Promise<DiagnosticsSnapshot>;
 	queues?: () => Promise<{
-		steer: readonly { entryId: string; message: AgentMessage }[];
-		followUp: readonly { entryId: string; message: AgentMessage }[];
+		steer: readonly QueuedPrompt[];
+		followUp: readonly QueuedPrompt[];
 	}>;
+}
+
+/** A queued provider message plus its server-owned, snapshot-safe content references. */
+export interface QueuedPrompt {
+	readonly entryId: string;
+	readonly message: AgentMessage;
+	readonly content?: readonly PromptContent[];
 }
 
 export interface CodingAgentV2Service {
@@ -183,7 +190,8 @@ function modelMetadata(model: Model<string>): ModelMetadata {
 
 type PromptPart = { type: "text"; text: string } | ImageContent;
 
-function queueContent(message: AgentMessage): PromptContent[] {
+function queueContent(message: AgentMessage, references?: readonly PromptContent[]): PromptContent[] {
+	if (references !== undefined) return [...references];
 	if (message.role !== "user") return [{ type: "text", text: `[${message.role} message]` }];
 	if (typeof message.content === "string") return [{ type: "text", text: message.content }];
 	return message.content.map((part) =>
@@ -681,12 +689,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			queues: {
 				steer: (queues?.steer ?? []).map((item) => ({
 					id: item.entryId,
-					content: queueContent(item.message),
+					content: queueContent(item.message, item.content),
 					createdAt: item.message.timestamp ?? 0,
 				})),
 				followUp: (queues?.followUp ?? []).map((item) => ({
 					id: item.entryId,
-					content: queueContent(item.message),
+					content: queueContent(item.message, item.content),
 					createdAt: item.message.timestamp ?? 0,
 				})),
 			},
