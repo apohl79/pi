@@ -134,6 +134,9 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 			case "set_auto_compaction":
 				await session.setAutoCompaction(command.enabled);
 				return success(id, "set_auto_compaction");
+			case "set_auto_retry":
+				await session.setAutoRetry(command.enabled);
+				return success(id, "set_auto_retry");
 			case "get_available_thinking_levels":
 				return success(id, "get_available_thinking_levels", { levels: THINKING_LEVELS });
 			case "cycle_thinking_level": {
