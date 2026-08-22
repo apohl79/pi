@@ -216,6 +216,7 @@ export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOption
 	tools?: CodingAgentHarnessTool[];
 	systemPromptOptions?: Omit<BuildSystemPromptOptions, "cwd" | "promptGuidelines" | "selectedTools" | "toolSnippets">;
 	modelInstructions?: { resolver: ModelInstructionResolver; scope?: "root" | "subagent" };
+	roleInstructions?: string;
 	requestUserInput?: (
 		request: CodingAgentInputRequest,
 		signal: AbortSignal | undefined,
@@ -235,6 +236,7 @@ export interface BuildCodingAgentHarnessSystemPromptOptions {
 	activeToolNames: readonly string[];
 	systemPromptOptions?: CreateCodingAgentHarnessOptions["systemPromptOptions"];
 	modelInstruction?: ResolvedModelInstructionProfile;
+	roleInstructions?: string;
 }
 
 export function buildCodingAgentHarnessSystemPrompt(options: BuildCodingAgentHarnessSystemPromptOptions): string {
@@ -260,13 +262,18 @@ export function buildCodingAgentHarnessSystemPrompt(options: BuildCodingAgentHar
 		promptGuidelines,
 	});
 	const instruction = options.modelInstruction;
-	if (!instruction) return basePrompt;
-	if (instruction.mode === "append") return `${basePrompt}\n\n${instruction.text}`;
-	const defaultPersona =
-		"You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
-	return basePrompt.startsWith(defaultPersona)
-		? `${instruction.text}${basePrompt.slice(defaultPersona.length)}`
-		: `${instruction.text}\n\n${basePrompt}`;
+	const instructionPrompt = !instruction
+		? basePrompt
+		: instruction.mode === "append"
+			? `${basePrompt}\n\n${instruction.text}`
+			: (() => {
+					const defaultPersona =
+						"You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
+					return basePrompt.startsWith(defaultPersona)
+						? `${instruction.text}${basePrompt.slice(defaultPersona.length)}`
+						: `${instruction.text}\n\n${basePrompt}`;
+				})();
+	return options.roleInstructions ? `${instructionPrompt}\n\n${options.roleInstructions}` : instructionPrompt;
 }
 
 export async function createCodingAgentHarness(options: CreateCodingAgentHarnessOptions) {
@@ -525,6 +532,7 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 				activeToolNames: currentActiveToolNames,
 				systemPromptOptions,
 				modelInstruction,
+				roleInstructions: options.roleInstructions,
 			});
 		});
 	const created = await AgentHarness.create({
