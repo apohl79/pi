@@ -43,6 +43,21 @@ export interface RemoteV2SpawnAgentOptions {
 	readonly parentPath?: string;
 }
 
+export interface RemoteV2ProcessOutput {
+	readonly output: string;
+	readonly cursor: number;
+	readonly truncated: boolean;
+}
+
+export interface RemoteV2ProcessSnapshot extends RemoteV2ProcessOutput {
+	readonly processId: string;
+	readonly sessionId: string;
+	readonly command: string;
+	readonly pty: boolean;
+	readonly state: "running" | "exited" | "terminated" | "lost";
+	readonly exitCode?: number;
+}
+
 function promptPayload(input: string | RemoteV2PromptContent, label: string): JsonValue {
 	if (typeof input === "string") {
 		const text = input.trim();
@@ -316,6 +331,69 @@ export class RemoteV2Session {
 		return structuredClone(result.agent);
 	}
 
+	async startProcess(
+		command: string,
+		options: { readonly cwd?: string; readonly env?: Readonly<Record<string, string>>; readonly pty?: boolean } = {},
+	): Promise<RemoteV2ProcessSnapshot> {
+		this.#assertControl();
+		const result = await this.#direct({
+			command: "process/start",
+			sessionId: this.#handle!.sessionId,
+			payload: {
+				command,
+				...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+				...(options.env === undefined ? {} : { env: { ...options.env } }),
+				...(options.pty === undefined ? {} : { pty: options.pty }),
+			},
+		});
+		if (!isProcessSnapshot(result.process)) throw new Error("Invalid process/start response");
+		return structuredClone(result.process);
+	}
+
+	async writeProcess(processId: string, input: string): Promise<RemoteV2ProcessOutput> {
+		this.#assertControl();
+		const result = await this.#direct({
+			command: "process/write",
+			sessionId: this.#handle!.sessionId,
+			payload: { processId, input },
+		});
+		if (!isProcessOutput(result.output)) throw new Error("Invalid process/write response");
+		return structuredClone(result.output);
+	}
+
+	async readProcess(processId: string, cursor = 0): Promise<RemoteV2ProcessOutput> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({
+			command: "process/read",
+			sessionId: this.#requireHandle().sessionId,
+			payload: { processId, cursor },
+		});
+		if (!isProcessOutput(result.output)) throw new Error("Invalid process/read response");
+		return structuredClone(result.output);
+	}
+
+	async waitProcess(processId: string): Promise<RemoteV2ProcessSnapshot> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({
+			command: "process/wait",
+			sessionId: this.#requireHandle().sessionId,
+			payload: { processId },
+		});
+		if (!isProcessSnapshot(result.process)) throw new Error("Invalid process/wait response");
+		return structuredClone(result.process);
+	}
+
+	async terminateProcess(processId: string): Promise<RemoteV2ProcessSnapshot> {
+		this.#assertControl();
+		const result = await this.#direct({
+			command: "process/terminate",
+			sessionId: this.#handle!.sessionId,
+			payload: { processId },
+		});
+		if (!isProcessSnapshot(result.process)) throw new Error("Invalid process/terminate response");
+		return structuredClone(result.process);
+	}
+
 	async relinquishControl(): Promise<void> {
 		this.#assertNotDisposed();
 		const handle = this.#requireHandle();
@@ -479,5 +557,25 @@ function isAgentSummary(value: unknown): value is AgentSummary {
 		["idle", "running", "awaitingInput", "complete", "failed", "interrupted"].includes(record.state as string) &&
 		typeof model?.provider === "string" &&
 		typeof model.id === "string"
+	);
+}
+
+function isProcessOutput(value: unknown): value is RemoteV2ProcessOutput {
+	const record = asRecord(value);
+	return (
+		typeof record?.output === "string" && typeof record.cursor === "number" && typeof record.truncated === "boolean"
+	);
+}
+
+function isProcessSnapshot(value: unknown): value is RemoteV2ProcessSnapshot {
+	const record = asRecord(value);
+	return (
+		isProcessOutput(value) &&
+		typeof record?.processId === "string" &&
+		typeof record.sessionId === "string" &&
+		typeof record.command === "string" &&
+		typeof record.pty === "boolean" &&
+		["running", "exited", "terminated", "lost"].includes(record.state as string) &&
+		(record.exitCode === undefined || typeof record.exitCode === "number")
 	);
 }
