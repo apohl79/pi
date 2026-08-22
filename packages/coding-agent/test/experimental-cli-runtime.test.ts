@@ -37,6 +37,7 @@ const sessionSnapshot = {
 	queues: { steer: [], followUp: [] },
 	steeringMode: "one-at-a-time",
 	followUpMode: "all",
+	autoRetryEnabled: false,
 	agents: [],
 	usage: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, pricingState: "known" },
 	context: { inputTokens: 6, contextWindow: 100, usedPercentage: 6 },
@@ -520,6 +521,29 @@ describe("experimental CLI runtime", () => {
 			payload: { enabled: true },
 		});
 		expect(output).toContainEqual(expect.objectContaining({ id: "retry-mode", success: true }));
+		runtime.close();
+	});
+
+	test("projects retry enablement through the legacy get_state response", async () => {
+		const server = clientFactory();
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: () => {},
+			rpcInput: Readable.from(['{"id":"state-1","type":"get_state"}\n']),
+			rpcOutput: (value) => output.push(value),
+		});
+		await runtime.runRpc({ messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(output).toContainEqual(
+			expect.objectContaining({
+				id: "state-1",
+				success: true,
+				data: expect.objectContaining({ autoRetryEnabled: false }),
+			}),
+		);
 		runtime.close();
 	});
 

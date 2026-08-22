@@ -103,6 +103,7 @@ export interface RpcSessionState {
 	sessionId: string;
 	sessionName?: string;
 	autoCompactionEnabled: boolean;
+	autoRetryEnabled: boolean;
 	messageCount: number;
 	pendingMessageCount: number;
 }
