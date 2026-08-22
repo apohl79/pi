@@ -627,6 +627,35 @@ describe("experimental CLI runtime", () => {
 		runtime.close();
 	});
 
+	test("preserves the server bundle when the client diagnostic spool is unavailable", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-cli-diagnostics-spool-failure-"));
+		const outputPath = join(directory, "bundle.json");
+		const server = clientFactory();
+		const spool = {
+			read: vi.fn().mockRejectedValue(new Error("client spool unavailable")),
+			latestSeq: vi.fn().mockRejectedValue(new Error("client spool unavailable")),
+		} as unknown as ClientDiagnosticSpool;
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			diagnosticsSpool: spool,
+			write: (value) => output.push(value),
+		});
+		await runtime.runDiagnostics({
+			command: "diagnostics",
+			action: "export",
+			output: outputPath,
+		});
+		const bundle = JSON.parse(await readFile(outputPath, "utf8")) as {
+			manifest: { unavailable?: readonly string[] };
+		};
+		expect(bundle.manifest.unavailable).toEqual(["client-diagnostic-spool"]);
+		expect(output).toMatchObject([{ command: "diagnostics/export" }]);
+		runtime.close();
+	});
+
 	test("verifies a bundle file without connecting to a daemon", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-cli-diagnostics-"));
 		const events = [{ seq: 1, kind: "boot" }];
