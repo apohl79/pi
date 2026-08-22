@@ -295,11 +295,16 @@ describe("PiServer v2 operation acceptance", () => {
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
-		const status = await client.request({ command: "diagnostics/status" });
-		const timeline = await client.request({ command: "diagnostics/timeline", payload: { sessionId: "session-1" } });
-		const exported = await client.request({ command: "diagnostics/export" });
-		const verified = await client.request({ command: "diagnostics/verify" });
-		const doctor = await client.request({ command: "diagnostics/doctor" });
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const status = await client.request({ command: "diagnostics/status", sessionId: "session-1" });
+		const timeline = await client.request({
+			command: "diagnostics/timeline",
+			sessionId: "session-1",
+			payload: { sessionId: "session-1" },
+		});
+		const exported = await client.request({ command: "diagnostics/export", sessionId: "session-1" });
+		const verified = await client.request({ command: "diagnostics/verify", sessionId: "session-1" });
+		const doctor = await client.request({ command: "diagnostics/doctor", sessionId: "session-1" });
 		expect(status).toMatchObject({ ok: true, result: { capture: "metadata", eventCount: 1 } });
 		expect(timeline).toMatchObject({
 			ok: true,
@@ -318,10 +323,15 @@ describe("PiServer v2 operation acceptance", () => {
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
-		const status = await client.request({ command: "diagnostics/status" });
-		const doctor = await client.request({ command: "diagnostics/doctor" });
+		const unauthenticated = await client.request({ command: "diagnostics/status" });
+		expect(unauthenticated).toMatchObject({ ok: false, error: { code: "request_failed" } });
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const status = await client.request({ command: "diagnostics/status", sessionId: "session-1" });
+		const doctor = await client.request({ command: "diagnostics/doctor", sessionId: "session-1" });
 		expect(status).toMatchObject({ ok: true, result: { capture: "metadata", eventCount: 0 } });
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
+	});
+
 	test("acknowledges a turn before starting runtime execution", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);

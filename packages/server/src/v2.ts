@@ -801,6 +801,7 @@ export class PiServerV2 {
 	}
 
 	private async diagnosticsStatus(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
 		const events = await this.diagnosticEvents();
 		await this.sendResponse(state, id, {
 			command: command.command,
@@ -812,6 +813,7 @@ export class PiServerV2 {
 	}
 
 	private async diagnosticsTimeline(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
 		const payload = objectPayload(command);
 		const events = await this.diagnosticEvents(typeof payload.afterSeq === "number" ? payload.afterSeq : 0);
 		await this.sendBoundedDiagnosticsResponse(state, id, {
@@ -827,6 +829,7 @@ export class PiServerV2 {
 	}
 
 	private async diagnosticsExport(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
 		await this.sendBoundedDiagnosticsResponse(state, id, {
 			command: command.command,
 			format: "json",
@@ -851,6 +854,7 @@ export class PiServerV2 {
 	}
 
 	private async diagnosticsVerify(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
 		const events = await this.diagnosticEvents();
 		const gaps = events.slice(1).flatMap((event, index) => {
 			const previous = events[index];
@@ -860,6 +864,7 @@ export class PiServerV2 {
 	}
 
 	private async diagnosticsDoctor(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
 		const events = await this.diagnosticEvents();
 		const sequenceOk = events.every((event, index) => index === 0 || event.seq === events[index - 1]!.seq + 1);
 		await this.sendResponse(state, id, {
