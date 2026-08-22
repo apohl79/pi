@@ -99,15 +99,69 @@ function durableClone<T>(value: T): T {
 function sanitizeErrorMessage(value: unknown, fallback: string): string {
 	const raw = value instanceof Error ? value.message : String(value);
 	const sanitized = raw
-		.replace(/Bearer\s+[^\s]+/gi, "Bearer [redacted]")
-		.replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{16,}\b/g, "[redacted]")
+		// Error payloads commonly echo credentials as an Authorization header or
+		// JSON. Stop at JSON/string delimiters so the useful surrounding error is
+		// retained without carrying the secret into durable history.
+		.replace(/\bBearer\s+[^\s"'`,;}\]]+/gi, "Bearer [redacted]")
+		.replace(/\b(?:sk|rk|pk)-[A-Za-z0-9][A-Za-z0-9_-]{8,}\b/gi, "[redacted]")
 		.replace(/\b(?:AIza|gh[pousr]_|xox[baprs]-)[A-Za-z0-9_-]{16,}\b/g, "[redacted]")
-		.replace(/([\"']?(?:api[_ -]?key|token|secret|password)[\"']?)\s*[:=]\s*[\"']?[^\s,;\"'}]+/gi, "$1=[redacted]")
+		.replace(
+			/([\"']?(?:api[_ -]?key|access[_ -]?token|token|secret|password|authorization|credential)[\"']?)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)/gi,
+			"$1=[redacted]",
+		)
 		.replace(/[\u0000-\u001f\u007f]/g, " ")
 		.replace(/\s+/g, " ")
 		.trim()
 		.slice(0, 512);
 	return sanitized || fallback;
+}
+
+function sanitizeErrorDetails(value: unknown, depth = 0): unknown {
+	if (depth >= 6) return "[redacted]";
+	if (typeof value === "string") return sanitizeErrorMessage(value, "");
+	if (Array.isArray(value)) return value.slice(0, 32).map((item) => sanitizeErrorDetails(item, depth + 1));
+	if (value !== null && typeof value === "object") {
+		const sanitized: Record<string, unknown> = {};
+		for (const [key, item] of Object.entries(value).slice(0, 32)) {
+			if (/api[_ -]?key|token|secret|password|authorization|credential/i.test(key)) {
+				sanitized[key] = "[redacted]";
+			} else {
+				sanitized[key] = sanitizeErrorDetails(item, depth + 1);
+			}
+		}
+		return sanitized;
+	}
+	return value;
+}
+
+function sanitizeTranscriptMessage(message: AgentMessage): AgentMessage {
+	if (message.role === "assistant") {
+		const content =
+			message.stopReason === "error"
+				? message.content.map((part) => {
+						if (part.type === "text") return { ...part, text: sanitizeErrorMessage(part.text, "") };
+						if (part.type === "thinking") return { ...part, thinking: sanitizeErrorMessage(part.thinking, "") };
+						return part;
+				  })
+				: message.content;
+		return {
+			...message,
+			content,
+			...(message.errorMessage === undefined
+				? {}
+				: { errorMessage: sanitizeErrorMessage(message.errorMessage, "Provider request failed") }),
+		};
+	}
+	if (message.role === "toolResult" && message.isError) {
+		return {
+			...message,
+			content: message.content.map((part) =>
+				part.type === "text" ? { ...part, text: sanitizeErrorMessage(part.text, "") } : part,
+			),
+			details: sanitizeErrorDetails(message.details),
+		};
+	}
+	return message;
 }
 
 export interface OperationError {
@@ -571,10 +625,11 @@ export class AgentHarness implements AgentLane {
 				this.models.streamSimple.bind(this.models),
 			);
 			let finalEntryId: string | undefined;
-			for (const message of newMessages) {
+			const transcriptMessages = newMessages.map(sanitizeTranscriptMessage);
+			for (const message of transcriptMessages) {
 				finalEntryId = await this.durableSession.appendMessage(durableClone(message));
 			}
-			const finalMessage = newMessages.at(-1);
+			const finalMessage = transcriptMessages.at(-1);
 			if (!finalEntryId || !finalMessage || finalMessage.role !== "assistant")
 				throw new Error("Agent loop produced no assistant message");
 			if (finalMessage.stopReason === "aborted") {

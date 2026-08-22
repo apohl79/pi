@@ -1,4 +1,4 @@
-import { createModels, type Usage } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, type Usage } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
 import { describe, expect, it } from "vitest";
 import {
@@ -195,5 +195,42 @@ describe("AgentHarness v2 scaffold", () => {
 		await expect(harness.waitForIdle()).rejects.toBeInstanceOf(HarnessClosed);
 		expect(() => harness.hooks.on("before_run", () => {})).toThrow(HarnessClosed);
 		expect(() => harness.events.on("event", () => {})).toThrow(HarnessClosed);
+	});
+
+	it("redacts credentials from failed assistant messages before durable append", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "transcript-redaction",
+			models: [{ id: "redaction-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage(
+				'upstream failed: {"api_key":"secret-value"}; Authorization: Bearer bearer-secret; sk-short-secret',
+				{
+					stopReason: "error",
+					errorMessage: 'request failed: {"api-key":"json-secret"} Bearer bearer-error sk-project-secret',
+				},
+			),
+		]);
+		const session = createSession("transcript-redaction");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+
+		const result = await harness.prompt("hello");
+		expect(result).toMatchObject({ ok: true, value: { kind: "failed" } });
+		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		const assistant = entries.find((entry) => entry.type === "message" && entry.message.role === "assistant");
+		expect(assistant).toBeDefined();
+		if (assistant?.type !== "message" || assistant.message.role !== "assistant") return;
+		const text = assistant.message.content
+			.filter((part): part is { type: "text"; text: string } => part.type === "text")
+			.map((part) => part.text)
+			.join(" ");
+		expect(text).toContain("upstream failed");
+		expect(text).not.toMatch(/secret-value|bearer-secret|short-secret/);
+		expect(assistant.message.errorMessage).toContain("request failed");
+		expect(assistant.message.errorMessage).not.toMatch(/json-secret|bearer-error|project-secret/);
+		expect(assistant.message.errorMessage!.length).toBeLessThanOrEqual(512);
+		await harness.close();
 	});
 });
