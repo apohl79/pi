@@ -410,7 +410,14 @@ class LifecycleRegistry implements Hooks, Events {
 		let currentEvent = event;
 		let aggregate: unknown;
 		for (const registration of this.hooks.get(name) ?? []) {
-			const result = await registration.handler(currentEvent);
+			let result: unknown;
+			try {
+				result = await registration.handler(currentEvent);
+			} catch {
+				if (name === "before_tool")
+					return { block: true, reason: "Tool blocked by lifecycle hook", terminate: true };
+				continue;
+			}
 			if (result === undefined) continue;
 			if (
 				result !== null &&
