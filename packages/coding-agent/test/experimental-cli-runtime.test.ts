@@ -10,7 +10,6 @@ import {
 import { describe, expect, test, vi } from "vitest";
 import { createExperimentalCliRuntime, type ExperimentalDaemonController } from "../src/cli/experimental/runtime.ts";
 import { main } from "../src/main.ts";
-import { main } from "../src/main.ts";
 
 const snapshot: ServerSnapshotV2 = {
 	serverId: "server-1",
