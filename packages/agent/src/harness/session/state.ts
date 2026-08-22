@@ -1,4 +1,5 @@
 import {
+	MAX_DURABLE_COMPACTION_TEXT_LENGTH,
 	type BranchBounds,
 	type Entry,
 	type EntryOrder,
@@ -126,6 +127,15 @@ export class SessionState {
 			case "record": {
 				if (!this.lanes.has(mutation.record.lane)) invalid(`references missing lane ${mutation.record.lane}`);
 				if (this.usedIds.has(mutation.record.id)) invalid(`contains duplicate id ${mutation.record.id}`);
+				if (mutation.record.type === "operation_started" && "customInstructions" in mutation.record.intent) {
+					const customInstructions = mutation.record.intent.customInstructions;
+					if (
+						typeof customInstructions !== "string" ||
+						customInstructions.length > MAX_DURABLE_COMPACTION_TEXT_LENGTH
+					) {
+						invalid(`has customInstructions exceeding ${MAX_DURABLE_COMPACTION_TEXT_LENGTH} characters`);
+					}
+				}
 				this.sequence = seq;
 				this.usedIds.add(mutation.record.id);
 				this.records.push(mutation.record);
