@@ -100,7 +100,7 @@ function sanitizeErrorMessage(value: unknown, fallback: string): string {
 	const raw = value instanceof Error ? value.message : String(value);
 	const sanitized = raw
 		.replace(/Bearer\s+[^\s]+/gi, "Bearer [redacted]")
-		.replace(/(api[_ -]?key|token|secret|password)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+		.replace(/([\"']?(?:api[_ -]?key|token|secret|password)[\"']?)\s*[:=]\s*[\"']?[^\s,;\"'}]+/gi, "$1=[redacted]")
 		.replace(/[\u0000-\u001f\u007f]/g, " ")
 		.replace(/\s+/g, " ")
 		.trim()
@@ -129,8 +129,8 @@ export type NavigationOutcome =
 	| { kind: "declined" | "aborted"; leafId: string | null }
 	| { kind: "failed"; leafId: string | null; error: OperationError };
 
-export type RunRejected = LaneBusy | InvalidMessage | UnknownSkill | UnknownTemplate | Closed;
-export type CompactionRejected = LaneBusy | NothingToCompact | Closed;
+export type RunRejected = LaneBusy | InvalidMessage | UnknownSkill | UnknownTemplate | MissingIdentities | Closed;
+export type CompactionRejected = LaneBusy | NothingToCompact | MissingIdentities | Closed;
 export type NavigationRejected = LaneBusy | UnknownTarget | Closed;
 export type ResumeRejected = LaneBusy | NothingToResume | MissingIdentities | Closed;
 export type QueueRejected = NoActiveRun | InvalidMessage | Closed;
@@ -350,9 +350,17 @@ export class AgentHarness implements AgentLane {
 	private followUpMode: QueueMode;
 	private closed = false;
 	private activeOperation:
-		| { id: string; kind: "run" | "compaction"; controller: AbortController }
+		| {
+				id: string;
+				kind: "run" | "compaction";
+				controller: AbortController;
+				done: Promise<void>;
+				resolveDone: () => void;
+		  }
 		| undefined;
 	private readonly finishedOperations = new Set<string>();
+	private readonly finishingOperations = new Map<string, Promise<void>>();
+	private missingModels: string[] = [];
 
 	private constructor(options: AgentHarnessOptions) {
 		this.durableSession = options.session;
@@ -393,6 +401,7 @@ export class AgentHarness implements AgentLane {
 			if (model) harness.model = model;
 			else missingModels.push(`${persistedModel.provider}/${persistedModel.modelId}`);
 		}
+		harness.missingModels = missingModels;
 		const persistedThinking = branchEntries.find((entry) => entry.type === "thinking_level_change");
 		if (persistedThinking?.type === "thinking_level_change") {
 			const levels: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -434,6 +443,10 @@ export class AgentHarness implements AgentLane {
 	async prompt(message: AgentMessage | AgentMessage[]): Promise<RunResult>;
 	async prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<RunResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		if (this.missingModels.length > 0)
+			return ResultValue.err(
+				new MissingIdentities({ lane: "main", tools: [], models: [...this.missingModels], message: "Persisted model is unavailable" }),
+			);
 		const localRunId = this.durableSession.idGenerator.next();
 		const controller = new AbortController();
 		if (this.activeOperation) {
@@ -446,8 +459,16 @@ export class AgentHarness implements AgentLane {
 				}),
 			);
 		}
-		this.activeOperation = { id: localRunId, kind: "run", controller };
+		let resolveDone!: () => void;
+		const done = new Promise<void>((resolve) => {
+			resolveDone = resolve;
+		});
+		this.activeOperation = { id: localRunId, kind: "run", controller, done, resolveDone };
+		let released = false;
 		const release = () => {
+			if (released) return;
+			released = true;
+			resolveDone();
 			if (this.activeOperation?.id === localRunId) this.activeOperation = undefined;
 		};
 		let open: OperationStartedRecord[];
@@ -496,6 +517,16 @@ export class AgentHarness implements AgentLane {
 			await this.durableSession.appendRecord(started);
 		} catch (error) {
 			release();
+			const raced = await this.durableSession.findOpenOperations("main", { limit: 1 }).catch(() => []);
+			if (raced.length > 0)
+				return ResultValue.err(
+					new LaneBusy({
+						lane: "main",
+						operationId: raced[0]!.id,
+						operationKind: raced[0]!.intent.kind,
+						message: "Lane is busy",
+					}),
+				);
 			throw error;
 		}
 		try {
@@ -534,6 +565,15 @@ export class AgentHarness implements AgentLane {
 			const finalMessage = newMessages.at(-1);
 			if (!finalEntryId || !finalMessage || finalMessage.role !== "assistant")
 				throw new Error("Agent loop produced no assistant message");
+			if (finalMessage.stopReason === "aborted") {
+				await this.finishOperation(runId, "aborted", { code: "aborted", message: "Run aborted" });
+				return ResultValue.ok({ runId, kind: "aborted", leafId: (await this.durableSession.getLeafId()) ?? "", finalEntryId, finalMessage });
+			}
+			if (finalMessage.stopReason === "error") {
+				const error = { code: "run_error", message: sanitizeErrorMessage(finalMessage.errorMessage, "Run failed") };
+				await this.finishOperation(runId, "failed", error);
+				return ResultValue.ok({ runId, kind: "failed", leafId: (await this.durableSession.getLeafId()) ?? "", error, finalEntryId, finalMessage });
+			}
 			await this.finishOperation(runId, "completed");
 			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 			return ResultValue.ok({
@@ -564,20 +604,41 @@ export class AgentHarness implements AgentLane {
 		error?: OperationFinishedRecord["error"],
 	): Promise<void> {
 		if (this.finishedOperations.has(runId)) return;
-		this.finishedOperations.add(runId);
-		try {
+		const existingAttempt = this.finishingOperations.get(runId);
+		if (existingAttempt) return existingAttempt;
+		const attempt = (async () => {
 			const existing = await this.durableSession.findRecords({ type: "operation_finished", runId, limit: 1 });
-			if (existing.length > 0) return;
-			await this.durableSession.appendRecord({
-				type: "operation_finished",
-				id: this.durableSession.idGenerator.next(),
-				lane: "main",
-				runId,
-				outcome,
-				...(error ? { error } : {}),
-			});
-		} catch {
-			// A terminal record is best effort. Never replace the operation's original result.
+			if (existing.length > 0) {
+				this.finishedOperations.add(runId);
+				return;
+			}
+			let lastError: unknown;
+			for (let attempt = 0; attempt < 3; attempt++) {
+				try {
+					await this.durableSession.appendRecord({
+						type: "operation_finished",
+						id: this.durableSession.idGenerator.next(),
+						lane: "main",
+						runId,
+						outcome,
+						...(error ? { error } : {}),
+					});
+					lastError = undefined;
+					break;
+				} catch (candidate) {
+					lastError = candidate;
+					if (attempt === 2) throw candidate;
+					await Promise.resolve();
+				}
+			}
+			if (lastError !== undefined) throw lastError;
+			this.finishedOperations.add(runId);
+		})();
+		this.finishingOperations.set(runId, attempt);
+		try {
+			await attempt;
+		} finally {
+			if (this.finishingOperations.get(runId) === attempt) this.finishingOperations.delete(runId);
 		}
 	}
 
@@ -597,6 +658,10 @@ export class AgentHarness implements AgentLane {
 	}
 	async compact(_options?: { customInstructions?: string }): Promise<CompactionResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		if (this.missingModels.length > 0)
+			return ResultValue.err(
+				new MissingIdentities({ lane: "main", tools: [], models: [...this.missingModels], message: "Persisted model is unavailable" }),
+			);
 		const localRunId = this.durableSession.idGenerator.next();
 		const controller = new AbortController();
 		if (this.activeOperation) {
@@ -609,8 +674,16 @@ export class AgentHarness implements AgentLane {
 				}),
 			);
 		}
-		this.activeOperation = { id: localRunId, kind: "compaction", controller };
+		let resolveDone!: () => void;
+		const done = new Promise<void>((resolve) => {
+			resolveDone = resolve;
+		});
+		this.activeOperation = { id: localRunId, kind: "compaction", controller, done, resolveDone };
+		let released = false;
 		const release = () => {
+			if (released) return;
+			released = true;
+			resolveDone();
 			if (this.activeOperation?.id === localRunId) this.activeOperation = undefined;
 		};
 		let open: OperationStartedRecord[];
@@ -654,14 +727,31 @@ export class AgentHarness implements AgentLane {
 		}
 		const runId = localRunId;
 		const resultEntryId = this.durableSession.idGenerator.next();
+		let startedPersisted = false;
 		try {
-			await this.durableSession.appendRecord({
-				type: "operation_started",
-				id: runId,
-				lane: "main",
-				sourceLeafId: await this.durableSession.getLeafId(),
-				intent: { kind: "compaction", resultEntryId, customInstructions: _options?.customInstructions },
-			});
+			try {
+				await this.durableSession.appendRecord({
+					type: "operation_started",
+					id: runId,
+					lane: "main",
+					sourceLeafId: await this.durableSession.getLeafId(),
+					intent: { kind: "compaction", resultEntryId, customInstructions: _options?.customInstructions },
+				});
+			} catch (error) {
+				const raced = await this.durableSession.findOpenOperations("main", { limit: 1 }).catch(() => []);
+				if (raced.length > 0) {
+					return ResultValue.err(
+						new LaneBusy({
+							lane: "main",
+							operationId: raced[0]!.id,
+							operationKind: raced[0]!.intent.kind,
+							message: "Lane is busy",
+						}),
+					);
+				}
+				throw error;
+			}
+			startedPersisted = true;
 			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
 			const result = await compact(
 				preparation.value,
@@ -715,6 +805,10 @@ export class AgentHarness implements AgentLane {
 				entry,
 			});
 		} catch (error) {
+			if (!startedPersisted) {
+				release();
+				throw error;
+			}
 			const message = sanitizeErrorMessage(error, "Compaction failed");
 			await this.finishOperation(runId, "failed", { code: "compaction_failed", message });
 			if (this.closed || controller.signal.aborted) throw new HarnessClosed();
@@ -783,6 +877,7 @@ export class AgentHarness implements AgentLane {
 			"main",
 		);
 		this.model = model;
+		this.missingModels = [];
 	}
 	async getThinkingLevel(): Promise<ThinkingLevel> {
 		return this.thinkingLevel;
@@ -881,6 +976,15 @@ export class AgentHarness implements AgentLane {
 	}
 	async close(): Promise<void> {
 		this.closed = true;
-		this.activeOperation?.controller.abort();
+		const active = this.activeOperation;
+		active?.controller.abort();
+		if (active) {
+			await Promise.race([
+				active.done,
+				new Promise<void>((resolve) => {
+					setTimeout(resolve, 5_000);
+				}),
+			]);
+		}
 	}
 }
