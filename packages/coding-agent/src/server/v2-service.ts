@@ -74,6 +74,11 @@ function queueContent(message: AgentMessage): Array<Record<string, unknown>> {
 	return parts.length > 0 ? parts : [{ type: "text", text: messageText(message) }];
 }
 
+function targetMessage(target: unknown): AgentMessage {
+	if (typeof target === "object" && target !== null && "message" in target) return (target as { message: AgentMessage }).message;
+	return { role: "user", content: "", timestamp: 0 };
+}
+
 function transcriptItem(entry: Extract<Entry, { type: "message" }>): SessionSnapshotV2["transcript"][number] | undefined {
 	const message = entry.message;
 	const timestamp = finiteTimestamp(entry.timestamp);
@@ -223,8 +228,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			.filter((item): item is SessionSnapshotV2["transcript"][number] => item !== undefined);
 		const cancelled = new Set(queueRecords.filter((record) => record.type === "queue_cancelled").map((record) => record.entryId));
 		const queued = queueRecords.filter((record) => record.type === "queue_enqueued" && !cancelled.has(record.target.id));
-		const queuedSteer = queued.filter((record) => record.type === "queue_enqueued" && record.queue === "steer").map((record) => ({ id: record.target.id, content: queueContent(record.target.message as AgentMessage) as never, createdAt: finiteTimestamp(record.timestamp) }));
-		const queuedFollowUp = queued.filter((record) => record.type === "queue_enqueued" && record.queue === "followUp").map((record) => ({ id: record.target.id, content: queueContent(record.target.message as AgentMessage) as never, createdAt: finiteTimestamp(record.timestamp) }));
+		const queuedSteer = queued.filter((record) => record.type === "queue_enqueued" && record.queue === "steer").map((record) => ({ id: record.target.id, content: queueContent(targetMessage(record.target)) as never, createdAt: finiteTimestamp(record.timestamp) }));
+		const queuedFollowUp = queued.filter((record) => record.type === "queue_enqueued" && record.queue === "followUp").map((record) => ({ id: record.target.id, content: queueContent(targetMessage(record.target)) as never, createdAt: finiteTimestamp(record.timestamp) }));
 		const active = this.activeOperation(laneOperation);
 		const phase: SessionPhaseV2 = laneOperation === undefined ? (active?.state === "suspended" ? "suspended" : "idle") : laneOperation.intent.kind === "compaction" ? "compaction" : laneOperation.intent.kind === "run" ? "turn" : "suspended";
 		const goal = await this.definition.goals?.read();
