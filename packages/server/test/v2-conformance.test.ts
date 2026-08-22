@@ -226,3 +226,4 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(terminal).toMatchObject({ type: "event", sessionId: "session-1", payload: { state: "complete" } });
 		await secondClient.close();
 	});
+});
