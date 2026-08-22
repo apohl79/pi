@@ -64,4 +64,42 @@ describe("SqliteV2OperationStore", () => {
 		expect((await store.load()).events.map((item) => item.revision)).toEqual([8, 7]);
 		await store.close();
 	});
+
+	test("rejects malformed persisted operation records", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-operations-invalid-"));
+		directories.push(directory);
+		const path = join(directory, "operations.sqlite");
+		const database = await createNodeSqliteFactory().open(path);
+		database.exec(
+			"CREATE TABLE v2_operations (operation_id TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);" +
+				"CREATE TABLE v2_events (event_id TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)",
+		);
+		database
+			.prepare("INSERT INTO v2_operations (operation_id, value) VALUES (?, ?)")
+			.run("operation-1", JSON.stringify({ ...operation(), state: "corrupt" }));
+		database.close();
+
+		await expect(new SqliteV2OperationStore(createNodeSqliteFactory(), path).load()).rejects.toThrow(
+			"Invalid operation store operation state",
+		);
+	});
+
+	test("rejects malformed persisted event records", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-events-invalid-"));
+		directories.push(directory);
+		const path = join(directory, "operations.sqlite");
+		const database = await createNodeSqliteFactory().open(path);
+		database.exec(
+			"CREATE TABLE v2_operations (operation_id TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);" +
+				"CREATE TABLE v2_events (event_id TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)",
+		);
+		database
+			.prepare("INSERT INTO v2_events (event_id, value) VALUES (?, ?)")
+			.run("session-1:1", JSON.stringify({ seq: 1 }));
+		database.close();
+
+		await expect(new SqliteV2OperationStore(createNodeSqliteFactory(), path).load()).rejects.toThrow(
+			"Invalid operation store event identity",
+		);
+	});
 });
