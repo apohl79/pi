@@ -5,6 +5,7 @@ import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-w
 import { type CreateCodingAgentHarnessOptions, createCodingAgentHarness } from "./create-harness.ts";
 import {
 	type CodingAgentV2Service,
+	type CodingAgentV2Runtime,
 	type CodingAgentV2SessionDefinition,
 	type CodingAgentV2SessionStore,
 	createCodingAgentV2ServiceFromStore,
@@ -40,6 +41,8 @@ export async function createCodingAgentV2SqliteService(
 		const model =
 			modelOverride ?? (typeof options.model === "function" ? await options.model(metadata) : options.model);
 		const env = typeof options.env === "function" ? await options.env(metadata) : options.env;
+		const goals = new GoalManager(session);
+		let runtime: CodingAgentV2Runtime | undefined;
 		const created = await createCodingAgentHarness({
 			...options.harness,
 			session,
@@ -55,10 +58,25 @@ export async function createCodingAgentV2SqliteService(
 				await callback();
 			},
 			continueGoal: async (goal) => {
-				await created.harness.followUp(`Continue working toward the goal: ${goal.objective}`);
+				if (!runtime) throw new Error("Goal continuation runtime is not ready");
+				const operationId = `goal-continuation-${goal.id}-${Date.now()}`;
+				await runtime.accept(operationId);
+				await runtime.run(operationId, {
+					command: "turn/followUp",
+					sessionId: metadata.id,
+					payload: { text: `Continue working toward the goal: ${goal.objective}` },
+				});
 			},
 		});
-		return { metadata: sessionMetadata(metadata), harness: created.harness, goals, goalContinuation };
+		return {
+			metadata: sessionMetadata(metadata),
+			harness: created.harness,
+			goals,
+			goalContinuation,
+			onRuntimeReady: (value) => {
+				runtime = value;
+			},
+		};
 	};
 	const store: CodingAgentV2SessionStore = {
 		list: async () => {
