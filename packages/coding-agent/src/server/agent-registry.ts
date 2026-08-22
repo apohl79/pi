@@ -125,6 +125,8 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	async followUp(agentId: string, message: string): Promise<AgentSummary> {
 		if (message.trim().length === 0) throw new Error("Agent message must not be empty");
 		const agent = this.get(agentId);
+		if (agent.state === "running" || agent.state === "awaitingInput")
+			throw new Error(`Cannot follow up active agent ${agentId}`);
 		await this.message(agentId, message);
 		if (agent.state === "complete" || agent.state === "interrupted" || agent.state === "failed") {
 			agent.state = "running";
