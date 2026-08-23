@@ -37,6 +37,12 @@ export type RemoteV2PromptPart =
 
 export type RemoteV2PromptContent = readonly RemoteV2PromptPart[];
 
+export interface RemoteV2SpawnAgentOptions {
+	readonly role?: string;
+	readonly model?: ModelRef;
+	readonly parentPath?: string;
+}
+
 function promptPayload(input: string | RemoteV2PromptContent, label: string): JsonValue {
 	if (typeof input === "string") {
 		const text = input.trim();
@@ -251,6 +257,65 @@ export class RemoteV2Session {
 		if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
 	}
 
+	async listAgents(): Promise<readonly AgentSummary[]> {
+		const result = await this.#direct({ command: "agent/list", sessionId: this.#handle!.sessionId });
+		if (!Array.isArray(result.agents) || !result.agents.every(isAgentSummary))
+			throw new Error("Invalid agent/list response");
+		return result.agents.map((agent) => structuredClone(agent));
+	}
+
+	async spawnAgent(
+		taskName: string,
+		taskMessage: string,
+		options: RemoteV2SpawnAgentOptions = {},
+	): Promise<AgentSummary> {
+		this.#assertControl();
+		const result = await this.#direct({
+			command: "agent/spawn",
+			sessionId: this.#handle!.sessionId,
+			payload: {
+				taskName,
+				taskMessage,
+				...(options.role === undefined ? {} : { role: options.role }),
+				...(options.parentPath === undefined ? {} : { parentPath: options.parentPath }),
+				...(options.model === undefined ? {} : { model: options.model }),
+			},
+		});
+		if (!isAgentSummary(result.agent)) throw new Error("Invalid agent/spawn response");
+		return structuredClone(result.agent);
+	}
+
+	async messageAgent(agentId: string, message: string): Promise<void> {
+		this.#assertControl();
+		await this.#direct({
+			command: "agent/message",
+			sessionId: this.#handle!.sessionId,
+			payload: { agentId, message },
+		});
+	}
+
+	async followUpAgent(agentId: string, message: string): Promise<AgentSummary> {
+		this.#assertControl();
+		const result = await this.#direct({
+			command: "agent/followUp",
+			sessionId: this.#handle!.sessionId,
+			payload: { agentId, message },
+		});
+		if (!isAgentSummary(result.agent)) throw new Error("Invalid agent/followUp response");
+		return structuredClone(result.agent);
+	}
+
+	async interruptAgent(agentId: string): Promise<AgentSummary> {
+		this.#assertControl();
+		const result = await this.#direct({
+			command: "agent/interrupt",
+			sessionId: this.#handle!.sessionId,
+			payload: { agentId },
+		});
+		if (!isAgentSummary(result.agent)) throw new Error("Invalid agent/interrupt response");
+		return structuredClone(result.agent);
+	}
+
 	async relinquishControl(): Promise<void> {
 		this.#assertNotDisposed();
 		const handle = this.#requireHandle();
@@ -305,6 +370,15 @@ export class RemoteV2Session {
 			this.#emit();
 			return response.accepted.operationId;
 		});
+	}
+
+	async #direct(command: CommandV2): Promise<Record<string, unknown>> {
+		const response = await this.#client.request(command);
+		if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
+		if (!("result" in response)) throw new Error(`Invalid ${command.command} response`);
+		const result = asRecord(response.result);
+		if (result === undefined) throw new Error(`Invalid ${command.command} response`);
+		return result;
 	}
 
 	#receiveEvent(event: ProtocolEvent): void {

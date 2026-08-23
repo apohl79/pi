@@ -73,9 +73,21 @@ function memoryTransport() {
 			const result: JsonValue =
 				message.request.command === "session/read"
 					? ({ session: snapshot() } as JsonValue)
-					: message.request.command === "plan/update"
-						? ({ plan: { version: 1, items: [{ step: "Inspect", status: "in_progress" }] } } as JsonValue)
-						: { command: message.request.command };
+					: message.request.command === "agent/list"
+						? ({ agents: [] } as JsonValue)
+						: message.request.command === "agent/spawn"
+							? ({
+									agent: {
+										id: "agent-1",
+										path: "/root/research",
+										taskName: "research",
+										state: "idle",
+										model: { provider: "faux", id: "model" },
+									},
+								} as JsonValue)
+							: message.request.command === "plan/update"
+								? ({ plan: { version: 1, items: [{ step: "Inspect", status: "in_progress" }] } } as JsonValue)
+								: { command: message.request.command };
 			const response: ServerMessageV2 =
 				message.request.command.startsWith("turn/") ||
 				message.request.command.startsWith("session/model") ||
@@ -223,6 +235,26 @@ describe("RemoteV2Session", () => {
 		expect(plan).toEqual({ version: 1, items: [{ step: "Inspect", status: "in_progress" }] });
 		await session.clearPlan();
 		expect(pair.requests.slice(-2).map((request) => request.command)).toEqual(["plan/update", "plan/clear"]);
+		await session.dispose();
+	});
+
+	test("lists and spawns agents through the control lease", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		expect(await session.listAgents()).toEqual([]);
+		const agent = await session.spawnAgent("research", "Inspect the repository", {
+			parentPath: "/root",
+			model: { provider: "faux", id: "model" },
+		});
+		expect(agent.id).toBe("agent-1");
+		expect(pair.requests.at(-1)?.payload).toEqual({
+			taskName: "research",
+			taskMessage: "Inspect the repository",
+			parentPath: "/root",
+			model: { provider: "faux", id: "model" },
+		});
 		await session.dispose();
 	});
 
