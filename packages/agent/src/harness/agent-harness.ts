@@ -13,6 +13,7 @@ import type {
 import { runAgentLoop } from "../agent-loop.ts";
 import type {
 	AfterToolCallResult,
+	AgentEvent,
 	AgentMessage,
 	AgentTool,
 	QueueMode,
@@ -994,7 +995,25 @@ export class AgentHarness implements AgentLane {
 									message.role === "user" || message.role === "assistant" || message.role === "toolResult",
 							)),
 				},
-				async () => {},
+				async (event: AgentEvent) => {
+					if (event.type === "message_end")
+						this.emitPassiveEvent({ type: "item_completed", runId, role: event.message.role });
+					else if (event.type === "tool_execution_start")
+						this.emitPassiveEvent({
+							type: "tool_started",
+							runId,
+							toolCallId: event.toolCallId,
+							toolName: event.toolName,
+						});
+					else if (event.type === "tool_execution_end")
+						this.emitPassiveEvent({
+							type: "tool_completed",
+							runId,
+							toolCallId: event.toolCallId,
+							toolName: event.toolName,
+							isError: event.isError,
+						});
+				},
 				controller.signal,
 				async (model, context, options) => {
 					const {

@@ -1468,7 +1468,16 @@ describe("AgentHarness v2 scaffold", () => {
 		laneWatch.start((event) => events.push(String((event as { type: string }).type)));
 		sessionWatch.start((event) => events.push(`session:${String((event as { type: string }).type)}`));
 		await harness.prompt("watch me");
-		expect(events).toEqual(["run_start", "session:run_start", "run_end", "session:run_end"]);
+		expect(events).toEqual([
+			"run_start",
+			"session:run_start",
+			"item_completed",
+			"session:item_completed",
+			"item_completed",
+			"session:item_completed",
+			"run_end",
+			"session:run_end",
+		]);
 		laneWatch.unsubscribe();
 		sessionWatch.unsubscribe();
 		await harness.close();

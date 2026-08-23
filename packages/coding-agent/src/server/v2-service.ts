@@ -4,6 +4,9 @@ import type {
 	Entry,
 	GoalContinuationScheduler,
 	GoalManager,
+	ItemCompletedEvent,
+	ToolCompletedEvent,
+	ToolStartedEvent,
 } from "@earendil-works/pi-agent-core";
 import type { Api, ImageContent, Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
 import type {
@@ -23,7 +26,12 @@ import type {
 	SessionSnapshotV2,
 	TranscriptItem,
 } from "@earendil-works/pi-protocol";
-import type { ForensicRecorder, V2InputRegistry, V2UsageLedger } from "@earendil-works/pi-server";
+import type {
+	ForensicRecorder,
+	PiSessionRuntimeEventV2,
+	V2InputRegistry,
+	V2UsageLedger,
+} from "@earendil-works/pi-server";
 import type { ServerRuntimeExtensionHookResult, ServerRuntimeExtensionHost } from "./extension-host.ts";
 
 const AGENT_COMPLETION = "agent_completion";
@@ -40,6 +48,8 @@ interface AgentCompletionRecord {
 	readonly role?: string;
 	readonly model?: { readonly provider: string; readonly id: string };
 }
+
+type HarnessRuntimeEvent = ItemCompletedEvent | ToolStartedEvent | ToolCompletedEvent;
 
 function readAgentCompletion(entry: Entry): AgentCompletionRecord | undefined {
 	if (entry.type !== "custom" || entry.customType !== AGENT_COMPLETION) return undefined;
@@ -341,6 +351,9 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	private phase: SessionPhaseV2 = "idle";
 	private activeOperation: OperationSummary | undefined;
 	private recoveryState: "clean" | "recovered" | "needsResolution" | "degraded";
+	private activeOperationId: string | undefined;
+	private readonly eventListeners = new Set<(event: PiSessionRuntimeEventV2) => void>();
+	private readonly unsubscribeHarnessEvents: readonly (() => void)[];
 
 	private readonly fastModel: Model<string> | undefined;
 	private readonly fastModelResolver: ((model: Model<string>) => Model<string> | undefined) | undefined;
@@ -360,8 +373,53 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		this.sessionName = definition.metadata.sessionName;
 		this.nameSource = definition.metadata.nameSource;
 		this.recoveryState = definition.recoveryState ?? "clean";
+		this.unsubscribeHarnessEvents = [
+			definition.harness.events.on("item_completed", (event) =>
+				this.emitRuntimeEvent(
+					"item_completed",
+					event as unknown as Extract<HarnessRuntimeEvent, { type: "item_completed" }>,
+				),
+			),
+			definition.harness.events.on("tool_started", (event) =>
+				this.emitRuntimeEvent(
+					"tool_started",
+					event as unknown as Extract<HarnessRuntimeEvent, { type: "tool_started" }>,
+				),
+			),
+			definition.harness.events.on("tool_completed", (event) =>
+				this.emitRuntimeEvent(
+					"tool_completed",
+					event as unknown as Extract<HarnessRuntimeEvent, { type: "tool_completed" }>,
+				),
+			),
+		];
 		this.fastModel = options?.fastModel;
 		this.fastModelResolver = options?.fastModelResolver;
+	}
+
+	onEvent(listener: (event: PiSessionRuntimeEventV2) => void): () => void {
+		this.eventListeners.add(listener);
+		return () => this.eventListeners.delete(listener);
+	}
+
+	private emitRuntimeEvent(
+		eventType: "item_completed" | "tool_started" | "tool_completed",
+		event: HarnessRuntimeEvent,
+	): void {
+		if (this.activeOperationId === undefined) return;
+		const payload =
+			event.type === "item_completed"
+				? { role: event.role }
+				: event.type === "tool_started"
+					? { toolCallId: event.toolCallId, toolName: event.toolName }
+					: { toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError };
+		const mapped: PiSessionRuntimeEventV2 = {
+			sessionId: this.definition.metadata.id,
+			event: eventType,
+			operationId: this.activeOperationId,
+			payload,
+		};
+		for (const listener of this.eventListeners) listener(mapped);
 	}
 
 	private async generateName(operationId: string): Promise<void> {
@@ -853,6 +911,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	async run(_operationId: string, command: CommandV2): Promise<void> {
 		await this.ensureAutoNameLoaded();
 		await this.ensureNameStateLoaded();
+		this.activeOperationId = _operationId;
 		const input = commandInput(command);
 		const completions =
 			command.command === "turn/start" || command.command === "turn/followUp"
@@ -1019,6 +1078,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				await harness.session.appendCustomEntry("auto_name_setting", payload.enabled);
 			}
 		} catch (error) {
+			this.activeOperationId = undefined;
 			if (!goalUsageRecorded) {
 				try {
 					await this.recordCurrentGoalUsage(usageBefore);
@@ -1066,6 +1126,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		if (generateNameAfterTurn) this.scheduleNameGeneration(_operationId);
 		if (runCommand === "turn/start" || runCommand === "turn/resume" || runCommand === "turn/followUp")
 			void this.definition.goalContinuation?.schedule().catch(() => undefined);
+		this.activeOperationId = undefined;
 	}
 
 	async cancelQueued(entryId: string): Promise<void> {
@@ -1074,6 +1135,9 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async dispose(): Promise<void> {
+		this.activeOperationId = undefined;
+		for (const unsubscribe of this.unsubscribeHarnessEvents) unsubscribe();
+		this.eventListeners.clear();
 		this.definition.onDispose?.();
 		this.definition.goalContinuation?.close();
 		await this.definition.harness.close();

@@ -75,6 +75,21 @@ export {
 	serializeConversation,
 	shouldCompact,
 } from "./harness/compaction/compaction.ts";
+export type {
+	CompactionEndEvent,
+	CompactionStartEvent,
+	HarnessEvent,
+	HarnessEventListener,
+	HarnessEventOfType,
+	HarnessEventType,
+	ItemCompletedEvent,
+	NavigationEndEvent,
+	NavigationStartEvent,
+	RunEndEvent,
+	RunStartEvent,
+	ToolCompletedEvent,
+	ToolStartedEvent,
+} from "./harness/events.ts";
 export * from "./harness/goals.ts";
 export * from "./harness/messages.ts";
 export * from "./harness/prompt-templates.ts";

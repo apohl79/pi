@@ -88,9 +88,18 @@ function modelReferencesResolveToSameCatalogModel(
 	return alias(left.id) || alias(right.id);
 }
 
+export interface PiSessionRuntimeEventV2 {
+	readonly sessionId: string;
+	readonly event: "item_completed" | "tool_started" | "tool_completed";
+	readonly payload: Record<string, unknown>;
+	readonly operationId?: string;
+}
+
 export interface PiSessionRuntimeV2 {
 	snapshot(): MaybePromise<SessionSnapshotV2>;
 	accept(operationId: string, command?: CommandV2): Promise<OperationAccepted>;
+	/** Subscribe to provider/tool lifecycle events that must reach detached clients. */
+	onEvent?(listener: (event: PiSessionRuntimeEventV2) => void): () => void;
 	/** Cancel an exact queued steer/follow-up item when the runtime exposes queue control. */
 	cancelQueued?(entryId: string): Promise<void>;
 	/** Mark an accepted operation failed when durable operation acceptance cannot be persisted. */
@@ -268,6 +277,7 @@ export class PiServerV2 {
 	private readonly pendingRequests = new Map<string, CommandV2>();
 	private readonly completionControllers = new Map<string, AbortController>();
 	private readonly disposedRuntimes = new WeakSet<PiSessionRuntimeV2>();
+	private readonly runtimeEventUnsubscribers = new WeakMap<PiSessionRuntimeV2, () => void>();
 	private closing = false;
 	private started = false;
 	private restored = false;
@@ -2396,6 +2406,14 @@ export class PiServerV2 {
 
 	private trackRuntime(runtime: PiSessionRuntimeV2): void {
 		this.runtimes.add(runtime);
+		if (runtime.onEvent !== undefined && !this.runtimeEventUnsubscribers.has(runtime)) {
+			const unsubscribe = runtime.onEvent((event) => {
+				void this.broadcastEvent(event.sessionId, runtime, event.payload, event.operationId, event.event).catch(
+					(error) => this.reportError(error instanceof Error ? error : new Error(String(error))),
+				);
+			});
+			this.runtimeEventUnsubscribers.set(runtime, unsubscribe);
+		}
 	}
 
 	private async disposeRuntime(runtime: PiSessionRuntimeV2): Promise<void> {
