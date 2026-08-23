@@ -1032,15 +1032,13 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				);
 			} else if (runCommand === "goal/update") {
 				if (!this.definition.goals) throw new Error("Goals are not configured");
-				await this.definition.goals.update({
-					status:
-						typeof payload.status === "string"
-							? (payload.status as Parameters<GoalManager["update"]>[0]["status"])
-							: undefined,
-					tokensUsed: typeof payload.tokensUsed === "number" ? payload.tokensUsed : undefined,
-					activeTimeSeconds: typeof payload.activeTimeSeconds === "number" ? payload.activeTimeSeconds : undefined,
-					tokenBudget: typeof payload.tokenBudget === "number" ? payload.tokenBudget : undefined,
-				});
+				const patch: Parameters<GoalManager["update"]>[0] = {};
+				if (typeof payload.status === "string")
+					patch.status = payload.status as Parameters<GoalManager["update"]>[0]["status"];
+				if (typeof payload.tokensUsed === "number") patch.tokensUsed = payload.tokensUsed;
+				if (typeof payload.activeTimeSeconds === "number") patch.activeTimeSeconds = payload.activeTimeSeconds;
+				if (typeof payload.tokenBudget === "number") patch.tokenBudget = payload.tokenBudget;
+				await this.definition.goals.update(patch);
 			} else if (runCommand === "goal/pause") {
 				if (!this.definition.goals) throw new Error("Goals are not configured");
 				await this.definition.goals.pause();

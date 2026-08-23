@@ -48,7 +48,7 @@ describe("production remote v2 goal durability", () => {
 				await complete(source, await source.createGoal("durable remote work", 100));
 				await complete(source, await source.updateGoal({ tokensUsed: 7 }));
 				sourceGoalId = String((await source.readGoal())?.id);
-				const forked = await source.fork({});
+				const forked = await source.fork({ scope: "tree" });
 				try {
 					const forkedGoal = await forked.readGoal();
 					expect(forkedGoal).toMatchObject({ objective: "durable remote work", tokensUsed: 7 });
@@ -84,5 +84,6 @@ describe("production remote v2 goal durability", () => {
 
 async function complete(session: RemoteV2Session, operationId: string): Promise<void> {
 	await session.waitForOperation(operationId);
-	expect((await session.readOperation(operationId)).state).toBe("complete");
+	const operation = await session.readOperation(operationId);
+	expect(operation?.state, JSON.stringify(operation)).toBe("complete");
 }
