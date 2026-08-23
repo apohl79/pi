@@ -58,6 +58,26 @@ describe("BlobV2ImageService", () => {
 		});
 	});
 
+	test("retains adapter-provided source operation provenance", async () => {
+		const service = new BlobV2ImageService(
+			new LocalV2FileReferenceService({ projectRoot: "." }),
+			new InMemoryV2BlobStore(),
+			{
+				generate: async () => ({
+					data: new Uint8Array([1]),
+					mimeType: "image/png",
+					provider: "fake",
+					model: "image-fast",
+					sourceOperationId: "adapter-operation",
+				}),
+			},
+		);
+
+		expect(await service.generate("session-1", { prompt: "draw" })).toMatchObject({
+			sourceOperationId: "adapter-operation",
+		});
+	});
+
 	test("validates an edit source before invoking the generator", async () => {
 		let calls = 0;
 		const blobs = new InMemoryV2BlobStore();
