@@ -13,8 +13,11 @@ without cancelling server-owned work.
 
 Pi's `AgentHarness`, provider catalog, tools, sessions, and extension APIs
 remain the execution baseline. Existing TypeScript extensions continue to
-load. Extensions are classified as `client`, `server`, or `both`; client-only
-UI state cannot become authoritative for a durable turn.
+load. Request-only sampling registrations are adapted into the daemon;
+process-local tools, commands, renderers, and lifecycle handlers are
+classified as client-side and produce bounded compatibility diagnostics until
+a server context exists. Extensions are classified as `client`, `server`, or
+`both`; client-only UI state cannot become authoritative for a durable turn.
 
 ## Remote references and media
 
