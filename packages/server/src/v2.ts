@@ -28,6 +28,7 @@ import {
 	type DiagnosticRuntimeManifest,
 	type DiagnosticValue,
 	type ForensicRecorder,
+	findDiagnosticClockDiscontinuities,
 	InMemoryForensicRecorder,
 	verifyDiagnosticBundle,
 } from "./diagnostics.ts";
@@ -1160,6 +1161,7 @@ export class PiServerV2 {
 			operations: operations.map((operation) => toProtocolJsonValue(operation)),
 			operationEvents: operationEvents.map((event) => toProtocolJsonValue(event)),
 			usage: toProtocolJsonValue({ aggregate: usageAggregate, entries: usageEntries }),
+			clockDiscontinuities: findDiagnosticClockDiscontinuities(events),
 		});
 	}
 

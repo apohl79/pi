@@ -4,12 +4,33 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
+	findDiagnosticClockDiscontinuities,
 	InMemoryForensicRecorder,
 	JsonlForensicRecorder,
 	LocalDiagnosticCapsuleStore,
 	TeeForensicRecorder,
 	verifyDiagnosticBundle,
 } from "../src/diagnostics.ts";
+
+describe("diagnostic timeline clock evidence", () => {
+	test("reports backwards wall-clock jumps while preserving sequence identity", () => {
+		expect(
+			findDiagnosticClockDiscontinuities([
+				{ seq: 1, timestamp: 2_000 },
+				{ seq: 2, timestamp: 1_500 },
+				{ seq: 3, timestamp: 1_600 },
+			]),
+		).toEqual([
+			{
+				previousSeq: 1,
+				seq: 2,
+				previousTimestamp: 2_000,
+				timestamp: 1_500,
+				deltaMs: -500,
+			},
+		]);
+	});
+});
 
 describe("InMemoryForensicRecorder", () => {
 	test("assigns correlated sequence numbers and redacts credential fields", async () => {
