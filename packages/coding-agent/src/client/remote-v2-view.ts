@@ -199,6 +199,7 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 				? ""
 				: ` operation=${snapshot.activeOperation.operationId} (${snapshot.activeOperation.state})`;
 	const lines = [`Session ${snapshot.id} · phase=${snapshot.phase} · model=${model}${operation}`];
+	if (snapshot.agentPath !== undefined) lines.push(`Thread ${snapshot.agentPath}`);
 	const cost = snapshot.usage.costUsd === undefined ? "unknown" : `$${snapshot.usage.costUsd.toFixed(6)}`;
 	lines.push(
 		`Usage input=${snapshot.usage.input} output=${snapshot.usage.output} cacheRead=${snapshot.usage.cacheRead} cost=${cost}`,

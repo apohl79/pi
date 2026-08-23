@@ -118,6 +118,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		const agentId = randomUUID();
 		const created = await this.service.createSession({
 			parentSessionId: request.sessionId,
+			agentPath: path,
 			name: request.taskName,
 			model,
 			modelResolution: request.modelResolution,

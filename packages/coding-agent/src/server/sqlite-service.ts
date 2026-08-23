@@ -524,6 +524,8 @@ export async function createCodingAgentV2SqliteService(
 		};
 		return {
 			metadata: sessionMetadata(metadata),
+			agentPath:
+				typeof metadata.metadata?.codingAgentPath === "string" ? metadata.metadata.codingAgentPath : "/root",
 			harness: created.harness,
 			onDispose: () => {
 				disposing = true;
@@ -576,12 +578,18 @@ export async function createCodingAgentV2SqliteService(
 				...(typeof payload.id === "string" ? { id: payload.id } : {}),
 				...(typeof payload.parentSessionId === "string" ? { parentSessionId: payload.parentSessionId } : {}),
 				...(selectedModel === undefined
-					? roleName === undefined
+					? roleName === undefined && typeof payload.agentPath !== "string"
 						? {}
-						: { metadata: { codingAgentRole: roleName } }
+						: {
+								metadata: {
+									...(roleName === undefined ? {} : { codingAgentRole: roleName }),
+									...(typeof payload.agentPath === "string" ? { codingAgentPath: payload.agentPath } : {}),
+								},
+							}
 					: {
 							metadata: {
 								codingAgentModel: selectedModel,
+								...(typeof payload.agentPath === "string" ? { codingAgentPath: payload.agentPath } : {}),
 								...(roleName === undefined ? {} : { codingAgentRole: roleName }),
 							},
 						}),
