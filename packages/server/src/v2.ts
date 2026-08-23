@@ -1329,9 +1329,19 @@ export class PiServerV2 {
 		const payload = objectPayload(command);
 		if (typeof payload.id !== "string" || typeof payload.version !== "string")
 			throw new Error("plugin/upgrade requires id and version");
+		if (
+			payload.manifest !== undefined &&
+			(typeof payload.manifest !== "object" || payload.manifest === null || Array.isArray(payload.manifest))
+		)
+			throw new Error("plugin/upgrade manifest must be an object");
 		await this.sendResponse(state, id, {
 			command: command.command,
-			plugin: await this.plugins.upgradePlugin(payload.id, payload.version),
+			plugin: await this.plugins.upgradePlugin(
+				payload.id,
+				payload.version,
+				payload.manifest as Record<string, unknown> | undefined,
+				typeof payload.root === "string" ? payload.root : undefined,
+			),
 		});
 	}
 

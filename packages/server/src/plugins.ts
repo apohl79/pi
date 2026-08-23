@@ -94,7 +94,7 @@ export interface V2PluginRegistry {
 		root?: string;
 		scope?: V2PluginScope;
 	}): Promise<V2Plugin>;
-	upgradePlugin(id: string, version: string): Promise<V2Plugin>;
+	upgradePlugin(id: string, version: string, manifest?: Record<string, unknown>, root?: string): Promise<V2Plugin>;
 	uninstallPlugin(id: string): Promise<void>;
 	setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin>;
 	startAppAuth?(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthStart>;
@@ -407,12 +407,43 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		if (!this.plugins.delete(requireName(id, "plugin id"))) throw new Error(`Unknown plugin: ${id}`);
 	}
 
-	async upgradePlugin(id: string, version: string): Promise<V2Plugin> {
+	async upgradePlugin(
+		id: string,
+		version: string,
+		manifest?: Record<string, unknown>,
+		root?: string,
+	): Promise<V2Plugin> {
 		const normalizedId = requireName(id, "plugin id");
 		const normalizedVersion = requireName(version, "plugin version");
 		const existing = this.plugins.get(normalizedId);
 		if (!existing) throw new Error(`Unknown plugin: ${normalizedId}`);
-		const updated = { ...existing, version: normalizedVersion };
+		const updated =
+			manifest === undefined
+				? { ...existing, version: normalizedVersion }
+				: {
+						...existing,
+						version: normalizedVersion,
+						manifestDigest: manifestDigest(manifest),
+						...(root === undefined ? {} : { root }),
+						resources: {
+							skills: Array.isArray(manifest.skills)
+								? manifest.skills.filter((value): value is string => typeof value === "string")
+								: [],
+							commands: Array.isArray(manifest.commands)
+								? manifest.commands.filter((value): value is string => typeof value === "string")
+								: [],
+							apps: resourceCount(manifest.apps),
+							hooks: resourceCount(manifest.hooks),
+						},
+						appDescriptors: appDescriptors(normalizedId, manifest.apps, existing.enabled),
+						hookDescriptors: hookDescriptors(normalizedId, manifest.hooks, existing.enabled),
+						...(interfaceMetadata(manifest.interface) === undefined
+							? {}
+							: { interface: interfaceMetadata(manifest.interface) }),
+						diagnostics: manifestDiagnostics(manifest),
+						threadContext: contextEntries(manifest, "thread"),
+						sampling: contextEntries(manifest, "sampling"),
+					};
 		this.plugins.set(normalizedId, updated);
 		return structuredClone(updated);
 	}
@@ -558,9 +589,14 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 		await this.persist();
 	}
 
-	async upgradePlugin(id: string, version: string): Promise<V2Plugin> {
+	async upgradePlugin(
+		id: string,
+		version: string,
+		manifest?: Record<string, unknown>,
+		root?: string,
+	): Promise<V2Plugin> {
 		await this.ensureLoaded();
-		const value = await this.memory.upgradePlugin(id, version);
+		const value = await this.memory.upgradePlugin(id, version, manifest, root);
 		await this.persist();
 		return value;
 	}

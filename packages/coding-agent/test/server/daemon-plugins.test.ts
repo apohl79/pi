@@ -121,6 +121,18 @@ describe("coding-agent daemon plugin lifecycle", () => {
 		try {
 			const listed = await secondClient.request({ command: "plugin/list", payload: { installedOnly: true } });
 			expect(listed).toMatchObject({ ok: true, result: { plugins: [{ id: "reviewer@local", enabled: true }] } });
+			const upgraded = await secondClient.request({
+				command: "plugin/upgrade",
+				payload: {
+					id: "reviewer@local",
+					version: "2",
+					manifest: { skills: ["new-skill"], commands: ["new-command"] },
+				},
+			});
+			expect(upgraded).toMatchObject({
+				ok: true,
+				result: { plugin: { version: "2", resources: { skills: ["new-skill"], commands: ["new-command"] } } },
+			});
 			await secondClient.request({ command: "plugin/uninstall", payload: { id: "reviewer@local" } });
 			await secondClient.request({ command: "marketplace/remove", payload: { name: "local" } });
 			expect(await secondClient.request({ command: "plugin/list" })).toMatchObject({
