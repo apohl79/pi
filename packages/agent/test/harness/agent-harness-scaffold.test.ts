@@ -913,6 +913,34 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("redacts aborted assistant content before durable persistence", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "aborted-content-redaction-faux",
+			models: [{ id: "aborted-content-redaction-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage('partial Bearer bearer-secret {"api_key":"secret-value"}', {
+				stopReason: "aborted",
+				errorMessage: "stopped",
+			}),
+		]);
+		const session = createSession("aborted-content-redaction");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+
+		await harness.prompt("hello");
+
+		const assistant = (await session.findEntriesOnBranch({ order: "oldestFirst" })).find(
+			(entry) => entry.type === "message" && entry.message.role === "assistant",
+		);
+		expect(assistant).toMatchObject({
+			type: "message",
+			message: { content: [{ type: "text", text: 'partial Bearer [redacted] {"api_key"=[redacted]}' }] },
+		});
+		await harness.close();
+	});
+
 	it("does not duplicate a terminal record after its commit response is lost", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
