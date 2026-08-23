@@ -1,9 +1,10 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModels, fauxProvider } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, test } from "vitest";
 import { type RemoteV2CommandResult, RemoteV2InteractiveAttachment, RemoteV2SessionSelector } from "../../src/index.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemon-runtime.ts";
@@ -28,6 +29,7 @@ async function createRemoteRuntime(directory: string) {
 	});
 	models.setProvider(faux.provider);
 	models.setProvider(child.provider);
+	faux.setResponses([fauxAssistantMessage("steering complete")]);
 	child.setResponses([() => new Promise(() => {})]);
 	return createConfiguredCodingAgentDaemonRuntime({
 		agentDir: directory,
@@ -46,6 +48,32 @@ function operationId(result: RemoteV2CommandResult): string {
 }
 
 describe("production remote v2 interactive attachment", () => {
+	test("keeps the editable prompt within narrow daemon-attached terminal width", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-remote-interactive-width-"));
+		directories.push(directory);
+		const runtime = await createRemoteRuntime(directory);
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			const sessionId = (created as unknown as { result: { session: { id: string } } }).result.session.id;
+			const attachment = await new RemoteV2SessionSelector(client).attachView(sessionId, { mode: "control" });
+			const adapter = new RemoteV2InteractiveAttachment(attachment);
+			try {
+				for (const character of "a long prompt that exceeds the terminal") adapter.handleInput(character);
+				expect(visibleWidth(adapter.render(12).at(-1) ?? "")).toBe(12);
+			} finally {
+				await adapter.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
 	test("dispatches goal slash commands and renders the updated goal state", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-remote-interactive-"));
 		directories.push(directory);
