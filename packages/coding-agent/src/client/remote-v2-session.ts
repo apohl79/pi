@@ -307,11 +307,18 @@ export class RemoteV2Session {
 		try {
 			nextUnsubscribe = nextHandle.onEvent((event) => this.#receiveEvent(event));
 			const nextSnapshot = await nextHandle.read();
+			const processResponse = await this.#client.request({ command: "process/list", sessionId });
+			if (!processResponse.ok || !("result" in processResponse)) throw new Error("Invalid process/list response");
+			const processResult = asRecord(processResponse.result);
+			if (!Array.isArray(processResult?.processes) || !processResult.processes.every(isProcessSnapshot))
+				throw new Error("Invalid process/list response");
+			const processes = processResult.processes.map((process) => structuredClone(process));
 			if (previousHandle !== undefined) await previousHandle.detach();
 			previousUnsubscribe?.();
 			this.#handle = nextHandle;
 			this.#unsubscribe = nextUnsubscribe;
 			this.#snapshot = structuredClone(nextSnapshot);
+			this.#processes = processes;
 			this.#lastEvent = undefined;
 		} catch (error) {
 			nextUnsubscribe?.();
@@ -616,6 +623,17 @@ export class RemoteV2Session {
 		});
 		if (!isProcessSnapshot(result.process)) throw new Error("Invalid process/start response");
 		return structuredClone(result.process);
+	}
+
+	async listProcesses(): Promise<readonly RemoteV2ProcessSnapshot[]> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({
+			command: "process/list",
+			sessionId: this.#requireHandle().sessionId,
+		});
+		if (!Array.isArray(result.processes) || !result.processes.every(isProcessSnapshot))
+			throw new Error("Invalid process/list response");
+		return result.processes.map((process) => structuredClone(process));
 	}
 
 	async writeProcess(

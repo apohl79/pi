@@ -124,6 +124,17 @@ function memoryTransport() {
 				handlers?.onData(encodeServerMessageV2(response));
 				return;
 			}
+			if (message.request.command === "process/list") {
+				const response: ServerMessageV2 = {
+					type: "response",
+					id: message.id,
+					ok: true,
+					result: { processes: [] },
+				};
+				sent.push(response);
+				handlers?.onData(encodeServerMessageV2(response));
+				return;
+			}
 			const result: JsonValue =
 				message.request.command === "session/read" || message.request.command === "session/create"
 					? ({ session: snapshot() } as JsonValue)
@@ -495,6 +506,7 @@ describe("RemoteV2Session", () => {
 			"session/create",
 			"session/attach",
 			"session/read",
+			"process/list",
 		]);
 		await session.dispose();
 	});

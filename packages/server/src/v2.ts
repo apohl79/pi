@@ -529,6 +529,7 @@ export class PiServerV2 {
 			if (command.command === "goal/read") return void (await this.readGoal(state, id, command));
 			if (command.command === "turn/queue/cancel") return void (await this.cancelQueued(state, id, command));
 			if (command.command === "process/start") return void (await this.startProcess(state, id, command));
+			if (command.command === "process/list") return void (await this.listProcesses(state, id, command));
 			if (command.command === "process/write") return void (await this.writeProcess(state, id, command));
 			if (command.command === "process/read") return void (await this.readProcess(state, id, command));
 			if (command.command === "process/wait") return void (await this.waitProcess(state, id, command));
@@ -793,6 +794,15 @@ export class PiServerV2 {
 		await this.sendResponse(state, id, {
 			command: command.command,
 			process: process as unknown as Record<string, unknown>,
+		});
+	}
+
+	private async listProcesses(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("process/list requires sessionId");
+		this.requireSessionReference(state, command.sessionId);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			processes: (await this.processes.list(command.sessionId)) as unknown as Record<string, unknown>[],
 		});
 	}
 

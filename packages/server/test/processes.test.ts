@@ -15,6 +15,14 @@ describe("InMemoryV2ProcessRegistry", () => {
 		expect(await registry.wait(started.processId)).toMatchObject({ state: "terminated" });
 	});
 
+	test("lists only processes owned by the requested session", async () => {
+		const registry = new InMemoryV2ProcessRegistry();
+		const owned = await registry.start({ sessionId: "session-list", command: "owned" });
+		await registry.start({ sessionId: "session-other", command: "other" });
+
+		expect(await registry.list("session-list")).toEqual([owned]);
+	});
+
 	test("rejects unsafe output cursors", async () => {
 		const registry = new InMemoryV2ProcessRegistry();
 		const started = await registry.start({ sessionId: "session-unsafe-cursor", command: "demo" });

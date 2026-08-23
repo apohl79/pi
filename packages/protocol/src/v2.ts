@@ -291,6 +291,7 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("agent/followUp"),
 	Type.Literal("agent/interrupt"),
 	Type.Literal("process/start"),
+	Type.Literal("process/list"),
 	Type.Literal("process/write"),
 	Type.Literal("process/wait"),
 	Type.Literal("process/terminate"),

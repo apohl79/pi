@@ -54,6 +54,7 @@ const commandNames = [
 	"agent/followUp",
 	"agent/interrupt",
 	"process/start",
+	"process/list",
 	"process/write",
 	"process/wait",
 	"process/terminate",
