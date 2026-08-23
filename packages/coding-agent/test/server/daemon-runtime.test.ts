@@ -636,6 +636,82 @@ describe("coding-agent daemon runtime", () => {
 		}
 	});
 
+	test("restores an automatic session name after a daemon restart", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-session-name-restart-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-session-name-restart-faux",
+			models: [
+				{
+					id: "coding-agent-daemon-session-name-restart-model",
+					reasoning: false,
+					contextWindow: 32_000,
+					maxTokens: 1_000,
+				},
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("turn response"), fauxAssistantMessage("Restarted session")]);
+		const createRuntime = () =>
+			createConfiguredCodingAgentDaemonRuntime({
+				agentDir: directory,
+				cwd: directory,
+				models,
+				model: faux.getModel(),
+				fastModel: faux.getModel(),
+				socketPath: join(directory, "server.sock"),
+				harness: { tools: [], activeToolNames: [] },
+				write: () => {},
+			});
+		let sessionId = "";
+		const first = await createRuntime();
+		const firstClient = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await first.daemon.start();
+			await firstClient.connect();
+			const created = await firstClient.request({ command: "session/create", payload: { cwd: directory } });
+			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
+			sessionId = (created.result as { session: { id: string } }).session.id;
+			await firstClient.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			await firstClient.request({ command: "turn/start", sessionId, payload: { text: "persist this name" } });
+			for (let attempt = 0; attempt < 50; attempt++) {
+				const read = await firstClient.request({ command: "session/read", sessionId });
+				if (
+					read.ok &&
+					"result" in read &&
+					(read.result as { session: { name?: string; nameSource?: string; phase: string } }).session.name ===
+						"Restarted session"
+				)
+					break;
+				if (attempt === 49) throw new Error("Timed out waiting for automatic session naming");
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+		} finally {
+			firstClient.dispose();
+			await first.close();
+		}
+
+		const second = await createRuntime();
+		const secondClient = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await second.daemon.start();
+			await secondClient.connect();
+			const restored = await secondClient.request({ command: "session/read", sessionId });
+			expect(restored).toMatchObject({
+				ok: true,
+				result: { session: { name: "Restarted session", nameSource: "generated", phase: "idle" } },
+			});
+		} finally {
+			secondClient.dispose();
+			await second.close();
+		}
+	});
+
 	test("keeps an explicit name when fast-model generation races it", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-session-name-race-"));
 		directories.push(directory);
