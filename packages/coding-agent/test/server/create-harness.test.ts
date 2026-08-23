@@ -408,11 +408,11 @@ describe("coding-agent Harness construction", () => {
 			]);
 			const spawn = (await created.harness.getTools()).find((tool) => tool.name === "spawn_agent");
 			if (!spawn) throw new Error("Expected spawn_agent tool");
-			expect(await spawn.execute("spawn-call", { taskName: "child", taskMessage: "Inspect the bug" })).toMatchObject(
-				{
-					content: [{ type: "text", text: expect.stringContaining('"taskName":"child"') }],
-				},
-			);
+			expect(
+				await spawn.execute("spawn-call", { taskName: "child", taskMessage: "Inspect the bug", forkTurns: 1 }),
+			).toMatchObject({
+				content: [{ type: "text", text: expect.stringContaining('"forkTurns":1') }],
+			});
 		} finally {
 			await created.harness.close();
 			await env.cleanup();
