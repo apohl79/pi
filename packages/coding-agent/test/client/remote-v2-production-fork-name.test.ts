@@ -5,7 +5,7 @@ import { createModels, fauxProvider } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import { afterEach, describe, expect, test } from "vitest";
-import { RemoteV2Session } from "../../src/index.ts";
+import { RemoteV2Session } from "../../src/client/remote-v2-session.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemon-runtime.ts";
 
 const directories: string[] = [];

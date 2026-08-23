@@ -569,8 +569,19 @@ export async function createCodingAgentV2SqliteService(
 			});
 			const metadata = await forked.getMetadata();
 			metadataById.set(metadata.id, metadata);
-			if (typeof payload.name === "string") await forked.setName(payload.name);
+			const explicitForkName = typeof payload.name === "string" ? payload.name : undefined;
+			if (explicitForkName !== undefined) {
+				await forked.setName(explicitForkName);
+				metadata.name = explicitForkName;
+			}
 			const created = await definition(metadata, forked);
+			if (metadata.name !== undefined || explicitForkName !== undefined) {
+				await created.harness.session.appendCustomEntry("session_name_state", {
+					name: explicitForkName ?? metadata.name ?? null,
+					source: explicitForkName === undefined ? "derived" : "explicit",
+					revision: 0,
+				});
+			}
 			await created.goals?.forkIdentity();
 			return created;
 		},
