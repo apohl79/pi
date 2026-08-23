@@ -91,4 +91,13 @@ describe("LocalV2FileReferenceService", () => {
 		]);
 		expect(() => new LocalV2FileReferenceService({ projectRoot: root, maxCompletions: 0 })).toThrow("maxCompletions");
 	});
+
+	test("validates and enforces the read byte limit", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-files-read-limit-"));
+		directories.push(root);
+		await writeFile(join(root, "large.txt"), "12345");
+		expect(() => new LocalV2FileReferenceService({ projectRoot: root, maxReadBytes: -1 })).toThrow("maxReadBytes");
+		const service = new LocalV2FileReferenceService({ projectRoot: root, maxReadBytes: 3 });
+		await expect(service.read("session-1", "large.txt")).rejects.toThrow("maximum size of 3 bytes");
+	});
 });

@@ -1,4 +1,4 @@
-import { lstat, readdir, readFile, realpath } from "node:fs/promises";
+import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -116,6 +116,8 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 		this.allowAbsolute = options.allowAbsolute ?? true;
 		this.maxReadBytes = options.maxReadBytes ?? DEFAULT_MAX_READ_BYTES;
 		this.maxCompletions = options.maxCompletions ?? DEFAULT_MAX_COMPLETIONS;
+		if (!Number.isSafeInteger(this.maxReadBytes) || this.maxReadBytes < 0)
+			throw new TypeError("maxReadBytes must be a non-negative safe integer");
 		if (!Number.isSafeInteger(this.maxCompletions) || this.maxCompletions <= 0)
 			throw new TypeError("maxCompletions must be a positive safe integer");
 	}
@@ -187,9 +189,16 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 	): Promise<{ readonly file: V2FileReference; readonly data: Uint8Array }> {
 		const file = await this.resolve(sessionId, reference);
 		if (file.kind !== "file") throw new Error("File reference must resolve to a file");
-		if ((file.size ?? 0) > this.maxReadBytes)
-			throw new Error(`File exceeds maximum size of ${this.maxReadBytes} bytes`);
-		return { file, data: new Uint8Array(await readFile(file.path)) };
+		const handle = await open(file.path, "r");
+		try {
+			const buffer = Buffer.alloc(this.maxReadBytes + 1);
+			const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+			if (bytesRead > this.maxReadBytes) throw new Error(`File exceeds maximum size of ${this.maxReadBytes} bytes`);
+			const data = new Uint8Array(buffer.subarray(0, bytesRead));
+			return { file: { ...file, size: bytesRead }, data };
+		} finally {
+			await handle.close();
+		}
 	}
 
 	private async authorize(reference: string): Promise<string> {
