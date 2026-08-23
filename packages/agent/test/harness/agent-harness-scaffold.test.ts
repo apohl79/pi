@@ -155,6 +155,31 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("automatically compacts before a turn crosses the resolved threshold", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-auto-compaction-faux",
+			models: [{ id: "harness-auto-compaction-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("first response")]);
+		const session = createSession("auto-compaction");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			compaction: { enabled: true, reserveTokens: 31_999, keepRecentTokens: 1 },
+		});
+		await harness.prompt("first request");
+		faux.setResponses([fauxAssistantMessage("durable summary"), fauxAssistantMessage("second response")]);
+		const result = await harness.prompt("second request");
+		expect(result).toMatchObject({ ok: true, value: { kind: "completed" } });
+		expect(
+			(await session.findEntriesOnBranch({ order: "oldestFirst" })).some((entry) => entry.type === "compaction"),
+		).toBe(true);
+		await harness.close();
+	});
+
 	it("discovers unfinished operations for crash recovery", async () => {
 		const session = createSession();
 		const { harness, suspended } = await AgentHarness.create({

@@ -27,8 +27,10 @@ import {
 import {
 	type CompactionSettings,
 	compact,
+	estimateTokens,
 	prepareCompaction,
 	resolveCompactionSettings,
+	shouldCompact,
 } from "./compaction/compaction.ts";
 import { HarnessEventBus } from "./events.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
@@ -516,6 +518,12 @@ export class AgentHarness implements AgentLane {
 			);
 		}
 		const prompts = this.normalizePromptInput(input, images);
+		const compactionSettings = resolveCompactionSettings(this.compactionSettings, this.model.provider, this.model.id);
+		const stats = await this.session.getStats();
+		const contextTokens = stats.totalTokens + prompts.reduce((total, message) => total + estimateTokens(message), 0);
+		if (shouldCompact(contextTokens, this.model.contextWindow ?? 128_000, compactionSettings)) {
+			await this.compact();
+		}
 		const runId = this.durableSession.idGenerator.next();
 		const started: NewRecord<OperationStartedRecord> = {
 			type: "operation_started",
@@ -716,7 +724,11 @@ export class AgentHarness implements AgentLane {
 			id: runId,
 			lane: this.name,
 			sourceLeafId: await this.session.getLeafId(),
-			intent: { kind: "compaction", resultEntryId, customInstructions: _options?.customInstructions },
+			intent: {
+				kind: "compaction",
+				resultEntryId,
+				...(_options?.customInstructions === undefined ? {} : { customInstructions: _options.customInstructions }),
+			},
 		});
 		try {
 			await this.park({ kind: "stream_assistant", step: "compaction", attempt: 1 });
