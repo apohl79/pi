@@ -50,4 +50,18 @@ describe("InMemoryV2PlanRegistry", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+
+	test("persists an explicit clear marker", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-v2-plans-clear-"));
+		try {
+			const path = join(directory, "plans.jsonl");
+			const first = new JsonlV2PlanRegistry(path);
+			await first.update("session-1", { items: [{ step: "clear", status: "pending" }] });
+			await first.clear("session-1");
+			const reopened = new JsonlV2PlanRegistry(path);
+			expect(await reopened.read("session-1")).toBeUndefined();
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 });

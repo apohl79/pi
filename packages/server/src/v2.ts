@@ -342,6 +342,7 @@ export class PiServerV2 {
 			if (command.command === "app/auth/start") return void (await this.startAppAuth(state, id, command));
 			if (command.command === "plan/read") return void (await this.readPlan(state, id, command));
 			if (command.command === "plan/update") return void (await this.updatePlan(state, id, command));
+			if (command.command === "plan/clear") return void (await this.clearPlan(state, id, command));
 			if (command.command === "input/request/read") return void (await this.readInputRequest(state, id, command));
 			if (command.command === "input/request/respond")
 				return void (await this.respondInputRequest(state, id, command));
@@ -710,6 +711,18 @@ export class PiServerV2 {
 		this.trackRuntime(runtime);
 		state.sessions.set(command.sessionId, runtime);
 		await this.broadcastEvent(command.sessionId, runtime, { plan }, undefined, "plan_updated");
+	}
+
+	private async clearPlan(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("plan/clear requires sessionId");
+		this.requireControl(state, command.sessionId);
+		if (!this.plans.clear) throw new Error("plan/clear is not supported by this registry");
+		await this.plans.clear(command.sessionId);
+		const runtime = state.sessions.get(command.sessionId) ?? (await this.service.openSession(command.sessionId));
+		this.trackRuntime(runtime);
+		state.sessions.set(command.sessionId, runtime);
+		await this.sendResponse(state, id, { command: command.command, cleared: true });
+		await this.broadcastEvent(command.sessionId, runtime, { plan: null }, undefined, "plan_updated");
 	}
 
 	private async readInputRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

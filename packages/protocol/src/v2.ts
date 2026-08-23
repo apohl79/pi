@@ -274,6 +274,7 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("input/request/cancel"),
 	Type.Literal("plan/read"),
 	Type.Literal("plan/update"),
+	Type.Literal("plan/clear"),
 	Type.Literal("goal/read"),
 	Type.Literal("goal/create"),
 	Type.Literal("goal/update"),
