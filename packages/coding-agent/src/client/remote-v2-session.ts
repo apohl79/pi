@@ -85,8 +85,13 @@ export interface RemoteV2FileReference {
 
 export interface RemoteV2FileCompletion {
 	readonly reference: string;
+	readonly display: string;
+	readonly hostScope: "server";
 	readonly path: string;
+	readonly canonicalPath: string;
 	readonly kind: "file" | "directory";
+	readonly size?: number;
+	readonly mimeType?: string;
 }
 
 export interface RemoteV2FileRead {
@@ -1299,8 +1304,13 @@ function isFileCompletion(value: unknown): value is RemoteV2FileCompletion {
 	const record = asRecord(value);
 	return (
 		typeof record?.reference === "string" &&
+		typeof record.display === "string" &&
+		record.hostScope === "server" &&
 		typeof record.path === "string" &&
-		(record.kind === "file" || record.kind === "directory")
+		typeof record.canonicalPath === "string" &&
+		(record.kind === "file" || record.kind === "directory") &&
+		(record.size === undefined || isSafeNonNegativeInteger(record.size)) &&
+		(record.mimeType === undefined || typeof record.mimeType === "string")
 	);
 }
 

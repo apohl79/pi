@@ -14,8 +14,13 @@ export interface V2FileReference {
 
 export interface V2FileCompletion {
 	readonly reference: string;
+	readonly display: string;
+	readonly hostScope: "server";
 	readonly path: string;
+	readonly canonicalPath: string;
 	readonly kind: V2FileReferenceKind;
+	readonly size?: number;
+	readonly mimeType?: string;
 }
 
 export interface V2FileReferenceService {
@@ -181,10 +186,15 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 					try {
 						const resolved = await realpath(path);
 						if (!(await this.allowed(resolved, scope === "absolute" || absoluteServerPath))) return undefined;
+						const reference = referenceFor(scope, base, path, absoluteServerPath);
 						return {
-							reference: referenceFor(scope, base, path, absoluteServerPath),
+							reference,
+							display: reference,
+							hostScope: "server",
 							path,
+							canonicalPath: resolved,
 							kind: entry.isDirectory() ? "directory" : "file",
+							...(entry.isDirectory() ? {} : { size: (await lstat(path)).size, mimeType: mimeTypeFor(path) }),
 						} satisfies V2FileCompletion;
 					} catch {
 						return undefined;
