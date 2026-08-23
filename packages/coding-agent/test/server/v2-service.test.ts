@@ -359,6 +359,11 @@ describe("coding-agent v2 service adapter", () => {
 				sessionId: "auto-name-setting-session",
 				payload: { enabled: false },
 			});
+			await first.run("explicit-name", {
+				command: "session/name/set",
+				sessionId: "auto-name-setting-session",
+				payload: { name: "Persisted manual title" },
+			});
 			const recreated = await createCodingAgentV2Service(models, [definition], { fastModel: faux.getModel() });
 			const second = await recreated.openSession("auto-name-setting-session");
 			await second.run("turn", {
@@ -366,7 +371,8 @@ describe("coding-agent v2 service adapter", () => {
 				sessionId: "auto-name-setting-session",
 				payload: { text: "work" },
 			});
-			expect((await second.snapshot()).name).toBeUndefined();
+			expect((await second.snapshot()).name).toBe("Persisted manual title");
+			expect((await second.snapshot()).nameSource).toBe("explicit");
 		} finally {
 			await created.harness.close();
 			await env.cleanup();

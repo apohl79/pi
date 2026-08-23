@@ -247,6 +247,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 
 	private readonly fastModel: Model<string> | undefined;
 	private autoNameLoaded = false;
+	private nameStateLoaded = false;
 	private nameGeneration: Promise<void> | undefined;
 
 	constructor(
@@ -345,6 +346,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		this.sessionName = generated;
 		this.nameSource = "generated";
 		this.nameRevision += 1;
+		await this.persistNameState();
 	}
 
 	private async ensureAutoNameLoaded(): Promise<void> {
@@ -356,6 +358,35 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		);
 		if (setting?.type === "custom" && typeof setting.data === "boolean") this.autoName = setting.data;
 		this.autoNameLoaded = true;
+	}
+
+	private async ensureNameStateLoaded(): Promise<void> {
+		if (this.nameStateLoaded) return;
+		const entries = await this.definition.harness.session.findEntriesOnBranch({ order: "newestFirst" });
+		const state = entries.find(
+			(entry) =>
+				entry.type === "custom" && entry.customType === "session_name_state" && typeof entry.data === "object",
+		);
+		if (state?.type === "custom" && typeof state.data === "object" && state.data !== null) {
+			const value = state.data as { name?: unknown; source?: unknown; revision?: unknown };
+			if (typeof value.revision === "number" && Number.isSafeInteger(value.revision) && value.revision >= 0) {
+				this.nameRevision = value.revision;
+				this.sessionName = typeof value.name === "string" ? value.name : undefined;
+				this.nameSource =
+					value.source === "explicit" || value.source === "generated" || value.source === "derived"
+						? value.source
+						: undefined;
+			}
+		}
+		this.nameStateLoaded = true;
+	}
+
+	private async persistNameState(): Promise<void> {
+		await this.definition.harness.session.appendCustomEntry("session_name_state", {
+			name: this.sessionName ?? null,
+			source: this.nameSource ?? null,
+			revision: this.nameRevision,
+		});
 	}
 
 	private scheduleNameGeneration(operationId: string): void {
@@ -432,6 +463,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	async snapshot(): Promise<SessionSnapshotV2> {
 		await this.nameGeneration;
 		await this.ensureAutoNameLoaded();
+		await this.ensureNameStateLoaded();
 		const [
 			leafId,
 			thinkingLevel,
@@ -566,6 +598,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 
 	async run(_operationId: string, command: CommandV2): Promise<void> {
 		await this.ensureAutoNameLoaded();
+		await this.ensureNameStateLoaded();
 		const input = commandInput(command);
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
@@ -676,6 +709,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				this.nameSource = payload.name === null ? undefined : "explicit";
 				await harness.session.setName(this.sessionName);
 				this.nameRevision += 1;
+				await this.persistNameState();
 			} else if (runCommand === "session/name/generate") {
 				const generated =
 					typeof payload.name === "string" && payload.name.trim().length > 0 ? payload.name.trim() : undefined;
@@ -686,6 +720,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 						this.nameSource = "generated";
 						await harness.session.setName(generated);
 						this.nameRevision += 1;
+						await this.persistNameState();
 					}
 				}
 			} else if (runCommand === "session/name/auto/set") {
