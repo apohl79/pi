@@ -99,7 +99,10 @@ describe("JsonlForensicRecorder", () => {
 		await expect(recorder.record({ kind: "accepted" })).resolves.toMatchObject({ kind: "accepted", seq: 1 });
 		expect(recorder.getOperationalLogFailureCount()).toBe(1);
 		expect(recorder.isDegraded()).toBe(true);
-		expect(await recorder.read()).toHaveLength(1);
+		expect(await recorder.read()).toMatchObject([
+			{ kind: "accepted" },
+			{ kind: "diagnostics_degraded", severity: "error", payload: { sink: "operational-log" } },
+		]);
 	});
 
 	test("recovers sequence and redaction state after restart", async () => {

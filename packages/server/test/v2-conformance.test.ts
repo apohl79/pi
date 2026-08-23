@@ -571,7 +571,7 @@ describe("PiServer v2 operation acceptance", () => {
 		const status = await client.request({ command: "diagnostics/status" });
 		expect(status).toMatchObject({
 			ok: true,
-			result: { capture: "metadata", eventCount: 2, degraded: true, lastCriticalEventSeq: 0 },
+			result: { capture: "metadata", eventCount: 3, degraded: true, lastCriticalEventSeq: 2 },
 		});
 		await client.close();
 	});

@@ -779,6 +779,18 @@ export class TeeForensicRecorder implements ForensicRecorder {
 			});
 		} catch {
 			this.secondaryFailures += 1;
+			if (this.secondaryFailures === 1) {
+				try {
+					await this.primary.record({
+						kind: "diagnostics_degraded",
+						severity: "error",
+						outcome: "error",
+						payload: { sink: "operational-log", failureCount: this.secondaryFailures },
+					});
+				} catch {
+					// The degradation marker is best-effort when the canonical recorder is already failing.
+				}
+			}
 		}
 		return event;
 	}
