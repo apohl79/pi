@@ -188,6 +188,20 @@ function isClientDiagnosticExport(value: unknown): boolean {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 	const exportValue = value as Record<string, unknown>;
 	if (!Number.isSafeInteger(exportValue.afterSeq) || (exportValue.afterSeq as number) < 0) return false;
+	if (exportValue.records === undefined) {
+		const manifest = exportValue.manifest;
+		if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) return false;
+		const fields = manifest as Record<string, unknown>;
+		return (
+			typeNonEmpty(fields.runtime) &&
+			typeNonEmpty(fields.platform) &&
+			typeNonEmpty(fields.arch) &&
+			(fields.buildVersion === undefined || typeNonEmpty(fields.buildVersion)) &&
+			(fields.forkCommit === undefined || typeNonEmpty(fields.forkCommit)) &&
+			(fields.upstreamBaseCommit === undefined || typeNonEmpty(fields.upstreamBaseCommit)) &&
+			(fields.configHash === undefined || typeNonEmpty(fields.configHash))
+		);
+	}
 	if (!Array.isArray(exportValue.records)) return false;
 	return exportValue.records.every((record) => {
 		if (typeof record !== "object" || record === null || Array.isArray(record)) return false;
