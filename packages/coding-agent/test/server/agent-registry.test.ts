@@ -64,7 +64,7 @@ describe("CodingAgentV2AgentRegistry", () => {
 		await registry.message(agent.id, "urgent context");
 		await registry.followUp(agent.id, "continue with the tests");
 		expect((await registry.wait(agent.id)).state).toBe("complete");
-		expect(runtime.commands[1]?.command).toBe("turn/followUp");
+		expect(runtime.commands[1]?.command).toBe("turn/start");
 		expect(runtime.commands[1]?.payload).toEqual({ text: "urgent context\n\ncontinue with the tests" });
 		// A completed child is stable until a follow-up is requested.
 		await registry.interrupt(agent.id);
