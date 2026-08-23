@@ -1007,7 +1007,11 @@ export class RemoteV2Session {
 		try {
 			listener(this.state);
 		} catch (error) {
-			this.#onListenerError?.(error instanceof Error ? error : new Error(String(error)));
+			try {
+				this.#onListenerError?.(error instanceof Error ? error : new Error(String(error)));
+			} catch {
+				// Listener diagnostics cannot affect remote session state.
+			}
 		}
 	}
 	#requireHandle(): PiSessionV2Handle {

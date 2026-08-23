@@ -851,6 +851,23 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("contains failures from the remote listener error sink", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1", {
+			onListenerError: () => {
+				throw new Error("listener sink failure");
+			},
+		});
+		session.subscribe(() => {
+			throw new Error("listener failure");
+		});
+
+		await expect(session.refresh()).resolves.toMatchObject({ id: "session-1" });
+		await session.dispose();
+	});
+
 	test("exposes lease transfer and remote control actions", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });
