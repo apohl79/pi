@@ -649,6 +649,35 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("applies after_response message transformations before persistence", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "after-response-faux",
+			models: [{ id: "after-response-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("original")]);
+		const session = createSession("after-response");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		harness.hooks.on("after_response", (event) => ({
+			message: {
+				...(event as { message: AgentMessage }).message,
+				content: [{ type: "text", text: "transformed" }],
+			},
+		}));
+
+		await harness.prompt("hello");
+
+		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		const assistant = entries.find((entry) => entry.type === "message" && entry.message.role === "assistant");
+		const assistantContent =
+			assistant?.type === "message" && assistant.message.role === "assistant"
+				? assistant.message.content
+				: undefined;
+		expect(assistantContent).toEqual([{ type: "text", text: "transformed" }]);
+		await harness.close();
+	});
+
 	it("invokes configured skills and prompt templates through durable prompts", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
