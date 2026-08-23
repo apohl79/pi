@@ -93,7 +93,9 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 		const id = command.id;
 		switch (command.type) {
 			case "prompt":
-				await session.submit(await promptContent(session, command.message, command.images));
+				if (command.streamingBehavior === "followUp")
+					await session.followUp(await promptContent(session, command.message, command.images));
+				else await session.submit(await promptContent(session, command.message, command.images));
 				return success(id, "prompt");
 			case "steer":
 				await session.submit(await promptContent(session, command.message, command.images));
