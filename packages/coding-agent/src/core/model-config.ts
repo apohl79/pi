@@ -246,6 +246,30 @@ function deepFreeze<T>(value: T): T {
 	return Object.freeze(value);
 }
 
+function modelIdFamily(id: string): string {
+	return id.replace(/-latest$/, "").replace(/-\d{8}$/, "");
+}
+
+function isModelAlias(id: string): boolean {
+	return id.endsWith("-latest") || !/-\d{8}$/.test(id);
+}
+
+function resolveCompactionModelId(
+	modelId: string,
+	modelIds: readonly string[],
+	overrideIds: readonly string[],
+): string | undefined {
+	const configuredIds = [...new Set([...modelIds, ...overrideIds])];
+	if (configuredIds.includes(modelId)) return modelId;
+	const matches = configuredIds.filter(
+		(candidate) => candidate !== modelId && modelIdFamily(candidate) === modelIdFamily(modelId),
+	);
+	const aliases = matches.filter(isModelAlias);
+	if (aliases.length === 1) return aliases[0];
+	if (aliases.length > 1) return undefined;
+	return matches.length === 1 ? matches[0] : undefined;
+}
+
 function validateCompactionPolicies(config: ModelsJson): string | undefined {
 	for (const [providerId, provider] of Object.entries(config.providers)) {
 		const models = new Map((provider.models ?? []).map((model) => [model.id, model]));
@@ -369,8 +393,14 @@ export class ModelConfig {
 	getCompactionOverride(providerId: string, modelId: string): ModelsJsonCompaction | undefined {
 		const provider = this.providers.get(providerId);
 		if (!provider) return undefined;
-		const model = provider.models?.find((candidate) => candidate.id === modelId)?.compaction;
-		const override = provider.modelOverrides?.[modelId]?.compaction;
+		const resolvedModelId = resolveCompactionModelId(
+			modelId,
+			(provider.models ?? []).map((candidate) => candidate.id),
+			Object.keys(provider.modelOverrides ?? {}),
+		);
+		if (resolvedModelId === undefined) return undefined;
+		const model = provider.models?.find((candidate) => candidate.id === resolvedModelId)?.compaction;
+		const override = provider.modelOverrides?.[resolvedModelId]?.compaction;
 		if (!model && !override) return undefined;
 		return { ...model, ...override };
 	}

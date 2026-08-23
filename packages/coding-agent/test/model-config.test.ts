@@ -47,6 +47,35 @@ describe("ModelConfig compaction overrides", () => {
 		}
 	});
 
+	test("resolves alias-equivalent compaction policies with exact-ID precedence", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-model-config-alias-"));
+		const path = join(directory, "models.json");
+		try {
+			await writeFile(
+				path,
+				JSON.stringify({
+					providers: {
+						faux: {
+							models: [{ id: "model-latest", compaction: { reserveTokens: 200 } }],
+							modelOverrides: {
+								"model-latest": { compaction: { keepRecentTokens: 500 } },
+								"model-20250101": { compaction: { keepRecentTokens: 700 } },
+							},
+						},
+					},
+				}),
+			);
+			const config = await ModelConfig.load(path);
+			expect(config.getCompactionOverride("faux", "model-20250101")).toEqual({ keepRecentTokens: 700 });
+			expect(config.getCompactionOverride("faux", "model-20250102")).toEqual({
+				reserveTokens: 200,
+				keepRecentTokens: 500,
+			});
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("rejects unsafe or context-incompatible compaction policies", async () => {
 		const cases = [
 			{
