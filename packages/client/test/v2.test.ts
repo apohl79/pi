@@ -32,6 +32,9 @@ function transportPair() {
 		deliver(message: ServerMessageV2) {
 			handlers?.onData(encodeServerMessageV2(message));
 		},
+		close() {
+			handlers?.onClose();
+		},
 	};
 }
 
@@ -268,12 +271,14 @@ describe("PiClientV2", () => {
 		await vi.waitFor(() => expect(pair.sent).toHaveLength(1));
 		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
 		await connection;
-		client.disconnect();
-		expect(await spool.read()).toMatchObject([
-			{ event: "client.connecting" },
-			{ event: "client.connected" },
-			{ event: "client.disconnected" },
-		]);
+		pair.close();
+		await vi.waitFor(async () =>
+			expect(await spool.read()).toMatchObject([
+				{ event: "client.connecting" },
+				{ event: "client.connected" },
+				{ event: "client.transport_closed", severity: "error", fields: { error: "Error" } },
+			]),
+		);
 		client.dispose();
 	});
 
