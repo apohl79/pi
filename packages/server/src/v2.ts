@@ -635,6 +635,7 @@ export class PiServerV2 {
 				provider: typeof modelPayload.provider === "string" ? modelPayload.provider : "inherit",
 				id: typeof modelPayload.id === "string" ? modelPayload.id : "inherit",
 			},
+			modelResolution: Object.keys(modelPayload).length === 0 ? "inherited" : "explicit",
 		});
 		await this.sendResponse(state, id, { command: command.command, agent });
 		const runtime = state.sessions.get(command.sessionId);

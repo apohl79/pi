@@ -7,6 +7,8 @@ export interface V2AgentRequest {
 	readonly taskName: string;
 	readonly taskMessage: string;
 	readonly role?: string;
+	/** Internal server hint preserving whether the model was caller-selected or inherited. */
+	readonly modelResolution?: "explicit" | "inherited";
 	readonly forkTurns?: "none" | "all" | number;
 	readonly model: { readonly provider: string; readonly id: string };
 }
