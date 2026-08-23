@@ -958,6 +958,26 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("serializes concurrent queue cancellation", async () => {
+		const session = createSession("queue-cancel-race");
+		const harness = await createHarness(session);
+		await session.appendRecord(operationStarted("run-race"));
+		const queued = await harness.nextRun("cancel once");
+		expect(queued).toMatchObject({ ok: true, value: { entryId: expect.any(String) } });
+		if (!queued.ok) throw new Error("queue admission failed");
+
+		const outcomes = await Promise.all([
+			harness.cancelQueued(queued.value.entryId),
+			harness.cancelQueued(queued.value.entryId),
+		]);
+		expect(outcomes.map((result) => result.ok && result.value.outcome).sort()).toEqual([
+			"already_cleared",
+			"cancelled",
+		]);
+		expect(await session.findRecords({ type: "queue_cancelled" })).toHaveLength(1);
+		await harness.close();
+	});
+
 	it("durably aborts a run and recalls only steer/follow-up input", async () => {
 		const session = createSession("abort");
 		const harness = await createHarness(session);
