@@ -788,6 +788,7 @@ export class SqliteSessionRepository
 	/** Verifies canonical SQLite integrity through a separate reopened connection. */
 	async verifyReopen(): Promise<SqliteInspection> {
 		return this.operations.enqueue(async () => {
+			await this.getDatabase();
 			const path = await this.getDatabasePath();
 			const reopened = await this.options.sqlite.open(path);
 			try {
