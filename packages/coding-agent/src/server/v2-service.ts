@@ -593,8 +593,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				await harness.setFollowUpMode(payload.mode);
 			} else if (runCommand === "session/compaction/set") {
 				if (typeof payload.enabled !== "boolean") throw new Error("session/compaction/set requires enabled");
-				const settings = await harness.getCompactionSettings();
-				await harness.setCompactionSettings({ ...settings, enabled: payload.enabled });
+				await harness.setCompactionEnabled(payload.enabled);
 			} else if (runCommand === "session/retry/set") {
 				if (typeof payload.enabled !== "boolean") throw new Error("session/retry/set requires enabled");
 				const policy = await harness.getRetryPolicy();

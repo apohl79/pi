@@ -300,6 +300,28 @@ describe("AgentHarness v2 scaffold", () => {
 		await reopened.harness.close();
 	});
 
+	it("toggles the active model compaction override without losing policy fields", async () => {
+		const session = createSession("compaction-override-toggle");
+		const { harness } = await AgentHarness.create({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			compaction: {
+				enabled: true,
+				reserveTokens: 123,
+				keepRecentTokens: 456,
+				modelOverrides: { "google/gemini-2.5-flash": { enabled: false, reserveTokens: 789 } },
+			},
+		});
+		await harness.setCompactionEnabled(true);
+		expect(await harness.getCompactionSettings()).toMatchObject({
+			enabled: true,
+			reserveTokens: 789,
+			keepRecentTokens: 456,
+		});
+		await harness.close();
+	});
+
 	it("persists steering and follow-up queue modes across harness recreation", async () => {
 		const session = createSession("queue-modes");
 		const harness = await createHarness(session);
