@@ -5,6 +5,7 @@ import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-work
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import { afterEach, describe, expect, test } from "vitest";
+import { RemoteV2Session } from "../../src/client/remote-v2-session.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemon-runtime.ts";
 
 const directories: string[] = [];
@@ -13,7 +14,7 @@ afterEach(async () => {
 	await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-async function createAgentRuntime(directory: string) {
+async function createAgentRuntime(directory: string, childCompletes = true) {
 	const models = createModels();
 	const parent = fauxProvider({
 		provider: "coding-agent-daemon-parent-faux",
@@ -26,7 +27,7 @@ async function createAgentRuntime(directory: string) {
 	models.setProvider(parent.provider);
 	models.setProvider(child.provider);
 	parent.setResponses([fauxAssistantMessage("inherited child completed")]);
-	child.setResponses([fauxAssistantMessage("child completed")]);
+	child.setResponses(childCompletes ? [fauxAssistantMessage("child completed")] : [() => new Promise(() => {})]);
 	return createConfiguredCodingAgentDaemonRuntime({
 		agentDir: directory,
 		cwd: directory,
@@ -130,6 +131,34 @@ describe("coding-agent daemon child agents", () => {
 				},
 			});
 		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("keeps a running child alive when the parent turn completes", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-agents-parent-complete-"));
+		directories.push(directory);
+		const runtime = await createAgentRuntime(directory, false);
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		let session: RemoteV2Session | undefined;
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			const sessionId = (created as unknown as { result: { session: { id: string } } }).result.session.id;
+			session = await RemoteV2Session.open(client, sessionId);
+			const child = await session.spawnAgent("long-lived", "keep working", {
+				model: { provider: "coding-agent-daemon-child-faux", id: "child-model" },
+			});
+			const parentOperation = await session.submit("finish the parent turn");
+			await session.waitForOperation(parentOperation);
+			expect((await session.listAgents()).find((agent) => agent.id === child.id)?.state).toBe("running");
+			expect((await session.interruptAgent(child.id)).state).toBe("interrupted");
+		} finally {
+			await session?.dispose();
 			client.dispose();
 			await runtime.close();
 		}
