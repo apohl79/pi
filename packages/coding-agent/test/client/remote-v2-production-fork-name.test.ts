@@ -42,7 +42,7 @@ describe("production remote v2 forked names", () => {
 			try {
 				const sourceName = await source.setName("Source title");
 				await source.waitForOperation(sourceName);
-				const forked = await source.fork();
+				const forked = await source.fork({ scope: "tree" });
 				try {
 					expect(forked.snapshot).toMatchObject({ name: "Source title", nameSource: "derived" });
 					const forkName = await forked.setName("Fork title");
