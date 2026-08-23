@@ -1729,6 +1729,22 @@ describe("PiServer v2 operation acceptance", () => {
 		});
 		const agent = (spawned as unknown as { result: { agent: { id: string; path: string } } }).result.agent;
 		expect(agent.path).toBe("/root/research");
+		const observer = await connectUnixTestClientV2(server.addresses[0]!);
+		await observer.hello();
+		expect(await observer.request({ command: "agent/list", sessionId: "session-1" })).toMatchObject({
+			ok: false,
+			error: { code: "request_failed", message: "Session session-1 is not attached" },
+		});
+		expect(await observer.request({ command: "agent/wait", payload: { agentId: agent.id } })).toMatchObject({
+			ok: false,
+			error: { code: "request_failed", message: "Session session-1 is not attached" },
+		});
+		await observer.request({ command: "session/attach", sessionId: "session-1", payload: { mode: "observer" } });
+		expect(await observer.request({ command: "agent/list", sessionId: "session-1" })).toMatchObject({
+			ok: true,
+			result: { agents: [{ id: agent.id, state: "running" }] },
+		});
+		await observer.close();
 		expect(
 			await client.request({ command: "agent/wait", payload: { agentId: agent.id, timeoutMs: "0" } }),
 		).toMatchObject({
