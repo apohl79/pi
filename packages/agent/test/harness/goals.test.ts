@@ -24,9 +24,11 @@ describe("durable GoalManager", () => {
 	test("rejects duplicate or invalid goals", async () => {
 		const manager = new GoalManager(new Session(new InMemorySessionStorage({ id: "goal-invalid", createdAt: 1 })));
 		await expect(manager.create("", 1)).rejects.toThrow("must not be empty");
+		await expect(manager.create("unsafe", Number.MAX_SAFE_INTEGER + 1)).rejects.toThrow("safe integer");
 		await manager.create("one");
 		await expect(manager.create("two")).rejects.toThrow("already exists");
 		await expect(manager.update({ tokensUsed: -1 })).rejects.toThrow("non-negative");
+		await expect(manager.update({ tokensUsed: Number.MAX_SAFE_INTEGER + 1 })).rejects.toThrow("safe integer");
 	});
 
 	test("accrues active time only across active transitions", async () => {
