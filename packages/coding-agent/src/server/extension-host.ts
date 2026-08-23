@@ -1,3 +1,8 @@
+import type { AgentMessage, SamplingInputContext } from "@earendil-works/pi-agent-core";
+
+const DEFAULT_MAX_SAMPLING_MESSAGES = 128;
+const DEFAULT_MAX_SAMPLING_CHARACTERS = 32_000;
+
 export interface ServerRuntimeModel {
 	readonly id: string;
 	readonly provider?: string;
@@ -29,6 +34,7 @@ export interface ServerRuntimeExtension {
 	readonly capabilities?: readonly string[];
 	onOperationAccepted?(context: ServerRuntimeExtensionContext): void | Promise<void>;
 	onOperationTerminal?(context: ServerRuntimeExtensionContext & { readonly outcome: string }): void | Promise<void>;
+	contributeSamplingInput?(context: SamplingInputContext): AgentMessage[] | Promise<AgentMessage[]>;
 }
 
 export interface ServerRuntimeExtensionHookResult {
@@ -37,10 +43,17 @@ export interface ServerRuntimeExtensionHookResult {
 	readonly reason?: unknown;
 }
 
+export interface ServerRuntimeExtensionSamplingResult {
+	readonly messages: readonly AgentMessage[];
+	readonly outcomes: readonly ServerRuntimeExtensionHookResult[];
+}
+
 export interface ServerRuntimeExtensionHostOptions {
 	readonly resolveModel: () => ServerRuntimeModel;
 	readonly loadState?: (extensionId: string, key: string) => unknown | Promise<unknown>;
 	readonly persistState?: (extensionId: string, key: string, value: unknown) => void | Promise<void>;
+	readonly maxSamplingMessages?: number;
+	readonly maxSamplingCharacters?: number;
 }
 
 export class ServerRuntimeExtensionHost {
@@ -74,6 +87,31 @@ export class ServerRuntimeExtensionHost {
 		return this.dispatchHook((extension) =>
 			extension.onOperationTerminal?.({ ...this.context(extension.id, operation), outcome }),
 		);
+	}
+
+	public async collectSamplingInput(context: SamplingInputContext): Promise<ServerRuntimeExtensionSamplingResult> {
+		const messages: AgentMessage[] = [];
+		let characters = 0;
+		const outcomes: ServerRuntimeExtensionHookResult[] = [];
+		for (const extension of this.extensions.values()) {
+			try {
+				const contributed = (await extension.contributeSamplingInput?.(context)) ?? [];
+				for (const message of contributed) {
+					const size = JSON.stringify(message).length;
+					if (
+						messages.length >= (this.options.maxSamplingMessages ?? DEFAULT_MAX_SAMPLING_MESSAGES) ||
+						characters + size > (this.options.maxSamplingCharacters ?? DEFAULT_MAX_SAMPLING_CHARACTERS)
+					)
+						break;
+					messages.push(message);
+					characters += size;
+				}
+				outcomes.push({ extensionId: extension.id, status: "fulfilled" });
+			} catch (reason) {
+				outcomes.push({ extensionId: extension.id, status: "rejected", reason });
+			}
+		}
+		return { messages, outcomes };
 	}
 
 	public async getState<T>(extensionId: string, key: string): Promise<T | undefined> {
