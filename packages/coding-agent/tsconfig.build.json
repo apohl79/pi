@@ -8,6 +8,7 @@
 			"@earendil-works/pi-ai": ["../ai/dist/index.d.ts"],
 			"@earendil-works/pi-ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"],
 			"@earendil-works/pi-client": ["../client/dist/index.d.ts"],
+			"@earendil-works/pi-codex-plugin-compat": ["../codex-plugin-compat/dist/index.d.ts"],
 			"@earendil-works/pi-client/unix": ["../client/dist/unix.d.ts"],
 			"@earendil-works/pi-server": ["../server/dist/index.d.ts"],
 			"@earendil-works/pi-model-instructions": ["../model-instructions/dist/index.d.ts"],
