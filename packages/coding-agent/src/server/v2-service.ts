@@ -261,6 +261,16 @@ function assertPromptCapabilities(model: Model<Api>, input: AgentMessage): void 
 }
 
 function transcriptItem(entry: Entry): TranscriptItem | undefined {
+	if (entry.type === "compaction") {
+		return {
+			id: entry.id,
+			role: "compactionSummary",
+			summary: entry.summary,
+			tokensBefore: entry.tokensBefore,
+			...(entry.usage === undefined ? {} : { usage: entry.usage }),
+			timestamp: entry.timestamp,
+		};
+	}
 	if (entry.type !== "message" || !("content" in entry.message) || !Array.isArray(entry.message.content))
 		return undefined;
 	const timestamp = entry.message.timestamp ?? entry.timestamp;

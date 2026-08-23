@@ -192,14 +192,25 @@ export const ToolTranscriptItemSchema = Type.Union([
 	CompleteToolTranscriptItemSchema,
 	ErrorToolTranscriptItemSchema,
 ]);
+export const CompactionSummaryTranscriptItemSchema = StrictObject({
+	id: IdSchema,
+	role: Type.Literal("compactionSummary"),
+	summary: Type.String(),
+	tokensBefore: Type.Integer({ minimum: 0 }),
+	usage: Type.Optional(UsageSchema),
+	details: Type.Optional(JsonValueSchema),
+	timestamp: TimestampSchema,
+});
 export const TranscriptItemSchema = Type.Union([
 	UserTranscriptItemSchema,
 	AssistantTranscriptItemSchema,
 	ToolTranscriptItemSchema,
+	CompactionSummaryTranscriptItemSchema,
 ]);
 export type UserTranscriptItem = Static<typeof UserTranscriptItemSchema>;
 export type AssistantTranscriptItem = Static<typeof AssistantTranscriptItemSchema>;
 export type ToolTranscriptItem = Static<typeof ToolTranscriptItemSchema>;
+export type CompactionSummaryTranscriptItem = Static<typeof CompactionSummaryTranscriptItemSchema>;
 export type TranscriptItem = Static<typeof TranscriptItemSchema>;
 
 /** Normalized incremental activity. Snapshots remain authoritative. */
