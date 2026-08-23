@@ -60,7 +60,7 @@ export class ClientDiagnosticSpool {
 			event: input.event,
 			severity: input.severity ?? "info",
 			timestamp: input.timestamp ?? Date.now(),
-			...(input.fields === undefined ? {} : { fields: sanitizeClientDiagnosticValue(input.fields) }),
+			...(input.fields === undefined ? {} : { fields: sanitizeClientDiagnosticFields(input.fields) }),
 		};
 		this.records.push(record);
 		const trimmed = this.trim();
@@ -205,6 +205,13 @@ function sanitizeClientDiagnosticValue(value: JsonValue, key?: string, depth = 0
 		return output;
 	}
 	return value;
+}
+
+function sanitizeClientDiagnosticFields(fields: Record<string, JsonValue>): Record<string, JsonValue> {
+	const output: Record<string, JsonValue> = {};
+	for (const [key, value] of Object.entries(fields).slice(0, 32))
+		output[key] = sanitizeClientDiagnosticValue(value, key, 1);
+	return output;
 }
 
 /** Merge client-local records into a server diagnostic bundle when identities match. */
