@@ -702,6 +702,19 @@ describe("RemoteV2Session", () => {
 			{ seq: 3, kind: "operation", outcome: "ok" },
 		]);
 		expect((await session.diagnosticsExport()).manifest).toMatchObject({ eventCount: 3 });
+		expect(
+			(
+				await session.diagnosticsExport({
+					decryptContent: true,
+					sessionId: "session-1",
+					operationId: "operation-1",
+				})
+			).manifest,
+		).toMatchObject({ eventCount: 3 });
+		expect(pair.requests.at(-1)).toMatchObject({
+			command: "diagnostics/export",
+			payload: { decryptContent: true, sessionId: "session-1", operationId: "operation-1" },
+		});
 		expect((await session.diagnosticsVerify()).valid).toBe(true);
 		expect((await session.diagnosticsDoctor()).ok).toBe(true);
 		await session.dispose();
