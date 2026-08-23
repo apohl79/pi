@@ -764,7 +764,9 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		try {
 			assertPromptCapabilities(await harness.getModel(), promptInput);
 			if (runCommand === "turn/start") {
-				await harness.prompt(promptInput);
+				const result = await harness.prompt(promptInput);
+				if (!result.ok) throw new Error(result.error.message);
+				if (result.value.kind === "failed") throw new Error(result.value.error.message);
 				await this.recordUsageLedger(_operationId, beforeEntryIds);
 				await this.recordGoalUsage(usageBefore);
 				await this.markAgentCompletionsConsumed(completions);
