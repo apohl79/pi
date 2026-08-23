@@ -147,4 +147,30 @@ describe("formatRemoteV2Session", () => {
 		expect(output).toContain("Plan v3");
 		expect(output).toContain("Plan in_progress · verify the daemon");
 	});
+
+	test("applies an aggregate character budget to plan lines", () => {
+		const output = formatRemoteV2Session(
+			{
+				lifecycle: { status: "ready" },
+				snapshot: {
+					...snapshot,
+					plan: {
+						version: 1,
+						items: Array.from({ length: 1000 }, () => ({ step: "x".repeat(10_000), status: "pending" as const })),
+					},
+				},
+			},
+			{ maxPlanItems: 1000, maxPlanCharacters: 100 },
+		);
+		const planLines = output.split("\n").filter((line) => line.startsWith("Plan "));
+		expect(planLines.join("\n").length).toBeLessThanOrEqual(108);
+	});
+
+	test("renders a pending structured input request", () => {
+		const output = formatRemoteV2Session({
+			lifecycle: { status: "ready" },
+			snapshot: { ...snapshot, queues: { ...snapshot.queues, pendingInputRequestId: "input-1" } },
+		});
+		expect(output).toContain("Input request pending · input-1");
+	});
 });

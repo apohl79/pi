@@ -8,6 +8,7 @@ export interface RemoteV2SessionViewOptions {
 	readonly maxTranscriptCharacters?: number;
 	readonly maxAgentItems?: number;
 	readonly maxPlanItems?: number;
+	readonly maxPlanCharacters?: number;
 	readonly maxGoalCharacters?: number;
 }
 
@@ -15,11 +16,13 @@ const DEFAULT_MAX_TRANSCRIPT_ITEMS = 48;
 const DEFAULT_MAX_TRANSCRIPT_CHARACTERS = 6_000;
 const DEFAULT_MAX_AGENT_ITEMS = 12;
 const DEFAULT_MAX_PLAN_ITEMS = 12;
+const DEFAULT_MAX_PLAN_CHARACTERS = 6_000;
 const DEFAULT_MAX_GOAL_CHARACTERS = 240;
 const MAX_TRANSCRIPT_ITEMS = 10_000;
 const MAX_TRANSCRIPT_CHARACTERS = 1_000_000;
 const MAX_AGENT_ITEMS = 1_000;
 const MAX_PLAN_ITEMS = 1_000;
+const MAX_PLAN_CHARACTERS = 1_000_000;
 const MAX_GOAL_CHARACTERS = 10_000;
 
 function normalizeLimit(value: number | undefined, fallback: number, maximum: number): number {
@@ -37,6 +40,7 @@ function normalizeOptions(options: RemoteV2SessionViewOptions): Required<RemoteV
 		),
 		maxAgentItems: normalizeLimit(options.maxAgentItems, DEFAULT_MAX_AGENT_ITEMS, MAX_AGENT_ITEMS),
 		maxPlanItems: normalizeLimit(options.maxPlanItems, DEFAULT_MAX_PLAN_ITEMS, MAX_PLAN_ITEMS),
+		maxPlanCharacters: normalizeLimit(options.maxPlanCharacters, DEFAULT_MAX_PLAN_CHARACTERS, MAX_PLAN_CHARACTERS),
 		maxGoalCharacters: normalizeLimit(options.maxGoalCharacters, DEFAULT_MAX_GOAL_CHARACTERS, MAX_GOAL_CHARACTERS),
 	};
 }
@@ -89,9 +93,20 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	}
 	if (snapshot.plan) {
 		lines.push(`Plan v${snapshot.plan.version}`);
-		for (const item of snapshot.plan.items.slice(0, normalizedOptions.maxPlanItems))
-			lines.push(`Plan ${sanitizeTranscriptText(item.status)} · ${sanitizeTranscriptText(item.step)}`);
+		let planCharacters = 0;
+		for (const item of snapshot.plan.items.slice(0, normalizedOptions.maxPlanItems)) {
+			const line = `Plan ${sanitizeTranscriptText(item.status)} · ${sanitizeTranscriptText(item.step)}`;
+			if (planCharacters + line.length > normalizedOptions.maxPlanCharacters) {
+				const remaining = Math.max(0, normalizedOptions.maxPlanCharacters - planCharacters);
+				if (remaining > 0) lines.push(`${line.slice(0, Math.max(0, remaining - 1))}…`);
+				break;
+			}
+			lines.push(line);
+			planCharacters += line.length;
+		}
 	}
+	if (snapshot.queues.pendingInputRequestId !== undefined)
+		lines.push(`Input request pending · ${sanitizeTranscriptText(snapshot.queues.pendingInputRequestId)}`);
 	let characters = 0;
 	const transcript = maxItems === 0 ? [] : snapshot.transcript.slice(-maxItems);
 	for (const item of transcript) {
