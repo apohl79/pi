@@ -433,6 +433,14 @@ describe("PiServer v2 operation acceptance", () => {
 			command: "diagnostics/timeline",
 			payload: { sessionId: "session-1", operationId: "operation-1" },
 		});
+		const malformedTimeline = await client.request({
+			command: "diagnostics/timeline",
+			payload: { afterSeq: "3" },
+		});
+		expect(malformedTimeline).toMatchObject({
+			ok: false,
+			error: { message: "diagnostics/timeline afterSeq must be a number" },
+		});
 		const exported = await client.request({ command: "diagnostics/export" });
 		const scopedExport = await client.request({
 			command: "diagnostics/export",
