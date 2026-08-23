@@ -283,6 +283,15 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: { items: [{ reference: "project:notes.ts", kind: "file" }] },
 		});
+		const malformedComplete = await client.request({
+			command: "filesystem/complete",
+			sessionId: "session-1",
+			payload: { prefix: 42 },
+		});
+		expect(malformedComplete).toMatchObject({
+			ok: false,
+			error: { code: "request_failed", message: "filesystem/complete prefix must be a string" },
+		});
 		const read = await client.request({
 			command: "filesystem/reference/read",
 			sessionId: "session-1",

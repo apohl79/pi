@@ -1064,7 +1064,9 @@ export class PiServerV2 {
 	private async completeFiles(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("filesystem/complete requires sessionId");
 		const payload = objectPayload(command);
-		const prefix = typeof payload.prefix === "string" ? payload.prefix : "";
+		if (payload.prefix !== undefined && typeof payload.prefix !== "string")
+			throw new Error("filesystem/complete prefix must be a string");
+		const prefix = payload.prefix === undefined ? "" : payload.prefix;
 		await this.sendResponse(state, id, {
 			command: command.command,
 			items: await this.files.complete(command.sessionId, prefix),
