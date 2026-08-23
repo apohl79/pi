@@ -13,7 +13,7 @@ import {
 	type GoalManager,
 	type HarnessTool,
 } from "@earendil-works/pi-agent-core";
-import type { Static, TSchema } from "typebox";
+import { type Static, type TSchema, Type } from "typebox";
 import { getExperimentalToolSampling } from "../core/experimental.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "../core/system-prompt.ts";
 import { bashToolSystemPromptContribution } from "../core/tools/bash.ts";
@@ -21,6 +21,35 @@ import { editToolSystemPromptContribution } from "../core/tools/edit.ts";
 import { readToolSystemPromptContribution } from "../core/tools/read.ts";
 import { writeToolSystemPromptContribution } from "../core/tools/write.ts";
 import type { ModelInstructionResolver, ResolvedModelInstructionProfile } from "./model-instructions.ts";
+
+export interface CodingAgentInputQuestion {
+	id: string;
+	prompt: string;
+	options?: readonly { label: string; value?: string }[];
+	allowFreeform?: boolean;
+}
+
+export interface CodingAgentInputRequest {
+	questions: readonly CodingAgentInputQuestion[];
+	autoResolutionMs?: number;
+}
+
+export type CodingAgentInputResponse = Readonly<Record<string, string>>;
+
+const requestUserInputSchema = Type.Object({
+	questions: Type.Array(
+		Type.Object({
+			id: Type.String({ minLength: 1 }),
+			prompt: Type.String({ minLength: 1 }),
+			options: Type.Optional(
+				Type.Array(Type.Object({ label: Type.String({ minLength: 1 }), value: Type.Optional(Type.String()) })),
+			),
+			allowFreeform: Type.Optional(Type.Boolean()),
+		}),
+		{ minItems: 1, maxItems: 3 },
+	),
+	autoResolutionMs: Type.Optional(Type.Integer({ minimum: 0 })),
+});
 
 export interface CodingAgentHarnessTool extends HarnessTool {
 	promptSnippet?: string;
@@ -50,6 +79,10 @@ export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOption
 	tools?: CodingAgentHarnessTool[];
 	systemPromptOptions?: Omit<BuildSystemPromptOptions, "cwd" | "promptGuidelines" | "selectedTools" | "toolSnippets">;
 	modelInstructions?: { resolver: ModelInstructionResolver; scope?: "root" | "subagent" };
+	requestUserInput?: (
+		request: CodingAgentInputRequest,
+		signal: AbortSignal | undefined,
+	) => Promise<CodingAgentInputResponse>;
 }
 
 export interface BuildCodingAgentHarnessSystemPromptOptions {
@@ -160,6 +193,19 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 					promptGuidelines: [],
 				})),
 			);
+		}
+		if (options.requestUserInput) {
+			const requestUserInput = options.requestUserInput;
+			tools.push({
+				name: "request_user_input",
+				label: "request_user_input",
+				description: "Ask the user one to three structured questions and wait for their response.",
+				parameters: requestUserInputSchema,
+				execute: async (_toolCallId, input, signal) => {
+					const response = await requestUserInput(input as Static<typeof requestUserInputSchema>, signal);
+					return { content: [{ type: "text", text: JSON.stringify(response) }], details: { response } };
+				},
+			});
 		}
 	}
 	const activeToolNames = [...(providedActiveToolNames ?? tools.map((tool) => tool.name))];
