@@ -5,7 +5,7 @@ import { describe, expect, test } from "vitest";
 import { InMemoryV2PluginRegistry, JsonV2PluginRegistry } from "../src/plugins.ts";
 
 describe("InMemoryV2PluginRegistry", () => {
-	test("tracks marketplace and plugin lifecycle with manifest provenance", async () => {
+	test("tracks marketplace and plugin lifecycle with package provenance", async () => {
 		const registry = new InMemoryV2PluginRegistry();
 		await registry.addMarketplace("local", "/workspace/plugins");
 		const plugin = await registry.installPlugin({
@@ -36,6 +36,7 @@ describe("InMemoryV2PluginRegistry", () => {
 
 		expect(plugin).toMatchObject({
 			id: "reviewer@local",
+			provenance: "package",
 			manifestDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
 			enabled: true,
 			resources: { skills: ["skills/review"], commands: ["commands/review"], apps: 1, hooks: 1 },
@@ -91,12 +92,23 @@ describe("InMemoryV2PluginRegistry", () => {
 		await registry.addMarketplace("local", "/workspace/plugins");
 		await registry.installPlugin({ name: "reviewer", marketplace: "local", version: "1", manifest: {} });
 
-		expect(await registry.upgradePlugin("reviewer@local", "2")).toMatchObject({ version: "2" });
+		expect(await registry.upgradePlugin("reviewer@local", "2")).toMatchObject({
+			version: "2",
+			provenance: "manifest",
+		});
+		expect(
+			await registry.upgradePlugin(
+				"reviewer@local",
+				"3",
+				{ name: "reviewer", version: "3" },
+				"/workspace/plugins/reviewer",
+			),
+		).toMatchObject({ version: "3", provenance: "package" });
 		await expect(registry.upgradePlugin("reviewer@local", "  ")).rejects.toThrow("plugin version must not be empty");
 		await expect(registry.upgradePlugin("missing@local", "2")).rejects.toThrow("Unknown plugin");
 
 		const reopened = new JsonV2PluginRegistry(path);
-		expect(await reopened.readPlugin("reviewer@local")).toMatchObject({ version: "2" });
+		expect(await reopened.readPlugin("reviewer@local")).toMatchObject({ version: "3", provenance: "package" });
 	});
 
 	test("does not follow a temporary symlink when writing state", async () => {

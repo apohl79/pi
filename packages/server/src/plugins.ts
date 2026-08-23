@@ -375,7 +375,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 			...(input.root === undefined ? {} : { root: input.root }),
 			enabled: true,
 			scope: input.scope ?? "user",
-			provenance: "manifest",
+			provenance: input.root === undefined ? "manifest" : "package",
 			resources: {
 				skills: Array.isArray(manifest.skills)
 					? manifest.skills.filter((value): value is string => typeof value === "string")
@@ -420,6 +420,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 						...existing,
 						version: normalizedVersion,
 						manifestDigest: manifestDigest(manifest),
+						provenance: root === undefined ? existing.provenance : "package",
 						...(root === undefined ? {} : { root }),
 						resources: {
 							skills: Array.isArray(manifest.skills)
