@@ -312,6 +312,29 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(phaseEvent).toMatchObject({ event: "session_phase_changed", payload: { phase: "idle" } });
 	});
 
+	test("emits an operation-updated event when execution starts", async () => {
+		const service = new TestService();
+		const server = new PiServerV2(service, { listeners: [], serverId: "operation-updated-events" });
+		await server.start();
+		servers.push(server);
+		const client = connectInMemoryTestClientV2(server.accept.bind(server));
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const accepted = await client.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { text: "hello" },
+		});
+		expect(accepted).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+		const updated = await client.next((message) => message.type === "event" && message.event === "operation_updated");
+		expect(updated).toMatchObject({
+			event: "operation_updated",
+			operationId: expect.any(String),
+			payload: { state: "running" },
+		});
+		service.sessions.get("session-1")!.release.resolve(undefined);
+	});
+
 	test("emits a usage event when an operation changes the usage aggregate", async () => {
 		const service = new TestService();
 		service.sessions.get("session-1")!.usageUpdated = true;
