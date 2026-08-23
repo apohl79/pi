@@ -68,6 +68,15 @@ describe("coding-agent SQLite v2 service", () => {
 					model: "coding-agent-v2-sqlite-model",
 					mode: "append",
 					text: "Use SQLite fixtures.",
+					applyTo: ["root"],
+				},
+				{
+					id: "sqlite-child-profile",
+					provider: faux.getModel().provider,
+					model: "coding-agent-v2-sqlite-model",
+					mode: "append",
+					text: "Use child SQLite fixtures.",
+					applyTo: ["subagent"],
 				},
 			],
 			{ cwd: directory },
@@ -112,6 +121,16 @@ describe("coding-agent SQLite v2 service", () => {
 				id: "sqlite-profile",
 				source: "text",
 			});
+			const child = await service.createSession!({
+				id: "sqlite-child-session",
+				parentSessionId: "sqlite-session",
+				cwd: directory,
+				model: { provider: faux.getModel().provider, id: faux.getModel().id },
+			});
+			expect((await child.runtime.snapshot()).instructionProfile).toMatchObject({
+				id: "sqlite-child-profile",
+				source: "text",
+			});
 			const enabledPluginSetHash = (await created.runtime.snapshot()).pluginSetHash;
 			await pluginRegistry.setEnabled("snapshot-plugin@local", false);
 			expect((await created.runtime.snapshot()).pluginSetHash).not.toBe(enabledPluginSetHash);
@@ -135,8 +154,9 @@ describe("coding-agent SQLite v2 service", () => {
 				source: "mixed",
 			});
 			expect((await created.runtime.snapshot()).instructionProfile).toBeUndefined();
-			expect(await service.listSessions()).toMatchObject([{ id: "sqlite-session", sessionName: "SQLite session" }]);
+			expect((await service.listSessions()).some((item) => item.id === "sqlite-session")).toBe(true);
 			await service.openSession("sqlite-session");
+			await service.deleteSession!(child.sessionId);
 			await service.deleteSession!("sqlite-session");
 			expect(await service.listSessions()).toEqual([]);
 		} finally {

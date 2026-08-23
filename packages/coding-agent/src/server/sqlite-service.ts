@@ -119,6 +119,12 @@ export async function createCodingAgentV2SqliteService(
 		const planRegistry = options.plans;
 		const agentRegistry =
 			typeof options.agentRegistry === "function" ? options.agentRegistry() : options.agentRegistry;
+		const modelInstructions: CreateCodingAgentHarnessOptions["modelInstructions"] = options.harness?.modelInstructions
+			? {
+					...options.harness.modelInstructions,
+					scope: metadata.parentSessionId === undefined ? ("root" as const) : ("subagent" as const),
+				}
+			: undefined;
 		const activePlugins = options.pluginRegistry
 			? (await options.pluginRegistry.listPlugins(true)).filter((plugin) => plugin.enabled)
 			: [];
@@ -238,6 +244,7 @@ export async function createCodingAgentV2SqliteService(
 					};
 		const created = await createCodingAgentHarness({
 			...options.harness,
+			...(modelInstructions === undefined ? {} : { modelInstructions }),
 			...(systemPromptOptions === undefined ? {} : { systemPromptOptions }),
 			session,
 			models: options.models,
@@ -299,12 +306,12 @@ export async function createCodingAgentV2SqliteService(
 		});
 		const goalContinuation = options.goalContinuation?.({ goals, harness: created.harness, model });
 		const instructionProfile =
-			options.harness?.modelInstructions === undefined
+			modelInstructions === undefined
 				? undefined
 				: async () => {
-						const resolved = await options.harness!.modelInstructions!.resolver.resolve(
+						const resolved = await modelInstructions.resolver.resolve(
 							await created.harness.getModel(),
-							options.harness!.modelInstructions!.scope,
+							modelInstructions.scope,
 						);
 						return resolved === undefined
 							? undefined
