@@ -78,6 +78,14 @@ describe("coding-agent SQLite v2 service", () => {
 					text: "Use child SQLite fixtures.",
 					applyTo: ["subagent"],
 				},
+				{
+					id: "sqlite-small-profile",
+					provider: faux.getModel().provider,
+					model: "coding-agent-v2-sqlite-small-model",
+					mode: "append",
+					text: "Use small-model fixtures.",
+					applyTo: ["root"],
+				},
 			],
 			{ cwd: directory },
 		);
@@ -131,6 +139,7 @@ describe("coding-agent SQLite v2 service", () => {
 				id: "sqlite-child-profile",
 				source: "text",
 			});
+			const transcriptBeforeModelSwitch = (await created.runtime.snapshot()).transcript;
 			const enabledPluginSetHash = (await created.runtime.snapshot()).pluginSetHash;
 			await pluginRegistry.setEnabled("snapshot-plugin@local", false);
 			expect((await created.runtime.snapshot()).pluginSetHash).not.toBe(enabledPluginSetHash);
@@ -153,7 +162,11 @@ describe("coding-agent SQLite v2 service", () => {
 				keepRecentTokens: 789,
 				source: "mixed",
 			});
-			expect((await created.runtime.snapshot()).instructionProfile).toBeUndefined();
+			expect((await created.runtime.snapshot()).instructionProfile).toMatchObject({
+				id: "sqlite-small-profile",
+				source: "text",
+			});
+			expect((await created.runtime.snapshot()).transcript).toEqual(transcriptBeforeModelSwitch);
 			expect((await service.listSessions()).some((item) => item.id === "sqlite-session")).toBe(true);
 			await service.openSession("sqlite-session");
 			await service.deleteSession!(child.sessionId);
