@@ -56,6 +56,7 @@ function snapshot(overrides: Partial<SessionSnapshotV2> = {}): SessionSnapshotV2
 function memoryTransport() {
 	let handlers: ByteTransportHandlers | undefined;
 	let failNextCommand: CommandV2["command"] | undefined;
+	let overrideResult: { command: CommandV2["command"]; result: JsonValue } | undefined;
 	const sent: ServerMessageV2[] = [];
 	const requests: CommandV2[] = [];
 	const transport: ByteTransport = {
@@ -88,6 +89,18 @@ function memoryTransport() {
 					ok: false,
 					error: { code: "invalid_request", message: "forced attach failure" },
 				};
+				sent.push(response);
+				handlers?.onData(encodeServerMessageV2(response));
+				return;
+			}
+			if (overrideResult?.command === message.request.command) {
+				const response: ServerMessageV2 = {
+					type: "response",
+					id: message.id,
+					ok: true,
+					result: overrideResult.result,
+				};
+				overrideResult = undefined;
 				sent.push(response);
 				handlers?.onData(encodeServerMessageV2(response));
 				return;
@@ -447,6 +460,9 @@ function memoryTransport() {
 		failNext(command: CommandV2["command"]) {
 			failNextCommand = command;
 		},
+		overrideNextResult(command: CommandV2["command"], result: JsonValue) {
+			overrideResult = { command, result };
+		},
 		sent,
 		requests,
 		deliver(message: ServerMessageV2) {
@@ -679,6 +695,18 @@ describe("RemoteV2Session", () => {
 			payload: { agent: { id: "agent-1", path: "/root", taskName: "child", state: "running", model: {} } },
 		});
 		expect(session.snapshot).toEqual(original);
+		await session.dispose();
+	});
+
+	test("rejects process and blob responses with invalid numeric fields", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		pair.overrideNextResult("process/read", { output: { output: "hi", cursor: -1, truncated: false } });
+		await expect(session.readProcess("process-1")).rejects.toThrow("Invalid process/read response");
+		pair.overrideNextResult("blob/stat", { blob: { digest: "sha256:blob", mimeType: "text/plain", size: 1.5 } });
+		await expect(session.statBlob("sha256:blob")).rejects.toThrow("Invalid blob/stat response");
 		await session.dispose();
 	});
 
