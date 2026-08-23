@@ -183,26 +183,11 @@ describe("AgentHarness v2 scaffold", () => {
 
 	it("rejects every unfinished public operation explicitly", async () => {
 		const harness = await createHarness();
-		let callbackCalled = false;
 		const unfinished: [string, () => unknown | Promise<unknown>][] = [
 			["skill", () => harness.skill("skill")],
 			["promptFromTemplate", () => harness.promptFromTemplate("template")],
 			["navigateTree", () => harness.navigateTree(null)],
 			["resume", () => harness.resume()],
-			["abort", () => harness.abort()],
-			["steer", () => harness.steer(userMessage)],
-			["followUp", () => harness.followUp(userMessage)],
-			["nextRun", () => harness.nextRun(userMessage)],
-			["cancelQueued", () => harness.cancelQueued("queued")],
-			["recordUsage", () => harness.recordUsage(usage)],
-			["waitForIdle", () => harness.waitForIdle()],
-			[
-				"runWhenIdle",
-				() =>
-					harness.runWhenIdle(() => {
-						callbackCalled = true;
-					}),
-			],
 			["peekAction", () => harness.peekAction()],
 			["executeAction", () => harness.executeAction()],
 			["runToCompletion", () => harness.runToCompletion()],
@@ -219,9 +204,53 @@ describe("AgentHarness v2 scaffold", () => {
 				operation,
 			});
 		}
-		expect(callbackCalled).toBe(false);
 		expect(() => harness.hooks.on("before_run", () => {})).toThrow(HarnessNotImplemented);
 		expect(() => harness.events.on("event", () => {})).toThrow(HarnessNotImplemented);
+	});
+
+	it("supports prompt lifecycle, queues, usage recording, and idle waiting", async () => {
+		const session = createSession("implemented-operations");
+		const harness = await createHarness(session);
+
+		await expect(harness.waitForIdle()).resolves.toBeUndefined();
+		let callbackCalled = false;
+		await harness.runWhenIdle(() => {
+			callbackCalled = true;
+		});
+		expect(callbackCalled).toBe(true);
+
+		await expect(harness.steer(userMessage)).resolves.toMatchObject({
+			ok: false,
+			error: { name: "NoActiveRun" },
+		});
+		await expect(harness.followUp(userMessage)).resolves.toMatchObject({
+			ok: false,
+			error: { name: "NoActiveRun" },
+		});
+
+		const nextRun = await harness.nextRun(userMessage);
+		expect(nextRun.ok).toBe(true);
+		if (!nextRun.ok) return;
+		await expect(harness.cancelQueued(nextRun.value.entryId)).resolves.toEqual({
+			ok: true,
+			value: { outcome: "cancelled" },
+		});
+		await expect(harness.cancelQueued(nextRun.value.entryId)).resolves.toEqual({
+			ok: true,
+			value: { outcome: "already_cleared" },
+		});
+
+		await expect(harness.recordUsage(usage)).resolves.toEqual({ ok: true, value: undefined });
+		expect(await session.findRecords({ type: "usage", lane: "main" })).toHaveLength(1);
+
+		await session.appendRecord(operationStarted("run"));
+		const steer = await harness.steer(userMessage);
+		const followUp = await harness.followUp(userMessage);
+		expect(steer.ok).toBe(true);
+		expect(followUp.ok).toBe(true);
+		await expect(harness.abort()).resolves.toMatchObject({ ok: true, value: { runId: "run" } });
+		await expect(harness.waitForIdle()).resolves.toBeUndefined();
+		expect(await session.findRecords({ type: "operation_finished", lane: "main" })).toHaveLength(1);
 	});
 
 	it("reports the closed state for operations after close", async () => {

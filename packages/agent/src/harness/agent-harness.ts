@@ -456,6 +456,10 @@ export class AgentHarness implements AgentLane {
 		| undefined;
 	private readonly finishedOperations = new Set<string>();
 	private readonly finishingOperations = new Map<string, Promise<void>>();
+	/** Serializes durable lifecycle mutations (abort, terminal records, queue admission). */
+	private lifecycleTail: Promise<void> = Promise.resolve();
+	/** Queue entries claimed by an in-flight run before their transcript entry is durable. */
+	private readonly claimedQueueItems = new Set<string>();
 	private missingModels: string[] = [];
 	private missingTools: string[] = [];
 	private static readonly finishedOperationCacheLimit = 1024;
@@ -604,6 +608,29 @@ export class AgentHarness implements AgentLane {
 			throw error;
 		}
 		const runId = localRunId;
+		const claimedQueueIds = new Set<string>();
+		let nextRunItems: ProvisionedEntry[];
+		try {
+			nextRunItems = await this.claimQueueItems("nextRun", undefined, claimedQueueIds);
+		} catch (error) {
+			// Queue discovery happens before operation_started is durable. A storage
+			// failure here must not strand the local lane admission or its completion
+			// promise, otherwise subsequent prompts and aborts observe a phantom run.
+			this.releaseQueueClaims(claimedQueueIds);
+			release();
+			throw error;
+		}
+		const initialMessages = [
+			...nextRunItems,
+			...prompts.map((message) => ({
+				type: "message" as const,
+				id: this.durableSession.idGenerator.next(),
+				message: durableClone(message),
+			})),
+		];
+		const messageTargets = new Map<AgentMessage, ProvisionedEntry>();
+		for (const item of nextRunItems) messageTargets.set(item.message, item);
+		prompts.forEach((message, index) => messageTargets.set(message, initialMessages[nextRunItems.length + index]!));
 		let started: NewRecord<OperationStartedRecord>;
 		try {
 			started = {
@@ -614,14 +641,11 @@ export class AgentHarness implements AgentLane {
 				intent: {
 					kind: "run",
 					originalPrompt: durableClone(prompts),
-					initialMessages: prompts.map((message) => ({
-						type: "message",
-						id: this.durableSession.idGenerator.next(),
-						message: durableClone(message),
-					})),
+					initialMessages,
 				},
 			};
 		} catch (error) {
+			this.releaseQueueClaims(claimedQueueIds);
 			release();
 			throw error;
 		}
@@ -634,6 +658,7 @@ export class AgentHarness implements AgentLane {
 				// Some remote stores can commit before reporting a transport error.
 				// Continue the operation when our own start is durably visible.
 			} else if (raced.length > 0) {
+				this.releaseQueueClaims(claimedQueueIds);
 				release();
 				return ResultValue.err(
 					new LaneBusy({
@@ -644,6 +669,7 @@ export class AgentHarness implements AgentLane {
 					}),
 				);
 			} else {
+				this.releaseQueueClaims(claimedQueueIds);
 				release();
 				throw error;
 			}
@@ -657,7 +683,7 @@ export class AgentHarness implements AgentLane {
 					: (this.systemPromptSource ?? "");
 			const activeTools = this.tools.filter((tool) => this.activeToolNames.includes(tool.name));
 			const newMessages = await runAgentLoop(
-				prompts,
+				[...nextRunItems.map((item) => item.message), ...prompts],
 				{ systemPrompt, messages: persisted.messages, tools: activeTools },
 				{
 					...this.streamOptions,
@@ -669,7 +695,17 @@ export class AgentHarness implements AgentLane {
 							messages.filter(
 								(message): message is Message =>
 									message.role === "user" || message.role === "assistant" || message.role === "toolResult",
-							)),
+								)),
+					getSteeringMessages: async () => {
+						const selected = await this.claimQueueItems("steer", runId, claimedQueueIds, this.steeringMode);
+						for (const item of selected) messageTargets.set(item.message, item);
+						return selected.map((item) => item.message);
+					},
+					getFollowUpMessages: async () => {
+						const selected = await this.claimQueueItems("followUp", runId, claimedQueueIds, this.followUpMode);
+						for (const item of selected) messageTargets.set(item.message, item);
+						return selected.map((item) => item.message);
+					},
 				},
 				async () => {},
 					controller.signal,
@@ -677,8 +713,12 @@ export class AgentHarness implements AgentLane {
 			);
 			let finalEntryId: string | undefined;
 			const transcriptMessages = newMessages.map(sanitizeTranscriptMessage);
-			for (const message of transcriptMessages) {
-				finalEntryId = await this.durableSession.appendMessage(durableClone(message));
+			for (const [index, message] of transcriptMessages.entries()) {
+				const sourceMessage = newMessages[index];
+				const target = messageTargets.get(sourceMessage);
+				finalEntryId = target
+					? (await this.durableSession.appendEntry({ ...target, message: durableClone(message) }, "main")).id
+					: await this.durableSession.appendMessage(durableClone(message));
 			}
 			const finalMessage = transcriptMessages.at(-1);
 			if (!finalEntryId || !finalMessage || finalMessage.role !== "assistant")
@@ -716,6 +756,7 @@ export class AgentHarness implements AgentLane {
 				error: { code: "run_failed", message },
 			});
 		} finally {
+			this.releaseQueueClaims(claimedQueueIds);
 			release();
 		}
 	}
@@ -728,7 +769,7 @@ export class AgentHarness implements AgentLane {
 		if (this.finishedOperations.has(runId)) return;
 		const existingAttempt = this.finishingOperations.get(runId);
 		if (existingAttempt) return existingAttempt;
-		const attempt = (async () => {
+		const attempt = this.withLifecycleLock(async () => {
 			const existing = await this.durableSession.findRecords({ type: "operation_finished", runId, limit: 1 });
 			if (existing.length > 0) {
 				this.rememberFinishedOperation(runId);
@@ -770,7 +811,7 @@ export class AgentHarness implements AgentLane {
 			}
 			if (lastError !== undefined) throw lastError;
 			this.rememberFinishedOperation(runId);
-		})();
+		});
 		this.finishingOperations.set(runId, attempt);
 		try {
 			await attempt;
@@ -779,11 +820,68 @@ export class AgentHarness implements AgentLane {
 		}
 	}
 
+	private withLifecycleLock<T>(operation: () => Promise<T>): Promise<T> {
+		const previous = this.lifecycleTail;
+		let release!: () => void;
+		this.lifecycleTail = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		return previous
+			.catch(() => undefined)
+			.then(operation)
+			.finally(release);
+	}
+
 	private rememberFinishedOperation(runId: string): void {
 		this.finishedOperations.add(runId);
 		if (this.finishedOperations.size <= AgentHarness.finishedOperationCacheLimit) return;
 		const oldest = this.finishedOperations.values().next().value as string | undefined;
 		if (oldest !== undefined) this.finishedOperations.delete(oldest);
+	}
+
+	private async pendingQueueItems(
+		queue: QueueEnqueuedRecord["queue"],
+		runId?: string,
+	): Promise<ProvisionedEntry[]> {
+		const records = await this.durableSession.findRecords({ type: "queue_enqueued", lane: "main", order: "oldestFirst" });
+		const cancelled = new Set(
+			(await this.durableSession.findRecords({ type: "queue_cancelled", lane: "main" })).map((record) => record.entryId),
+		);
+		const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
+		const existing = new Set(entries.map((entry) => entry.id));
+		return records
+			.filter(
+				(record): record is QueueEnqueuedRecord =>
+					record.queue === queue &&
+					(queue === "nextRun" || record.runId === runId) &&
+					!cancelled.has(record.target.id) &&
+					!existing.has(record.target.id) &&
+					record.target.type === "message",
+			)
+			.map((record) => ({ ...record.target, message: structuredClone(record.target.message) }));
+	}
+
+	private async claimQueueItems(
+		queue: QueueEnqueuedRecord["queue"],
+		runId: string | undefined,
+		localClaims: Set<string>,
+		mode?: QueueMode,
+	): Promise<ProvisionedEntry[]> {
+		return this.withLifecycleLock(async () => {
+			const items = (await this.pendingQueueItems(queue, runId)).filter(
+				(item) => !localClaims.has(item.id) && !this.claimedQueueItems.has(item.id),
+			);
+			const selected = mode === "all" ? items : mode === undefined ? items : items.slice(0, 1);
+			for (const item of selected) {
+				localClaims.add(item.id);
+				this.claimedQueueItems.add(item.id);
+			}
+			return selected;
+		});
+	}
+
+	private releaseQueueClaims(claims: Set<string>): void {
+		for (const entryId of claims) this.claimedQueueItems.delete(entryId);
 	}
 
 	private normalizePromptInput(
@@ -1014,34 +1112,188 @@ export class AgentHarness implements AgentLane {
 		return this.unavailable("resume");
 	}
 	async abort(): Promise<AbortResult> {
-		return this.unavailable("abort");
+		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		const request = await this.withLifecycleLock(async () => {
+			if (this.closed) return undefined;
+			// Recheck under the same lifecycle lock used by finishOperation. This
+			// prevents an abort marker from being appended after a terminal record.
+			const openRun = (await this.durableSession.findOpenOperations("main", { limit: 1 })).find(
+				(operation) => operation.intent.kind === "run",
+			);
+			const active = this.activeOperation?.kind === "run" ? this.activeOperation : undefined;
+			// prompt() admits a local run before operation_started is durable. In
+			// that window there is no record to mark, but abort still needs to signal
+			// and await the local operation rather than reporting a phantom idle lane.
+			if (!openRun && active) return { runId: active.id, active, durable: false, recalled: { steer: [], followUp: [] } };
+			if (!openRun) return undefined;
+			const durableActive = active?.id === openRun.id ? active : undefined;
+			await this.durableSession.appendRecord({
+				type: "abort_requested",
+				id: this.durableSession.idGenerator.next(),
+				lane: "main",
+				runId: openRun.id,
+			});
+			const queued = await this.durableSession.findRecords({
+				type: "queue_enqueued",
+				lane: "main",
+				order: "oldestFirst",
+			});
+			const cancelled = new Set(
+				(await this.durableSession.findRecords({ type: "queue_cancelled", lane: "main" })).map(
+					(record) => record.entryId,
+				),
+			);
+			const recalled = { steer: [] as AgentMessage[], followUp: [] as AgentMessage[] };
+			for (const item of queued) {
+				if (
+					item.queue === "nextRun" ||
+					item.runId !== openRun.id ||
+					cancelled.has(item.target.id) ||
+					this.claimedQueueItems.has(item.target.id) ||
+					item.target.type !== "message"
+				)
+					continue;
+				recalled[item.queue].push(structuredClone(item.target.message));
+				cancelled.add(item.target.id);
+				await this.durableSession.appendRecord({
+					type: "queue_cancelled",
+					id: this.durableSession.idGenerator.next(),
+					lane: "main",
+					runId: openRun.id,
+					entryId: item.target.id,
+				} satisfies NewRecord<QueueCancelledRecord>);
+			}
+			return { runId: openRun.id, active: durableActive, durable: true, recalled };
+		});
+		if (!request) return ResultValue.err(new NoActiveOperation({ lane: "main", message: "No active operation" }));
+		request.active?.controller.abort();
+		await request.active?.done;
+		if (!request.durable) return ResultValue.ok({ runId: request.runId, ...request.recalled });
+		// Remote/recovered runs have no local controller. Persist a durable
+		// terminal outcome rather than waiting on an unrelated local operation.
+		await this.finishOperation(request.runId, "aborted", { code: "aborted", message: "Run aborted" });
+		return ResultValue.ok({ runId: request.runId, ...request.recalled });
 	}
 	async steer(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
 	async steer(_message: AgentMessage): Promise<QueueResult>;
-	async steer(_input: string | AgentMessage, _images?: ImageContent[]): Promise<QueueResult> {
-		return this.unavailable("steer");
+	async steer(input: string | AgentMessage, images?: ImageContent[]): Promise<QueueResult> {
+		return this.enqueue(input, images, "steer", true);
 	}
 	async followUp(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
 	async followUp(_message: AgentMessage): Promise<QueueResult>;
-	async followUp(_input: string | AgentMessage, _images?: ImageContent[]): Promise<QueueResult> {
-		return this.unavailable("followUp");
+	async followUp(input: string | AgentMessage, images?: ImageContent[]): Promise<QueueResult> {
+		return this.enqueue(input, images, "followUp", true);
 	}
 	async nextRun(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
 	async nextRun(_message: AgentMessage): Promise<QueueResult>;
-	async nextRun(_input: string | AgentMessage, _images?: ImageContent[]): Promise<QueueResult> {
-		return this.unavailable("nextRun");
+	async nextRun(input: string | AgentMessage, images?: ImageContent[]): Promise<QueueResult> {
+		return this.enqueue(input, images, "nextRun", false);
 	}
-	async cancelQueued(_entryId: string): Promise<CancelQueuedResult> {
-		return this.unavailable("cancelQueued");
+	async cancelQueued(entryId: string): Promise<CancelQueuedResult> {
+		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		return this.withLifecycleLock(async () => {
+			if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+			const enqueued = (await this.durableSession.findRecords({ type: "queue_enqueued", lane: "main" })).find(
+				(record) => record.target.id === entryId,
+			);
+			if (!enqueued)
+				return ResultValue.err(new UnknownQueueItem({ lane: "main", entryId, message: "Queued item not found" }));
+			const cancelled = (await this.durableSession.findRecords({ type: "queue_cancelled", lane: "main" })).some(
+				(record) => record.entryId === entryId,
+			);
+			if (cancelled) return ResultValue.ok({ outcome: "already_cleared" });
+			if (this.claimedQueueItems.has(entryId)) return ResultValue.ok({ outcome: "already_consumed" });
+			const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
+			if (entries.some((entry) => entry.id === entryId)) return ResultValue.ok({ outcome: "already_consumed" });
+			await this.durableSession.appendRecord(
+				enqueued.queue === "nextRun"
+					? { type: "queue_cancelled", id: this.durableSession.idGenerator.next(), lane: "main", entryId }
+					: {
+							type: "queue_cancelled",
+							id: this.durableSession.idGenerator.next(),
+							lane: "main",
+							runId: enqueued.runId,
+							entryId,
+						} satisfies NewRecord<QueueCancelledRecord>,
+			);
+			return ResultValue.ok({ outcome: "cancelled" });
+		});
 	}
-	async recordUsage(_usage: Usage, _options?: { entryId?: string; details?: JsonValue }): Promise<RecordUsageResult> {
-		return this.unavailable("recordUsage");
+
+	private async enqueue(
+		input: string | AgentMessage,
+		images: ImageContent[] | undefined,
+		queue: QueueEnqueuedRecord["queue"],
+		requiresRun: boolean,
+	): Promise<QueueResult> {
+		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		const message: AgentMessage =
+			typeof input === "string"
+				? { role: "user", content: [{ type: "text", text: input }, ...(images ?? [])], timestamp: Date.now() }
+				: structuredClone(input);
+		const target: ProvisionedEntry = { type: "message", id: this.durableSession.idGenerator.next(), message };
+		return this.withLifecycleLock(async () => {
+			if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+			const openRun = (await this.durableSession.findOpenOperations("main", { limit: 1 })).find(
+				(operation) => operation.intent.kind === "run",
+			);
+			const localRun = this.activeOperation?.kind === "run" ? this.activeOperation : undefined;
+			const runId = openRun?.id ?? localRun?.id;
+			const aborting = runId
+				? (await this.durableSession.findRecords({ type: "abort_requested", lane: "main" })).some(
+						(record) => record.runId === runId,
+					)
+				: false;
+			if (requiresRun && (!runId || aborting)) return ResultValue.err(new NoActiveRun({ lane: "main", message: "No active run" }));
+			const record: NewRecord<QueueEnqueuedRecord> =
+				queue === "nextRun"
+					? { type: "queue_enqueued", id: this.durableSession.idGenerator.next(), lane: "main", queue, target }
+					: {
+							type: "queue_enqueued",
+							id: this.durableSession.idGenerator.next(),
+							lane: "main",
+							queue,
+							runId: runId!,
+							target,
+						};
+			await this.durableSession.appendRecord(record);
+			return ResultValue.ok({ entryId: target.id });
+		});
+	}
+	async recordUsage(usage: Usage, options?: { entryId?: string; details?: JsonValue }): Promise<RecordUsageResult> {
+		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		try {
+			const record: NewRecord<UsageRecord> = {
+				type: "usage",
+				id: this.durableSession.idGenerator.next(),
+				lane: "main",
+				usage: structuredClone(usage),
+				cause: "adjustment",
+				entryId: options?.entryId,
+				details: options?.details,
+			};
+			await this.durableSession.appendRecord(record);
+			return ResultValue.ok(undefined);
+		} catch (error) {
+			throw new HarnessFault("Unable to persist usage record", error);
+		}
 	}
 	async waitForIdle(): Promise<void> {
-		return this.unavailable("waitForIdle");
+		while (true) {
+			if (this.closed) throw new HarnessClosed();
+			if (this.activeOperation) {
+				await this.activeOperation.done;
+				continue;
+			}
+			const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+			if (open.length === 0) return;
+			await new Promise<void>((resolve) => setTimeout(resolve, 5));
+		}
 	}
-	async runWhenIdle(_callback: () => void | Promise<void>): Promise<void> {
-		return this.unavailable("runWhenIdle");
+	async runWhenIdle(callback: () => void | Promise<void>): Promise<void> {
+		await this.waitForIdle();
+		if (this.closed) throw new HarnessClosed();
+		await callback();
 	}
 	async peekAction(): Promise<ActionInfo | undefined> {
 		return this.unavailable("peekAction");
