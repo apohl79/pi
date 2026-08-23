@@ -1935,6 +1935,7 @@ export class PiServerV2 {
 		if (!command.operationId) throw new Error("operation/read requires operationId");
 		const operation = this.operations.get(command.operationId);
 		if (!operation) throw new Error(`Unknown operation ${command.operationId}`);
+		this.requireSessionReference(state, operation.sessionId);
 		await this.sendResponse(state, id, { command: command.command, operation });
 	}
 
