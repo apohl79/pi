@@ -1,25 +1,27 @@
 import { uuidv7 } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "../../types.ts";
-import type {
-	BranchBounds,
-	Entry,
-	EntryQuery,
-	IdGenerator,
-	LanePointer,
-	LaneRecord,
-	LogItem,
-	LogOptions,
-	NewRecord,
-	OperationStartedRecord,
-	ProvisionedEntry,
-	RecordBase,
-	RecordQuery,
-	SessionMetadata,
-	SessionStats,
-	SessionStorage,
-	SessionTree,
+import { assertBoundedEntryPayload } from "./state.ts";
+import {
+	type BranchBounds,
+	type Entry,
+	type EntryQuery,
+	type IdGenerator,
+	type LanePointer,
+	type LaneRecord,
+	type LogItem,
+	type LogOptions,
+	MAX_DURABLE_COMPACTION_TEXT_LENGTH,
+	type NewRecord,
+	type OperationStartedRecord,
+	type ProvisionedEntry,
+	type RecordBase,
+	type RecordQuery,
+	SessionError,
+	type SessionMetadata,
+	type SessionStats,
+	type SessionStorage,
+	type SessionTree,
 } from "./types.ts";
-import { SessionError } from "./types.ts";
 
 type JsonValidationFrame = { value: unknown } | { exit: object };
 
@@ -285,12 +287,28 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> implem
 
 	private async commitEntry<TEntry extends Entry>(entry: ProvisionedEntry<TEntry>, lane: string): Promise<TEntry> {
 		assertJsonSerializable(entry);
+		assertBoundedEntryPayload(entry as unknown as Entry, (reason) => invalidPayload(reason));
 		return this.storage.appendEntry(entry, lane);
 	}
 
 	private async commitRecord<TNewRecord extends NewRecord>(
 		record: TNewRecord,
 	): Promise<TNewRecord & Pick<RecordBase, "seq" | "timestamp">> {
+		if (record.type === "operation_started") {
+			const intent = record.intent;
+			const customInstructions = "customInstructions" in intent ? intent.customInstructions : undefined;
+			if (customInstructions !== undefined) {
+				if (typeof customInstructions !== "string") {
+					throw new SessionError("invalid_payload", "Operation customInstructions must be a string");
+				}
+				if (customInstructions.length > MAX_DURABLE_COMPACTION_TEXT_LENGTH) {
+					throw new SessionError(
+						"invalid_payload",
+						`Operation customInstructions exceeds ${MAX_DURABLE_COMPACTION_TEXT_LENGTH} characters`,
+					);
+				}
+			}
+		}
 		assertJsonSerializable(record);
 		return this.storage.appendRecord<LaneRecord>(record) as unknown as Promise<
 			TNewRecord & Pick<RecordBase, "seq" | "timestamp">
