@@ -134,6 +134,24 @@ export class HarnessNotImplemented extends Error {
 	}
 }
 
+function deferredHandleFromRegister(value: JsonValue): DeferredHandle | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	const candidate = value as Record<string, JsonValue>;
+	if (
+		typeof candidate.provider !== "string" ||
+		typeof candidate.modelId !== "string" ||
+		typeof candidate.api !== "string" ||
+		typeof candidate.id !== "string"
+	)
+		return undefined;
+	return {
+		provider: candidate.provider,
+		modelId: candidate.modelId,
+		api: candidate.api,
+		id: candidate.id,
+	};
+}
+
 function durableClone<T>(value: T): T {
 	const encoded = JSON.stringify(value);
 	if (encoded === undefined) throw new Error("Durable payload cannot be undefined");
@@ -682,13 +700,24 @@ export class AgentHarness implements AgentLane {
 			for (const operation of operations) {
 				const intent = operation.intent;
 				const cancelling = await harness.isOperationCancelling(operation.id, intent.kind);
+				const transaction = harness.registerSession();
+				const stateRegister = transaction ? await transaction.getRegister("op.state", operation.id) : undefined;
+				const state =
+					stateRegister &&
+					typeof stateRegister.value === "object" &&
+					stateRegister.value !== null &&
+					!Array.isArray(stateRegister.value)
+						? (stateRegister.value as Record<string, JsonValue>)
+						: undefined;
+				const deferred = state?.phase === "deferred" ? deferredHandleFromRegister(state.deferred) : undefined;
 				suspended.push({
 					lane: operation.lane,
 					kind: intent.kind,
 					id: operation.id,
 					startedAt: operation.timestamp,
-					reason: "crash",
+					reason: deferred ? "deferred" : "crash",
 					prompt: intent.kind === "run" ? structuredClone(intent.originalPrompt) : undefined,
+					deferred,
 					aborting: cancelling ? await harness.recoveredAbortPayloads(operation.id) : undefined,
 					missing: { tools: [], models: [...missingModels] },
 				});

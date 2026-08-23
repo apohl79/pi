@@ -208,6 +208,45 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("rehydrates a deferred provider handle after harness recreation", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "deferred-recovery-faux",
+			deferred: { pendingFetches: 0 },
+			models: [{ id: "deferred-recovery-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("resolved after restart")]);
+		const session = createSession("deferred-recovery");
+		const first = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			streamOptions: { deferred: true },
+		});
+		expect(await first.harness.prompt("defer this")).toMatchObject({ ok: true, value: { kind: "suspended" } });
+		const started = (await session.findRecords({ type: "operation_started" }))[0]!;
+		const checkpoint = await session.getRegister("op.state", started.id);
+		await first.harness.close();
+
+		const second = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			streamOptions: { deferred: true },
+		});
+		expect(second.suspended).toMatchObject([{ reason: "deferred", deferred: { provider: faux.provider.id } }]);
+		expect(second.suspended[0]?.deferred).toEqual(
+			(checkpoint?.value as { deferred?: unknown } | undefined)?.deferred,
+		);
+		const resumed = await second.harness.resume();
+
+		expect(resumed).toMatchObject({ ok: true, value: { kind: "completed", runId: expect.any(String) } });
+		expect(faux.state.deferredFetchCount).toBe(1);
+		expect(await session.findOpenOperations("main")).toEqual([]);
+		await second.harness.close();
+	});
+
 	it("rejects deferred resume when its provider model is unavailable", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
