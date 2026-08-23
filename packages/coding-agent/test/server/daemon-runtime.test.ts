@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
+import { AdapterV2WebService } from "@earendil-works/pi-server";
 import { afterEach, describe, expect, test } from "vitest";
 import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemon-runtime.ts";
 
@@ -312,6 +313,51 @@ describe("coding-agent daemon runtime", () => {
 				ok: true,
 				result: { process: { state: "exited", output: "process response" } },
 			});
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("routes configured web requests through the production daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-web-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-web-faux",
+			models: [{ id: "coding-agent-daemon-web-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			web: new AdapterV2WebService({
+				execute: async () => [
+					{ id: "result-1", title: "Configured", source: "faux", retrievedAt: 1, extract: "ok" },
+				],
+			}),
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			expect(created).toMatchObject({ ok: true, result: { session: { id: expect.any(String) } } });
+			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
+			const sessionId = (created.result as { session: { id: string } }).session.id;
+			const response = await client.request({
+				command: "web",
+				sessionId,
+				payload: { operation: "search_query", query: "configured" },
+			});
+			expect(response).toMatchObject({ ok: true, result: { results: [{ id: "result-1", source: "faux" }] } });
 		} finally {
 			client.dispose();
 			await runtime.close();
