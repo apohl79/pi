@@ -370,8 +370,8 @@ export async function createCodingAgentV2SqliteService(
 							const recoveredPending = pendingId !== undefined;
 							const pending =
 								pendingId === undefined
-										? await inputRegistry.create(metadata.id, request.questions, request.autoResolutionMs)
-										: await inputRegistry.read(pendingId);
+									? await inputRegistry.create(metadata.id, request.questions, request.autoResolutionMs)
+									: await inputRegistry.read(pendingId);
 							if (signal?.aborted && !recoveredPending) {
 								if (!disposing) await inputRegistry.cancel(pending.id).catch(() => {});
 								throw new Error("Input request aborted");
