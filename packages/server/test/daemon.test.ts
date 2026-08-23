@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { ServerDaemon, type ServerDaemonServer } from "../src/daemon.ts";
 import { InMemoryForensicRecorder } from "../src/diagnostics.ts";
+import { InMemoryV2ProcessRegistry } from "../src/processes.ts";
 import type { PiServerServiceV2 } from "../src/v2.ts";
 
 function service(): PiServerServiceV2 {
@@ -147,6 +148,41 @@ describe("ServerDaemon", () => {
 			expect((await diagnostics.read()).map((event) => event.kind)).toContain("daemon_unclean_shutdown");
 			await daemon.stop();
 			expect(JSON.parse(await readFile(markerPath, "utf8"))).toMatchObject({ state: "clean" });
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("marks processes lost before serving after an unclean generation", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-lost-processes-"));
+		try {
+			const markerPath = join(directory, "daemon-state.json");
+			await writeFile(
+				markerPath,
+				JSON.stringify({ schemaVersion: 1, daemonInstanceId: "previous", state: "running", timestamp: 1 }),
+			);
+			const processes = new InMemoryV2ProcessRegistry();
+			const process = await processes.start({ sessionId: "session-1", command: "demo" });
+			const diagnostics = new InMemoryForensicRecorder();
+			const daemon = new ServerDaemon({
+				service: service(),
+				socketPath: join(directory, "daemon.sock"),
+				lifecycleMarkerPath: markerPath,
+				diagnostics,
+				processes,
+				createServer: () =>
+					fakeServer(
+						async () => {},
+						async () => {},
+					),
+			});
+
+			await daemon.start();
+			expect(await processes.getSnapshot(process.processId)).toMatchObject({ state: "lost" });
+			expect((await diagnostics.read()).find((event) => event.kind === "daemon_unclean_shutdown")).toMatchObject({
+				payload: { previousDaemonInstanceId: "previous", lostProcesses: 1 },
+			});
+			await daemon.stop();
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}

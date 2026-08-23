@@ -13,6 +13,15 @@ describe("InMemoryV2ProcessRegistry", () => {
 		expect(await registry.wait(started.processId)).toMatchObject({ state: "terminated" });
 	});
 
+	test("marks running in-memory processes lost after an unclean daemon generation", async () => {
+		const registry = new InMemoryV2ProcessRegistry();
+		const started = await registry.start({ sessionId: "session-recovery", command: "demo" });
+
+		expect(await registry.markLost()).toBe(1);
+		expect(await registry.wait(started.processId)).toMatchObject({ state: "lost" });
+		expect(await registry.markLost()).toBe(0);
+	});
+
 	test("keeps UTF-8 byte cursors aligned across multibyte output", async () => {
 		const registry = new InMemoryV2ProcessRegistry({ maxOutputBytes: 5 });
 		const started = await registry.start({ sessionId: "session-unicode", command: "demo" });
@@ -60,6 +69,19 @@ describe("InMemoryV2ProcessRegistry", () => {
 
 		expect((await registry.terminate(started.processId)).state).toBe("terminated");
 		expect(await registry.wait(started.processId)).toMatchObject({ state: "terminated", exitCode: 143 });
+	});
+
+	test("marks a running Node process lost and resolves waiters", async () => {
+		const registry = new NodeV2ProcessRegistry();
+		const started = await registry.start({
+			sessionId: "session-recovery",
+			command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("setInterval(() => {}, 1000)")}`,
+		});
+
+		const waiting = registry.wait(started.processId);
+		expect(await registry.markLost()).toBe(1);
+		expect(await waiting).toMatchObject({ state: "lost" });
+		expect(await registry.getSnapshot(started.processId)).toMatchObject({ state: "lost" });
 	});
 
 	test("parses quoted argv without shell expansion and rejects shell syntax", async () => {

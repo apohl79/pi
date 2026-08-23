@@ -34,6 +34,8 @@ export interface V2ProcessRegistry {
 	read(processId: string, cursor: number): Promise<V2ProcessOutput>;
 	wait(processId: string): Promise<V2ProcessSnapshot>;
 	terminate(processId: string): Promise<V2ProcessSnapshot>;
+	/** Mark processes owned by a daemon generation that did not shut down cleanly. */
+	markLost(): Promise<number>;
 }
 
 /** Host-provided PTY launcher; the server keeps PTY ownership behind this boundary. */
@@ -109,6 +111,16 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 			process.exitCode = 143;
 		}
 		return this.snapshot(process);
+	}
+
+	markLost(): Promise<number> {
+		let count = 0;
+		for (const process of this.processes.values()) {
+			if (process.state !== "running") continue;
+			process.state = "lost";
+			count += 1;
+		}
+		return Promise.resolve(count);
 	}
 
 	private append(process: ProcessState, value: string): void {
@@ -299,6 +311,24 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 			process.terminationTimer.unref();
 		}
 		return this.snapshot(process);
+	}
+
+	markLost(): Promise<number> {
+		let count = 0;
+		for (const process of this.processes.values()) {
+			if (process.state !== "running") continue;
+			process.state = "lost";
+			count += 1;
+			if (process.terminationTimer !== undefined) {
+				clearTimeout(process.terminationTimer);
+				process.terminationTimer = undefined;
+			}
+			signalProcessTree(process.child, "SIGTERM");
+			const snapshot = this.snapshot(process);
+			for (const resolve of process.waiters) resolve(snapshot);
+			process.waiters = [];
+		}
+		return Promise.resolve(count);
 	}
 
 	private finish(process: NodeProcessState, state: V2ProcessState, exitCode: number): void {

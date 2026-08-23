@@ -129,13 +129,15 @@ export class ServerDaemon {
 	private async startInternal(): Promise<void> {
 		this.daemonInstanceId = randomUUID();
 		const previousMarker = await this.readLifecycleMarker();
-		if (previousMarker?.state === "running")
+		if (previousMarker?.state === "running") {
+			const lostProcesses = (await this.options.processes?.markLost()) ?? 0;
 			await this.recordDiagnostic(
 				"daemon_unclean_shutdown",
-				{ previousDaemonInstanceId: previousMarker.daemonInstanceId },
+				{ previousDaemonInstanceId: previousMarker.daemonInstanceId, lostProcesses },
 				"error",
 				"error",
 			);
+		}
 		await this.writeLifecycleMarker("running");
 		await this.recordDiagnostic("daemon_starting", { socketPath: this.options.socketPath }, "started");
 		let server: ServerDaemonServer;
