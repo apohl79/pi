@@ -2,7 +2,12 @@ import { GoalContinuationScheduler, GoalManager, InMemorySessionStorage, Session
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
-import { InMemoryForensicRecorder, InMemoryV2InputRegistry, InMemoryV2PlanRegistry } from "@earendil-works/pi-server";
+import {
+	InMemoryForensicRecorder,
+	InMemoryV2InputRegistry,
+	InMemoryV2PlanRegistry,
+	InMemoryV2UsageLedger,
+} from "@earendil-works/pi-server";
 import { describe, expect, test } from "vitest";
 import { createCodingAgentHarness } from "../../src/server/create-harness.ts";
 import { ServerRuntimeExtensionHost } from "../../src/server/extension-host.ts";
@@ -324,6 +329,48 @@ describe("coding-agent v2 service adapter", () => {
 				}),
 			).resolves.toBeUndefined();
 			expect((await runtime.snapshot()).phase).toBe("idle");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("records compaction responses with compaction usage purpose", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-compaction-usage-faux",
+			models: [{ id: "model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("turn response"), fauxAssistantMessage("compaction summary")]);
+		const session = new Session(new InMemorySessionStorage({ id: "compaction-usage-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({ session, models, model: faux.getModel(), env, tools: [] });
+		const usage = new InMemoryV2UsageLedger();
+		try {
+			const runtime = await createCodingAgentV2Service(models, [
+				{
+					metadata: { id: "compaction-usage-session", createdAt: 1, updatedAt: 1 },
+					harness: created.harness,
+					usage,
+				},
+			]).openSession("compaction-usage-session");
+			await runtime.run("disable-auto-name", {
+				command: "session/name/auto/set",
+				sessionId: "compaction-usage-session",
+				payload: { enabled: false },
+			});
+			await runtime.run("turn", {
+				command: "turn/start",
+				sessionId: "compaction-usage-session",
+				payload: { text: "history" },
+			});
+			await runtime.run("compact", {
+				command: "turn/compact",
+				sessionId: "compaction-usage-session",
+				payload: {},
+			});
+			expect(await usage.read({ purpose: "compaction" })).toHaveLength(1);
 		} finally {
 			await created.harness.close();
 			await env.cleanup();

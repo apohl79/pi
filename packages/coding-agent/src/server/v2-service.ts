@@ -428,8 +428,32 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const ledger = this.definition.usage;
 		if (!ledger) return;
 		const goalId = (await this.definition.goals?.read())?.id;
+		const currentModel = await this.definition.harness.getModel();
 		const entries = await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" });
 		for (const entry of entries) {
+			if (entry.type === "compaction") {
+				if (beforeEntryIds.has(entry.id) || entry.usage === undefined) continue;
+				await ledger.record({
+					responseId: `${operationId}:compaction:${entry.id}`,
+					sessionId: this.definition.metadata.id,
+					agentId: this.definition.metadata.id,
+					operationId,
+					turnId: operationId,
+					...(goalId === undefined ? {} : { goalId }),
+					purpose: "compaction",
+					provider: currentModel.provider,
+					model: currentModel.id,
+					input: entry.usage.input,
+					output: entry.usage.output,
+					cacheRead: entry.usage.cacheRead,
+					cacheWrite: entry.usage.cacheWrite,
+					...(entry.usage.reasoning === undefined ? {} : { reasoning: entry.usage.reasoning }),
+					pricing: "providerReported",
+					costUsd: entry.usage.cost.total,
+					createdAt: entry.timestamp,
+				});
+				continue;
+			}
 			if (
 				entry.type !== "message" ||
 				beforeEntryIds.has(entry.id) ||
@@ -657,6 +681,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 						typeof payload.customInstructions === "string" ? payload.customInstructions : undefined,
 				});
 				if (!result.ok) throw new Error(result.error.message);
+				if (result.value.kind === "failed") throw new Error(result.value.error.message);
+				if (result.value.kind === "completed") await this.recordUsageLedger(_operationId, beforeEntryIds);
 			} else if (runCommand === "session/steering-mode/set") {
 				if (payload.mode !== "all" && payload.mode !== "one-at-a-time")
 					throw new Error("session/steering-mode/set requires a valid mode");
