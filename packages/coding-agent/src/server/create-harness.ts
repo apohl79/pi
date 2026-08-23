@@ -14,6 +14,7 @@ import {
 	type GoalManager,
 	type HarnessTool,
 } from "@earendil-works/pi-agent-core";
+import type { PlanSnapshot } from "@earendil-works/pi-protocol";
 import type { V2ProcessRegistry } from "@earendil-works/pi-server";
 import { type Static, type TSchema, Type } from "typebox";
 import { getExperimentalToolSampling } from "../core/experimental.ts";
@@ -116,6 +117,7 @@ export interface CodingAgentAgentTools {
 }
 
 export interface CodingAgentPlanTools {
+	read(): Promise<PlanSnapshot | undefined>;
 	update(input: {
 		items: readonly { step: string; status: "pending" | "in_progress" | "completed" }[];
 		version?: number;
@@ -240,6 +242,7 @@ export interface BuildCodingAgentHarnessSystemPromptOptions {
 	systemPromptOptions?: CreateCodingAgentHarnessOptions["systemPromptOptions"];
 	modelInstruction?: ResolvedModelInstructionProfile;
 	roleInstructions?: string;
+	plan?: PlanSnapshot;
 }
 
 export function buildCodingAgentHarnessSystemPrompt(options: BuildCodingAgentHarnessSystemPromptOptions): string {
@@ -276,7 +279,17 @@ export function buildCodingAgentHarnessSystemPrompt(options: BuildCodingAgentHar
 						? `${instruction.text}${basePrompt.slice(defaultPersona.length)}`
 						: `${instruction.text}\n\n${basePrompt}`;
 				})();
-	return options.roleInstructions ? `${instructionPrompt}\n\n${options.roleInstructions}` : instructionPrompt;
+	const planPrompt = options.plan === undefined ? "" : formatPlanForPrompt(options.plan);
+	const prompt = [instructionPrompt, options.roleInstructions, planPrompt].filter(Boolean).join("\n\n");
+	return prompt;
+}
+
+function formatPlanForPrompt(plan: PlanSnapshot): string {
+	const items = plan.items
+		.slice(0, 64)
+		.map((item) => `- [${item.status}] ${item.step.slice(0, 500)}`)
+		.join("\n");
+	return `# Active Plan (v${plan.version})\n\n${items}`.slice(0, 8_000);
 }
 
 export async function createCodingAgentHarness(options: CreateCodingAgentHarnessOptions) {
@@ -529,6 +542,7 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 						options.modelInstructions.scope,
 					)
 				: undefined;
+			const plan = options.plans === undefined ? undefined : await options.plans.read();
 			return buildCodingAgentHarnessSystemPrompt({
 				cwd: env.cwd,
 				tools: currentTools,
@@ -536,6 +550,7 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 				systemPromptOptions,
 				modelInstruction,
 				roleInstructions: options.roleInstructions,
+				plan,
 			});
 		});
 	const created = await AgentHarness.create({
