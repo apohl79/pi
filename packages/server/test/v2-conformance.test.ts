@@ -1232,6 +1232,40 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.close();
 	});
 
+	test("emits transient bundle progress around diagnostics export", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-diagnostics-progress-"));
+		directories.push(directory);
+		const server = createUnixServerV2(new TestService(), { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const started = client.next(
+			(message) =>
+				message.type === "event" &&
+				message.event === "bundle_progress" &&
+				(message.payload as { phase?: unknown }).phase === "started",
+		);
+		const completed = client.next(
+			(message) =>
+				message.type === "event" &&
+				message.event === "bundle_progress" &&
+				(message.payload as { phase?: unknown }).phase === "completed",
+		);
+		const exported = await client.request({ command: "diagnostics/export", payload: { sessionId: "session-1" } });
+		expect(exported).toMatchObject({ ok: true, result: { command: "diagnostics/export", format: "json" } });
+		expect(await started).toMatchObject({
+			event: "bundle_progress",
+			payload: { phase: "started", completed: 0, total: 1 },
+		});
+		expect(await completed).toMatchObject({
+			event: "bundle_progress",
+			payload: { phase: "completed", completed: 1, total: 1 },
+		});
+		await client.close();
+	});
+
 	test("exposes usage ledger aggregates and entries through v2", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-usage-wire-"));
 		directories.push(directory);
