@@ -43,6 +43,8 @@ export interface PiServerServiceV2 {
 	listSessions(): Promise<SessionMetadataV2[]>;
 	listModels(): Promise<ModelMetadata[]>;
 	openSession(sessionId: string): Promise<PiSessionRuntimeV2>;
+	createSession?(options: Record<string, unknown>): Promise<{ sessionId: string; runtime: PiSessionRuntimeV2 }>;
+	deleteSession?(sessionId: string): Promise<void>;
 }
 
 export interface PiServerV2Options {
@@ -167,6 +169,9 @@ export class PiServerV2 {
 	private readonly inputSessions = new Map<string, string>();
 	private readonly disposedRuntimes = new WeakSet<PiSessionRuntimeV2>();
 	private readonly activeOperations = new Map<PiSessionRuntimeV2, number>();
+	private readonly activeOperationSessions = new Map<string, number>();
+	private readonly deletingSessions = new Set<string>();
+	private readonly deletedSessions = new Set<string>();
 	/** Pending attach leases must protect the runtime instance they resolve to. */
 	private readonly pendingAttaches = new WeakMap<PiSessionRuntimeV2, number>();
 	private startPromise?: Promise<this>;
@@ -352,6 +357,8 @@ export class PiServerV2 {
 
 	private async handleRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		try {
+			if (command.command === "session/create") return void (await this.createSession(state, id, command));
+			if (command.command === "session/delete") return void (await this.deleteSession(state, id, command));
 			if (command.command === "session/list")
 				return void (await this.sendResponse(state, id, {
 					command: command.command,
@@ -438,12 +445,80 @@ export class PiServerV2 {
 		}
 	}
 
+	private async createSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!this.service.createSession) throw new Error("session/create is not supported by this service");
+		const payload = objectPayload(command);
+		for (const field of ["id", "name", "cwd"]) {
+			if (payload[field] !== undefined && typeof payload[field] !== "string")
+				throw new Error(`session/create ${field} must be a string`);
+		}
+		const created = await this.service.createSession(payload);
+		const staleReference = Array.from(this.connections).some(
+			(connection) =>
+				connection.sessions.has(created.sessionId) ||
+				connection.attachingSessions.has(created.sessionId) ||
+				(connection.pendingAttachCounts.get(created.sessionId) ?? 0) > 0,
+		);
+		if (staleReference) {
+			if (this.service.deleteSession)
+				await this.service.deleteSession(created.sessionId).catch((cleanupError) => this.reportError(cleanupError));
+			await this.disposeRuntime(created.runtime).catch((disposeError) => this.reportError(disposeError));
+			throw new Error(`Session ${created.sessionId} still has stale connection references`);
+		}
+		this.deletedSessions.delete(created.sessionId);
+		if (state.sessions.has(created.sessionId) || state.visibleSessions.has(created.sessionId)) {
+			await this.disposeRuntime(created.runtime);
+			throw new Error(`Session ${created.sessionId} is already attached`);
+		}
+		state.sessions.set(created.sessionId, created.runtime);
+		state.visibleSessions.add(created.sessionId);
+		state.attachedSessions.add(created.sessionId);
+		try {
+			await this.sendResponse(state, id, {
+				command: command.command,
+				session: toProtocolJsonValue(await this.snapshotForSession(created.sessionId, created.runtime)),
+			});
+		} catch (error) {
+			state.sessions.delete(created.sessionId);
+			state.visibleSessions.delete(created.sessionId);
+			state.attachedSessions.delete(created.sessionId);
+			if (this.service.deleteSession) await this.service.deleteSession(created.sessionId).catch((cleanupError) => this.reportError(cleanupError));
+			await this.disposeRuntime(created.runtime).catch((disposeError) => this.reportError(disposeError));
+			throw error;
+		}
+	}
+
+	private async deleteSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("session/delete requires sessionId");
+		if (!this.service.deleteSession) throw new Error("session/delete is not supported by this service");
+		this.requireVisibleSession(state, command.sessionId);
+		const runtime = this.requireAttached(state, command.sessionId);
+		if (this.deletingSessions.has(command.sessionId)) throw new Error("Session is already being deleted");
+		const references = Array.from(this.connections).filter((connection) => connection !== state && connection.sessions.has(command.sessionId));
+		if (references.length > 0 || this.hasActiveOperationForSession(command.sessionId))
+			throw new Error("Session is still referenced by another connection or active operation");
+		if (this.hasPendingAttachSession(command.sessionId)) throw new Error("Session has an attach in progress");
+		this.deletingSessions.add(command.sessionId);
+		try {
+			await this.service.deleteSession(command.sessionId);
+			this.deletedSessions.add(command.sessionId);
+		} finally {
+			this.deletingSessions.delete(command.sessionId);
+		}
+		state.sessions.delete(command.sessionId);
+		state.visibleSessions.delete(command.sessionId);
+		state.attachedSessions.delete(command.sessionId);
+		if (runtime && !this.hasRuntimeReference(runtime)) await this.disposeRuntime(runtime);
+		await this.sendResponse(state, id, { command: command.command, sessionId: command.sessionId });
+	}
+
 	private async attach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("session/attach requires sessionId");
 		let runtime: PiSessionRuntimeV2 | undefined;
 		let existing: PiSessionRuntimeV2 | undefined;
 		try {
 			this.requireVisibleSession(state, command.sessionId);
+			if (this.deletingSessions.has(command.sessionId) || this.deletedSessions.has(command.sessionId)) throw new Error("Session is unavailable");
 			existing = state.sessions.get(command.sessionId);
 			runtime = existing;
 			if (!runtime) {
@@ -456,6 +531,7 @@ export class PiServerV2 {
 				runtime = await opening;
 			}
 			if (!runtime) throw new Error("Session runtime is unavailable");
+			if (this.deletingSessions.has(command.sessionId) || this.deletedSessions.has(command.sessionId)) throw new Error("Session is unavailable");
 			this.retainAttach(state, command.sessionId, runtime);
 			if (state.closed || state.connection.closed) return;
 			state.sessions.set(command.sessionId, runtime);
@@ -1067,14 +1143,15 @@ export class PiServerV2 {
 
 	private async startTurn(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("turn/start requires sessionId");
+		if (this.deletingSessions.has(command.sessionId)) throw new Error("Session is being deleted");
 		const runtime = this.requireAttached(state, command.sessionId);
 		const operationId = randomUUID();
-		this.retainOperation(runtime);
+		this.retainOperation(runtime, command.sessionId);
 		let accepted: OperationAccepted;
 		try {
 			accepted = await runtime.accept(operationId);
 		} catch (error) {
-			this.releaseOperation(runtime);
+			this.releaseOperation(runtime, command.sessionId);
 			if (!this.hasRuntimeReference(runtime) && !this.hasActiveOperation(runtime) && !this.hasPendingAttach(runtime)) {
 				try {
 					await this.disposeRuntime(runtime);
@@ -1128,7 +1205,7 @@ export class PiServerV2 {
 		} catch (error) {
 			await this.finalizeOperation(runtime, sessionId, operationId, "failed", safeOperationError(error));
 		} finally {
-			this.releaseOperation(runtime);
+			this.releaseOperation(runtime, sessionId);
 			if (!this.hasRuntimeReference(runtime) && !this.hasActiveOperation(runtime) && !this.hasPendingAttach(runtime)) await this.disposeRuntime(runtime);
 		}
 	}
@@ -1271,18 +1348,26 @@ export class PiServerV2 {
 		);
 	}
 
-	private retainOperation(runtime: PiSessionRuntimeV2): void {
+	private retainOperation(runtime: PiSessionRuntimeV2, sessionId: string): void {
 		this.activeOperations.set(runtime, (this.activeOperations.get(runtime) ?? 0) + 1);
+		this.activeOperationSessions.set(sessionId, (this.activeOperationSessions.get(sessionId) ?? 0) + 1);
 	}
 
-	private releaseOperation(runtime: PiSessionRuntimeV2): void {
+	private releaseOperation(runtime: PiSessionRuntimeV2, sessionId: string): void {
 		const count = this.activeOperations.get(runtime);
 		if (count === undefined || count <= 1) this.activeOperations.delete(runtime);
 		else this.activeOperations.set(runtime, count - 1);
+		const sessionCount = this.activeOperationSessions.get(sessionId) ?? 0;
+		if (sessionCount <= 1) this.activeOperationSessions.delete(sessionId);
+		else this.activeOperationSessions.set(sessionId, sessionCount - 1);
 	}
 
 	private hasActiveOperation(runtime: PiSessionRuntimeV2): boolean {
 		return (this.activeOperations.get(runtime) ?? 0) > 0;
+	}
+
+	private hasActiveOperationForSession(sessionId: string): boolean {
+		return (this.activeOperationSessions.get(sessionId) ?? 0) > 0;
 	}
 
 	private retainAttach(state: V2ConnectionState, sessionId: string, runtime: PiSessionRuntimeV2): void {
@@ -1320,6 +1405,10 @@ export class PiServerV2 {
 
 	private hasPendingAttach(runtime: PiSessionRuntimeV2): boolean {
 		return (this.pendingAttaches.get(runtime) ?? 0) > 0;
+	}
+
+	private hasPendingAttachSession(sessionId: string): boolean {
+		return Array.from(this.connections).some((connection) => (connection.pendingAttachCounts.get(sessionId) ?? 0) > 0);
 	}
 
 	private hasOtherPendingAttach(state: V2ConnectionState, sessionId: string): boolean {
