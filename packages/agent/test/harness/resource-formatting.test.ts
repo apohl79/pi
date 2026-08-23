@@ -16,6 +16,17 @@ describe("resource formatting helpers", () => {
 		);
 	});
 
+	it("escapes skill metadata in XML attributes", () => {
+		const prompt = formatSkillInvocation({
+			name: 'review "fast"',
+			description: "Inspect things",
+			content: "Use inspection tools.",
+			filePath: "/project/<unsafe>/SKILL.md",
+		});
+
+		expect(prompt).toContain('name="review &quot;fast&quot;" location="/project/&lt;unsafe&gt;/SKILL.md"');
+	});
+
 	it("formats prompt template invocations with positional arguments", () => {
 		expect(
 			formatPromptTemplateInvocation({ name: "review", content: "Review $1 with $ARGUMENTS" }, ["a.ts", "care"]),
