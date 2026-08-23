@@ -27,6 +27,16 @@ export interface ModelInstructionResolverOptions {
 	readonly maxBytes?: number;
 }
 
+function modelIdFamily(id: string): string {
+	return id.replace(/-latest$/, "").replace(/-\d{8}$/, "");
+}
+
+function modelIdsResolveToSameAliasFamily(left: string, right: string): boolean {
+	if (left === right) return true;
+	if (modelIdFamily(left) !== modelIdFamily(right)) return false;
+	return left.endsWith("-latest") || right.endsWith("-latest") || !/-\d{8}$/.test(left) || !/-\d{8}$/.test(right);
+}
+
 export class ModelInstructionResolver {
 	private readonly profiles: readonly ModelInstructionProfile[];
 	private readonly cwd: string;
@@ -52,7 +62,7 @@ export class ModelInstructionResolver {
 		const matches = this.profiles.filter(
 			(profile) =>
 				profile.provider === model.provider &&
-				profile.model === model.id &&
+				modelIdsResolveToSameAliasFamily(profile.model, model.id) &&
 				(profile.applyTo === undefined || profile.applyTo.includes(scope)),
 		);
 		if (matches.length > 1)

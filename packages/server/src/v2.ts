@@ -64,7 +64,7 @@ function fileReferencePayload(file: Awaited<ReturnType<V2FileReferenceService["r
 }
 
 function modelIdFamily(id: string): string {
-	return id.replace(/-\d{8}$/, "");
+	return id.replace(/-latest$/, "").replace(/-\d{8}$/, "");
 }
 
 function modelReferencesResolveToSameCatalogModel(
