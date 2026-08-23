@@ -27,6 +27,16 @@ describe("InMemoryForensicRecorder", () => {
 		const events = await recorder.read();
 		expect(events).toHaveLength(2);
 		expect(events[0]).toMatchObject({ seq: 1, sessionId: "session", operationId: "operation" });
+		expect(events[0]).toMatchObject({
+			schemaVersion: 1,
+			eventId: expect.any(String),
+			severity: "info",
+			traceId: expect.any(String),
+			spanId: expect.any(String),
+			processInstanceId: expect.any(String),
+		});
+		expect(events[0]?.traceId).not.toBe(events[1]?.traceId);
+		expect(events[0]?.processInstanceId).toBe(events[1]?.processInstanceId);
 		expect(events[0]?.payload).toEqual({ token: "[REDACTED]", nested: { password: "[REDACTED]" }, value: "safe" });
 		expect(second.seq).toBe(2);
 		expect(await recorder.read(1)).toHaveLength(1);
@@ -71,6 +81,12 @@ describe("JsonlForensicRecorder", () => {
 		await first.record({ kind: "accepted" });
 
 		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
+		const persisted = await reopened.read();
+		expect(persisted[0]).toMatchObject({
+			schemaVersion: 1,
+			eventId: expect.any(String),
+			processInstanceId: expect.any(String),
+		});
 		const event = await reopened.record({ kind: "terminal" });
 		expect(event.seq).toBe(3);
 		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
