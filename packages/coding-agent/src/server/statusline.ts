@@ -82,6 +82,7 @@ export class StatuslineRunner {
 	private snapshotValue: StatuslineSnapshot = { pending: false };
 	private inFlight: Promise<StatuslineSnapshot> | undefined;
 	private abortController: AbortController | undefined;
+	private generation = 0;
 
 	constructor(options: StatuslineRunnerOptions = {}) {
 		const configured = options.command ?? (existsSync(defaultCommand) ? defaultCommand : undefined);
@@ -102,6 +103,7 @@ export class StatuslineRunner {
 	}
 
 	async update(payload: unknown, command = this.command): Promise<StatuslineSnapshot> {
+		const generation = ++this.generation;
 		const payloadHash = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 		const commandKey = JSON.stringify(command);
 		if (commandKey === this.commandKey && payloadHash === this.payloadHash) return this.inFlight ?? this.snapshot;
@@ -116,10 +118,11 @@ export class StatuslineRunner {
 		this.snapshotValue = { command, payloadHash, pending: true };
 		const controller = new AbortController();
 		this.abortController = controller;
-		const run = this.executeWithTimeout(command, JSON.stringify(payload), controller);
+		const run = this.executeWithTimeout(command, JSON.stringify(payload), controller, generation);
 		this.inFlight = run;
 		try {
-			return await run;
+			const result = await run;
+			return generation === this.generation ? result : this.snapshot;
 		} finally {
 			if (this.inFlight === run) this.inFlight = undefined;
 			if (this.abortController === controller) this.abortController = undefined;
@@ -138,6 +141,7 @@ export class StatuslineRunner {
 		command: StatuslineCommand,
 		payload: string,
 		controller: AbortController,
+		generation: number,
 	): Promise<StatuslineSnapshot> {
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
@@ -155,12 +159,14 @@ export class StatuslineRunner {
 				this.maxOutputBytes,
 			);
 			const stderr = truncateUtf8(result.stderr, this.maxErrorBytes);
+			if (generation !== this.generation) return this.snapshot;
 			this.snapshotValue =
 				result.exitCode === 0
 					? { command, payloadHash: this.payloadHash, pending: false, output: stdout }
 					: { command, payloadHash: this.payloadHash, pending: false, error: stderr || `exit ${result.exitCode}` };
 			return this.snapshot;
 		} catch (error) {
+			if (generation !== this.generation) return this.snapshot;
 			this.snapshotValue = {
 				command,
 				payloadHash: this.payloadHash,

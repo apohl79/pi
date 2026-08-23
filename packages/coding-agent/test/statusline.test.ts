@@ -35,6 +35,24 @@ describe("StatuslineRunner", () => {
 		expect(changed.output).toBeUndefined();
 	});
 
+	test("does not let an aborted command overwrite a newer command result", async () => {
+		const pending: Array<(result: { stdout: string; stderr: string; exitCode: number }) => void> = [];
+		const runner = new StatuslineRunner({
+			command: "first.sh",
+			execute: async () =>
+				new Promise((resolve) => {
+					pending.push(resolve);
+				}),
+		});
+		const first = runner.update({ value: 1 });
+		const second = runner.update({ value: 2 }, "second.sh");
+		pending[1]?.({ stdout: "new", stderr: "", exitCode: 0 });
+		await expect(second).resolves.toMatchObject({ output: "new", command: "second.sh" });
+		pending[0]?.({ stdout: "old", stderr: "", exitCode: 0 });
+		await expect(first).resolves.toMatchObject({ output: "new", command: "second.sh" });
+		expect(runner.snapshot).toMatchObject({ output: "new", command: "second.sh" });
+	});
+
 	test("times out and aborts a hanging command", async () => {
 		let aborted = false;
 		const runner = new StatuslineRunner({
