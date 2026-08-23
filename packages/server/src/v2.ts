@@ -738,6 +738,8 @@ export class PiServerV2 {
 		});
 		this.agentSessions.set(agent.id, command.sessionId);
 		await this.sendResponse(state, id, { command: command.command, agent });
+		const runtime = state.sessions.get(command.sessionId);
+		if (runtime) await this.broadcastEvent(command.sessionId, runtime, { agent }, undefined, "agent_updated");
 	}
 
 	private async listAgents(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
@@ -765,8 +767,12 @@ export class PiServerV2 {
 		this.requireControl(state, (await this.agents.getSnapshot(agentId)).sessionId);
 		this.requireResource(state, this.agentSessions, agentId, "agent");
 		if (typeof payload.message !== "string") throw new Error("agent/message requires message");
-		await this.agents.message(agentId, payload.message);
+		const message = payload.message;
+		await this.agents.message(agentId, message);
 		await this.sendResponse(state, id, { command: command.command, agentId });
+		const sessionId = (await this.agents.getSnapshot(agentId)).sessionId;
+		const runtime = state.sessions.get(sessionId);
+		if (runtime) await this.broadcastEvent(sessionId, runtime, { agentId, message }, undefined, "agent_message");
 	}
 
 	private async followUpAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
@@ -775,20 +781,28 @@ export class PiServerV2 {
 		this.requireControl(state, (await this.agents.getSnapshot(agentId)).sessionId);
 		this.requireResource(state, this.agentSessions, agentId, "agent");
 		if (typeof payload.message !== "string") throw new Error("agent/followUp requires message");
+		const agent = await this.agents.followUp(agentId, payload.message);
 		await this.sendResponse(state, id, {
 			command: command.command,
-			agent: await this.agents.followUp(agentId, payload.message),
+			agent,
 		});
+		const sessionId = (await this.agents.getSnapshot(agentId)).sessionId;
+		const runtime = state.sessions.get(sessionId);
+		if (runtime) await this.broadcastEvent(sessionId, runtime, { agent }, undefined, "agent_updated");
 	}
 
 	private async interruptAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		this.requireControl(state, (await this.agents.getSnapshot(agentIdFrom(command, payload))).sessionId);
 		this.requireResource(state, this.agentSessions, agentIdFrom(command, payload), "agent");
+		const agent = await this.agents.interrupt(agentIdFrom(command, payload));
 		await this.sendResponse(state, id, {
 			command: command.command,
-			agent: await this.agents.interrupt(agentIdFrom(command, payload)),
+			agent,
 		});
+		const sessionId = (await this.agents.getSnapshot(agent.id)).sessionId;
+		const runtime = state.sessions.get(sessionId);
+		if (runtime) await this.broadcastEvent(sessionId, runtime, { agent }, undefined, "agent_updated");
 	}
 
 	private async listApps(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
@@ -1354,21 +1368,22 @@ export class PiServerV2 {
 		sessionId: string,
 		runtime: PiSessionRuntimeV2,
 		payload: Record<string, unknown>,
-		operationId: string,
-		eventName: "operation_accepted" | "operation_terminal",
+		operationId: string | undefined,
+		eventName: EventEnvelopeV2["event"],
 		sequence?: { eventSeq: number; revision: number },
 	): Promise<void> {
 		const snapshot = await runtime.snapshot();
+		const history = this.eventHistory.get(sessionId) ?? [];
+		const lastEvent = history.at(-1);
 		const event: ServerMessageV2 = {
 			type: "event",
 			sessionId,
-			seq: sequence?.eventSeq ?? snapshot.eventSeq,
-			revision: sequence?.revision ?? snapshot.revision,
-			operationId,
+			seq: sequence?.eventSeq ?? Math.max(snapshot.eventSeq, lastEvent?.seq ?? 0) + 1,
+			revision: sequence?.revision ?? Math.max(snapshot.revision, lastEvent?.revision ?? 0) + 1,
+			...(operationId === undefined ? {} : { operationId }),
 			event: eventName,
 			payload: toProtocolJsonValue(payload),
 		};
-		const history = this.eventHistory.get(sessionId) ?? [];
 		history.push(event);
 		if (history.length > 256) history.splice(0, history.length - 256);
 		this.eventHistory.set(sessionId, history);
