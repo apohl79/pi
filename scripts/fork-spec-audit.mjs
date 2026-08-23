@@ -1,9 +1,17 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export function resolveRepositoryRoot(metaUrl) {
 	return fileURLToPath(new URL("..", metaUrl));
+}
+
+function testFilesUnder(path) {
+	if (!existsSync(path)) return [];
+	if (statSync(path).isFile()) return /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) ? [path] : [];
+	return readdirSync(path, { withFileTypes: true }).flatMap((entry) =>
+		testFilesUnder(join(path, entry.name)),
+	);
 }
 
 const root = resolveRepositoryRoot(import.meta.url);
@@ -96,6 +104,8 @@ export function auditForkSpec() {
 		for (const testPath of entry.tests) {
 			if (typeof testPath !== "string" || !existsSync(join(root, testPath))) {
 				failures.push(`missing compatibility test evidence: ${path} -> ${String(testPath)}`);
+			} else if (testFilesUnder(join(root, testPath)).length === 0) {
+				failures.push(`compatibility evidence contains no test file: ${path} -> ${testPath}`);
 			}
 		}
 	}
