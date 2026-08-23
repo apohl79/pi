@@ -72,6 +72,13 @@ describe("production remote v2 web and image services", () => {
 			await client.connect();
 			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
 			try {
+				const blob = await session.putBlob("remote blob", "text/plain", "utf8");
+				expect(blob).toMatchObject({ mimeType: "text/plain", size: Buffer.byteLength("remote blob") });
+				expect(await session.statBlob(blob.digest)).toMatchObject({ digest: blob.digest, size: 11 });
+				expect(await session.readBlob(blob.digest)).toMatchObject({
+					encoding: "base64",
+					data: Buffer.from("remote blob").toString("base64"),
+				});
 				expect(await session.webRequest("search_query", { query: "remote" })).toEqual([
 					expect.objectContaining({ id: "remote-web-result", extract: "remote extract" }),
 				]);
