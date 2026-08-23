@@ -87,6 +87,30 @@ describe("coding-agent daemon runtime", () => {
 		});
 	});
 
+	test("ignores blank release environment values when compiled identity exists", () => {
+		expect(
+			createRuntimeManifest(
+				{
+					PI_BUILD_VERSION: "  ",
+					PI_FORK_COMMIT: "\t",
+					PI_UPSTREAM_BASE_COMMIT: "",
+					PI_CONFIG_HASH: "\n",
+				},
+				{
+					buildVersion: "compiled-version",
+					forkCommit: "compiled-fork",
+					upstreamBaseCommit: "compiled-upstream",
+					configHash: "compiled-config",
+				},
+			),
+		).toMatchObject({
+			buildVersion: "compiled-version",
+			forkCommit: "compiled-fork",
+			upstreamBaseCommit: "compiled-upstream",
+			configHash: "compiled-config",
+		});
+	});
+
 	test("composes the SQLite service, daemon lifecycle, and CLI runtime", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-daemon-"));
 		directories.push(directory);

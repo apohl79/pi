@@ -145,18 +145,26 @@ restore_build_identity() {
 }
 trap restore_build_identity EXIT
 
-build_identity_version="${PI_BUILD_VERSION:-${RELEASE_TAG:-dev}}"
+if [[ -n "${PI_BUILD_VERSION:-}" ]]; then
+	build_identity_version="$PI_BUILD_VERSION"
+else
+	build_identity_version="${RELEASE_TAG:-dev}"
+	build_identity_version="${build_identity_version#v}"
+fi
 build_identity_fork="${PI_FORK_COMMIT:-$(git rev-parse --verify HEAD 2>/dev/null || true)}"
 build_identity_upstream="${PI_UPSTREAM_BASE_COMMIT:-}"
 if [[ -z "$build_identity_upstream" && -f FORK_DELTA.md ]]; then
 	build_identity_upstream="$(sed -n 's/^- Initial pinned upstream base: //p' FORK_DELTA.md | head -n 1)"
 fi
+build_identity_version_json="$(node -p 'JSON.stringify(process.argv[1])' "$build_identity_version")"
+build_identity_fork_json="$(node -p 'JSON.stringify(process.argv[1])' "$build_identity_fork")"
+build_identity_upstream_json="$(node -p 'JSON.stringify(process.argv[1])' "$build_identity_upstream")"
 printf '%s\n' \
 	'/** Generated for this standalone build; restored by build-binaries.sh. */' \
 	'export const BUILD_IDENTITY = {' \
-	"    buildVersion: \"${build_identity_version}\"," \
-	"    forkCommit: \"${build_identity_fork}\"," \
-	"    upstreamBaseCommit: \"${build_identity_upstream}\"," \
+	"    buildVersion: ${build_identity_version_json}," \
+	"    forkCommit: ${build_identity_fork_json}," \
+	"    upstreamBaseCommit: ${build_identity_upstream_json}," \
 	'    configHash: undefined,' \
 	'} as const;' > "$BUILD_IDENTITY_FILE"
 
