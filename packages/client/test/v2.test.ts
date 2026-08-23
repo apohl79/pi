@@ -198,4 +198,43 @@ describe("PiClientV2", () => {
 		expect(await second).toEqual(snapshot);
 		client.dispose();
 	});
+
+	test("retains the latest event cursor for a reconnect without explicit state", async () => {
+		const pair = transportPair();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		const first = client.connect();
+		await Promise.resolve();
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
+		await first;
+		pair.deliver({ type: "event", sessionId: "session-1", seq: 4, revision: 1, event: "usage_updated", payload: {} });
+		expect(client.lastEventCursor).toEqual({ sessionId: "session-1", eventSeq: 4 });
+		client.disconnect();
+
+		const second = client.connect();
+		await Promise.resolve();
+		await Promise.resolve();
+		const hello = parseClientMessageV2(decodeCbor(pair.sent[1]!.subarray(4)));
+		expect(hello).toMatchObject({ type: "hello", lastEvent: { sessionId: "session-1", eventSeq: 4 } });
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-2", snapshot });
+		await second;
+		client.dispose();
+	});
+
+	test("tracks interleaved session cursors and refuses ambiguous automatic replay", async () => {
+		const pair = transportPair();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		const first = client.connect();
+		await Promise.resolve();
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
+		await first;
+		pair.deliver({ type: "event", sessionId: "session-1", seq: 4, revision: 1, event: "usage_updated", payload: {} });
+		pair.deliver({ type: "event", sessionId: "session-2", seq: 9, revision: 1, event: "usage_updated", payload: {} });
+		expect(client.lastEventCursors).toEqual([
+			{ sessionId: "session-1", eventSeq: 4 },
+			{ sessionId: "session-2", eventSeq: 9 },
+		]);
+		client.disconnect();
+		await expect(client.connect()).rejects.toThrow("multiple sessions");
+		client.dispose();
+	});
 });
