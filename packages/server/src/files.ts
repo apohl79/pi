@@ -30,11 +30,13 @@ export interface V2FileReferenceOptions {
 	readonly homeDirectory?: string;
 	readonly allowAbsolute?: boolean;
 	readonly maxReadBytes?: number;
+	readonly maxCompletions?: number;
 }
 
 type FileScope = "project" | "relative" | "server" | "local" | "home" | "absolute";
 
 const DEFAULT_MAX_READ_BYTES = 8 * 1024 * 1024;
+const DEFAULT_MAX_COMPLETIONS = 256;
 
 function cleanReference(reference: string): string {
 	const value = reference.trim();
@@ -105,6 +107,7 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 	private readonly homeDirectory: string;
 	private readonly allowAbsolute: boolean;
 	private readonly maxReadBytes: number;
+	private readonly maxCompletions: number;
 
 	constructor(options: V2FileReferenceOptions) {
 		this.projectRoot = resolve(options.projectRoot);
@@ -112,6 +115,9 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 		this.homeDirectory = resolve(options.homeDirectory ?? homedir());
 		this.allowAbsolute = options.allowAbsolute ?? true;
 		this.maxReadBytes = options.maxReadBytes ?? DEFAULT_MAX_READ_BYTES;
+		this.maxCompletions = options.maxCompletions ?? DEFAULT_MAX_COMPLETIONS;
+		if (!Number.isSafeInteger(this.maxCompletions) || this.maxCompletions <= 0)
+			throw new TypeError("maxCompletions must be a positive safe integer");
 	}
 
 	async complete(sessionId: string, prefix: string): Promise<readonly V2FileCompletion[]> {
@@ -158,7 +164,8 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 				(left, right) =>
 					Number(right.kind === "directory") - Number(left.kind === "directory") ||
 					left.reference.localeCompare(right.reference),
-			);
+			)
+			.slice(0, this.maxCompletions);
 	}
 
 	async resolve(sessionId: string, reference: string): Promise<V2FileReference> {
