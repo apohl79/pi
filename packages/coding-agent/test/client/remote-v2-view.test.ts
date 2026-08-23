@@ -5,6 +5,7 @@ import {
 	createRemoteV2StatuslinePayload,
 	formatRemoteV2Session,
 	type RemoteV2SessionViewOptions,
+	RemoteV2StatuslineComponent,
 	RemoteV2StatuslineController,
 } from "../../src/client/remote-v2-view.ts";
 import { StatuslineRunner } from "../../src/server/statusline.ts";
@@ -240,5 +241,27 @@ describe("formatRemoteV2Session", () => {
 		} finally {
 			await controller.dispose();
 		}
+	});
+
+	test("renders the local statusline component from remote state", async () => {
+		const source = {
+			state: { lifecycle: { status: "ready" as const }, snapshot },
+			subscribe: (callback: (state: RemoteV2SessionState) => void) => {
+				callback(source.state);
+				return () => {};
+			},
+		};
+		const runner = new StatuslineRunner({
+			command: "statusline.sh",
+			execute: async () => ({ stdout: "remote status\nignored", stderr: "", exitCode: 0 }),
+		});
+		let updates = 0;
+		const component = new RemoteV2StatuslineComponent(source, runner, { cwd: "/work", transcriptPath: "" }, () => {
+			updates += 1;
+		});
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(component.render(80)).toEqual(["remote status"]);
+		expect(updates).toBe(1);
+		component.dispose();
 	});
 });
