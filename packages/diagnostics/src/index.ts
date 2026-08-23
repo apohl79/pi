@@ -159,4 +159,16 @@ export interface DiagnosticRuntimeManifest {
 	readonly configHash?: string;
 }
 
+export interface RemoteV2DiagnosticsTimeline {
+	readonly events: readonly Record<string, unknown>[];
+	readonly operations: readonly Record<string, unknown>[];
+	readonly operationEvents: readonly Record<string, unknown>[];
+	readonly usage?: Record<string, unknown>;
+}
+
+export interface RemoteV2UsageRead {
+	readonly aggregate: Record<string, unknown>;
+	readonly entries: readonly Record<string, unknown>[];
+}
+
 /** Pure offline verifier for exported diagnostic bundles; it does not require a daemon or provider access. */
