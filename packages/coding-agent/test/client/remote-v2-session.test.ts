@@ -75,7 +75,7 @@ function memoryTransport() {
 					? ({ session: snapshot() } as JsonValue)
 					: message.request.command === "agent/list"
 						? ({ agents: [] } as JsonValue)
-						: message.request.command === "agent/spawn"
+						: message.request.command === "agent/spawn" || message.request.command === "agent/wait"
 							? ({
 									agent: {
 										id: "agent-1",
@@ -521,6 +521,7 @@ describe("RemoteV2Session", () => {
 			parentPath: "/root",
 			model: { provider: "faux", id: "model" },
 		});
+		expect(await session.waitAgent(agent.id, 10)).toMatchObject({ id: "agent-1", state: "idle" });
 		await session.dispose();
 	});
 
