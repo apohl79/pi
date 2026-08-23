@@ -33,7 +33,13 @@ export interface V2ProcessSnapshot extends V2ProcessOutput {
 	readonly exitCode?: number;
 }
 
+export type V2ProcessChange = {
+	readonly kind: "output" | "terminal";
+	readonly process: V2ProcessSnapshot;
+};
+
 export interface V2ProcessRegistry {
+	onChange?(listener: (change: V2ProcessChange) => void): () => void;
 	start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot>;
 	getSnapshot(processId: string): Promise<V2ProcessSnapshot>;
 	write(processId: string, input: string, options?: V2ProcessWriteOptions): Promise<V2ProcessOutput>;
@@ -65,9 +71,15 @@ interface ProcessState {
 export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 	private readonly maxOutputBytes: number;
 	private readonly processes = new Map<string, ProcessState>();
+	private readonly listeners = new Set<(change: V2ProcessChange) => void>();
 
 	constructor(options: { maxOutputBytes?: number } = {}) {
 		this.maxOutputBytes = options.maxOutputBytes ?? 64 * 1024;
+	}
+
+	onChange(listener: (change: V2ProcessChange) => void): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
 	}
 
 	async start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
@@ -91,6 +103,7 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 		if (process.inputClosed) throw new Error(`Process ${processId} input is closed`);
 		const cursor = process.totalBytes;
 		this.append(process, input);
+		this.notify("output", process);
 		if (options.eof) process.inputClosed = true;
 		return this.read(processId, cursor);
 	}
@@ -123,6 +136,7 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 			process.state = "terminated";
 			process.exitCode = 143;
 			this.resolveWaiters(process);
+			this.notify("terminal", process);
 		}
 		return this.snapshot(process);
 	}
@@ -134,6 +148,7 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 			process.state = "lost";
 			count += 1;
 			this.resolveWaiters(process);
+			this.notify("terminal", process);
 		}
 		return Promise.resolve(count);
 	}
@@ -168,6 +183,11 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 		const process = this.processes.get(processId);
 		if (!process) throw new Error(`Unknown process ${processId}`);
 		return process;
+	}
+
+	private notify(kind: V2ProcessChange["kind"], process: ProcessState): void {
+		const change = { kind, process: this.snapshot(process) } satisfies V2ProcessChange;
+		for (const listener of this.listeners) listener(structuredClone(change));
 	}
 }
 
@@ -251,10 +271,16 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 	private readonly maxOutputBytes: number;
 	private readonly ptyLauncher: V2PtyLauncher | undefined;
 	private readonly processes = new Map<string, NodeProcessState>();
+	private readonly listeners = new Set<(change: V2ProcessChange) => void>();
 
 	constructor(options: { maxOutputBytes?: number; ptyLauncher?: V2PtyLauncher } = {}) {
 		this.maxOutputBytes = options.maxOutputBytes ?? 64 * 1024;
 		this.ptyLauncher = options.ptyLauncher;
+	}
+
+	onChange(listener: (change: V2ProcessChange) => void): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
 	}
 
 	async start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
@@ -274,8 +300,10 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		};
 		this.processes.set(state.processId, state);
 		const append = (value: string): void => {
+			if (value.length === 0) return;
 			state.totalBytes += Buffer.byteLength(value, "utf8");
 			state.output = retainUtf8(`${state.output}${value}`, this.maxOutputBytes);
+			this.notify("output", state);
 		};
 		child.stdout?.on("data", (chunk: Buffer) => append(state.stdoutDecoder.write(chunk)));
 		child.stderr?.on("data", (chunk: Buffer) => append(state.stderrDecoder.write(chunk)));
@@ -353,6 +381,7 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 			const snapshot = this.snapshot(process);
 			for (const resolve of process.waiters) resolve(snapshot);
 			process.waiters = [];
+			this.notify("terminal", process);
 		}
 		return Promise.resolve(count);
 	}
@@ -368,6 +397,7 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		const snapshot = this.snapshot(process);
 		for (const resolve of process.waiters) resolve(snapshot);
 		process.waiters = [];
+		this.notify("terminal", process);
 	}
 
 	private snapshot(process: NodeProcessState): V2ProcessSnapshot {
@@ -390,6 +420,11 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		if (!process) throw new Error(`Unknown process ${processId}`);
 		return process;
 	}
+
+	private notify(kind: V2ProcessChange["kind"], process: NodeProcessState): void {
+		const change = { kind, process: this.snapshot(process) } satisfies V2ProcessChange;
+		for (const listener of this.listeners) listener(structuredClone(change));
+	}
 }
 
 /**
@@ -404,12 +439,19 @@ export class JsonlV2ProcessRegistry implements V2ProcessRegistry {
 	private readonly records = new Map<string, V2ProcessSnapshot>();
 	private readonly ready: Promise<void>;
 	private pendingWrite: Promise<void> = Promise.resolve();
+	private readonly listeners = new Set<(change: V2ProcessChange) => void>();
 
 	constructor(path: string, delegate: V2ProcessRegistry = new NodeV2ProcessRegistry()) {
 		if (path.length === 0) throw new TypeError("Process journal path must not be empty");
 		this.path = path;
 		this.delegate = delegate;
+		this.delegate.onChange?.((change) => this.notify(change));
 		this.ready = this.load();
+	}
+
+	onChange(listener: (change: V2ProcessChange) => void): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
 	}
 
 	async start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
@@ -519,6 +561,10 @@ export class JsonlV2ProcessRegistry implements V2ProcessRegistry {
 			() => undefined,
 		);
 		await write;
+	}
+
+	private notify(change: V2ProcessChange): void {
+		for (const listener of this.listeners) listener(structuredClone(change));
 	}
 
 	private async append(snapshot: V2ProcessSnapshot): Promise<void> {
