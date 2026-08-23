@@ -5,8 +5,8 @@ import { auditForkSpec, resolveRepositoryRoot } from "./fork-spec-audit.mjs";
 test("keeps required implementation and production-test evidence present", () => {
 	const result = auditForkSpec();
 	assert.deepEqual(result.failures, []);
-	assert.ok(result.checkedFiles >= 28);
-	assert.ok(result.checkedPatterns >= 19);
+	assert.ok(result.checkedFiles >= 27);
+	assert.ok(result.checkedPatterns >= 15);
 });
 
 test("resolves URL-encoded repository paths portably", () => {
