@@ -59,6 +59,11 @@ describe("LocalV2FileReferenceService", () => {
 			path: await realpath(join(root, "README.md")),
 			kind: "file",
 		});
+		expect(await service.resolve("session-1", '@server:"README.md"')).toMatchObject({
+			reference: "server:README.md",
+			path: await realpath(join(root, "README.md")),
+			kind: "file",
+		});
 		expect(new TextDecoder().decode((await service.read("session-1", "~/notes.ts")).data)).toBe(
 			"export const answer = 42;",
 		);
