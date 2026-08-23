@@ -403,6 +403,7 @@ export class JsonlV2ProcessRegistry implements V2ProcessRegistry {
 	private readonly delegate: V2ProcessRegistry;
 	private readonly records = new Map<string, V2ProcessSnapshot>();
 	private readonly ready: Promise<void>;
+	private pendingWrite: Promise<void> = Promise.resolve();
 
 	constructor(path: string, delegate: V2ProcessRegistry = new NodeV2ProcessRegistry()) {
 		if (path.length === 0) throw new TypeError("Process journal path must not be empty");
@@ -511,7 +512,12 @@ export class JsonlV2ProcessRegistry implements V2ProcessRegistry {
 
 	private async persist(snapshot: V2ProcessSnapshot): Promise<void> {
 		this.records.set(snapshot.processId, snapshot);
-		await this.append(snapshot);
+		const write = this.pendingWrite.then(() => this.append(snapshot));
+		this.pendingWrite = write.then(
+			() => undefined,
+			() => undefined,
+		);
+		await write;
 	}
 
 	private async append(snapshot: V2ProcessSnapshot): Promise<void> {

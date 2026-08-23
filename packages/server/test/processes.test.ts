@@ -137,6 +137,24 @@ describe("InMemoryV2ProcessRegistry", () => {
 		}
 	});
 
+	test("serializes concurrent process journal appends", async () => {
+		const directory = await mkdtemp(join(process.env.TMPDIR ?? "/tmp", "pi-process-journal-concurrent-"));
+		try {
+			const path = join(directory, "processes.jsonl");
+			const registry = new JsonlV2ProcessRegistry(path, new InMemoryV2ProcessRegistry());
+			const started = await Promise.all(
+				Array.from({ length: 8 }, (_, index) =>
+					registry.start({ sessionId: `session-${index}`, command: `demo-${index}` }),
+				),
+			);
+			const restored = new JsonlV2ProcessRegistry(path, new InMemoryV2ProcessRegistry());
+			await restored.markLost();
+			expect(await Promise.all(started.map((process) => restored.getSnapshot(process.processId)))).toHaveLength(8);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("parses quoted argv without shell expansion and rejects shell syntax", async () => {
 		const registry = new NodeV2ProcessRegistry();
 		const started = await registry.start({
