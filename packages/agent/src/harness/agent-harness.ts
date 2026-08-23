@@ -119,6 +119,11 @@ function durableClone<T>(value: T): T {
 	return JSON.parse(encoded) as T;
 }
 
+function persistedQueueMode(entry: Entry, customType: string): QueueMode | undefined {
+	if (entry.type !== "custom" || entry.customType !== customType) return undefined;
+	return entry.data === "all" || entry.data === "one-at-a-time" ? entry.data : undefined;
+}
+
 function persistedRetryPolicy(entry: Entry): RetryPolicy | undefined {
 	if (entry.type !== "custom" || entry.customType !== "retry_policy_change") return undefined;
 	if (typeof entry.data !== "object" || entry.data === null || Array.isArray(entry.data)) return undefined;
@@ -524,6 +529,16 @@ export class AgentHarness implements AgentLane {
 		const persistedCompaction = branchEntries.find((entry) => persistedCompactionSettings(entry) !== undefined);
 		if (persistedCompaction !== undefined)
 			harness.compactionSettings = persistedCompactionSettings(persistedCompaction)!;
+		const persistedSteering = branchEntries.find(
+			(entry) => persistedQueueMode(entry, "steering_mode_change") !== undefined,
+		);
+		if (persistedSteering !== undefined)
+			harness.steeringMode = persistedQueueMode(persistedSteering, "steering_mode_change")!;
+		const persistedFollowUp = branchEntries.find(
+			(entry) => persistedQueueMode(entry, "follow_up_mode_change") !== undefined,
+		);
+		if (persistedFollowUp !== undefined)
+			harness.followUpMode = persistedQueueMode(persistedFollowUp, "follow_up_mode_change")!;
 		const lanes = await options.session.getLanes();
 		const suspended: SuspendedOperation[] = [];
 		for (const lane of lanes.filter((candidate) => candidate.lane === harness.name)) {
@@ -1444,12 +1459,25 @@ export class AgentHarness implements AgentLane {
 	}
 	async setSteeringMode(mode: QueueMode): Promise<void> {
 		this.steeringMode = mode;
+		await this.durableSession.appendEntry(
+			{ type: "custom", customType: "steering_mode_change", id: this.durableSession.idGenerator.next(), data: mode },
+			this.name,
+		);
 	}
 	async getFollowUpMode(): Promise<QueueMode> {
 		return this.followUpMode;
 	}
 	async setFollowUpMode(mode: QueueMode): Promise<void> {
 		this.followUpMode = mode;
+		await this.durableSession.appendEntry(
+			{
+				type: "custom",
+				customType: "follow_up_mode_change",
+				id: this.durableSession.idGenerator.next(),
+				data: mode,
+			},
+			this.name,
+		);
 	}
 	async watchSession(): Promise<WatchHandle<SessionSnapshot>> {
 		const snapshot = await this.sessionSnapshot();
