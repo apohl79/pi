@@ -97,6 +97,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	disposeCount = 0;
 	rejected: Array<{ operationId: string; error: string }> = [];
 	fail = false;
+	usageUpdated = false;
 	private current: SessionSnapshotV2;
 
 	constructor(id: string) {
@@ -129,6 +130,12 @@ class TestRuntime implements PiSessionRuntimeV2 {
 				name: typeof payload?.name === "string" ? payload.name : undefined,
 				nameSource: typeof payload?.name === "string" ? "explicit" : undefined,
 				nameRevision: this.current.nameRevision + 1,
+			};
+		}
+		if (this.usageUpdated) {
+			this.current = {
+				...this.current,
+				usage: { ...this.current.usage, output: this.current.usage.output + 1 },
 			};
 		}
 		this.current = {
@@ -274,6 +281,26 @@ describe("PiServer v2 operation acceptance", () => {
 			(message) => message.type === "event" && message.event === "session_phase_changed",
 		);
 		expect(phaseEvent).toMatchObject({ event: "session_phase_changed", payload: { phase: "idle" } });
+	});
+
+	test("emits a usage event when an operation changes the usage aggregate", async () => {
+		const service = new TestService();
+		service.sessions.get("session-1")!.usageUpdated = true;
+		const server = new PiServerV2(service, { listeners: [], serverId: "usage-events" });
+		await server.start();
+		servers.push(server);
+		const client = connectInMemoryTestClientV2(server.accept.bind(server));
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const accepted = await client.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { text: "hello" },
+		});
+		expect(accepted).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+		service.sessions.get("session-1")!.release.resolve(undefined);
+		const usageEvent = await client.next((message) => message.type === "event" && message.event === "usage_updated");
+		expect(usageEvent).toMatchObject({ event: "usage_updated", payload: { usage: { output: 1 } } });
 	});
 
 	test("accepts deterministic in-memory v2 handshakes and fragmented requests", async () => {
