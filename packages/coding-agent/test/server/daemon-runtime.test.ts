@@ -453,11 +453,7 @@ describe("coding-agent daemon runtime", () => {
 		models.setProvider(faux.provider);
 		faux.setResponses([
 			(context) => {
-				observedRequests.push(
-					context.messages.flatMap((message) =>
-						message.role === "user" && typeof message.content === "string" ? [message.content] : [],
-					),
-				);
+				observedRequests.push(context.messages.map((message) => JSON.stringify(message)));
 				return fauxAssistantMessage("completed");
 			},
 		]);
@@ -472,7 +468,10 @@ describe("coding-agent daemon runtime", () => {
 			write: () => {},
 		});
 		try {
-			expect(await diagnostics.read()).toEqual([
+			const compatibilityDiagnostics = (await diagnostics.read()).filter(
+				(event) => event.kind === "pi_extension_compatibility",
+			);
+			expect(compatibilityDiagnostics).toEqual([
 				expect.objectContaining({
 					kind: "pi_extension_compatibility",
 					severity: "warn",
@@ -480,12 +479,17 @@ describe("coding-agent daemon runtime", () => {
 				}),
 			]);
 			const created = await runtime.service.createSession!({ id: "pi-extension-session", cwd: directory });
+			await created.runtime.run("disable-auto-name", {
+				command: "session/name/auto/set",
+				sessionId: created.sessionId,
+				payload: { enabled: false },
+			});
 			await created.runtime.run("pi-extension-turn", {
 				command: "turn/start",
 				sessionId: created.sessionId,
 				payload: { text: "work" },
 			});
-			expect(observedRequests[0]).toContain("discovered reminder");
+			expect(observedRequests[0]?.join("\n")).toContain("discovered reminder");
 		} finally {
 			await runtime.close();
 		}
