@@ -70,8 +70,16 @@ export class JsonlV2OperationStore implements V2OperationStore {
 		}
 		const operations = new Map<string, OperationRecordV2>();
 		const events: EventEnvelopeV2[] = [];
-		for (const line of contents.split("\n").filter(Boolean)) {
-			const record = JSON.parse(line) as StoreRecord;
+		const lines = contents.split("\n").filter(Boolean);
+		for (const [index, line] of lines.entries()) {
+			let record: StoreRecord;
+			try {
+				record = JSON.parse(line) as StoreRecord;
+			} catch (error) {
+				const isTornTail = index === lines.length - 1 && !contents.endsWith("\n");
+				if (isTornTail) break;
+				throw error;
+			}
 			if (record.kind === "operation") operations.set(record.value.operationId, record.value);
 			else events.push(record.value);
 		}
