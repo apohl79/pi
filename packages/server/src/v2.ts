@@ -1894,26 +1894,11 @@ export class PiServerV2 {
 		operationId: string,
 		command: CommandV2,
 	): Promise<void> {
+		const beforeSnapshot = await runtime.snapshot();
 		try {
-			const beforeSnapshot = await runtime.snapshot();
 			await runtime.run(operationId, command);
 			const completedSnapshot = await runtime.snapshot();
-			if (
-				beforeSnapshot.nameRevision !== completedSnapshot.nameRevision ||
-				beforeSnapshot.name !== completedSnapshot.name ||
-				beforeSnapshot.nameSource !== completedSnapshot.nameSource
-			)
-				await this.broadcastEvent(
-					sessionId,
-					runtime,
-					{
-						name: completedSnapshot.name ?? null,
-						nameSource: completedSnapshot.nameSource ?? null,
-						nameRevision: completedSnapshot.nameRevision,
-					},
-					operationId,
-					"session_name_updated",
-				);
+			await this.broadcastSnapshotChanges(sessionId, runtime, operationId, beforeSnapshot, completedSnapshot);
 			const record = this.operations.get(operationId);
 			if (record) {
 				const updated = { ...record, state: "complete" as const };
@@ -1944,6 +1929,7 @@ export class PiServerV2 {
 				payload: { state: "complete" },
 			});
 		} catch (error) {
+			await this.broadcastSnapshotChanges(sessionId, runtime, operationId, beforeSnapshot, await runtime.snapshot());
 			const message = error instanceof Error ? error.message : String(error);
 			const failureSnapshot = await runtime.snapshot();
 			const record = this.operations.get(operationId);
@@ -1979,6 +1965,33 @@ export class PiServerV2 {
 		}
 	}
 
+	private async broadcastSnapshotChanges(
+		sessionId: string,
+		runtime: PiSessionRuntimeV2,
+		operationId: string,
+		before: Awaited<ReturnType<PiSessionRuntimeV2["snapshot"]>>,
+		after: Awaited<ReturnType<PiSessionRuntimeV2["snapshot"]>>,
+	): Promise<void> {
+		if (
+			before.nameRevision !== after.nameRevision ||
+			before.name !== after.name ||
+			before.nameSource !== after.nameSource
+		)
+			await this.broadcastEvent(
+				sessionId,
+				runtime,
+				{
+					name: after.name ?? null,
+					nameSource: after.nameSource ?? null,
+					nameRevision: after.nameRevision,
+				},
+				operationId,
+				"session_name_updated",
+			);
+		if (before.phase !== after.phase)
+			await this.broadcastEvent(sessionId, runtime, { phase: after.phase }, operationId, "session_phase_changed");
+	}
+
 	private async readOperation(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.operationId) throw new Error("operation/read requires operationId");
 		const operation = this.operations.get(command.operationId);
@@ -2011,7 +2024,7 @@ export class PiServerV2 {
 		if (history.length > MAX_EVENT_HISTORY) history.splice(0, history.length - MAX_EVENT_HISTORY);
 		this.eventHistory.set(sessionId, history);
 		await this.operationStore.appendEvent(event);
-		await Promise.all(
+		await Promise.allSettled(
 			Array.from(this.connections)
 				.filter((connection) => connection.sessions.get(sessionId) === runtime)
 				.map((connection) => this.sendEvent(connection, event)),
