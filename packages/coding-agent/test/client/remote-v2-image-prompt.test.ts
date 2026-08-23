@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
@@ -119,6 +119,48 @@ describe("remote v2 image prompts", () => {
 				const snapshot = await session.waitForOperation(operationId);
 				expect(snapshot.phase).toBe("failed");
 				expect(snapshot.transcript.some((item) => item.role === "user")).toBe(false);
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("uploads a client-local image before submitting a remote prompt", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-remote-local-image-"));
+		directories.push(directory);
+		const runtime = await createImagePromptRuntime(
+			directory,
+			"coding-agent-remote-local-image-faux",
+			"coding-agent-remote-local-image-model",
+			["text", "image"],
+			"local image received",
+		);
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const localPath = join(directory, "local.png");
+			await writeFile(localPath, Buffer.from("fake-png"));
+			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
+			try {
+				const blob = await session.uploadLocalFile(localPath, "image/png");
+				const operationId = await session.submit([
+					{ type: "text", text: "inspect this local image" },
+					{ type: "image", digest: blob.digest, mimeType: blob.mimeType },
+				]);
+				const snapshot = await session.waitForOperation(operationId);
+				expect(
+					snapshot.transcript.some(
+						(item) =>
+							item.role === "assistant" &&
+							item.content.some((part) => part.type === "text" && part.text === "local image received"),
+					),
+				).toBe(true);
 			} finally {
 				await session.dispose();
 			}
