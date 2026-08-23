@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import type { PiClientV2, PiSessionV2Handle } from "@earendil-works/pi-client";
 import type { CommandV2, JsonValue } from "@earendil-works/pi-protocol";
+import { verifyDiagnosticBundle } from "@earendil-works/pi-server";
 import { RemoteV2Session } from "../../client/remote-v2-session.ts";
 import type { ExperimentalCliContext } from "./cli.ts";
 import type { AttachCommand } from "./commands/attach.ts";
@@ -82,14 +83,14 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 		}
 	};
 	const runDiagnostics = async (command: DiagnosticsCommand): Promise<void> => {
+		if (command.action === "verify" && command.bundle !== undefined) {
+			const bundle = JSON.parse(await readFile(command.bundle, "utf8")) as JsonValue;
+			options.write(verifyDiagnosticBundle(bundle));
+			return;
+		}
 		const client = connect(addressFor(command.connect));
 		try {
 			await client.connect();
-			if (command.action === "verify" && command.bundle !== undefined) {
-				const bundle = JSON.parse(await readFile(command.bundle, "utf8")) as JsonValue;
-				options.write(resultOf(await client.request({ command: "diagnostics/verify", payload: { bundle } })));
-				return;
-			}
 			const protocolCommand =
 				command.action === "tail" || command.action === "timeline"
 					? "diagnostics/timeline"
@@ -101,7 +102,10 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 			};
 			const result = resultOf(await client.request({ command: protocolCommand as CommandV2["command"], payload }));
 			if (command.action === "export" && command.output !== undefined) {
-				await writeFile(command.output, `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
+				const bundle = result.bundle;
+				if (typeof bundle !== "object" || bundle === null || Array.isArray(bundle))
+					throw new Error("diagnostics/export response did not contain a bundle");
+				await writeFile(command.output, `${JSON.stringify(bundle, null, 2)}\n`, { mode: 0o600 });
 			}
 			options.write(result);
 		} finally {
