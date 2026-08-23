@@ -131,6 +131,9 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 			case "set_follow_up_mode":
 				await session.setFollowUpMode(command.mode);
 				return success(id, "set_follow_up_mode");
+			case "set_auto_compaction":
+				await session.setAutoCompaction(command.enabled);
+				return success(id, "set_auto_compaction");
 			case "get_available_thinking_levels":
 				return success(id, "get_available_thinking_levels", { levels: THINKING_LEVELS });
 			case "cycle_thinking_level": {
