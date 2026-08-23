@@ -132,7 +132,9 @@ export async function createCodingAgentDaemonRuntime(
 				}
 			: { ...options, inputs, plans, diagnostics, processes },
 	);
-	const agents = options.agents ?? (service.createSession ? createCodingAgentV2AgentRegistry(service) : undefined);
+	const agents =
+		options.agents ??
+		(service.createSession ? createCodingAgentV2AgentRegistry(service, { diagnostics }) : undefined);
 	createdAgents = agents;
 	const daemon = new ServerDaemon({
 		service,
