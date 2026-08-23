@@ -81,13 +81,18 @@ function validateRestoredRequest(value: unknown): asserts value is V2InputReques
 		if (!Object.values(record.answers).every((answer) => typeof answer === "string"))
 			throw new Error("Input record answers must be strings");
 	}
-	if (record.deadlineAt !== undefined && (!Number.isInteger(record.deadlineAt) || (record.deadlineAt as number) < 0))
+	if (
+		record.deadlineAt !== undefined &&
+		(!Number.isSafeInteger(record.deadlineAt) || (record.deadlineAt as number) < 0)
+	)
 		throw new Error("Input record deadlineAt is invalid");
 }
 
 function validateDeadline(autoResolutionMs: number | undefined): void {
-	if (autoResolutionMs !== undefined && (!Number.isInteger(autoResolutionMs) || autoResolutionMs < 0))
+	if (autoResolutionMs !== undefined && (!Number.isSafeInteger(autoResolutionMs) || autoResolutionMs < 0))
 		throw new Error("autoResolutionMs must be non-negative");
+	if (autoResolutionMs !== undefined && Date.now() + autoResolutionMs > Number.MAX_SAFE_INTEGER)
+		throw new Error("autoResolutionMs exceeds the supported deadline range");
 }
 
 export function createV2InputRequest(
