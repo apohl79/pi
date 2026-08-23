@@ -1176,7 +1176,9 @@ export class PiServerV2 {
 
 	private async diagnosticsStatus(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
-		const sessionId = typeof payload.sessionId === "string" ? payload.sessionId : undefined;
+		if (payload.sessionId !== undefined && typeof payload.sessionId !== "string")
+			throw new Error("diagnostics/status sessionId must be a string");
+		const sessionId = payload.sessionId === undefined ? undefined : payload.sessionId;
 		const events = await this.diagnosticEvents();
 		const scopedEvents = sessionId === undefined ? events : events.filter((event) => event.sessionId === sessionId);
 		const critical = scopedEvents.filter((event) => event.severity === "error");
@@ -1191,8 +1193,12 @@ export class PiServerV2 {
 
 	private async diagnosticsTimeline(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
-		const sessionId = typeof payload.sessionId === "string" ? payload.sessionId : undefined;
-		const operationId = typeof payload.operationId === "string" ? payload.operationId : undefined;
+		if (payload.sessionId !== undefined && typeof payload.sessionId !== "string")
+			throw new Error("diagnostics/timeline sessionId must be a string");
+		if (payload.operationId !== undefined && typeof payload.operationId !== "string")
+			throw new Error("diagnostics/timeline operationId must be a string");
+		const sessionId = payload.sessionId === undefined ? undefined : payload.sessionId;
+		const operationId = payload.operationId === undefined ? undefined : payload.operationId;
 		if (payload.afterSeq !== undefined && typeof payload.afterSeq !== "number")
 			throw new Error("diagnostics/timeline afterSeq must be a number");
 		const events = await this.diagnosticEvents(typeof payload.afterSeq === "number" ? payload.afterSeq : 0);
@@ -1234,8 +1240,14 @@ export class PiServerV2 {
 
 	private async diagnosticsExport(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
-		const sessionId = typeof payload.sessionId === "string" ? payload.sessionId : undefined;
-		const operationId = typeof payload.operationId === "string" ? payload.operationId : undefined;
+		if (payload.sessionId !== undefined && typeof payload.sessionId !== "string")
+			throw new Error("diagnostics/export sessionId must be a string");
+		if (payload.operationId !== undefined && typeof payload.operationId !== "string")
+			throw new Error("diagnostics/export operationId must be a string");
+		if (payload.decryptContent !== undefined && typeof payload.decryptContent !== "boolean")
+			throw new Error("diagnostics/export decryptContent must be a boolean");
+		const sessionId = payload.sessionId === undefined ? undefined : payload.sessionId;
+		const operationId = payload.operationId === undefined ? undefined : payload.operationId;
 		const allEvents = await this.diagnosticEvents();
 		const events = allEvents.filter(
 			(event) =>

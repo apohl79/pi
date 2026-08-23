@@ -461,6 +461,16 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: false,
 			error: { message: "diagnostics/timeline afterSeq must be a number" },
 		});
+		for (const [command, field, message] of [
+			["diagnostics/status", "sessionId", "diagnostics/status sessionId must be a string"],
+			["diagnostics/timeline", "operationId", "diagnostics/timeline operationId must be a string"],
+			["diagnostics/export", "sessionId", "diagnostics/export sessionId must be a string"],
+			["diagnostics/export", "operationId", "diagnostics/export operationId must be a string"],
+			["diagnostics/export", "decryptContent", "diagnostics/export decryptContent must be a boolean"],
+		] as const) {
+			const malformed = await client.request({ command, payload: { [field]: 42 } });
+			expect(malformed).toMatchObject({ ok: false, error: { code: "request_failed", message } });
+		}
 		const exported = await client.request({ command: "diagnostics/export" });
 		const scopedExport = await client.request({
 			command: "diagnostics/export",
