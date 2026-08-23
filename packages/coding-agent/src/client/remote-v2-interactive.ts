@@ -417,7 +417,7 @@ export class RemoteV2InteractiveAttachment implements Component {
 		const prefix = this.#input.slice(tokenStart);
 		if (!prefix.startsWith("@")) return;
 		try {
-			const items = await this.session.completeFiles(prefix);
+			const items = await this.session.completeFiles(prefix, { requestId: `completion-${sequence}` });
 			if (sequence !== this.#completionSequence || this.#input.slice(tokenStart) !== prefix) return;
 			const item = items[0];
 			if (item === undefined) return;

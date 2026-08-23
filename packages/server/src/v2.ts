@@ -1189,6 +1189,7 @@ export class PiServerV2 {
 		const prefix = payload.prefix === undefined ? "" : payload.prefix;
 		await this.sendResponse(state, id, {
 			command: command.command,
+			...(command.requestId === undefined ? {} : { requestId: command.requestId }),
 			items: await this.files.complete(command.sessionId, prefix),
 		});
 	}
