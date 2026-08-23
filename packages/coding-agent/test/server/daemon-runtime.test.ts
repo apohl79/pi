@@ -391,7 +391,9 @@ describe("coding-agent daemon runtime", () => {
 				calls.push(`accepted:${context.operation.type}:${context.model.id}`);
 				await context.state.set("lastOperation", context.operation.id);
 			},
-			onOperationTerminal: (context) => calls.push(`terminal:${context.outcome}`),
+			onOperationTerminal: (context) => {
+				calls.push(`terminal:${context.outcome}`);
+			},
 		};
 		const runtime = await createConfiguredCodingAgentDaemonRuntime({
 			agentDir: directory,
