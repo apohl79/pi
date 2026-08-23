@@ -1,4 +1,4 @@
-import type { PiClientV2, PiSessionV2Handle } from "@earendil-works/pi-client";
+import type { PiClientV2, PiSessionV2Handle, V2SessionLeaseMode } from "@earendil-works/pi-client";
 import type {
 	CommandV2,
 	JsonValue,
@@ -23,6 +23,7 @@ export interface RemoteV2SessionState {
 
 export interface RemoteV2SessionOptions {
 	readonly onListenerError?: (error: Error) => void;
+	readonly mode?: V2SessionLeaseMode;
 }
 
 type Listener = (state: RemoteV2SessionState) => void;
@@ -30,6 +31,7 @@ type Listener = (state: RemoteV2SessionState) => void;
 export class RemoteV2Session {
 	readonly #client: PiClientV2;
 	readonly #onListenerError: ((error: Error) => void) | undefined;
+	readonly #mode: V2SessionLeaseMode;
 	readonly #listeners = new Set<Listener>();
 	#handle: PiSessionV2Handle | undefined;
 	#unsubscribe: (() => void) | undefined;
@@ -40,6 +42,7 @@ export class RemoteV2Session {
 	private constructor(client: PiClientV2, options: RemoteV2SessionOptions) {
 		this.#client = client;
 		this.#onListenerError = options.onListenerError;
+		this.#mode = options.mode ?? "control";
 	}
 
 	static async open(
@@ -90,7 +93,7 @@ export class RemoteV2Session {
 		let next: PiSessionV2Handle | undefined;
 		let unsubscribe: (() => void) | undefined;
 		try {
-			next = await this.#client.openSession(sessionId, "control");
+			next = await this.#client.openSession(sessionId, this.#mode);
 			unsubscribe = next.onEvent((event) => this.#receiveEvent(event));
 			this.#handle = next;
 			this.#unsubscribe = unsubscribe;

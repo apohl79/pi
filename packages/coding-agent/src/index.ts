@@ -8,6 +8,12 @@ export {
 	type ExperimentalDaemonController,
 } from "./cli/experimental/runtime.ts";
 export {
+	type RemoteV2SessionEntry,
+	RemoteV2SessionSelector,
+	type RemoteV2SessionStatus,
+	sessionStatus,
+} from "./client/remote-v2-selector.ts";
+export {
 	RemoteV2Session,
 	type RemoteV2SessionLifecycle,
 	type RemoteV2SessionOptions,
