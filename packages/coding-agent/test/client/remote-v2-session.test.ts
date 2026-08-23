@@ -125,7 +125,7 @@ function memoryTransport() {
 				return;
 			}
 			const result: JsonValue =
-				message.request.command === "session/read"
+				message.request.command === "session/read" || message.request.command === "session/create"
 					? ({ session: snapshot() } as JsonValue)
 					: message.request.command === "agent/list"
 						? ({ agents: [] } as JsonValue)
@@ -472,6 +472,37 @@ function memoryTransport() {
 }
 
 describe("RemoteV2Session", () => {
+	test("creates and opens a server-owned session", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.create(client, { name: "new session", cwd: "/workspace" });
+		expect(session.id).toBe("session-1");
+		expect(session.state.snapshot).toMatchObject({ id: "session-1", phase: "idle" });
+		expect(pair.requests.map((request) => request.command)).toEqual([
+			"session/create",
+			"session/attach",
+			"session/read",
+		]);
+		await session.dispose();
+	});
+
+	test("forks through the server-owned session boundary and opens the child", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		pair.overrideNextResult("session/fork", { session: { ...snapshot(), id: "session-2" } });
+		const forked = await session.fork({ name: "branch", scope: "branch", position: "at" });
+		expect(forked.id).toBe("session-2");
+		expect(pair.requests.find((request) => request.command === "session/fork")).toMatchObject({
+			sessionId: "session-1",
+			payload: { name: "branch", scope: "branch", position: "at" },
+		});
+		await forked.dispose();
+		await session.dispose();
+	});
+
 	test("opens, reads authoritative state, and publishes terminal snapshots", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });
@@ -486,6 +517,7 @@ describe("RemoteV2Session", () => {
 		const operation = session.submit("hello");
 		expect(await operation).toBe("operation-1");
 		expect(session.state.lifecycle).toMatchObject({ status: "busy", operationId: "operation-1" });
+		const completed = session.waitForOperation("operation-1");
 		expect(pair.requests.find((request) => request.command === "session/thinking/set")?.payload).toEqual({
 			level: "high",
 		});
@@ -499,6 +531,7 @@ describe("RemoteV2Session", () => {
 			payload: { state: "complete", snapshot: snapshot({ revision: 3, eventSeq: 3, phase: "idle" }) },
 		});
 		expect(session.state).toMatchObject({ lifecycle: { status: "ready" }, snapshot: { revision: 3 } });
+		expect(await completed).toMatchObject({ revision: 3, phase: "idle" });
 		await session.dispose();
 	});
 
