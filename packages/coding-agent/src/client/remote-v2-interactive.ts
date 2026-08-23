@@ -9,6 +9,8 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/goal",
 	"/goal-pause",
 	"/goal-resume",
+	"/input",
+	"/input-cancel",
 	"/model",
 	"/name",
 	"/name-auto",
@@ -26,6 +28,8 @@ export type RemoteV2Command =
 	| { readonly name: "goal"; readonly objective: string }
 	| { readonly name: "goal-pause" }
 	| { readonly name: "goal-resume" }
+	| { readonly name: "input"; readonly requestId: string; readonly answers: Readonly<Record<string, string>> }
+	| { readonly name: "input-cancel"; readonly requestId: string }
 	| { readonly name: "model"; readonly provider: string; readonly id: string }
 	| { readonly name: "name"; readonly value?: string; readonly clear?: boolean; readonly generate?: boolean }
 	| { readonly name: "name-auto"; readonly enabled: boolean }
@@ -67,6 +71,28 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 	if (name === "/goal-pause" || name === "/goal-resume") {
 		if (arguments_.length > 0) throw new Error(`${name} does not accept arguments`);
 		return { name: name.slice(1) as "goal-pause" | "goal-resume" };
+	}
+	if (name === "/input") {
+		if (arguments_.length < 2) throw new Error("/input requires <request-id> <answers-json>");
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(arguments_.slice(1).join(" "));
+		} catch {
+			throw new Error("/input answers must be valid JSON");
+		}
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+			throw new Error("/input answers must be a JSON object");
+		const answers = Object.fromEntries(
+			Object.entries(parsed).map(([key, value]) => {
+				if (typeof value !== "string") throw new Error("/input answers must contain only strings");
+				return [key, value];
+			}),
+		);
+		return { name: "input", requestId: arguments_[0], answers };
+	}
+	if (name === "/input-cancel") {
+		if (arguments_.length !== 1) throw new Error("/input-cancel requires <request-id>");
+		return { name: "input-cancel", requestId: arguments_[0] };
 	}
 	if (name === "/model") {
 		if (arguments_.length !== 1) throw new Error("/model requires <provider/model>");
@@ -144,6 +170,12 @@ export class RemoteV2InteractiveAttachment implements Component {
 				return operation(await this.session.pauseGoal());
 			case "goal-resume":
 				return operation(await this.session.resumeGoal());
+			case "input":
+				await this.session.respondInput(command.requestId, command.answers);
+				return { kind: "status", text: "input answered" };
+			case "input-cancel":
+				await this.session.cancelInput(command.requestId);
+				return { kind: "status", text: "input cancelled" };
 			case "model":
 				return operation(await this.session.setModel({ provider: command.provider, id: command.id }));
 			case "name":
