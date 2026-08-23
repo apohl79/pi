@@ -5,7 +5,12 @@ import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-work
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import { afterEach, describe, expect, test } from "vitest";
-import { type RemoteV2CommandResult, RemoteV2InteractiveAttachment, RemoteV2SessionSelector } from "../../src/index.ts";
+import {
+	type RemoteV2CommandResult,
+	RemoteV2InteractiveAttachment,
+	RemoteV2Session,
+	RemoteV2SessionSelector,
+} from "../../src/index.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemon-runtime.ts";
 
 const directories: string[] = [];
@@ -58,6 +63,58 @@ describe("production remote v2 automatic naming", () => {
 				expect(attachment.session.snapshot?.name).toBeUndefined();
 			} finally {
 				await adapter.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("generates a durable title through the fast model without transcript growth", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-remote-generated-name-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-remote-generated-name-faux",
+			models: [{ id: "remote-generated-name-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("turn complete"), fauxAssistantMessage("Remote generated title")]);
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			fastModel: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
+			try {
+				const sessionId = session.id;
+				if (sessionId === undefined) throw new Error("Remote session did not expose an id");
+				const operation = await session.submit("summarize this remote task");
+				await session.waitForOperation(operation);
+				for (let attempt = 0; attempt < 50; attempt++) {
+					await session.refresh();
+					if (session.snapshot?.name === "Remote generated title") break;
+					if (attempt === 49) throw new Error("Timed out waiting for remote automatic naming");
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+				expect(session.snapshot?.nameSource).toBe("generated");
+				expect(
+					session.snapshot?.transcript?.some((item) => JSON.stringify(item).includes("Remote generated title")),
+				).toBe(false);
+				expect((await session.readUsage({ sessionId, purpose: "sessionName" })).entries).toHaveLength(1);
+			} finally {
+				await session.dispose();
 			}
 		} finally {
 			client.dispose();
