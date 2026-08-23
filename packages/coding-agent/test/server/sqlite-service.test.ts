@@ -6,6 +6,7 @@ import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-work
 import { InMemoryV2PluginRegistry } from "@earendil-works/pi-server";
 import { createNodeSqliteFactory, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import { afterEach, describe, expect, test } from "vitest";
+import { ModelInstructionResolver } from "../../src/server/model-instructions.ts";
 import { createCodingAgentV2SqliteService } from "../../src/server/sqlite-service.ts";
 
 const directories: string[] = [];
@@ -33,12 +34,33 @@ describe("coding-agent SQLite v2 service", () => {
 			],
 		});
 		models.setProvider(faux.provider);
+		expect(faux.getModel().id).toBe("coding-agent-v2-sqlite-model");
+		const instructionResolver = new ModelInstructionResolver(
+			[
+				{
+					id: "sqlite-profile",
+					provider: faux.getModel().provider,
+					model: "coding-agent-v2-sqlite-model",
+					mode: "append",
+					text: "Use SQLite fixtures.",
+				},
+			],
+			{ cwd: directory },
+		);
+		expect(await instructionResolver.resolve(faux.getModel())).toMatchObject({ id: "sqlite-profile" });
 		try {
 			const service = await createCodingAgentV2SqliteService({
 				repository,
 				models,
 				env,
 				model: faux.getModel(),
+				harness: {
+					modelInstructions: {
+						resolver: instructionResolver,
+					},
+					tools: [],
+					activeToolNames: [],
+				},
 				compaction: (selectedModel) => ({
 					enabled: true,
 					reserveTokens: 123,
@@ -48,7 +70,6 @@ describe("coding-agent SQLite v2 service", () => {
 						[`${selectedModel.provider}/coding-agent-v2-sqlite-small-model`]: { reserveTokens: 456 },
 					},
 				}),
-				harness: { tools: [], activeToolNames: [] },
 			});
 			const created = await service.createSession!({ id: "sqlite-session", cwd: directory, name: "SQLite session" });
 			expect(created.sessionId).toBe("sqlite-session");
@@ -56,6 +77,10 @@ describe("coding-agent SQLite v2 service", () => {
 				reserveTokens: 123,
 				keepRecentTokens: 789,
 				source: "mixed",
+			});
+			expect((await created.runtime.snapshot()).instructionProfile).toMatchObject({
+				id: "sqlite-profile",
+				source: "text",
 			});
 			await created.runtime.run("model-switch", {
 				command: "session/model/set",
@@ -68,6 +93,7 @@ describe("coding-agent SQLite v2 service", () => {
 				keepRecentTokens: 789,
 				source: "mixed",
 			});
+			expect((await created.runtime.snapshot()).instructionProfile).toBeUndefined();
 			expect(await service.listSessions()).toMatchObject([{ id: "sqlite-session", sessionName: "SQLite session" }]);
 			await service.openSession("sqlite-session");
 			await service.deleteSession!("sqlite-session");

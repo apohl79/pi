@@ -9,6 +9,7 @@ import type { Api, ImageContent, Message, Model, Models, ThinkingLevel } from "@
 import type {
 	CommandNameV2,
 	CommandV2,
+	InstructionProfileSummary,
 	ModelMetadata,
 	OperationAccepted,
 	OperationSummary,
@@ -28,6 +29,7 @@ export interface CodingAgentV2SessionDefinition {
 	extensionHost?: ServerRuntimeExtensionHost;
 	inputs?: V2InputRegistry;
 	usage?: V2UsageLedger;
+	instructionProfile?: () => Promise<InstructionProfileSummary | undefined>;
 }
 
 export interface CodingAgentV2Service {
@@ -387,9 +389,10 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.definition.usage?.aggregate({ sessionId: this.definition.metadata.id }),
 		]);
 		void leafId;
-		const [goal, persistedName] = await Promise.all([
+		const [goal, persistedName, instructionProfile] = await Promise.all([
 			this.definition.goals?.read(),
 			this.definition.harness.session.getName(),
+			this.definition.instructionProfile?.(),
 		]);
 		const effectiveName = persistedName ?? this.sessionName;
 		const cacheRead = Math.max(0, stats.cachedTokens);
@@ -433,6 +436,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				contextWindow,
 				usedPercentage: Math.min(100, (Math.max(0, stats.totalTokens) / contextWindow) * 100),
 			},
+			...(instructionProfile === undefined ? {} : { instructionProfile }),
 			compactionPolicy: {
 				enabled: compaction.enabled,
 				contextWindow,

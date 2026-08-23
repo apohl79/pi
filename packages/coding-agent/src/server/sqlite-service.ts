@@ -297,9 +297,22 @@ export async function createCodingAgentV2SqliteService(
 			...(agentRegistry === undefined ? {} : { agents: createAgentTools(agentRegistry, metadata.id, model) }),
 		});
 		const goalContinuation = options.goalContinuation?.({ goals, harness: created.harness, model });
+		const instructionProfile =
+			options.harness?.modelInstructions === undefined
+				? undefined
+				: async () => {
+						const resolved = await options.harness!.modelInstructions!.resolver.resolve(
+							await created.harness.getModel(),
+							options.harness!.modelInstructions!.scope,
+						);
+						return resolved === undefined
+							? undefined
+							: { id: resolved.id, source: resolved.source, contentHash: resolved.contentHash };
+					};
 		return {
 			metadata: sessionMetadata(metadata),
 			harness: created.harness,
+			...(instructionProfile === undefined ? {} : { instructionProfile }),
 			goals,
 			...(goalContinuation === undefined ? {} : { goalContinuation }),
 			...(inputRegistry === undefined ? {} : { inputs: inputRegistry }),
