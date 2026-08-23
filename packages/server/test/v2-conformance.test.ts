@@ -300,6 +300,15 @@ describe("PiServer v2 operation acceptance", () => {
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
+		const unauthorised = await client.request({
+			command: "filesystem/reference/read",
+			sessionId: "session-1",
+			payload: { reference: "notes.ts" },
+		});
+		expect(unauthorised).toMatchObject({
+			ok: false,
+			error: { code: "request_failed", message: "Session session-1 is not attached" },
+		});
 		await client.request({ command: "session/attach", sessionId: "session-1" });
 
 		const complete = await client.request({
