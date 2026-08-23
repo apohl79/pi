@@ -105,6 +105,7 @@ export interface CodingAgentAgentTools {
 		taskMessage: string;
 		model?: { provider: string; id: string };
 		role?: string;
+		forkTurns?: "none" | "all" | number;
 	}): Promise<unknown>;
 	list(): Promise<unknown>;
 	wait(agentId: string, timeoutMs?: number): Promise<unknown>;

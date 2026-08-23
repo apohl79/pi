@@ -78,6 +78,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			throw new Error(`Agent active limit ${this.maxActivePerParent} exceeded for parent ${request.sessionId}`);
 		if (!this.service.createSession) throw new Error("Coding-agent service does not support child sessions");
 		const model = await this.resolveModel(request);
+		const forkedContext = await this.readForkedContext(request);
 		const path = `${request.parentPath.replace(/\/$/, "")}/${request.taskName}`;
 		if ([...this.agents.values()].some((agent) => agent.summary.path === path))
 			throw new Error(`Agent path ${path} already exists`);
@@ -108,7 +109,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		};
 		this.agents.set(summary.id, agent);
 		await this.persist(agent);
-		void this.run(agent, "turn/start", request.taskMessage);
+		void this.run(agent, "turn/start", [forkedContext, request.taskMessage].filter(Boolean).join("\n\n"));
 		return this.snapshot(agent);
 	}
 
@@ -230,6 +231,13 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	private validateRequest(request: V2AgentRequest): void {
+		if (
+			request.forkTurns !== undefined &&
+			request.forkTurns !== "none" &&
+			request.forkTurns !== "all" &&
+			(!Number.isInteger(request.forkTurns) || request.forkTurns < 1 || request.forkTurns > 32)
+		)
+			throw new Error("forkTurns must be none, all, or an integer from 1 to 32");
 		const depth = request.parentPath.split("/").filter(Boolean).length - 1;
 		if (depth >= this.maxDepth) throw new Error(`Agent maximum depth ${this.maxDepth} exceeded`);
 		if (!/^[A-Za-z0-9._-]+$/.test(request.taskName))
@@ -245,6 +253,22 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			provider: request.model.provider === "inherit" ? inherited.provider : request.model.provider,
 			id: request.model.id === "inherit" ? inherited.id : request.model.id,
 		};
+	}
+
+	private async readForkedContext(request: V2AgentRequest): Promise<string | undefined> {
+		if (request.forkTurns === undefined || request.forkTurns === "none") return undefined;
+		const snapshot = await (await this.service.openSession(request.sessionId)).snapshot();
+		const transcript = snapshot.transcript;
+		const userIndexes = transcript.flatMap((item, index) => (item.role === "user" ? [index] : []));
+		const start =
+			request.forkTurns === "all"
+				? 0
+				: (userIndexes[Math.max(0, userIndexes.length - request.forkTurns)] ?? transcript.length);
+		const selected = transcript.slice(start);
+		if (selected.length === 0) return undefined;
+		const serialized = selected.map((item) => `${item.role}: ${JSON.stringify(item.content)}`).join("\n");
+		const bounded = serialized.slice(0, 32_000);
+		return `[forked context]\n${bounded}`;
 	}
 
 	private activeCount(): number {

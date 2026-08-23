@@ -443,6 +443,7 @@ function createAgentTools(registry: V2AgentRegistry, sessionId: string, model: M
 				taskName: request.taskName,
 				taskMessage: request.taskMessage,
 				...(request.role === undefined ? {} : { role: request.role }),
+				...(request.forkTurns === undefined ? {} : { forkTurns: request.forkTurns }),
 				model: request.model ?? { provider: model.provider, id: model.id },
 			}),
 		list: () => registry.list(sessionId),

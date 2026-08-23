@@ -111,6 +111,12 @@ function objectPayload(command: CommandV2): Record<string, unknown> {
 	return command.payload as Record<string, unknown>;
 }
 
+function parseForkTurns(value: unknown): "none" | "all" | number {
+	if (value === "none" || value === "all") return value;
+	if (typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 32) return value;
+	throw new Error("agent/spawn forkTurns must be none, all, or an integer from 1 to 32");
+}
+
 function processIdFrom(command: CommandV2, payload: Record<string, unknown>): string {
 	const processId = payload.processId ?? command.operationId;
 	if (typeof processId !== "string" || processId.length === 0) throw new Error("processId is required");
@@ -624,6 +630,7 @@ export class PiServerV2 {
 			taskName: payload.taskName,
 			taskMessage: payload.taskMessage,
 			...(typeof payload.role === "string" ? { role: payload.role } : {}),
+			...(payload.forkTurns === undefined ? {} : { forkTurns: parseForkTurns(payload.forkTurns) }),
 			model: {
 				provider: typeof modelPayload.provider === "string" ? modelPayload.provider : "inherit",
 				id: typeof modelPayload.id === "string" ? modelPayload.id : "inherit",
