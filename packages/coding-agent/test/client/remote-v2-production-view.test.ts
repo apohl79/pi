@@ -47,22 +47,29 @@ describe("production remote v2 view", () => {
 			expect(created).toMatchObject({ ok: true, result: { session: { id: expect.any(String) } } });
 			const sessionId = (created as unknown as { result: { session: { id: string } } }).result.session.id;
 			const attachment = await new RemoteV2SessionSelector(client).attachView(sessionId, { mode: "control" });
+			const goalOperation = await attachment.session.createGoal("finish the remote implementation");
+			await attachment.session.waitForOperation(goalOperation);
+			const plan = await client.request({
+				command: "plan/update",
+				sessionId,
+				payload: { items: [{ step: "verify the daemon", status: "in_progress" }] },
+			});
+			expect(plan).toMatchObject({ ok: true, result: { plan: { version: 1 } } });
+			await attachment.session.refresh();
+			const rendered = attachment.view.render(120).join("\n");
+			expect(rendered).toContain("Goal active · finish the remote implementation");
+			expect(rendered).toContain("Plan v1");
+			expect(rendered).toContain("Plan in_progress · verify the daemon");
+
+			await attachment.dispose();
+			const reattached = await new RemoteV2SessionSelector(client).attachView(sessionId, { mode: "control" });
 			try {
-				const goalOperation = await attachment.session.createGoal("finish the remote implementation");
-				await attachment.session.waitForOperation(goalOperation);
-				const plan = await client.request({
-					command: "plan/update",
-					sessionId,
-					payload: { items: [{ step: "verify the daemon", status: "in_progress" }] },
-				});
-				expect(plan).toMatchObject({ ok: true, result: { plan: { version: 1 } } });
-				await attachment.session.refresh();
-				const rendered = attachment.view.render(120).join("\n");
-				expect(rendered).toContain("Goal active · finish the remote implementation");
-				expect(rendered).toContain("Plan v1");
-				expect(rendered).toContain("Plan in_progress · verify the daemon");
+				const rerendered = reattached.view.render(120).join("\n");
+				expect(rerendered).toContain("Goal active · finish the remote implementation");
+				expect(rerendered).toContain("Plan v1");
+				expect(rerendered).toContain("Plan in_progress · verify the daemon");
 			} finally {
-				await attachment.dispose();
+				await reattached.dispose();
 			}
 		} finally {
 			client.dispose();
@@ -101,11 +108,11 @@ describe("production remote v2 view", () => {
 					reference: `@local:${localPath}`,
 					path: localPath,
 					kind: "file",
-					size: 13,
+					size: 14,
 				});
 				const blob = await session.session.statBlob(localFile.blobDigest);
 				const blobRead = await session.session.readBlob(localFile.blobDigest);
-				expect(blob).toMatchObject({ digest: localFile.blobDigest, mimeType: "text/plain", size: 13 });
+				expect(blob).toMatchObject({ digest: localFile.blobDigest, mimeType: "text/plain", size: 14 });
 				expect(Buffer.from(blobRead.data, "base64").toString("utf8")).toBe("local content\n");
 			} finally {
 				await session.dispose();
