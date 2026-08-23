@@ -8,6 +8,7 @@ import {
 	parseClientMessageV2,
 	type SessionSnapshotV2,
 } from "@earendil-works/pi-protocol";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import {
 	applyRemoteFileCompletion,
@@ -331,11 +332,9 @@ describe("remote v2 interactive command boundary", () => {
 		await client.connect();
 		const attachment = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
 		const adapter = new RemoteV2InteractiveAttachment(attachment);
-		adapter.handleInput("h");
-		adapter.handleInput("i");
-		adapter.handleInput("\u007f");
-		adapter.handleInput("ello\n");
-		expect(adapter.render(80).at(-1)).toContain("> ");
+		for (const character of "a long prompt that exceeds the terminal") adapter.handleInput(character);
+		expect(visibleWidth(adapter.render(12).at(-1) ?? "")).toBe(12);
+		adapter.handleInput("\n");
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(commands).toContain("turn/start");
 		expect(adapter.render(80).at(-1)).toContain("operation operation-1");
