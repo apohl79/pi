@@ -176,6 +176,71 @@ describe("formatRemoteV2Session", () => {
 		}
 	});
 
+	test("snapshots the authoritative remote work surface", () => {
+		const source = {
+			state: {
+				lifecycle: { status: "ready" as const },
+				snapshot: {
+					...snapshot,
+					usage: { ...snapshot.usage, pricingState: "unknown" as const },
+					goal: {
+						id: "goal-1",
+						objective: "finish the remote implementation",
+						status: "active" as const,
+						tokensUsed: 4,
+						activeTimeSeconds: 2,
+						createdAt: 1,
+						updatedAt: 2,
+					},
+					plan: { version: 3, items: [{ step: "verify the daemon", status: "in_progress" as const }] },
+					queues: { steer: [], followUp: [], pendingInputRequestId: "input-1" },
+					agents: [
+						{
+							id: "agent-1",
+							path: "/root/worker",
+							taskName: "worker",
+							state: "running" as const,
+							model: { provider: "anthropic", id: "sonnet" },
+						},
+					],
+				},
+				processes: [
+					{
+						processId: "process-1",
+						sessionId: "session-1",
+						command: "echo hi",
+						pty: false,
+						state: "running" as const,
+						output: "hi",
+						cursor: 2,
+						truncated: false,
+					},
+				],
+			},
+			subscribe: (_listener: (state: RemoteV2SessionState) => void) => () => {},
+		};
+		const view = new RemoteV2SessionView(source as never);
+		try {
+			expect(view.render(120).map((line) => line.trimEnd())).toMatchInlineSnapshot(`
+				[
+				  "Session session-1 · phase=turn · model=faux/model",
+				  "Usage input=0 output=0 cacheRead=0 cost=unknown",
+				  "Process process-1 · running · echo hi",
+				  "  hi",
+				  "Agent /root/worker · running · anthropic/sonnet",
+				  "Goal active · finish the remote implementation",
+				  "Plan v3",
+				  "Plan in_progress · verify the daemon",
+				  "Input request pending · input-1",
+				  "user: old",
+				  "assistant: a long assistant response",
+				]
+			`);
+		} finally {
+			view.dispose();
+		}
+	});
+
 	test("renders bounded active-agent summaries", () => {
 		const output = formatRemoteV2Session(
 			{
