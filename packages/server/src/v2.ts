@@ -858,12 +858,30 @@ export class PiServerV2 {
 		this.requireControl(state, command.sessionId);
 		const payload = objectPayload(command);
 		if (typeof payload.prompt !== "string") throw new Error("image/generate requires prompt");
+		const image = await this.images.generate(command.sessionId, {
+			prompt: payload.prompt,
+			...(typeof payload.sourceDigest === "string" ? { sourceDigest: payload.sourceDigest } : {}),
+		});
+		await this.usage.record({
+			responseId: `${id}:image`,
+			sessionId: command.sessionId,
+			agentId: command.sessionId,
+			operationId: id,
+			purpose: "otherSideband",
+			provider: image.provider,
+			model: image.model,
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			pricing: image.costUsd === undefined ? "unknown" : "providerReported",
+			...(image.costUsd === undefined ? {} : { costUsd: image.costUsd }),
+			imageUnits: 1,
+			createdAt: Date.now(),
+		});
 		await this.sendResponse(state, id, {
 			command: command.command,
-			image: await this.images.generate(command.sessionId, {
-				prompt: payload.prompt,
-				...(typeof payload.sourceDigest === "string" ? { sourceDigest: payload.sourceDigest } : {}),
-			}),
+			image,
 		});
 	}
 

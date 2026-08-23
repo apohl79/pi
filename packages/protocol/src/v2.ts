@@ -141,6 +141,7 @@ export const UsageAggregateSchema = StrictObject({
 	output: NonNegativeIntegerSchema,
 	cacheRead: NonNegativeIntegerSchema,
 	cacheWrite: NonNegativeIntegerSchema,
+	imageUnits: Type.Optional(NonNegativeIntegerSchema),
 	costUsd: Type.Optional(Type.Number({ minimum: 0 })),
 	pricingState: Type.Union([Type.Literal("known"), Type.Literal("unknown"), Type.Literal("subscription")]),
 });
