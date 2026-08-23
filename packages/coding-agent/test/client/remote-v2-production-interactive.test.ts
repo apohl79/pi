@@ -100,4 +100,31 @@ describe("production remote v2 interactive attachment", () => {
 			await runtime.close();
 		}
 	});
+
+	test("routes remote steering through the production daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-remote-interactive-steer-"));
+		directories.push(directory);
+		const runtime = await createRemoteRuntime(directory);
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			const sessionId = (created as unknown as { result: { session: { id: string } } }).result.session.id;
+			const attachment = await new RemoteV2SessionSelector(client).attachView(sessionId, { mode: "control" });
+			const adapter = new RemoteV2InteractiveAttachment(attachment);
+			try {
+				const result = await adapter.execute("/steer prioritize tests");
+				await attachment.session.waitForOperation(operationId(result));
+				expect(attachment.session.phase).toBe("idle");
+			} finally {
+				await adapter.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
 });
