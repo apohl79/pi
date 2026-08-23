@@ -14,6 +14,7 @@ import {
 	isServerMessageV2,
 	OperationAcceptedSchema,
 	PROTOCOL_V2_VERSION,
+	PromptContentSchema,
 	parseClientMessageV2,
 	type SessionSnapshotV2,
 	SessionSnapshotV2Schema,
@@ -256,6 +257,15 @@ describe("protocol v2 contract", () => {
 		expect(Check(ImageContentSchema, { type: "image", data: "abc", mimeType: "text/plain\nX-Injected: yes" })).toBe(
 			false,
 		);
+	});
+
+	test("constrains V2 prompt reference MIME values", () => {
+		expect(Check(PromptContentSchema, { type: "image", digest: "sha256:image", mimeType: "image/png" })).toBe(true);
+		expect(Check(PromptContentSchema, { type: "blob", digest: "sha256:blob", mimeType: "text/plain" })).toBe(true);
+		expect(Check(PromptContentSchema, { type: "image", digest: "sha256:image", mimeType: "text/plain" })).toBe(false);
+		expect(
+			Check(PromptContentSchema, { type: "blob", digest: "sha256:blob", mimeType: "text/plain\nX-Injected: yes" }),
+		).toBe(false);
 	});
 
 	test("round-trips v2 messages through framed CBOR", () => {
