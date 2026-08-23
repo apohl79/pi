@@ -64,6 +64,7 @@ describe("plugin sampling adapter", () => {
 				entryId: "enabled",
 				reason: "included",
 				characters: 5,
+				tokens: 2,
 				contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
 			});
 			expect(diagnostics[2]).toMatchObject({
@@ -71,6 +72,7 @@ describe("plugin sampling adapter", () => {
 				entryId: "enabled",
 				reason: "included",
 				characters: 6,
+				tokens: 2,
 				contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
 			});
 		} finally {
