@@ -24,11 +24,29 @@ describe("LocalV2FileReferenceService", () => {
 			kind: "file",
 		});
 		expect(await service.complete("session-1", "@server:R")).toEqual([
-			{ reference: "server:README.md", path: join(root, "README.md"), kind: "file" },
+			{
+				reference: "server:README.md",
+				display: "server:README.md",
+				hostScope: "server",
+				path: join(root, "README.md"),
+				canonicalPath: await realpath(join(root, "README.md")),
+				kind: "file",
+				size: 5,
+				mimeType: "text/markdown",
+			},
 		]);
 
 		expect(await service.complete("session-1", "@project:n")).toEqual([
-			{ reference: "project:notes.ts", path: join(root, "notes.ts"), kind: "file" },
+			{
+				reference: "project:notes.ts",
+				display: "project:notes.ts",
+				hostScope: "server",
+				path: join(root, "notes.ts"),
+				canonicalPath: await realpath(join(root, "notes.ts")),
+				kind: "file",
+				size: 25,
+				mimeType: "text/typescript",
+			},
 		]);
 		expect(await service.resolve("session-1", "@README.md")).toMatchObject({
 			reference: "README.md",
@@ -72,8 +90,23 @@ describe("LocalV2FileReferenceService", () => {
 			kind: "file",
 		});
 		expect(await service.complete("session-1", join(outside, ""))).toEqual([
-			{ reference: join(outside, "nested"), path: join(outside, "nested"), kind: "directory" },
-			{ reference: join(outside, "secret.txt"), path: join(outside, "secret.txt"), kind: "file" },
+			{
+				reference: join(outside, "nested"),
+				display: join(outside, "nested"),
+				hostScope: "server",
+				path: join(outside, "nested"),
+				canonicalPath: await realpath(join(outside, "nested")),
+				kind: "directory",
+			},
+			{
+				reference: join(outside, "secret.txt"),
+				display: join(outside, "secret.txt"),
+				hostScope: "server",
+				path: join(outside, "secret.txt"),
+				canonicalPath: await realpath(join(outside, "secret.txt")),
+				kind: "file",
+				size: 6,
+			},
 		]);
 	});
 
@@ -86,8 +119,22 @@ describe("LocalV2FileReferenceService", () => {
 		const service = new LocalV2FileReferenceService({ projectRoot: root, homeDirectory: root, maxCompletions: 2 });
 
 		expect(await service.complete("session-1", "@server:")).toEqual([
-			{ reference: "server:a-directory", path: join(root, "a-directory"), kind: "directory" },
-			{ reference: "server:b-directory", path: join(root, "b-directory"), kind: "directory" },
+			{
+				reference: "server:a-directory",
+				display: "server:a-directory",
+				hostScope: "server",
+				path: join(root, "a-directory"),
+				canonicalPath: await realpath(join(root, "a-directory")),
+				kind: "directory",
+			},
+			{
+				reference: "server:b-directory",
+				display: "server:b-directory",
+				hostScope: "server",
+				path: join(root, "b-directory"),
+				canonicalPath: await realpath(join(root, "b-directory")),
+				kind: "directory",
+			},
 		]);
 		expect(() => new LocalV2FileReferenceService({ projectRoot: root, maxCompletions: 0 })).toThrow("maxCompletions");
 	});

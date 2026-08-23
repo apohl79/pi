@@ -161,7 +161,16 @@ function memoryTransport() {
 												...(message.request.requestId === undefined
 													? {}
 													: { requestId: message.request.requestId }),
-												items: [{ reference: "project:src", path: "/workspace/src", kind: "directory" }],
+												items: [
+													{
+														reference: "project:src",
+														display: "project:src",
+														hostScope: "server",
+														path: "/workspace/src",
+														canonicalPath: "/workspace/src",
+														kind: "directory",
+													},
+												],
 											} as JsonValue)
 										: message.request.command === "filesystem/reference/resolve"
 											? ({
@@ -939,7 +948,16 @@ describe("RemoteV2Session", () => {
 				cwd: "/workspace",
 				environmentId: "default",
 			}),
-		).toEqual([{ reference: "project:src", path: "/workspace/src", kind: "directory" }]);
+		).toEqual([
+			{
+				reference: "project:src",
+				display: "project:src",
+				hostScope: "server",
+				path: "/workspace/src",
+				canonicalPath: "/workspace/src",
+				kind: "directory",
+			},
+		]);
 		expect(pair.requests.at(-1)?.requestId).toBe("completion-1");
 		expect(pair.requests.at(-1)?.payload).toEqual({
 			prefix: "project:s",
