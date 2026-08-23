@@ -205,8 +205,7 @@ export async function createCodingAgentV2SqliteService(
 		if (extensionHost !== undefined) {
 			for (const extension of options.serverExtensions ?? []) await extensionHost.register(extension);
 			for (const extension of options.piExtensions ?? []) {
-				const adapted = adaptPiExtensionSampling(extension);
-				if (adapted !== undefined) await extensionHost.register(adapted);
+				for (const adapted of adaptPiExtensionSampling(extension)) await extensionHost.register(adapted);
 			}
 		}
 		const usageLedger = options.usage;

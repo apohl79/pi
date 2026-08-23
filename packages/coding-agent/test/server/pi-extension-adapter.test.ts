@@ -32,18 +32,48 @@ describe("adaptPiExtensionSampling", () => {
 		} as unknown as Extension;
 
 		const adapted = adaptPiExtensionSampling(extension);
-		expect(adapted).toBeDefined();
-		expect(adapted?.scope).toBe("server");
-		expect(adapted?.capabilities).toEqual(["sampling-input"]);
+		expect(adapted).toHaveLength(2);
+		expect(adapted.map((item) => item.id)).toEqual([
+			"pi:/project/extensions/context.ts:sampling:first",
+			"pi:/project/extensions/context.ts:sampling:second",
+		]);
+		expect(adapted).toEqual(
+			expect.arrayContaining([expect.objectContaining({ scope: "server", capabilities: ["sampling-input"] })]),
+		);
 		const context = { model: undefined, systemPrompt: "", messages: [], tools: [] } as unknown as Parameters<
 			NonNullable<ServerRuntimeExtension["contributeSamplingInput"]>
 		>[0];
-		expect(await adapted?.contributeSamplingInput?.(context)).toEqual([
+		const messages = await Promise.all(adapted.map((item) => item.contributeSamplingInput?.(context)));
+		expect(messages.flat()).toEqual([
 			{ role: "user", content: [{ type: "text", text: "one" }] },
 			{ role: "user", content: [{ type: "text", text: "two" }] },
 			{ role: "user", content: [{ type: "text", text: "three" }] },
 		]);
-		expect(adaptPiExtensionSampling({ path: "/project/extensions/ui.ts" } as unknown as Extension)).toBeUndefined();
+		expect(adaptPiExtensionSampling({ path: "/project/extensions/ui.ts" } as unknown as Extension)).toEqual([]);
+	});
+
+	test("keeps later registrations available when one contributor rejects", async () => {
+		const extension = {
+			path: "/project/extensions/faulty.ts",
+			samplingInputs: new Map([
+				[
+					"faulty",
+					{
+						id: "faulty",
+						contribute: async () => {
+							throw new Error("broken");
+						},
+					},
+				],
+				["healthy", { id: "healthy", contribute: () => ({ role: "user", content: "healthy", timestamp: 0 }) }],
+			]),
+		} as unknown as Extension;
+		const [faulty, healthy] = adaptPiExtensionSampling(extension);
+		const context = { model: undefined, messages: [] } as never;
+		await expect(faulty!.contributeSamplingInput!(context)).rejects.toThrow("broken");
+		expect(await healthy!.contributeSamplingInput!(context)).toEqual([
+			{ role: "user", content: "healthy", timestamp: 0 },
+		]);
 	});
 
 	test("reports process-local resources instead of projecting them into the daemon", () => {
