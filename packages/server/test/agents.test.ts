@@ -215,7 +215,7 @@ describe("InMemoryV2AgentRegistry", () => {
 			});
 		await spawn("/root", "one");
 		await spawn("/root/other", "two");
-		await expect(spawn("/root", "three")).rejects.toThrow("for parent /root");
+		await expect(spawn("/root/", "three")).rejects.toThrow("for parent /root");
 	});
 
 	test("rejects unsafe agent registry limits", () => {
