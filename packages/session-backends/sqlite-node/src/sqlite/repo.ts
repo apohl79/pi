@@ -11,11 +11,14 @@ import {
 	type OperationStartedRecord,
 	type ProvisionedEntry,
 	type RecordQuery,
+	type RegisterWrite,
 	Session,
 	SessionError,
+	type SessionRegister,
 	type SessionRepo as SessionRepository,
 	type SessionStats,
 	type SessionStorage,
+	type SessionTransactionStorage,
 } from "@earendil-works/pi-agent-core";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import { appendEntryToBranchCache, buildCachedBranch, deleteBranchCache, rebuildBranchCache } from "./branch-cache.ts";
@@ -54,6 +57,7 @@ import {
 	readOpenOperationRows,
 	readRecordRows,
 } from "./storage/records.ts";
+import { deleteRegisterRows, readRegister, writeRegister } from "./storage/registers.ts";
 import {
 	advanceSequence,
 	createSequence,
@@ -339,7 +343,9 @@ function requireSessionRow(db: SqliteDatabase, sessionId: string): SessionRow {
 	return row;
 }
 
-class SqliteSessionStorage implements SessionStorage<SqliteSessionMetadata> {
+class SqliteSessionStorage
+	implements SessionStorage<SqliteSessionMetadata>, SessionTransactionStorage<SqliteSessionMetadata>
+{
 	private readonly db: SqliteDatabase;
 	private readonly metadata: SqliteSessionMetadata;
 	private readonly lease: WriterLease;
@@ -498,37 +504,61 @@ class SqliteSessionStorage implements SessionStorage<SqliteSessionMetadata> {
 	}
 
 	async appendRecords<TRecord extends LaneRecord>(records: readonly NewRecord<TRecord>[]): Promise<TRecord[]> {
-		return this.enqueueWrite(() => {
-			const committed: LaneRecord[] = [];
-			for (const record of records) {
-				if (!readLane(this.db, this.metadata.id, record.lane)) {
-					throw new SessionError("invalid_lane", `Lane not found: ${record.lane}`);
-				}
-				assertUnusedId(this.db, this.metadata.id, record.id);
-				const seq = getNextSequence(this.db, this.metadata.id);
-				const materialized: LaneRecord = { ...record, seq, timestamp: Date.now() };
-				if (record.type === "operation_started") {
-					startLaneOperation(this.db, this.metadata.id, record.lane, record.id);
-				}
-				appendRecordRow(this.db, this.metadata.id, {
-					seq,
-					id: record.id,
-					lane: record.lane,
-					runId: recordRunId(record),
-					type: record.type,
-					opKind: recordOpKind(record),
-					timestamp: materialized.timestamp,
-					payload: JSON.stringify(record),
-				});
-				if (record.type === "operation_finished") {
-					finishLaneOperation(this.db, this.metadata.id, record.lane, record.runId);
-				}
-				if (record.type === "usage") addUsageToStats(this.db, this.metadata.id, record.usage);
-				advanceSequence(this.db, this.metadata.id, seq);
-				committed.push(materialized);
+		return this.enqueueWrite(() => this.appendRecordsInTransaction(records));
+	}
+
+	private appendRecordsInTransaction<TRecord extends LaneRecord>(records: readonly NewRecord<TRecord>[]): TRecord[] {
+		const committed: LaneRecord[] = [];
+		for (const record of records) {
+			if (!readLane(this.db, this.metadata.id, record.lane)) {
+				throw new SessionError("invalid_lane", `Lane not found: ${record.lane}`);
 			}
-			return structuredClone(committed) as TRecord[];
+			assertUnusedId(this.db, this.metadata.id, record.id);
+			const seq = getNextSequence(this.db, this.metadata.id);
+			const materialized: LaneRecord = { ...record, seq, timestamp: Date.now() };
+			if (record.type === "operation_started") {
+				startLaneOperation(this.db, this.metadata.id, record.lane, record.id);
+			}
+			appendRecordRow(this.db, this.metadata.id, {
+				seq,
+				id: record.id,
+				lane: record.lane,
+				runId: recordRunId(record),
+				type: record.type,
+				opKind: recordOpKind(record),
+				timestamp: materialized.timestamp,
+				payload: JSON.stringify(record),
+			});
+			if (record.type === "operation_finished") {
+				finishLaneOperation(this.db, this.metadata.id, record.lane, record.runId);
+			}
+			if (record.type === "usage") addUsageToStats(this.db, this.metadata.id, record.usage);
+			advanceSequence(this.db, this.metadata.id, seq);
+			committed.push(materialized);
+		}
+		return structuredClone(committed) as TRecord[];
+	}
+
+	async appendTransaction<TRecord extends LaneRecord>(
+		records: readonly NewRecord<TRecord>[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ records: TRecord[]; registers: SessionRegister[] }> {
+		return this.enqueueWrite(() => {
+			const committed = this.appendRecordsInTransaction(records);
+			const registerValues: SessionRegister[] = [];
+			for (const write of writes) {
+				const seq = getNextSequence(this.db, this.metadata.id);
+				writeRegister(this.db, this.metadata.id, seq, write);
+				advanceSequence(this.db, this.metadata.id, seq);
+				const value = readRegister(this.db, this.metadata.id, write.namespace, write.key);
+				if (value) registerValues.push(value);
+			}
+			return { records: committed, registers: registerValues };
 		});
+	}
+
+	async getRegister(namespace: string, key: string): Promise<SessionRegister | undefined> {
+		return readRegister(this.db, this.metadata.id, namespace, key);
 	}
 
 	async getEntry(id: string): Promise<Entry | undefined> {
@@ -870,6 +900,7 @@ export class SqliteSessionRepository
 				deleteFactRows(db, metadata.id);
 				deleteLaneRows(db, metadata.id);
 				deleteRecordRows(db, metadata.id);
+				deleteRegisterRows(db, metadata.id);
 				deleteEntryRows(db, metadata.id);
 				deleteWriterLease(db, metadata.id);
 				deleteStats(db, metadata.id);

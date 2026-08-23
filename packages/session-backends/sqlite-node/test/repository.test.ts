@@ -91,6 +91,38 @@ function createCloseCountingSqliteFactory(): {
 }
 
 describe("SQLite session repository", () => {
+	it("persists register transactions and deletes register values atomically", async () => {
+		const root = createTempDir();
+		const databasePath = join(root, "sessions.sqlite");
+		const env = new NodeExecutionEnv({ cwd: root });
+		await using repo = new SqliteSessionRepository({ env, sqlite: createNodeSqliteFactory(), databasePath });
+		const session = await repo.create({ cwd: root, id: "registers" });
+		const storage = (
+			session as unknown as {
+				storage: {
+					appendTransaction(records: readonly never[], writes: readonly never[]): Promise<unknown>;
+					getRegister(namespace: string, key: string): Promise<unknown>;
+				};
+			}
+		).storage;
+		await storage.appendTransaction(
+			[],
+			[{ op: "set", namespace: "pending.entry", key: "queued-1", value: { text: "queued" } } as never],
+		);
+		const metadata = await session.getMetadata();
+		const reopened = await repo.open(metadata);
+		const reopenedStorage = (reopened as unknown as { storage: typeof storage }).storage;
+		expect(await reopenedStorage.getRegister("pending.entry", "queued-1")).toMatchObject({
+			value: { text: "queued" },
+		});
+
+		await reopenedStorage.appendTransaction(
+			[],
+			[{ op: "delete", namespace: "pending.entry", key: "queued-1" } as never],
+		);
+		expect(await reopenedStorage.getRegister("pending.entry", "queued-1")).toBeUndefined();
+	});
+
 	it("persists session metadata through create, list, open, and fork", async () => {
 		const root = createTempDir();
 		const databasePath = join(root, "sessions.sqlite");
