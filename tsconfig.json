@@ -30,6 +30,7 @@
 			"@earendil-works/pi-client/*": ["./packages/client/src/*"],
 			"@earendil-works/pi-server": ["./packages/server/src/index.ts"],
 			"@earendil-works/pi-server/*": ["./packages/server/src/*"],
+			"@earendil-works/pi-server-extension-api": ["./packages/server-extension-api/src/index.ts"],
 			"typebox": ["./node_modules/typebox"],
 			"@earendil-works/pi-tui": ["./packages/tui/src/index.ts"],
 			"@earendil-works/pi-tui/*": ["./packages/tui/src/*"],
