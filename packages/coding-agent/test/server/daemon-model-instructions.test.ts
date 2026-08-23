@@ -19,7 +19,10 @@ async function createModelInstructionFixture(directory: string, rootPrompts: str
 	const models = createModels();
 	const root = fauxProvider({
 		provider: "coding-agent-model-instructions-root-faux",
-		models: [{ id: "root-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		models: [
+			{ id: "root-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			{ id: "switched-root-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+		],
 	});
 	const child = fauxProvider({
 		provider: "coding-agent-model-instructions-child-faux",
@@ -29,6 +32,14 @@ async function createModelInstructionFixture(directory: string, rootPrompts: str
 		(context) => {
 			rootPrompts.push(context.systemPrompt ?? "");
 			return fauxAssistantMessage("root response");
+		},
+		(context) => {
+			rootPrompts.push(context.systemPrompt ?? "");
+			return fauxAssistantMessage("switched root response");
+		},
+		(context) => {
+			rootPrompts.push(context.systemPrompt ?? "");
+			return fauxAssistantMessage("root response after preflight");
 		},
 	]);
 	child.setResponses([
@@ -47,6 +58,13 @@ async function createModelInstructionFixture(directory: string, rootPrompts: str
 				model: "root-model",
 				mode: "append",
 				text: "Root profile only.",
+			},
+			{
+				id: "switched-root-profile",
+				provider: root.provider.id,
+				model: "switched-root-model",
+				mode: "append",
+				text: "Switched root profile only.",
 			},
 			{
 				id: "child-profile",
@@ -71,7 +89,7 @@ async function createModelInstructionFixture(directory: string, rootPrompts: str
 	const client = new PiClientV2({ transportFactory: createUnixTransportFactory({ path: socketPath }) });
 	await runtime.daemon.start();
 	await client.connect();
-	return { runtime, client, child };
+	return { runtime, client, root, child };
 }
 
 describe("production daemon model instruction profiles", () => {
@@ -91,7 +109,11 @@ describe("production daemon model instruction profiles", () => {
 		directories.push(directory);
 		const rootPrompts: string[] = [];
 		const childPrompts: string[] = [];
-		const { runtime, client, child } = await createModelInstructionFixture(directory, rootPrompts, childPrompts);
+		const { runtime, client, root, child } = await createModelInstructionFixture(
+			directory,
+			rootPrompts,
+			childPrompts,
+		);
 		try {
 			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
 			try {
@@ -101,9 +123,16 @@ describe("production daemon model instruction profiles", () => {
 					model: { provider: child.provider.id, id: "child-model" },
 				});
 				await session.waitAgent(childAgent.id);
-				expect(rootPrompts).toHaveLength(1);
+				const switched = await session.setModel({ provider: root.provider.id, id: "switched-root-model" });
+				await session.waitForOperation(switched);
+				const secondRoot = await session.submit("root request after model switch");
+				await session.waitForOperation(secondRoot);
+				expect(rootPrompts).toHaveLength(3);
 				expect(rootPrompts[0]).toContain("Root profile only.");
 				expect(rootPrompts[0]).not.toContain("Child profile only.");
+				expect(rootPrompts[2]).toContain("Switched root profile only.");
+				expect(rootPrompts[2]).not.toContain("Root profile only.");
+				expect(rootPrompts[2]).not.toContain("Child profile only.");
 				expect(childPrompts).toHaveLength(1);
 				expect(childPrompts[0]).toContain("Child profile only.");
 				expect(childPrompts[0]).not.toContain("Root profile only.");
