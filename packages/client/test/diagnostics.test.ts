@@ -70,6 +70,24 @@ describe("ClientDiagnosticSpool", () => {
 		expect((bundle.manifest as { unavailable?: readonly string[] }).unavailable).toBeUndefined();
 	});
 
+	test("does not attach local records without a matching server identity", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-client-diagnostics-mismatch-"));
+		const spool = new ClientDiagnosticSpool({
+			path: join(directory, "client.jsonl"),
+			clientInstanceId: "client-local",
+		});
+		await spool.append({ event: "client.connected" });
+
+		const bundle = await mergeClientDiagnosticBundle(
+			{ manifest: { eventCount: 0 }, clientDiagnostics: { afterSeq: 0 } },
+			spool,
+		);
+
+		expect(bundle.clientDiagnostics).toMatchObject({ afterSeq: 0 });
+		expect(bundle.clientDiagnostics).not.toHaveProperty("records");
+		expect((bundle.manifest as { unavailable?: readonly string[] }).unavailable).toEqual(["client-diagnostic-spool"]);
+	});
+
 	test("redacts secret-shaped fields before persisting client evidence", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-client-diagnostics-redaction-"));
 		const path = join(directory, "client.jsonl");
