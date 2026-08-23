@@ -463,6 +463,9 @@ describe("CodingAgentV2AgentRegistry", () => {
 			"maxActive must be an integer from 1 to 8",
 		);
 		expect(() => new CodingAgentV2AgentRegistry(service, { maxActivePerParent: 0 })).toThrow("maxActivePerParent");
+		expect(() => new CodingAgentV2AgentRegistry(service, { maxDepth: Number.MAX_SAFE_INTEGER + 1 })).toThrow(
+			"maxDepth",
+		);
 	});
 
 	test("persists interruption when the daemon disposes running children", async () => {
