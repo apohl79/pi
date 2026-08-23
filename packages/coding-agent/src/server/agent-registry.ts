@@ -158,8 +158,18 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	async list(sessionId: string): Promise<readonly AgentSummary[]> {
-		await this.hydrate(sessionId);
-		const owned = [...this.agents.values()].filter((agent) => agent.parentSessionId === sessionId);
+		const visible = new Map<string, ChildAgent>();
+		const pending = [sessionId];
+		while (pending.length > 0) {
+			const parentSessionId = pending.shift()!;
+			await this.hydrate(parentSessionId);
+			for (const agent of this.agents.values()) {
+				if (agent.parentSessionId !== parentSessionId || visible.has(agent.summary.id)) continue;
+				visible.set(agent.summary.id, agent);
+				pending.push(agent.childSessionId);
+			}
+		}
+		const owned = [...visible.values()];
 		await Promise.all(owned.map((agent) => this.refreshUsage(agent)));
 		return owned.map((agent) => this.snapshot(agent));
 	}
