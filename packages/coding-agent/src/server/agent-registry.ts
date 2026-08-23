@@ -412,7 +412,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		if (selected.length === 0) return undefined;
 		const serialized = selected
 			.map((item) =>
-				item.role === "compactionSummary"
+				item.role === "compactionSummary" || item.role === "branchSummary"
 					? `${item.role}: ${item.summary}`
 					: `${item.role}: ${JSON.stringify(item.content)}`,
 			)

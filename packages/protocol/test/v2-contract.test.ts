@@ -207,6 +207,25 @@ describe("protocol v2 contract", () => {
 		).toBe(false);
 	});
 
+	test("projects durable branch summaries as transcript items", () => {
+		const branchSummary = {
+			id: "branch-summary-1",
+			role: "branchSummary",
+			summary: "abandoned branch",
+			fromId: "message-1",
+			timestamp: 1_700_000_000_002,
+		} as const;
+		const withBranchSummary = { ...snapshot, transcript: [branchSummary] };
+		expect(Check(SessionSnapshotV2Schema, withBranchSummary)).toBe(true);
+		expect(decodeCbor(encodeCbor(withBranchSummary))).toEqual(withBranchSummary);
+		expect(
+			Check(SessionSnapshotV2Schema, {
+				...snapshot,
+				transcript: [{ ...branchSummary, fromId: "" }],
+			}),
+		).toBe(false);
+	});
+
 	test("accepts an operation request and durable acceptance response", () => {
 		const request = {
 			type: "request",

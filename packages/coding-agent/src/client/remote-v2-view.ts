@@ -334,6 +334,7 @@ export function createRemoteV2StatuslinePayload(
 
 function transcriptText(item: TranscriptItem): string {
 	if (item.role === "compactionSummary") return `[compaction] ${item.summary}`;
+	if (item.role === "branchSummary") return `[branch summary] ${item.summary}`;
 	if (item.role === "tool") {
 		return (
 			item.content
