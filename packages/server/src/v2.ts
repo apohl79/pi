@@ -373,6 +373,7 @@ export class PiServerV2 {
 
 	private async handleRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const requestKey = `${state.id}:${id}`;
+		if (this.pendingRequests.has(requestKey)) return void (await this.rejectDuplicateRequest(state, id, command));
 		this.pendingRequests.set(requestKey, command);
 		try {
 			await this.recordProtocolDiagnostic({
@@ -486,6 +487,36 @@ export class PiServerV2 {
 			);
 		} catch (error) {
 			await this.sendError(state, id, "request_failed", error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	private async rejectDuplicateRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		await this.recordProtocolDiagnostic({
+			kind: "protocol_command_completed",
+			severity: "error",
+			outcome: "error",
+			traceId: command.operationId ?? command.requestId ?? id,
+			spanId: id,
+			...(command.sessionId === undefined ? {} : { sessionId: command.sessionId }),
+			...(command.operationId === undefined ? {} : { operationId: command.operationId }),
+			...(this.daemonInstanceId === undefined ? {} : { daemonInstanceId: this.daemonInstanceId }),
+			payload: {
+				command: command.command,
+				requestId: id,
+				errorCode: "duplicate_request_id",
+				error: "A request with this id is already in flight",
+			},
+		});
+		if (state.closed) return;
+		try {
+			await this.send(state, {
+				type: "response",
+				id,
+				ok: false,
+				error: { code: "duplicate_request_id", message: "A request with this id is already in flight" },
+			});
+		} catch {
+			this.disconnect(state);
 		}
 	}
 

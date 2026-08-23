@@ -37,6 +37,19 @@ class ModelService implements PiServerServiceV2 {
 	}
 }
 
+class BlockingRequestService extends ModelService {
+	readonly started = new Deferred<void>();
+	readonly release = new Deferred<void>();
+	private modelListCalls = 0;
+
+	listModels(): Promise<ModelMetadata[]> {
+		this.modelListCalls += 1;
+		if (this.modelListCalls === 1) return super.listModels();
+		this.started.resolve(undefined);
+		return this.release.promise.then(() => [model]);
+	}
+}
+
 describe("PiServerV2 handshake ordering", () => {
 	test("accepts a request received while the hello write is pending", async () => {
 		const server = new PiServerV2(new ModelService(), { listeners: [], serverId: "memory-server" });
@@ -72,6 +85,43 @@ describe("PiServerV2 handshake ordering", () => {
 
 		expect(await response.promise).toMatchObject({ type: "response", id: "early-model-list", ok: true });
 		helloRelease.resolve(undefined);
+		await server.close();
+	});
+
+	test("rejects duplicate in-flight request ids without replacing the original", async () => {
+		const service = new BlockingRequestService();
+		const server = new PiServerV2(service, { listeners: [], serverId: "memory-server" });
+		const responses: ServerMessageV2[] = [];
+		const duplicateResponse = new Deferred<void>();
+		const responsesReady = new Deferred<void>();
+		const helloReady = new Deferred<void>();
+		const connection = {
+			closed: false,
+			send: async (chunk: Uint8Array) => {
+				const message = parseServerMessageV2(decodeCbor(chunk.subarray(4)));
+				if (message.type === "hello") helloReady.resolve(undefined);
+				if (message.type !== "response") return;
+				responses.push(message);
+				if (message.ok === false) duplicateResponse.resolve(undefined);
+				if (responses.length === 2) responsesReady.resolve(undefined);
+			},
+			close: async () => {},
+		};
+		const handler = server.accept(connection);
+		handler.onData(encodeClientMessageV2({ type: "hello", version: 2 }));
+		await helloReady.promise;
+		handler.onData(encodeClientMessageV2({ type: "request", id: "same-id", request: { command: "model/list" } }));
+		await service.started.promise;
+		handler.onData(encodeClientMessageV2({ type: "request", id: "same-id", request: { command: "model/list" } }));
+		await duplicateResponse.promise;
+		expect(responses).toContainEqual({
+			type: "response",
+			id: "same-id",
+			ok: false,
+			error: { code: "duplicate_request_id", message: "A request with this id is already in flight" },
+		});
+		service.release.resolve(undefined);
+		await responsesReady.promise;
 		await server.close();
 	});
 });
