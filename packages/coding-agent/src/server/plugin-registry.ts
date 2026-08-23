@@ -72,8 +72,26 @@ export class AcquiringV2PluginRegistry implements V2PluginRegistry {
 			root: resolved.root,
 		});
 	}
-	upgradePlugin(id: string, version: string, manifest?: Record<string, unknown>, root?: string): Promise<V2Plugin> {
-		return this.delegate.upgradePlugin(id, version, manifest, root);
+	async upgradePlugin(
+		id: string,
+		version: string,
+		manifest?: Record<string, unknown>,
+		root?: string,
+	): Promise<V2Plugin> {
+		if (manifest !== undefined || root !== undefined) return this.delegate.upgradePlugin(id, version, manifest, root);
+		const existing = await this.delegate.readPlugin(id);
+		if (existing === undefined) throw new Error(`Unknown plugin: ${id}`);
+		const marketplace = (await this.delegate.listMarketplaces()).find((item) => item.name === existing.marketplace);
+		if (marketplace === undefined) throw new Error(`Unknown marketplace: ${existing.marketplace}`);
+		const resolved = await this.resolver(marketplace, existing.name);
+		if (resolved.manifest.version !== version)
+			throw new Error(`Resolved plugin version ${resolved.manifest.version} does not match requested ${version}`);
+		return this.delegate.upgradePlugin(
+			id,
+			version,
+			resolved.manifest as unknown as Record<string, unknown>,
+			resolved.root,
+		);
 	}
 }
 
