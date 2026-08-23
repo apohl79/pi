@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -11,6 +11,17 @@ async function createPlugin(version: string): Promise<{ root: string; manifest: 
 	const manifest = { name: "reviewer", version, skills: [], commands: [] } satisfies CodexPluginManifest;
 	await writeFile(join(root, ".codex-plugin", "plugin.json"), JSON.stringify(manifest));
 	return { root, manifest };
+}
+
+async function createPluginWithResource(
+	version: string,
+	resource: string,
+): Promise<{ root: string; manifest: CodexPluginManifest }> {
+	const plugin = await createPlugin(version);
+	await mkdir(join(plugin.root, resource), { recursive: true });
+	const manifest = { ...plugin.manifest, skills: [resource] } satisfies CodexPluginManifest;
+	await writeFile(join(plugin.root, ".codex-plugin", "plugin.json"), JSON.stringify(manifest));
+	return { root: plugin.root, manifest };
 }
 
 describe("CodexPluginActivationStore", () => {
@@ -72,6 +83,21 @@ describe("CodexPluginActivationStore", () => {
 			store.activate({
 				id: "reviewer@local",
 				version: "../escape",
+				sourceRoot: source.root,
+				manifest: source.manifest,
+			}),
+		).rejects.toMatchObject({ code: "invalid_manifest" });
+	});
+
+	test("rejects incomplete packages before activating them", async () => {
+		const source = await createPluginWithResource("1.0.0", "skills/review");
+		const cache = await mkdtemp(join(tmpdir(), "pi-codex-activation-incomplete-"));
+		await rm(join(source.root, "skills"), { recursive: true, force: true });
+		const store = new CodexPluginActivationStore(cache);
+		await expect(
+			store.activate({
+				id: "reviewer@local",
+				version: source.manifest.version,
 				sourceRoot: source.root,
 				manifest: source.manifest,
 			}),
