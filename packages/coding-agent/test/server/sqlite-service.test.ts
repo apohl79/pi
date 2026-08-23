@@ -285,6 +285,11 @@ describe("coding-agent SQLite v2 service", () => {
 				harness: { tools: [], activeToolNames: [] },
 			});
 			const created = await service.createSession!({ id: "plugin-sampling-session", cwd: directory });
+			await created.runtime.run("disable-auto-name", {
+				command: "session/name/auto/set",
+				sessionId: created.sessionId,
+				payload: { enabled: false },
+			});
 			await created.runtime.run("plugin-sampling-turn", {
 				command: "turn/start",
 				sessionId: created.sessionId,
