@@ -975,12 +975,35 @@ export class RemoteV2Session {
 	}
 
 	async webRequest(
-		operation: "search_query" | "open" | "click" | "find" | "screenshot" | "image_query",
+		operation:
+			| "search_query"
+			| "open"
+			| "click"
+			| "find"
+			| "screenshot"
+			| "image_query"
+			| "finance"
+			| "weather"
+			| "sports"
+			| "time",
 		options: {
 			readonly query?: string;
 			readonly url?: string;
 			readonly refId?: string;
 			readonly pattern?: string;
+			readonly ticker?: string;
+			readonly market?: string;
+			readonly location?: string;
+			readonly duration?: number;
+			readonly start?: string;
+			readonly dateFrom?: string;
+			readonly dateTo?: string;
+			readonly league?: string;
+			readonly team?: string;
+			readonly opponent?: string;
+			readonly numGames?: number;
+			readonly locale?: string;
+			readonly utcOffset?: string;
 		} = {},
 	): Promise<readonly RemoteV2WebResult[]> {
 		this.#assertNotDisposed();

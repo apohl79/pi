@@ -31,7 +31,7 @@ import { connectInMemoryTestClientV2, connectUnixTestClientV2, Deferred } from "
 import { createUnixServerV2 } from "../src/transports/unix/preset.ts";
 import { InMemoryV2UsageLedger } from "../src/usage-ledger.ts";
 import { type PiServerServiceV2, PiServerV2, type PiSessionRuntimeV2 } from "../src/v2.ts";
-import { AdapterV2WebService } from "../src/web.ts";
+import { AdapterV2WebService, type V2WebOperation } from "../src/web.ts";
 
 const runtimes: TestRuntime[] = [];
 const servers: Array<Awaited<ReturnType<typeof createUnixServerV2>>> = [];
@@ -644,19 +644,25 @@ describe("PiServer v2 operation acceptance", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-web-"));
 		directories.push(directory);
 		const service = new TestService();
+		let receivedOperation: V2WebOperation | undefined;
+		let receivedLocation: string | undefined;
 		const server = createUnixServerV2(service, {
 			path: join(directory, "server.sock"),
 			web: new AdapterV2WebService({
-				execute: async () => [
-					{
-						id: "result-1",
-						title: "Example",
-						source: "fake",
-						retrievedAt: 1,
-						url: "https://example.test",
-						extract: "ok",
-					},
-				],
+				execute: async (request) => {
+					receivedOperation = request.operation;
+					receivedLocation = request.location;
+					return [
+						{
+							id: "result-1",
+							title: "Example",
+							source: "fake",
+							retrievedAt: 1,
+							url: "https://example.test",
+							extract: "ok",
+						},
+					];
+				},
 			}),
 		});
 		servers.push(server);
@@ -670,6 +676,25 @@ describe("PiServer v2 operation acceptance", () => {
 			payload: { operation: "search_query", query: "example" },
 		});
 		expect(response).toMatchObject({ ok: true, result: { results: [{ id: "result-1", source: "fake" }] } });
+		const typed = await client.request({
+			command: "web",
+			sessionId: "session-1",
+			payload: { operation: "weather", location: "Berlin", duration: 3 },
+		});
+		expect(typed).toMatchObject({ ok: true });
+		expect({ receivedOperation, receivedLocation }).toEqual({
+			receivedOperation: "weather",
+			receivedLocation: "Berlin",
+		});
+		const invalidDuration = await client.request({
+			command: "web",
+			sessionId: "session-1",
+			payload: { operation: "weather", duration: 0 },
+		});
+		expect(invalidDuration).toMatchObject({
+			ok: false,
+			error: { message: "web duration must be a positive integer" },
+		});
 		for (const field of ["query", "url", "refId", "pattern"] as const) {
 			const malformed = await client.request({
 				command: "web",

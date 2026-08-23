@@ -1,6 +1,16 @@
 import { isIP } from "node:net";
 
-export type V2WebOperation = "search_query" | "open" | "click" | "find" | "screenshot" | "image_query";
+export type V2WebOperation =
+	| "search_query"
+	| "open"
+	| "click"
+	| "find"
+	| "screenshot"
+	| "image_query"
+	| "finance"
+	| "weather"
+	| "sports"
+	| "time";
 
 export type V2WebRequest = Readonly<{
 	operation: V2WebOperation;
@@ -8,6 +18,19 @@ export type V2WebRequest = Readonly<{
 	url?: string;
 	refId?: string;
 	pattern?: string;
+	ticker?: string;
+	market?: string;
+	location?: string;
+	duration?: number;
+	start?: string;
+	dateFrom?: string;
+	dateTo?: string;
+	league?: string;
+	team?: string;
+	opponent?: string;
+	numGames?: number;
+	locale?: string;
+	utcOffset?: string;
 }>;
 
 export type V2WebResult = Readonly<{
