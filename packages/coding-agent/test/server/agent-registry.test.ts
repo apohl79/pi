@@ -152,8 +152,18 @@ describe("CodingAgentV2AgentRegistry", () => {
 	});
 
 	test("enforces the active-child limit per parent", async () => {
-		const { registry, runtime } = fixture();
+		const runtime = new FixtureRuntime();
 		runtime.blocked = true;
+		let childNumber = 0;
+		const registry = new CodingAgentV2AgentRegistry(
+			{
+				listSessions: async () => [],
+				listModels: async () => [],
+				openSession: async () => runtime,
+				createSession: async () => ({ sessionId: `child-session-${childNumber++}`, runtime }),
+			},
+			{ maxActivePerParent: 1 },
+		);
 		await registry.spawn({
 			sessionId: "parent-session",
 			parentPath: "root",
@@ -161,31 +171,22 @@ describe("CodingAgentV2AgentRegistry", () => {
 			taskMessage: "first task",
 			model: { provider: "inherit", id: "inherit" },
 		});
-		const limited = new CodingAgentV2AgentRegistry(
-			{
-				listSessions: async () => [],
-				listModels: async () => [],
-				openSession: async () => runtime,
-				createSession: async () => ({ sessionId: "child-session", runtime }),
-			},
-			{ maxActivePerParent: 1 },
-		);
-		await limited.spawn({
+		await registry.spawn({
 			sessionId: "parent-session",
-			parentPath: "root",
+			parentPath: "other",
 			taskName: "first",
 			taskMessage: "first task",
 			model: { provider: "inherit", id: "inherit" },
 		});
 		await expect(
-			limited.spawn({
+			registry.spawn({
 				sessionId: "parent-session",
 				parentPath: "root",
 				taskName: "second",
 				taskMessage: "second task",
 				model: { provider: "inherit", id: "inherit" },
 			}),
-		).rejects.toThrow("for parent parent-session");
+		).rejects.toThrow("for parent root");
 	});
 
 	test("bounds queued child messages", async () => {

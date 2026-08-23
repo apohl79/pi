@@ -11,6 +11,7 @@ const AGENT_COMPLETION = "agent_completion";
 
 interface PersistedAgentState {
 	readonly version: 1;
+	readonly parentPath?: string;
 	readonly state?: AgentSummary["state"];
 	readonly role?: string;
 	readonly inbox: readonly string[];
@@ -21,6 +22,8 @@ function isPersistedAgentState(value: unknown): value is PersistedAgentState {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 	const state = value as Record<string, unknown>;
 	if (state.version !== 1 || !Array.isArray(state.inbox) || !Array.isArray(state.followUps)) return false;
+	if (state.parentPath !== undefined && (typeof state.parentPath !== "string" || state.parentPath.length === 0))
+		return false;
 	if (
 		state.role !== undefined &&
 		(typeof state.role !== "string" || state.role.length === 0 || state.role.length > 128)
@@ -50,6 +53,7 @@ function isCompletionForAgent(entry: Entry, agentId: string): boolean {
 
 interface ChildAgent {
 	summary: AgentSummary;
+	readonly parentPath: string;
 	readonly parentSessionId: string;
 	readonly childSessionId: string;
 	readonly role?: string;
@@ -98,12 +102,13 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		this.validateRequest(request);
 		await this.hydrate(request.sessionId);
 		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
-		if (this.activeCountForParent(request.sessionId) >= this.maxActivePerParent)
-			throw new Error(`Agent active limit ${this.maxActivePerParent} exceeded for parent ${request.sessionId}`);
+		if (this.activeCountForParent(request.parentPath) >= this.maxActivePerParent)
+			throw new Error(`Agent active limit ${this.maxActivePerParent} exceeded for parent ${request.parentPath}`);
 		if (!this.service.createSession) throw new Error("Coding-agent service does not support child sessions");
 		const model = await this.resolveModel(request);
 		const forkedContext = await this.readForkedContext(request);
-		const path = `${request.parentPath.replace(/\/$/, "")}/${request.taskName}`;
+		const parentPath = request.parentPath.replace(/\/$/, "");
+		const path = `${parentPath}/${request.taskName}`;
 		if ([...this.agents.values()].some((agent) => agent.summary.path === path))
 			throw new Error(`Agent path ${path} already exists`);
 		const agentId = randomUUID();
@@ -127,6 +132,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		};
 		const agent: ChildAgent = {
 			summary,
+			parentPath,
 			parentSessionId: request.sessionId,
 			childSessionId: created.sessionId,
 			...(request.role === undefined ? {} : { role: request.role }),
@@ -363,10 +369,9 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		return [...this.agents.values()].filter((agent) => agent.state === "running").length;
 	}
 
-	private activeCountForParent(sessionId: string): number {
-		return [...this.agents.values()].filter(
-			(agent) => agent.parentSessionId === sessionId && agent.state === "running",
-		).length;
+	private activeCountForParent(parentPath: string): number {
+		return [...this.agents.values()].filter((agent) => agent.parentPath === parentPath && agent.state === "running")
+			.length;
 	}
 
 	private async ensureAgent(agentId: string): Promise<void> {
@@ -389,7 +394,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			const snapshot = await runtime.snapshot();
 			const persisted = await this.readState(runtime);
 			const taskName = metadata.sessionName ?? metadata.id;
-			const parentPath = this.agents.get(metadata.parentSessionId)?.summary.path ?? "/root";
+			const parentPath = persisted?.parentPath ?? this.agents.get(metadata.parentSessionId)?.summary.path ?? "/root";
 			const summary: AgentSummary = {
 				id: metadata.id,
 				path: `${parentPath}/${taskName}`,
@@ -401,6 +406,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			};
 			this.agents.set(metadata.id, {
 				summary,
+				parentPath,
 				parentSessionId,
 				childSessionId: metadata.id,
 				runtime,
@@ -420,6 +426,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		if (!append) return;
 		const state: PersistedAgentState = {
 			version: 1,
+			parentPath: agent.parentPath,
 			state: agent.state,
 			...(agent.role === undefined ? {} : { role: agent.role }),
 			inbox: agent.inbox.slice(),
