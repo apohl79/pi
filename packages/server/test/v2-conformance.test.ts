@@ -1442,13 +1442,21 @@ describe("PiServer v2 operation acceptance", () => {
 				},
 			],
 		});
-		const server = createUnixServerV2(new TestService(), { path: join(directory, "server.sock"), apps });
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock"), apps });
 		servers.push(server);
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
 		const listed = await client.request({ command: "app/list" });
 		const read = await client.request({ command: "app/read", payload: { id: "calendar" } });
+		const pendingEvent = client.next(
+			(message) =>
+				message.type === "event" &&
+				message.event === "connector_auth_changed" &&
+				(message.payload as { state?: unknown }).state === "pending",
+		);
 		const auth = await client.request({
 			command: "app/auth/start",
 			payload: { id: "calendar", authorizationUrl: "https://auth.example.test/start" },
@@ -1459,8 +1467,29 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: { auth: { appId: "calendar", state: "pending", authorizationUrl: "https://auth.example.test/start" } },
 		});
+		expect(await pendingEvent).toMatchObject({
+			event: "connector_auth_changed",
+			payload: { appId: "calendar", state: "pending" },
+		});
 		const pending = await client.request({ command: "app/read", payload: { id: "calendar" } });
 		expect(pending).toMatchObject({ ok: true, result: { app: { id: "calendar", auth: "pending" } } });
+		const completeEvent = client.next(
+			(message) =>
+				message.type === "event" &&
+				message.event === "connector_auth_changed" &&
+				(message.payload as { state?: unknown }).state === "authenticated",
+		);
+		const completed = await client.request({
+			command: "app/auth/complete",
+			payload: { id: "calendar", code: "test-code", credentials: { token: "redacted" } },
+		});
+		expect(completed).toMatchObject({ ok: true, result: { auth: { appId: "calendar", state: "authenticated" } } });
+		expect(await completeEvent).toMatchObject({
+			event: "connector_auth_changed",
+			payload: { appId: "calendar", state: "authenticated" },
+		});
+		expect(service.sessions.has("session-1")).toBe(true);
+		await client.close();
 	});
 
 	test("acknowledges a turn before starting runtime execution", async () => {

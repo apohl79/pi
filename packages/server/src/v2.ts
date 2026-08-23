@@ -21,6 +21,8 @@ import {
 	InMemoryV2AppCredentialStore,
 	InMemoryV2AppRegistry,
 	type V2App,
+	type V2AppAuthComplete,
+	type V2AppAuthStart,
 	type V2AppCredentialStore,
 	type V2AppRegistry,
 } from "./apps.ts";
@@ -1835,16 +1837,20 @@ export class PiServerV2 {
 		if (typeof payload.id !== "string") throw new Error("app/auth/start requires id");
 		const standalone = await this.apps.read(payload.id);
 		if (!standalone && this.plugins.startAppAuth !== undefined) {
+			const auth = await this.plugins.startAppAuth(payload.id, payload);
 			await this.sendResponse(state, id, {
 				command: command.command,
-				auth: await this.plugins.startAppAuth(payload.id, payload),
+				auth,
 			});
+			await this.broadcastConnectorAuthChanged(auth);
 			return;
 		}
+		const auth = await this.apps.startAuth(payload.id, payload);
 		await this.sendResponse(state, id, {
 			command: command.command,
-			auth: await this.apps.startAuth(payload.id, payload),
+			auth,
 		});
+		await this.broadcastConnectorAuthChanged(auth);
 	}
 
 	private async completeAppAuth(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
@@ -1858,6 +1864,7 @@ export class PiServerV2 {
 				command: command.command,
 				auth,
 			});
+			await this.broadcastConnectorAuthChanged(auth);
 			return;
 		}
 		const auth = await this.apps.completeAuth(payload.id, payload);
@@ -1866,6 +1873,25 @@ export class PiServerV2 {
 			command: command.command,
 			auth,
 		});
+		await this.broadcastConnectorAuthChanged(auth);
+	}
+
+	private async broadcastConnectorAuthChanged(auth: V2AppAuthStart | V2AppAuthComplete): Promise<void> {
+		const runtimes = new Map<string, PiSessionRuntimeV2>();
+		for (const connection of this.connections) {
+			for (const [sessionId, runtime] of connection.sessions) runtimes.set(sessionId, runtime);
+		}
+		await Promise.all(
+			Array.from(runtimes, ([sessionId, runtime]) =>
+				this.broadcastEvent(
+					sessionId,
+					runtime,
+					{ appId: auth.appId, state: auth.state },
+					undefined,
+					"connector_auth_changed",
+				),
+			),
+		);
 	}
 
 	private async saveAppCredentials(appId: string, payload: Record<string, unknown>): Promise<void> {
