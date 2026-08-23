@@ -1896,6 +1896,13 @@ export class PiServerV2 {
 	): Promise<void> {
 		const beforeSnapshot = await runtime.snapshot();
 		try {
+			const acceptedRecord = this.operations.get(operationId);
+			if (acceptedRecord?.state === "accepted") {
+				const runningRecord = { ...acceptedRecord, state: "running" as const };
+				this.operations.set(operationId, runningRecord);
+				await this.operationStore.putOperation(runningRecord);
+				await this.broadcastEvent(sessionId, runtime, { state: "running" }, operationId, "operation_updated");
+			}
 			await runtime.run(operationId, command);
 			const completedSnapshot = await runtime.snapshot();
 			await this.broadcastSnapshotChanges(sessionId, runtime, operationId, beforeSnapshot, completedSnapshot);
