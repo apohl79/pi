@@ -271,6 +271,16 @@ function transcriptItem(entry: Entry): TranscriptItem | undefined {
 			timestamp: entry.timestamp,
 		};
 	}
+	if (entry.type === "branch_summary") {
+		return {
+			id: entry.id,
+			role: "branchSummary",
+			summary: entry.summary,
+			fromId: entry.fromId,
+			...(entry.usage === undefined ? {} : { usage: entry.usage }),
+			timestamp: entry.timestamp,
+		};
+	}
 	if (entry.type !== "message" || !("content" in entry.message) || !Array.isArray(entry.message.content))
 		return undefined;
 	const timestamp = entry.message.timestamp ?? entry.timestamp;
