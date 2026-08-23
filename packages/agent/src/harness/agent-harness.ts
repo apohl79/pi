@@ -882,17 +882,26 @@ export class AgentHarness implements AgentLane {
 		const runId = this.durableSession.idGenerator.next();
 		const resultEntryId = this.durableSession.idGenerator.next();
 		await this.runLifecycleHook("before_compaction", { operationId: runId, model: this.model });
-		await this.durableSession.appendRecord({
-			type: "operation_started",
-			id: runId,
-			lane: this.name,
-			sourceLeafId: await this.session.getLeafId(),
-			intent: {
-				kind: "compaction",
-				resultEntryId,
-				...(_options?.customInstructions === undefined ? {} : { customInstructions: _options.customInstructions }),
-			},
-		});
+		try {
+			await this.durableSession.appendRecord({
+				type: "operation_started",
+				id: runId,
+				lane: this.name,
+				sourceLeafId: await this.session.getLeafId(),
+				intent: {
+					kind: "compaction",
+					resultEntryId,
+					...(_options?.customInstructions === undefined
+						? {}
+						: { customInstructions: _options.customInstructions }),
+				},
+			});
+		} catch (error) {
+			const raced = await this.durableSession.findOpenOperations(this.name, { limit: 1 });
+			if (raced.length === 0) throw error;
+			// The append may have committed before the backend reported an error.
+			// Continue when our own operation is durably visible.
+		}
 		try {
 			await this.park({ kind: "stream_assistant", step: "compaction", attempt: 1 });
 			const result = await compact(
