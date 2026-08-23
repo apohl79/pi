@@ -597,6 +597,7 @@ export class AgentHarness implements AgentLane {
 	private readonly watchBus = new HarnessEventBus();
 	private readonly driveMode: "automatic" | "manual";
 	private queueMutationTail: Promise<void> = Promise.resolve();
+	private readonly prePersistedMessages = new WeakSet<object>();
 	private manualAction?: {
 		info: ActionInfo;
 		resolve: () => void;
@@ -951,7 +952,13 @@ export class AgentHarness implements AgentLane {
 			);
 			let finalEntryId: string | undefined;
 			const transcriptMessages: AgentMessage[] = [];
-			const messagesToPersist = initialMessagesPersisted ? newMessages.slice(prompts.length) : newMessages;
+			const messagesToPersist = (initialMessagesPersisted ? newMessages.slice(prompts.length) : newMessages).filter(
+				(message) => {
+					if (!this.prePersistedMessages.has(message)) return true;
+					this.prePersistedMessages.delete(message);
+					return false;
+				},
+			);
 			for (const message of messagesToPersist.map(sanitizeTranscriptMessage)) {
 				if (message.role !== "assistant") {
 					transcriptMessages.push(message);
@@ -1683,9 +1690,13 @@ export class AgentHarness implements AgentLane {
 				this[queue === "steer" ? "steeringMode" : "followUpMode"] === "all" ? pending : pending.slice(0, 1);
 			const messages: AgentMessage[] = [];
 			const cancellations: NewRecord<QueueCancelledRecord>[] = [];
+			const placements: { lane: string; entry: ProvisionedEntry }[] = [];
+			const transaction = this.registerSession();
 			for (const record of selected) {
 				const target = await this.queueTarget(record);
 				if (target.type !== "message") continue;
+				if (transaction && (await this.durableSession.getEntry(target.id)) === undefined)
+					placements.push({ lane: this.name, entry: target });
 				cancellations.push({
 					type: "queue_cancelled",
 					id: this.durableSession.idGenerator.next(),
@@ -1694,11 +1705,14 @@ export class AgentHarness implements AgentLane {
 					entryId: target.id,
 					disposition: "consumed",
 				});
-				messages.push(durableClone(target.message));
+				const message = durableClone(target.message);
+				if (transaction) this.prePersistedMessages.add(message);
+				messages.push(message);
 			}
 			await this.appendQueueTransaction(
 				cancellations,
 				cancellations.map((record) => ({ op: "delete" as const, namespace: "pending.entry", key: record.entryId })),
+				placements,
 			);
 			return messages;
 		});
@@ -1819,10 +1833,12 @@ export class AgentHarness implements AgentLane {
 			| { op: "set"; namespace: string; key: string; value: JsonValue }
 			| { op: "delete"; namespace: string; key: string }
 		)[],
+		entries: readonly { lane: string; entry: ProvisionedEntry }[] = [],
 	): Promise<void> {
 		const transaction = this.registerSession();
 		if (transaction) {
-			await transaction.appendTransaction(records, writes);
+			if (entries.length > 0) await transaction.appendAtomicTransaction(entries, records, writes);
+			else await transaction.appendTransaction(records, writes);
 			return;
 		}
 		await this.durableSession.appendRecords(records);
