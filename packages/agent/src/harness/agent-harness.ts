@@ -1582,6 +1582,7 @@ export class AgentHarness implements AgentLane {
 				),
 			);
 			const recalled = { steer: [] as AgentMessage[], followUp: [] as AgentMessage[] };
+			const cancellations: NewRecord<QueueCancelledRecord>[] = [];
 			for (const item of queued) {
 				if (
 					item.queue === "nextRun" ||
@@ -1592,15 +1593,15 @@ export class AgentHarness implements AgentLane {
 					continue;
 				recalled[item.queue].push(structuredClone(item.target.message));
 				cancelled.add(item.target.id);
-				const cancellation: NewRecord<QueueCancelledRecord> = {
+				cancellations.push({
 					type: "queue_cancelled",
 					id: this.durableSession.idGenerator.next(),
 					lane: this.name,
 					runId: openRun.id,
 					entryId: item.target.id,
-				};
-				await this.durableSession.appendRecord(cancellation);
+				});
 			}
+			await this.durableSession.appendRecords(cancellations);
 			return recalled;
 		});
 		const requested: NewRecord<AbortRequestedRecord> = {
@@ -1658,8 +1659,9 @@ export class AgentHarness implements AgentLane {
 			const selected =
 				this[queue === "steer" ? "steeringMode" : "followUpMode"] === "all" ? pending : pending.slice(0, 1);
 			const messages: AgentMessage[] = [];
+			const cancellations: NewRecord<QueueCancelledRecord>[] = [];
 			for (const record of selected) {
-				await this.durableSession.appendRecord({
+				cancellations.push({
 					type: "queue_cancelled",
 					id: this.durableSession.idGenerator.next(),
 					lane: this.name,
@@ -1669,6 +1671,7 @@ export class AgentHarness implements AgentLane {
 				});
 				if (record.target.type === "message") messages.push(durableClone(record.target.message));
 			}
+			await this.durableSession.appendRecords(cancellations);
 			return messages;
 		});
 	}
