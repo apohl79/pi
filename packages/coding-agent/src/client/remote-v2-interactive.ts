@@ -10,6 +10,8 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/goal-pause",
 	"/goal-resume",
 	"/model",
+	"/name",
+	"/name-auto",
 	"/release-control",
 	"/resume",
 	"/rollback",
@@ -25,6 +27,8 @@ export type RemoteV2Command =
 	| { readonly name: "goal-pause" }
 	| { readonly name: "goal-resume" }
 	| { readonly name: "model"; readonly provider: string; readonly id: string }
+	| { readonly name: "name"; readonly value?: string; readonly clear?: boolean; readonly generate?: boolean }
+	| { readonly name: "name-auto"; readonly enabled: boolean }
 	| { readonly name: "release-control" }
 	| { readonly name: "resume" }
 	| { readonly name: "rollback"; readonly turns: number }
@@ -34,6 +38,7 @@ export type RemoteV2Command =
 export type RemoteV2CommandResult =
 	| { readonly kind: "operation"; readonly operationId: string }
 	| { readonly kind: "control"; readonly mode: "control" | "observer" }
+	| { readonly kind: "status"; readonly text: string }
 	| { readonly kind: "detached" };
 
 export function parseRemoteV2Command(input: string): RemoteV2Command {
@@ -68,6 +73,18 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		const separator = arguments_[0].indexOf("/");
 		if (separator < 1 || separator === arguments_[0].length - 1) throw new Error("/model requires <provider/model>");
 		return { name: "model", provider: arguments_[0].slice(0, separator), id: arguments_[0].slice(separator + 1) };
+	}
+	if (name === "/name") {
+		if (arguments_.length === 0) return { name: "name" };
+		if (arguments_.length === 1 && arguments_[0] === "--clear") return { name: "name", clear: true };
+		if (arguments_.length === 1 && arguments_[0] === "--generate") return { name: "name", generate: true };
+		if (arguments_[0].startsWith("--")) throw new Error("/name accepts a title, --clear, or --generate");
+		return { name: "name", value: arguments_.join(" ").trim() };
+	}
+	if (name === "/name-auto") {
+		if (arguments_.length !== 1 || (arguments_[0] !== "on" && arguments_[0] !== "off"))
+			throw new Error("/name-auto requires on or off");
+		return { name: "name-auto", enabled: arguments_[0] === "on" };
 	}
 	if (name === "/rollback") {
 		const turns = arguments_.length === 0 ? 1 : Number(arguments_[0]);
@@ -128,6 +145,22 @@ export class RemoteV2InteractiveAttachment implements Component {
 				return operation(await this.session.resumeGoal());
 			case "model":
 				return operation(await this.session.setModel({ provider: command.provider, id: command.id }));
+			case "name":
+				if (command.generate) return operation(await this.session.generateName());
+				if (command.clear) return operation(await this.session.setName(null));
+				if (command.value === undefined) {
+					const snapshot = this.session.snapshot;
+					return {
+						kind: "status",
+						text:
+							snapshot?.name === undefined
+								? "(unnamed)"
+								: `${snapshot.name} (${snapshot.nameSource ?? "unknown"})`,
+					};
+				}
+				return operation(await this.session.setName(command.value));
+			case "name-auto":
+				return operation(await this.session.setAutoName(command.enabled));
 			case "release-control":
 				await this.session.relinquishControl();
 				return { kind: "control", mode: "observer" };
