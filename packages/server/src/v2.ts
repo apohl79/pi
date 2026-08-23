@@ -1488,6 +1488,7 @@ export class PiServerV2 {
 			const message = error instanceof Error ? error.message : String(error);
 			const failureSnapshot = await runtime.snapshot();
 			const record = this.operations.get(operationId);
+			if (record?.state === "complete") return;
 			if (record) {
 				const updated = { ...record, state: "failed" as const, error: message };
 				this.operations.set(operationId, updated);
