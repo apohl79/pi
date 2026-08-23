@@ -474,6 +474,7 @@ export class PiServerV2 {
 
 	private async deleteSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("session/delete requires sessionId");
+		this.requireControl(state, command.sessionId);
 		if (!this.service.deleteSession) throw new Error("session/delete is not supported by this service");
 		await this.service.deleteSession(command.sessionId);
 		const runtime = state.sessions.get(command.sessionId);
