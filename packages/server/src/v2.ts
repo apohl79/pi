@@ -158,6 +158,7 @@ const GOAL_STATUSES = new Set(["active", "paused", "blocked", "usageLimited", "b
 function validateGoalCommand(command: CommandV2, payload: Record<string, unknown>): void {
 	if (command.command === "goal/create") {
 		if (typeof payload.objective !== "string") throw new Error("goal/create objective must be a string");
+		if (payload.objective.trim().length === 0) throw new Error("goal/create objective must not be empty");
 		if (payload.tokenBudget !== undefined) {
 			if (typeof payload.tokenBudget !== "number") throw new Error("goal/create tokenBudget must be a number");
 			if (!Number.isSafeInteger(payload.tokenBudget) || payload.tokenBudget < 0)
