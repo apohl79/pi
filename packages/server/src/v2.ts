@@ -722,6 +722,8 @@ export class PiServerV2 {
 		const processId = processIdFrom(command, payload);
 		if (payload.cursor !== undefined && typeof payload.cursor !== "number")
 			throw new Error("process/read cursor must be a number");
+		if (typeof payload.cursor === "number" && (!Number.isSafeInteger(payload.cursor) || payload.cursor < 0))
+			throw new Error("process/read cursor must be a non-negative safe integer");
 		const cursor = typeof payload.cursor === "number" ? payload.cursor : 0;
 		const output = await this.processes.read(processId, cursor);
 		await this.diagnostics.record({
@@ -875,6 +877,8 @@ export class PiServerV2 {
 		const agentId = agentIdFrom(command, payload);
 		if (payload.timeoutMs !== undefined && typeof payload.timeoutMs !== "number")
 			throw new Error("agent/wait timeoutMs must be a number");
+		if (typeof payload.timeoutMs === "number" && (!Number.isSafeInteger(payload.timeoutMs) || payload.timeoutMs < 0))
+			throw new Error("agent/wait timeoutMs must be a non-negative safe integer");
 		await this.sendResponse(state, id, {
 			command: command.command,
 			agent: await this.agents.wait(agentId, typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined),
@@ -992,6 +996,8 @@ export class PiServerV2 {
 		if (!Array.isArray(payload.items)) throw new Error("plan/update requires items");
 		if (payload.version !== undefined && typeof payload.version !== "number")
 			throw new Error("plan/update version must be a number");
+		if (typeof payload.version === "number" && (!Number.isSafeInteger(payload.version) || payload.version < 1))
+			throw new Error("plan/update version must be a positive safe integer");
 		const items = payload.items as Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
 		const plan = await this.plans.update(command.sessionId, {
 			items,
@@ -1201,6 +1207,8 @@ export class PiServerV2 {
 		const operationId = payload.operationId === undefined ? undefined : payload.operationId;
 		if (payload.afterSeq !== undefined && typeof payload.afterSeq !== "number")
 			throw new Error("diagnostics/timeline afterSeq must be a number");
+		if (typeof payload.afterSeq === "number" && (!Number.isSafeInteger(payload.afterSeq) || payload.afterSeq < 0))
+			throw new Error("diagnostics/timeline afterSeq must be a non-negative safe integer");
 		const events = await this.diagnosticEvents(typeof payload.afterSeq === "number" ? payload.afterSeq : 0);
 		const [operationState, allUsageEntries] = await Promise.all([
 			this.operationStore.load(),

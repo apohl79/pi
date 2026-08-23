@@ -489,6 +489,14 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: false,
 			error: { message: "diagnostics/timeline afterSeq must be a number" },
 		});
+		const unsafeTimeline = await client.request({
+			command: "diagnostics/timeline",
+			payload: { afterSeq: -1 },
+		});
+		expect(unsafeTimeline).toMatchObject({
+			ok: false,
+			error: { message: "diagnostics/timeline afterSeq must be a non-negative safe integer" },
+		});
 		for (const [command, field, message] of [
 			["diagnostics/status", "sessionId", "diagnostics/status sessionId must be a string"],
 			["diagnostics/timeline", "operationId", "diagnostics/timeline operationId must be a string"],
@@ -1395,6 +1403,14 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(output).toMatchObject({ ok: true, result: { output: { output: "bcdef", cursor: 6, truncated: true } } });
 		const malformedCursor = await client.request({ command: "process/read", payload: { processId, cursor: "0" } });
 		expect(malformedCursor).toMatchObject({ ok: false, error: { message: "process/read cursor must be a number" } });
+		const unsafeCursor = await client.request({
+			command: "process/read",
+			payload: { processId, cursor: -1 },
+		});
+		expect(unsafeCursor).toMatchObject({
+			ok: false,
+			error: { message: "process/read cursor must be a non-negative safe integer" },
+		});
 		const terminated = await client.request({ command: "process/terminate", payload: { processId } });
 		expect(terminated).toMatchObject({ ok: true, result: { process: { state: "terminated", exitCode: 143 } } });
 		const waited = await client.request({ command: "process/wait", payload: { processId } });
@@ -1408,8 +1424,8 @@ describe("PiServer v2 operation acceptance", () => {
 			"process_terminated",
 			"process_waited",
 		]);
-		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_received")).toHaveLength(8);
-		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_completed")).toHaveLength(8);
+		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_received")).toHaveLength(9);
+		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_completed")).toHaveLength(9);
 		const inputEvent = diagnosticEvents.find((event) => event.kind === "process_input_written");
 		expect(inputEvent).toMatchObject({
 			processInstanceId: processId,
@@ -1627,6 +1643,15 @@ describe("PiServer v2 operation acceptance", () => {
 		});
 		expect(
 			await client.request({
+				command: "agent/wait",
+				payload: { agentId: agent.id, timeoutMs: -1 },
+			}),
+		).toMatchObject({
+			ok: false,
+			error: { message: "agent/wait timeoutMs must be a non-negative safe integer" },
+		});
+		expect(
+			await client.request({
 				command: "agent/spawn",
 				sessionId: "session-1",
 				payload: { taskName: "bad-parent", taskMessage: "inspect", parentPath: 1 },
@@ -1717,6 +1742,13 @@ describe("PiServer v2 operation acceptance", () => {
 				payload: { items: [{ step: "bad", status: "pending" }], version: "1" },
 			}),
 		).toMatchObject({ ok: false, error: { message: "plan/update version must be a number" } });
+		expect(
+			await client.request({
+				command: "plan/update",
+				sessionId: "session-1",
+				payload: { items: [{ step: "bad", status: "pending" }], version: 0 },
+			}),
+		).toMatchObject({ ok: false, error: { message: "plan/update version must be a positive safe integer" } });
 		await expect(
 			client.next((message) => message.type === "event" && message.event === "plan_updated"),
 		).resolves.toMatchObject({
