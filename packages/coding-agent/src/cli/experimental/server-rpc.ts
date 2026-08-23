@@ -142,7 +142,7 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 					(model) => model.provider === current?.provider && model.id === current.id,
 				);
 				const model = models[(currentIndex + 1) % models.length];
-				await session.setModel({ provider: model.provider, id: model.id });
+				await session.waitForOperation(await session.setModel({ provider: model.provider, id: model.id }));
 				return success(id, "cycle_model", model);
 			}
 			case "set_thinking_level":
@@ -166,7 +166,7 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 				const current = session.snapshot?.thinkingLevel ?? "off";
 				const index = THINKING_LEVELS.indexOf(current);
 				const level = THINKING_LEVELS[(index + 1) % THINKING_LEVELS.length];
-				await session.setThinking(level);
+				await session.waitForOperation(await session.setThinking(level));
 				return success(id, "cycle_thinking_level", { level });
 			}
 			case "set_session_name":
