@@ -270,7 +270,10 @@ describe("PiServer v2 operation acceptance", () => {
 		servers.push(server);
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
-		await client.hello();
+		await client.hello(undefined, {
+			manifest: { runtime: "node v22", platform: "linux", arch: "x64", forkCommit: "fork-sha" },
+			afterSeq: 3,
+		});
 		const status = await client.request({ command: "diagnostics/status" });
 		const timeline = await client.request({ command: "diagnostics/timeline", payload: { sessionId: "session-1" } });
 		const exported = await client.request({ command: "diagnostics/export" });
@@ -291,7 +294,12 @@ describe("PiServer v2 operation acceptance", () => {
 		});
 		expect(exported).toMatchObject({
 			ok: true,
-			result: { bundle: { runtimeManifest: { runtime: "node test", forkCommit: "fork-commit" } } },
+			result: {
+				bundle: {
+					runtimeManifest: { runtime: "node test", forkCommit: "fork-commit" },
+					clientDiagnostics: { manifest: { forkCommit: "fork-sha" }, afterSeq: 3 },
+				},
+			},
 		});
 		expect(verified).toMatchObject({ ok: true, result: { valid: true, gaps: [] } });
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });

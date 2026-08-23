@@ -235,6 +235,20 @@ describe("protocol v2 contract", () => {
 		expect(serverMessages).toEqual([response]);
 	});
 
+	test("round-trips a client diagnostic manifest and local cursor", () => {
+		const hello = {
+			type: "hello",
+			version: PROTOCOL_V2_VERSION,
+			diagnostics: {
+				manifest: { runtime: "node v22", platform: "linux", arch: "x64", forkCommit: "fork-sha" },
+				afterSeq: 12,
+			},
+		} as const;
+		const decoder = new FrameDecoder();
+		const [payload] = decoder.push(encodeClientMessageV2(hello));
+		expect(parseClientMessageV2(decodeCbor(payload))).toEqual(hello);
+	});
+
 	test("rejects v1 messages and unknown v2 fields", () => {
 		expect(isClientMessageV2({ type: "hello", version: 1 })).toBe(false);
 		expect(

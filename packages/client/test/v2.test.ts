@@ -133,6 +133,26 @@ describe("PiClientV2", () => {
 		client.dispose();
 	});
 
+	test("sends the client diagnostic manifest and local cursor during handshake", async () => {
+		const pair = transportPair();
+		const client = new PiClientV2({
+			transportFactory: pair.factory,
+			diagnostics: {
+				manifest: { runtime: "node v22", platform: "linux", arch: "x64", forkCommit: "fork-sha" },
+				afterSeq: 4,
+			},
+		});
+		const connection = client.connect();
+		await Promise.resolve();
+		const hello = parseClientMessageV2(decodeCbor(pair.sent[0]!.subarray(4)));
+		expect(hello).toMatchObject({
+			diagnostics: { manifest: { forkCommit: "fork-sha" }, afterSeq: 4 },
+		});
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
+		await connection;
+		client.dispose();
+	});
+
 	test("retains the latest event cursor for a reconnect without explicit state", async () => {
 		const pair = transportPair();
 		const client = new PiClientV2({ transportFactory: pair.factory });

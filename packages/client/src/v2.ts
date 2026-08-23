@@ -1,4 +1,5 @@
 import {
+	type ClientDiagnosticManifestV2,
 	type ClientMessageV2,
 	type CommandV2,
 	DEFAULT_MAX_FRAME_LENGTH,
@@ -20,6 +21,7 @@ import type { ByteTransport, ByteTransportFactory, ByteTransportHandlers } from 
 export interface PiClientV2Options {
 	readonly transportFactory: ByteTransportFactory;
 	readonly maxFrameLength?: number;
+	readonly diagnostics?: { readonly manifest: ClientDiagnosticManifestV2; readonly afterSeq?: number };
 }
 
 export type V2SessionLeaseMode = "control" | "observer";
@@ -81,6 +83,7 @@ export class PiClientV2 {
 				type: "hello",
 				version: PROTOCOL_V2_VERSION,
 				...(effectiveLastEvent === undefined ? {} : { lastEvent: effectiveLastEvent }),
+				...(this.options.diagnostics === undefined ? {} : { diagnostics: this.options.diagnostics }),
 			});
 			return await snapshot;
 		} catch (error) {
