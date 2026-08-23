@@ -822,6 +822,11 @@ export class PiServerV2 {
 			throw new Error("agent/spawn requires taskName and taskMessage");
 		if (payload.parentPath !== undefined && typeof payload.parentPath !== "string")
 			throw new Error("agent/spawn parentPath must be a string");
+		if (
+			payload.model !== undefined &&
+			(typeof payload.model !== "object" || payload.model === null || Array.isArray(payload.model))
+		)
+			throw new Error("agent/spawn model must be an object");
 		const modelPayload =
 			typeof payload.model === "object" && payload.model !== null && !Array.isArray(payload.model)
 				? (payload.model as Record<string, unknown>)

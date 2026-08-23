@@ -1551,6 +1551,13 @@ describe("PiServer v2 operation acceptance", () => {
 				payload: { taskName: "bad-parent", taskMessage: "inspect", parentPath: 1 },
 			}),
 		).toMatchObject({ ok: false, error: { message: "agent/spawn parentPath must be a string" } });
+		expect(
+			await client.request({
+				command: "agent/spawn",
+				sessionId: "session-1",
+				payload: { taskName: "bad-model", taskMessage: "inspect", model: "inherit" },
+			}),
+		).toMatchObject({ ok: false, error: { message: "agent/spawn model must be an object" } });
 		expect(await client.request({ command: "agent/list", sessionId: "session-1" })).toMatchObject({
 			ok: true,
 			result: { agents: [{ id: agent.id, state: "running" }] },
