@@ -413,6 +413,22 @@ describe("experimental CLI runtime", () => {
 		runtime.close();
 	});
 
+	test("resolves RPC when an injected input stream is already destroyed", async () => {
+		const server = clientFactory();
+		const input = Readable.from([]);
+		input.destroy();
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: () => {},
+			rpcInput: input,
+			rpcOutput: () => {},
+		});
+		await runtime.runRpc({ messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] });
+		runtime.close();
+	});
+
 	test("uploads RPC images to the server blob boundary before prompting", async () => {
 		const requests: Array<{ command: string; payload?: unknown }> = [];
 		const server = clientFactory(requests);
