@@ -1,3 +1,4 @@
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -19,6 +20,203 @@ export interface ForensicEvent extends ForensicEventInput {
 export interface ForensicRecorder {
 	record(event: ForensicEventInput): Promise<ForensicEvent>;
 	read(afterSeq?: number): Promise<ForensicEvent[]>;
+}
+
+export interface DiagnosticCapsule {
+	schemaVersion: 1;
+	eventId: string;
+	kind: string;
+	keyId: string;
+	nonce: string;
+	ciphertext: string;
+	authTag: string;
+	plaintextSha256: string;
+	byteLength: number;
+	originalByteLength: number;
+	truncated: boolean;
+}
+
+export interface DiagnosticCapsuleInput {
+	eventId: string;
+	kind: string;
+	content: string | Uint8Array;
+	maxBytes?: number;
+}
+
+export interface DiagnosticContentStore {
+	encrypt(input: DiagnosticCapsuleInput): Promise<DiagnosticCapsule>;
+}
+
+export interface DiagnosticBundleVerification {
+	valid: boolean;
+	reason?: string;
+}
+
+/** Pure offline verifier for exported diagnostic bundles; it does not require a daemon or provider access. */
+export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerification {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		return { valid: false, reason: "diagnostic bundle must be an object" };
+	const candidate = value as Record<string, unknown>;
+	const events = candidate.events;
+	const manifest = candidate.manifest;
+	if (!Array.isArray(events) || typeof manifest !== "object" || manifest === null || Array.isArray(manifest))
+		return { valid: false, reason: "diagnostics/verify bundle requires events and manifest" };
+	const fields = manifest as Record<string, unknown>;
+	const serializedEvents = JSON.stringify(events);
+	const digest = createHash("sha256").update(serializedEvents).digest("hex");
+	const firstSeq = events.length === 0 ? 0 : eventSequence(events[0]);
+	const lastSeq = events.length === 0 ? 0 : eventSequence(events[events.length - 1]);
+	const contiguous = events.every((event, index) => {
+		const seq = eventSequence(event);
+		return seq !== undefined && (index === 0 || seq === eventSequence(events[index - 1])! + 1);
+	});
+	const valid =
+		fields.schemaVersion === 1 &&
+		fields.eventCount === events.length &&
+		fields.firstSeq === firstSeq &&
+		fields.lastSeq === lastSeq &&
+		fields.eventsSha256 === digest &&
+		contiguous;
+	return valid ? { valid: true } : { valid: false, reason: "Diagnostic bundle manifest does not match its events" };
+}
+
+function eventSequence(value: unknown): number | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	const seq = (value as Record<string, unknown>).seq;
+	return Number.isInteger(seq) && (seq as number) >= 1 ? (seq as number) : undefined;
+}
+
+interface DiagnosticKeyFile {
+	currentKeyId: string;
+	keys: Record<string, string>;
+}
+
+/** Local authenticated evidence store; key material stays in its owner-only key file, never in capsules. */
+export class LocalDiagnosticCapsuleStore {
+	private readonly keyPath: string;
+	private readonly defaultMaxBytes: number;
+	private loaded = false;
+	private currentKeyId = "";
+	private readonly keys = new Map<string, Buffer>();
+
+	constructor(keyPath: string, options: { maxBytes?: number } = {}) {
+		this.keyPath = keyPath;
+		this.defaultMaxBytes = options.maxBytes ?? 64 * 1024;
+	}
+
+	async encrypt(input: DiagnosticCapsuleInput): Promise<DiagnosticCapsule> {
+		await this.ensureLoaded();
+		const original = Buffer.from(input.content);
+		const maxBytes = input.maxBytes ?? this.defaultMaxBytes;
+		if (!Number.isSafeInteger(maxBytes) || maxBytes < 1)
+			throw new Error("Diagnostic capsule maxBytes must be positive");
+		const plaintext = original.subarray(0, maxBytes);
+		const truncated = plaintext.length < original.length;
+		const nonce = randomBytes(12);
+		const key = this.keys.get(this.currentKeyId);
+		if (!key) throw new Error("Diagnostic capsule key is unavailable");
+		const aad = capsuleAad(
+			input.eventId,
+			input.kind,
+			this.currentKeyId,
+			plaintext.length,
+			original.length,
+			truncated,
+		);
+		const cipher = createCipheriv("aes-256-gcm", key, nonce);
+		cipher.setAAD(aad);
+		const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+		return {
+			schemaVersion: 1,
+			eventId: input.eventId,
+			kind: input.kind,
+			keyId: this.currentKeyId,
+			nonce: nonce.toString("base64url"),
+			ciphertext: ciphertext.toString("base64url"),
+			authTag: cipher.getAuthTag().toString("base64url"),
+			plaintextSha256: createHash("sha256").update(plaintext).digest("hex"),
+			byteLength: plaintext.length,
+			originalByteLength: original.length,
+			truncated,
+		};
+	}
+
+	async decrypt(capsule: DiagnosticCapsule): Promise<Uint8Array> {
+		await this.ensureLoaded();
+		if (capsule.schemaVersion !== 1) throw new Error("Unsupported diagnostic capsule schema");
+		const key = this.keys.get(capsule.keyId);
+		if (!key) throw new Error(`Diagnostic capsule key is unavailable: ${capsule.keyId}`);
+		const nonce = Buffer.from(capsule.nonce, "base64url");
+		const ciphertext = Buffer.from(capsule.ciphertext, "base64url");
+		const aad = capsuleAad(
+			capsule.eventId,
+			capsule.kind,
+			capsule.keyId,
+			capsule.byteLength,
+			capsule.originalByteLength,
+			capsule.truncated,
+		);
+		const decipher = createDecipheriv("aes-256-gcm", key, nonce);
+		decipher.setAAD(aad);
+		decipher.setAuthTag(Buffer.from(capsule.authTag, "base64url"));
+		const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+		if (plaintext.length !== capsule.byteLength) throw new Error("Diagnostic capsule length mismatch");
+		if (createHash("sha256").update(plaintext).digest("hex") !== capsule.plaintextSha256)
+			throw new Error("Diagnostic capsule digest mismatch");
+		return new Uint8Array(plaintext);
+	}
+
+	async rotateKey(): Promise<string> {
+		await this.ensureLoaded();
+		this.currentKeyId = randomUUID();
+		this.keys.set(this.currentKeyId, randomBytes(32));
+		await this.persistKeys();
+		return this.currentKeyId;
+	}
+
+	private async ensureLoaded(): Promise<void> {
+		if (this.loaded) return;
+		this.loaded = true;
+		let file: DiagnosticKeyFile | undefined;
+		try {
+			file = JSON.parse(await readFile(this.keyPath, "utf8")) as DiagnosticKeyFile;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		if (file?.currentKeyId && file.keys) {
+			this.currentKeyId = file.currentKeyId;
+			for (const [id, encoded] of Object.entries(file.keys)) this.keys.set(id, Buffer.from(encoded, "base64url"));
+			if (this.keys.has(this.currentKeyId)) return;
+		}
+		this.currentKeyId = randomUUID();
+		this.keys.set(this.currentKeyId, randomBytes(32));
+		await this.persistKeys();
+	}
+
+	private async persistKeys(): Promise<void> {
+		await mkdir(dirname(this.keyPath), { recursive: true, mode: 0o700 });
+		const temporary = `${this.keyPath}.${process.pid}.tmp`;
+		const file: DiagnosticKeyFile = {
+			currentKeyId: this.currentKeyId,
+			keys: Object.fromEntries([...this.keys].map(([id, key]) => [id, key.toString("base64url")])),
+		};
+		await writeFile(temporary, `${JSON.stringify(file)}\n`, { mode: 0o600 });
+		await rename(temporary, this.keyPath);
+	}
+}
+
+function capsuleAad(
+	eventId: string,
+	kind: string,
+	keyId: string,
+	byteLength: number,
+	originalByteLength: number,
+	truncated: boolean,
+): Buffer {
+	return Buffer.from(
+		`${eventId}\0${kind}\0${keyId}\0${byteLength}\0${originalByteLength}\0${truncated ? 1 : 0}`,
+		"utf8",
+	);
 }
 
 const SENSITIVE_KEY_PARTS = ["apikey", "authorization", "credential", "password", "secret", "token", "privatekey"];
