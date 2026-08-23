@@ -130,7 +130,10 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>)
 							ok: true,
 							result: {
 								command: "diagnostics/export",
-								bundle: { manifest: { schemaVersion: 1 }, events: [] },
+								bundle: {
+									manifest: { schemaVersion: 1, unavailable: ["client-diagnostic-spool"] },
+									events: [],
+								},
 							},
 						}),
 					);
@@ -619,6 +622,7 @@ describe("experimental CLI runtime", () => {
 			events: [],
 			clientDiagnostics: { afterSeq: 1, records: [{ event: "client.pre_connect" }] },
 		});
+		expect(JSON.parse(await readFile(outputPath, "utf8")).manifest.unavailable).toBeUndefined();
 		expect(output).toMatchObject([{ command: "diagnostics/export" }]);
 		runtime.close();
 	});
