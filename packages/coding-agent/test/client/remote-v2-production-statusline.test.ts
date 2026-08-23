@@ -42,6 +42,8 @@ describe("production remote v2 statusline", () => {
 			await client.connect();
 			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
 			try {
+				const goalOperation = await session.createGoal("statusline goal");
+				await session.waitForOperation(goalOperation);
 				const runner = new StatuslineRunner({
 					command: "codex-statusline",
 					execute: async (_command, payload) => {
@@ -61,6 +63,7 @@ describe("production remote v2 statusline", () => {
 						session_id: session.snapshot?.id,
 						cwd: directory,
 						server: { connected: true, detachable: true },
+						goal: { status: "active", remaining_tokens: expect.any(Number) },
 					});
 					await controller.setCommand("broken-statusline");
 					const failing = new StatuslineRunner({
