@@ -301,6 +301,35 @@ describe("coding-agent v2 service adapter", () => {
 		}
 	});
 
+	test("does not fail a completed turn when side-band naming fails", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-naming-failure-faux",
+			models: [{ id: "session-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("turn response")]);
+		const session = new Session(new InMemorySessionStorage({ id: "naming-failure-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({ session, models, model: faux.getModel(), env, tools: [] });
+		try {
+			const runtime = await createCodingAgentV2Service(models, [
+				{ metadata: { id: "naming-failure-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+			]).openSession("naming-failure-session");
+			await expect(
+				runtime.run("naming-failure", {
+					command: "turn/start",
+					sessionId: "naming-failure-session",
+					payload: { text: "complete this turn" },
+				}),
+			).resolves.toBeUndefined();
+			expect((await runtime.snapshot()).phase).toBe("idle");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("persists the automatic naming setting across runtime recreation", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
