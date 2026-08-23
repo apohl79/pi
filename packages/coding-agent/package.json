@@ -49,6 +49,7 @@
 		"@earendil-works/pi-protocol": "^0.84.2",
 		"@earendil-works/pi-server": "^0.84.2",
 		"@earendil-works/pi-model-instructions": "^0.84.2",
+		"@earendil-works/pi-session-naming": "^0.84.2",
 		"@earendil-works/pi-server-extension-api": "^0.84.2",
 		"@earendil-works/pi-session-backend-sqlite-node": "0.84.2",
 		"@earendil-works/pi-tui": "^0.84.2",

@@ -11,6 +11,7 @@
 			"@earendil-works/pi-client/unix": ["../client/dist/unix.d.ts"],
 			"@earendil-works/pi-server": ["../server/dist/index.d.ts"],
 			"@earendil-works/pi-model-instructions": ["../model-instructions/dist/index.d.ts"],
+			"@earendil-works/pi-session-naming": ["../session-naming/dist/index.d.ts"],
 			"@earendil-works/pi-server-extension-api": ["../server-extension-api/dist/index.d.ts"],
 			"@earendil-works/pi-protocol": ["../protocol/dist/index.d.ts"],
 			"@earendil-works/pi-tui": ["../tui/dist/index.d.ts"],
