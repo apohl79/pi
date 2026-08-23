@@ -91,6 +91,7 @@ const MAX_REPLAY_EVENTS = 256;
 const MAX_REPLAY_BYTES = 16 * 1024 * 1024;
 const MAX_UINT32 = 0xffff_ffff;
 const MAX_AGENT_MESSAGE_EVENT_LENGTH = 4096;
+const MAX_DIAGNOSTIC_EXPORT_BYTES = 4 * 1024 * 1024;
 
 function validateBoundedOption(name: string, value: number | undefined, fallback: number, maximum: number): number {
 	const candidate = value ?? fallback;
@@ -1079,10 +1080,17 @@ export class PiServerV2 {
 
 	private async diagnosticsExport(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		this.requireControl(state, command);
-		const events = (await this.diagnosticEvents()).slice(0, MAX_REPLAY_EVENTS);
+		const events: Awaited<ReturnType<ForensicRecorder["read"]>> = [];
+		const exportBudget = Math.max(1, Math.min(MAX_DIAGNOSTIC_EXPORT_BYTES, Math.floor(this.maxFrameLength * 0.75)));
+		for (const event of (await this.diagnosticEvents()).slice(0, MAX_REPLAY_EVENTS)) {
+			const candidate = [...events, event];
+			if (Buffer.byteLength(JSON.stringify(candidate), "utf8") > exportBudget) break;
+			events.push(event);
+		}
 		const serializedEvents = JSON.stringify(events);
 		const manifest = {
 			schemaVersion: 1,
+			integrity: "corruption-detection-only",
 			eventCount: events.length,
 			firstSeq: events[0]?.seq ?? 0,
 			lastSeq: events.at(-1)?.seq ?? 0,
@@ -1091,7 +1099,6 @@ export class PiServerV2 {
 		await this.sendBoundedDiagnosticsResponse(state, id, {
 			command: command.command,
 			format: "json",
-			events,
 			bundle: { manifest, events },
 		});
 	}
@@ -1128,6 +1135,7 @@ export class PiServerV2 {
 			await this.sendResponse(state, id, {
 				command: command.command,
 				valid,
+				integrity: "corruption-detection-only",
 				...(valid ? {} : { reason: "Diagnostic bundle manifest does not match its events" }),
 			});
 			return;
