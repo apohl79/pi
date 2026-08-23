@@ -125,12 +125,12 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 				}
 				return success(id, "abort_bash");
 			case "compact":
-				await session.compact(command.customInstructions);
+				await session.waitForOperation(await session.compact(command.customInstructions));
 				return success(id, "compact");
 			case "get_state":
 				return success(id, "get_state", stateFor(session.snapshot));
 			case "set_model":
-				await session.setModel({ provider: command.provider, id: command.modelId });
+				await session.waitForOperation(await session.setModel({ provider: command.provider, id: command.modelId }));
 				return success(id, "set_model", { provider: command.provider, id: command.modelId });
 			case "get_available_models":
 				return success(id, "get_available_models", { models: await client.listModels() });
@@ -146,19 +146,19 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 				return success(id, "cycle_model", model);
 			}
 			case "set_thinking_level":
-				await session.setThinking(command.level);
+				await session.waitForOperation(await session.setThinking(command.level));
 				return success(id, "set_thinking_level");
 			case "set_steering_mode":
-				await session.setSteeringMode(command.mode);
+				await session.waitForOperation(await session.setSteeringMode(command.mode));
 				return success(id, "set_steering_mode");
 			case "set_follow_up_mode":
-				await session.setFollowUpMode(command.mode);
+				await session.waitForOperation(await session.setFollowUpMode(command.mode));
 				return success(id, "set_follow_up_mode");
 			case "set_auto_compaction":
-				await session.setAutoCompaction(command.enabled);
+				await session.waitForOperation(await session.setAutoCompaction(command.enabled));
 				return success(id, "set_auto_compaction");
 			case "set_auto_retry":
-				await session.setAutoRetry(command.enabled);
+				await session.waitForOperation(await session.setAutoRetry(command.enabled));
 				return success(id, "set_auto_retry");
 			case "get_available_thinking_levels":
 				return success(id, "get_available_thinking_levels", { levels: THINKING_LEVELS });
@@ -170,7 +170,7 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 				return success(id, "cycle_thinking_level", { level });
 			}
 			case "set_session_name":
-				await session.setName(command.name.trim());
+				await session.waitForOperation(await session.setName(command.name.trim()));
 				return success(id, "set_session_name");
 			case "get_session_stats":
 				return success(id, "get_session_stats", sessionStats(session.snapshot));
