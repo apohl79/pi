@@ -675,6 +675,7 @@ export class PiServerV2 {
 
 	private async readGoal(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("goal/read requires sessionId");
+		this.requireSessionReference(state, command.sessionId);
 		const runtime = state.sessions.get(command.sessionId) ?? (await this.service.openSession(command.sessionId));
 		this.trackRuntime(runtime);
 		state.sessions.set(command.sessionId, runtime);
@@ -1007,6 +1008,7 @@ export class PiServerV2 {
 
 	private async readPlan(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("plan/read requires sessionId");
+		this.requireSessionReference(state, command.sessionId);
 		const plan = await this.plans.read(command.sessionId);
 		await this.sendResponse(
 			state,

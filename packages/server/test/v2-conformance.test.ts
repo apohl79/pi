@@ -1286,6 +1286,10 @@ describe("PiServer v2 operation acceptance", () => {
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
+		expect(await client.request({ command: "goal/read", sessionId: "session-1" })).toMatchObject({
+			ok: false,
+			error: { code: "request_failed", message: "Session session-1 is not attached" },
+		});
 		await client.request({ command: "session/attach", sessionId: "session-1" });
 		const goal = await client.request({ command: "goal/read", sessionId: "session-1" });
 		expect(goal).toMatchObject({ ok: true, result: { command: "goal/read" } });
@@ -1845,6 +1849,18 @@ describe("PiServer v2 operation acceptance", () => {
 			payload: { items: [{ step: "implement", status: "in_progress" }] },
 		});
 		expect(updated).toMatchObject({ ok: true, result: { plan: { version: 1 } } });
+		const observer = await connectUnixTestClientV2(server.addresses[0]!);
+		await observer.hello();
+		expect(await observer.request({ command: "plan/read", sessionId: "session-1" })).toMatchObject({
+			ok: false,
+			error: { code: "request_failed", message: "Session session-1 is not attached" },
+		});
+		await observer.request({ command: "session/attach", sessionId: "session-1", payload: { mode: "observer" } });
+		expect(await observer.request({ command: "plan/read", sessionId: "session-1" })).toMatchObject({
+			ok: true,
+			result: { plan: { version: 1 } },
+		});
+		await observer.close();
 		expect(
 			await client.request({
 				command: "plan/update",
