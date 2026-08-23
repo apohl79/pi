@@ -165,14 +165,52 @@ function memoryTransport() {
 																					promptHash: "hash",
 																				},
 																			} as JsonValue)
-																		: message.request.command === "plan/update"
+																		: message.request.command === "diagnostics/status"
 																			? ({
-																					plan: {
-																						version: 1,
-																						items: [{ step: "Inspect", status: "in_progress" }],
-																					},
+																					capture: "metadata",
+																					degraded: false,
+																					lastCriticalEventSeq: 3,
+																					eventCount: 3,
 																				} as JsonValue)
-																			: { command: message.request.command };
+																			: message.request.command === "diagnostics/timeline"
+																				? ({
+																						events: [
+																							{ seq: 3, kind: "operation", outcome: "ok" },
+																						],
+																					} as JsonValue)
+																				: message.request.command === "diagnostics/export"
+																					? ({
+																							bundle: {
+																								manifest: {
+																									schemaVersion: 1,
+																									eventCount: 3,
+																									firstSeq: 1,
+																									lastSeq: 3,
+																									eventsSha256: "hash",
+																								},
+																								events: [],
+																							},
+																						} as JsonValue)
+																					: message.request.command === "diagnostics/verify"
+																						? ({ valid: true } as JsonValue)
+																						: message.request.command === "diagnostics/doctor"
+																							? ({
+																									ok: true,
+																									checks: [{ name: "recorder", ok: true }],
+																								} as JsonValue)
+																							: message.request.command === "plan/update"
+																								? ({
+																										plan: {
+																											version: 1,
+																											items: [
+																												{
+																													step: "Inspect",
+																													status: "in_progress",
+																												},
+																											],
+																										},
+																									} as JsonValue)
+																								: { command: message.request.command };
 			const response: ServerMessageV2 =
 				message.request.command.startsWith("turn/") ||
 				message.request.command.startsWith("session/model") ||
@@ -400,6 +438,21 @@ describe("RemoteV2Session", () => {
 		});
 		expect(await session.readBlob("sha256:blob")).toMatchObject({ encoding: "base64", data: "aGk=" });
 		expect(await session.statBlob("sha256:blob")).toMatchObject({ mimeType: "text/plain", size: 2 });
+		await session.dispose();
+	});
+
+	test("inspects server diagnostics", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		expect(await session.diagnosticsStatus()).toMatchObject({ capture: "metadata", degraded: false });
+		expect(await session.diagnosticsTimeline({ afterSeq: 2 })).toEqual([
+			{ seq: 3, kind: "operation", outcome: "ok" },
+		]);
+		expect((await session.diagnosticsExport()).manifest).toMatchObject({ eventCount: 3 });
+		expect((await session.diagnosticsVerify()).valid).toBe(true);
+		expect((await session.diagnosticsDoctor()).ok).toBe(true);
 		await session.dispose();
 	});
 
