@@ -1387,6 +1387,8 @@ export class PiServerV2 {
 	private async diagnosticsVerify(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const bundle = payload.bundle;
+		if (bundle !== undefined && (typeof bundle !== "object" || bundle === null || Array.isArray(bundle)))
+			throw new Error("diagnostics/verify bundle must be an object");
 		if (typeof bundle === "object" && bundle !== null && !Array.isArray(bundle)) {
 			const verification = verifyDiagnosticBundle(bundle);
 			if (verification.reason === "diagnostics/verify bundle requires events and manifest")

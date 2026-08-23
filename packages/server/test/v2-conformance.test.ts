@@ -507,6 +507,14 @@ describe("PiServer v2 operation acceptance", () => {
 			const malformed = await client.request({ command, payload: { [field]: 42 } });
 			expect(malformed).toMatchObject({ ok: false, error: { code: "request_failed", message } });
 		}
+		const malformedBundle = await client.request({
+			command: "diagnostics/verify",
+			payload: { bundle: "not-a-bundle" },
+		});
+		expect(malformedBundle).toMatchObject({
+			ok: false,
+			error: { code: "request_failed", message: "diagnostics/verify bundle must be an object" },
+		});
 		const exported = await client.request({ command: "diagnostics/export" });
 		const scopedExport = await client.request({
 			command: "diagnostics/export",
