@@ -95,7 +95,12 @@ export class StatuslineRunner {
 			options.execute ??
 			((command, payload, signal) =>
 				defaultExecutor(command, payload, signal, this.maxOutputBytes, this.maxErrorBytes));
-		if (!Number.isInteger(this.timeoutMs) || this.timeoutMs <= 0) throw new Error("timeoutMs must be positive");
+		if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs <= 0)
+			throw new Error("timeoutMs must be a positive safe integer");
+		if (!Number.isSafeInteger(this.maxOutputBytes) || this.maxOutputBytes <= 0)
+			throw new Error("maxOutputBytes must be a positive safe integer");
+		if (!Number.isSafeInteger(this.maxErrorBytes) || this.maxErrorBytes <= 0)
+			throw new Error("maxErrorBytes must be a positive safe integer");
 	}
 
 	get snapshot(): StatuslineSnapshot {

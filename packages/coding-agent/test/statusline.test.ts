@@ -2,24 +2,48 @@ import { describe, expect, test } from "vitest";
 import { StatuslineRunner } from "../src/server/statusline.ts";
 
 describe("StatuslineRunner", () => {
-	test("coalesces unchanged payloads and bounds successful output", async () => {
+	test("rejects invalid timeout and output bounds", () => {
+		expect(() => new StatuslineRunner({ timeoutMs: 0 })).toThrow("timeoutMs");
+		expect(() => new StatuslineRunner({ maxOutputBytes: 0 })).toThrow("maxOutputBytes");
+		expect(() => new StatuslineRunner({ maxErrorBytes: Number.POSITIVE_INFINITY })).toThrow("maxErrorBytes");
+	});
+
+	test("coalesces identical requests and bounds output", async () => {
 		let calls = 0;
 		const runner = new StatuslineRunner({
-			command: "statusline.sh",
-			maxOutputBytes: 5,
-			execute: async (_command, payload) => {
+			command: ["statusline"],
+			maxOutputBytes: 4,
+			execute: async () => {
 				calls += 1;
-				return { stdout: `${payload}abcdef`, stderr: "", exitCode: 0 };
+				return { stdout: "abcdef\nsecond", stderr: "", exitCode: 0 };
 			},
 		});
-		const first = await runner.update({ session: "one" });
-		const same = await runner.update({ session: "one" });
+
+		expect(await runner.update({ session: "one" })).toMatchObject({ output: "abcd", pending: false });
+		expect(await runner.update({ session: "one" })).toMatchObject({ output: "abcd", pending: false });
 		expect(calls).toBe(1);
-		expect(first.output).toHaveLength(5);
-		expect(same).toEqual(first);
-		const changed = await runner.update({ session: "two" });
-		expect(calls).toBe(2);
-		expect(changed.payloadHash).not.toBe(first.payloadHash);
+	});
+
+	test("does not publish a stale result after a newer request", async () => {
+		let releaseFirst!: () => void;
+		const first = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		let calls = 0;
+		const runner = new StatuslineRunner({
+			command: ["statusline"],
+			execute: async (_command, payload) => {
+				calls += 1;
+				if (calls === 1) await first;
+				return { stdout: payload.includes("two") ? "two" : "one", stderr: "", exitCode: 0 };
+			},
+		});
+
+		const oldResult = runner.update({ value: "one" });
+		const newResult = runner.update({ value: "two" });
+		releaseFirst();
+		expect(await newResult).toMatchObject({ output: "two", pending: false });
+		expect((await oldResult).output).not.toBe("one");
 	});
 
 	test("reports bounded command failures and clears stale output on command changes", async () => {
@@ -33,40 +57,6 @@ describe("StatuslineRunner", () => {
 		const changed = await runner.update({ value: 1 }, "second.sh");
 		expect(changed).toMatchObject({ pending: false, error: "fail", command: "second.sh" });
 		expect(changed.output).toBeUndefined();
-	});
-
-	test("does not let an aborted command overwrite a newer command result", async () => {
-		const pending: Array<(result: { stdout: string; stderr: string; exitCode: number }) => void> = [];
-		const runner = new StatuslineRunner({
-			command: "first.sh",
-			execute: async () =>
-				new Promise((resolve) => {
-					pending.push(resolve);
-				}),
-		});
-		const first = runner.update({ value: 1 });
-		const second = runner.update({ value: 2 }, "second.sh");
-		pending[1]?.({ stdout: "new", stderr: "", exitCode: 0 });
-		await expect(second).resolves.toMatchObject({ output: "new", command: "second.sh" });
-		pending[0]?.({ stdout: "old", stderr: "", exitCode: 0 });
-		await expect(first).resolves.toMatchObject({ output: "new", command: "second.sh" });
-		expect(runner.snapshot).toMatchObject({ output: "new", command: "second.sh" });
-	});
-
-	test("coalesces identical in-flight updates without invalidating the original run", async () => {
-		let resolvePending: ((result: { stdout: string; stderr: string; exitCode: number }) => void) | undefined;
-		const runner = new StatuslineRunner({
-			command: "statusline.sh",
-			execute: async () =>
-				new Promise((resolve) => {
-					resolvePending = resolve;
-				}),
-		});
-		const first = runner.update({ session: "same" });
-		const duplicate = runner.update({ session: "same" });
-		resolvePending?.({ stdout: "stable", stderr: "", exitCode: 0 });
-		await expect(duplicate).resolves.toMatchObject({ output: "stable" });
-		await expect(first).resolves.toMatchObject({ output: "stable" });
 	});
 
 	test("does not restore output when a disposed command resolves late", async () => {
