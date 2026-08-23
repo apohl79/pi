@@ -641,11 +641,22 @@ describe("RemoteV2Session", () => {
 			event: "session_phase_changed",
 			payload: { phase: "turn" },
 		});
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 4,
+			revision: 4,
+			event: "usage_updated",
+			payload: {
+				usage: { input: 0, output: 2, cacheRead: 0, cacheWrite: 0, costUsd: 0, pricingState: "known" },
+			},
+		});
 		expect(session.snapshot).toMatchObject({
 			name: "Renamed",
 			nameSource: "explicit",
 			nameRevision: 2,
 			phase: "turn",
+			usage: { output: 2 },
 		});
 		await session.dispose();
 	});

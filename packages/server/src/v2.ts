@@ -1990,6 +1990,16 @@ export class PiServerV2 {
 			);
 		if (before.phase !== after.phase)
 			await this.broadcastEvent(sessionId, runtime, { phase: after.phase }, operationId, "session_phase_changed");
+		if (
+			before.usage.input !== after.usage.input ||
+			before.usage.output !== after.usage.output ||
+			before.usage.cacheRead !== after.usage.cacheRead ||
+			before.usage.cacheWrite !== after.usage.cacheWrite ||
+			before.usage.imageUnits !== after.usage.imageUnits ||
+			before.usage.costUsd !== after.usage.costUsd ||
+			before.usage.pricingState !== after.usage.pricingState
+		)
+			await this.broadcastEvent(sessionId, runtime, { usage: after.usage }, operationId, "usage_updated");
 	}
 
 	private async readOperation(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

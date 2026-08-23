@@ -18,8 +18,14 @@ import type {
 	SessionSnapshotV2 as ProtocolSnapshot,
 	ThinkingLevel as ProtocolThinkingLevel,
 	SessionPhaseV2,
+	UsageAggregate,
 } from "@earendil-works/pi-protocol";
-import { AgentSummarySchema, PlanSnapshotSchema, SessionSnapshotV2Schema } from "@earendil-works/pi-protocol";
+import {
+	AgentSummarySchema,
+	PlanSnapshotSchema,
+	SessionSnapshotV2Schema,
+	UsageAggregateSchema,
+} from "@earendil-works/pi-protocol";
 import { Check } from "typebox/value";
 
 export type RemoteV2SessionLifecycle =
@@ -1074,6 +1080,9 @@ export class RemoteV2Session {
 		} else if (event.event === "session_phase_changed" && this.#snapshot) {
 			const phase = asRecord(event.payload)?.phase;
 			if (isSessionPhase(phase)) this.#snapshot = { ...this.#snapshot, phase };
+		} else if (event.event === "usage_updated" && this.#snapshot) {
+			const usage = asRecord(event.payload)?.usage;
+			if (isUsageAggregate(usage)) this.#snapshot = { ...this.#snapshot, usage: structuredClone(usage) };
 		} else if (event.event === "plan_updated" && this.#snapshot) {
 			const plan = asRecord(event.payload)?.plan;
 			if (plan === null) {
@@ -1152,6 +1161,10 @@ function isSessionPhase(value: unknown): value is SessionPhaseV2 {
 		value === "suspended" ||
 		value === "failed"
 	);
+}
+
+function isUsageAggregate(value: unknown): value is UsageAggregate {
+	return Check(UsageAggregateSchema, value);
 }
 
 function isSnapshot(value: unknown): value is ProtocolSnapshot {
