@@ -263,6 +263,34 @@ describe("CodingAgentV2AgentRegistry", () => {
 		expect(events.every((event) => event.agentId === agent.id && event.sessionId === "parent-session")).toBe(true);
 	});
 
+	test("records queued child messages and follow-ups in diagnostics", async () => {
+		const { runtime } = fixture();
+		const diagnostics = new InMemoryForensicRecorder();
+		const registry = new CodingAgentV2AgentRegistry(
+			{
+				listSessions: async () => [],
+				listModels: async () => [],
+				openSession: async () => runtime,
+				createSession: async () => ({ sessionId: "child-session", runtime }),
+			},
+			{ diagnostics },
+		);
+		const agent = await registry.spawn({
+			sessionId: "parent-session",
+			parentPath: "root",
+			taskName: "worker",
+			taskMessage: "complete this task",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		await registry.message(agent.id, "context update");
+		await registry.followUp(agent.id, "continue the task");
+		await registry.wait(agent.id);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const kinds = (await diagnostics.read()).map((event) => event.kind);
+		expect(kinds).toContain("agent_message_queued");
+		expect(kinds).toContain("agent_followup_queued");
+	});
+
 	test("queues terminal completion metadata exactly once across an interrupt race", async () => {
 		const { registry, runtime } = fixture();
 		runtime.blocked = true;
