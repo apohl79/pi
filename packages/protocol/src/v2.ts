@@ -17,6 +17,16 @@ const NonNegativeIntegerSchema = Type.Integer({ minimum: 0 });
 const StrictObject = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
 	Type.Object(properties, { additionalProperties: false });
 
+export const CompactionPolicySchema = StrictObject({
+	enabled: Type.Boolean(),
+	contextWindow: Type.Integer({ minimum: 1 }),
+	reserveTokens: NonNegativeIntegerSchema,
+	keepRecentTokens: NonNegativeIntegerSchema,
+	triggerTokens: NonNegativeIntegerSchema,
+	source: Type.Union([Type.Literal("global"), Type.Literal("model"), Type.Literal("mixed")]),
+});
+export type CompactionPolicy = Static<typeof CompactionPolicySchema>;
+
 export const SessionPhaseV2Schema = Type.Union([
 	Type.Literal("idle"),
 	Type.Literal("turn"),
@@ -43,6 +53,7 @@ export const OperationSummarySchema = StrictObject({
 	state: OperationStateSchema,
 	acceptedSeq: NonNegativeIntegerSchema,
 	terminalSeq: Type.Optional(NonNegativeIntegerSchema),
+	compactionPolicy: Type.Optional(CompactionPolicySchema),
 });
 export type OperationSummary = Static<typeof OperationSummarySchema>;
 
@@ -161,15 +172,6 @@ export const InstructionProfileSummarySchema = StrictObject({
 	contentHash: IdSchema,
 });
 export type InstructionProfileSummary = Static<typeof InstructionProfileSummarySchema>;
-
-export const CompactionPolicySchema = StrictObject({
-	enabled: Type.Boolean(),
-	contextWindow: Type.Integer({ minimum: 1 }),
-	reserveTokens: NonNegativeIntegerSchema,
-	keepRecentTokens: NonNegativeIntegerSchema,
-	triggerTokens: NonNegativeIntegerSchema,
-	source: Type.Union([Type.Literal("global"), Type.Literal("model"), Type.Literal("mixed")]),
-});
 
 export const DiagnosticsSnapshotSchema = StrictObject({
 	capture: Type.Union([Type.Literal("metadata"), Type.Literal("encrypted")]),

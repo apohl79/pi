@@ -357,6 +357,44 @@ describe("coding-agent v2 service adapter", () => {
 		}
 	});
 
+	test("freezes compaction policy on operation acceptance", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-frozen-policy-faux",
+			models: [
+				{ id: "coding-agent-v2-frozen-policy-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		const session = new Session(new InMemorySessionStorage({ id: "frozen-policy-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		try {
+			await created.harness.setCompactionSettings({ enabled: false, reserveTokens: 123, keepRecentTokens: 456 });
+			const opened = await createCodingAgentV2Service(models, [
+				{ metadata: { id: "frozen-policy-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+			]).openSession("frozen-policy-session");
+			await opened.accept("frozen-operation");
+			await created.harness.setCompactionSettings({ enabled: true, reserveTokens: 999, keepRecentTokens: 888 });
+			expect((await opened.snapshot()).activeOperation?.compactionPolicy).toMatchObject({
+				enabled: false,
+				reserveTokens: 123,
+				keepRecentTokens: 456,
+			});
+			expect((await opened.snapshot()).compactionPolicy).toMatchObject({ enabled: true, reserveTokens: 999 });
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("maps a durable harness to an accepted and executable turn runtime", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
