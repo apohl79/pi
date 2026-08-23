@@ -1114,6 +1114,7 @@ export class PiServerV2 {
 
 	private async completeFiles(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("filesystem/complete requires sessionId");
+		this.requireSessionReference(state, command.sessionId);
 		const payload = objectPayload(command);
 		if (payload.prefix !== undefined && typeof payload.prefix !== "string")
 			throw new Error("filesystem/complete prefix must be a string");
@@ -1126,6 +1127,7 @@ export class PiServerV2 {
 
 	private async resolveFile(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("filesystem/reference/resolve requires sessionId");
+		this.requireSessionReference(state, command.sessionId);
 		await this.sendResponse(state, id, {
 			command: command.command,
 			file: fileReferencePayload(
@@ -1136,6 +1138,7 @@ export class PiServerV2 {
 
 	private async readFile(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("filesystem/reference/read requires sessionId");
+		this.requireSessionReference(state, command.sessionId);
 		const result = await this.files.read(command.sessionId, referenceFrom(command, objectPayload(command)));
 		await this.sendResponse(state, id, {
 			command: command.command,
@@ -1147,6 +1150,7 @@ export class PiServerV2 {
 
 	private async webRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("web requires sessionId");
+		this.requireSessionReference(state, command.sessionId);
 		const payload = objectPayload(command);
 		const operation = payload.operation;
 		const operations: readonly V2WebOperation[] = [
@@ -1182,6 +1186,7 @@ export class PiServerV2 {
 
 	private async viewImage(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("image/view requires sessionId");
+		this.requireSessionReference(state, command.sessionId);
 		const payload = objectPayload(command);
 		if (typeof payload.reference !== "string") throw new Error("image/view requires reference");
 		await this.sendResponse(state, id, {
@@ -2071,6 +2076,11 @@ export class PiServerV2 {
 		if (command.sessionId === undefined) throw new Error(`${command.command} requires sessionId`);
 		if (command.sessionId !== sessionId)
 			throw new Error(`${command.command} sessionId does not match process session`);
+		if (!state.sessions.has(sessionId) && this.controls.get(sessionId) !== state.id)
+			throw new Error(`Session ${sessionId} is not attached`);
+	}
+
+	private requireSessionReference(state: V2ConnectionState, sessionId: string): void {
 		if (!state.sessions.has(sessionId) && this.controls.get(sessionId) !== state.id)
 			throw new Error(`Session ${sessionId} is not attached`);
 	}
