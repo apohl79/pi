@@ -139,6 +139,26 @@ describe("LocalV2FileReferenceService", () => {
 		expect(() => new LocalV2FileReferenceService({ projectRoot: root, maxCompletions: 0 })).toThrow("maxCompletions");
 	});
 
+	test("fuzzy-searches bare queries through nested accessible paths", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-files-fuzzy-"));
+		directories.push(root);
+		await mkdir(join(root, "src", "nested"), { recursive: true });
+		await writeFile(join(root, "src", "nested", "target-file.ts"), "target");
+		await mkdir(join(root, "docs"));
+		const service = new LocalV2FileReferenceService({ projectRoot: root, cwd: root });
+
+		expect(await service.complete("session-1", "@tft")).toMatchObject([
+			{
+				reference: join("src", "nested", "target-file.ts"),
+				kind: "file",
+				canonicalPath: await realpath(join(root, "src", "nested", "target-file.ts")),
+			},
+		]);
+		expect(await service.complete("session-1", "@d")).toEqual(
+			expect.arrayContaining([expect.objectContaining({ reference: "docs", kind: "directory" })]),
+		);
+	});
+
 	test("validates and enforces the read byte limit", async () => {
 		const root = await mkdtemp(join(tmpdir(), "pi-files-read-limit-"));
 		directories.push(root);
