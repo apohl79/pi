@@ -47,6 +47,7 @@ describe("AgentHarness manual tool drive", () => {
 			tools: [tool],
 		});
 		harness.hooks.on("before_tool", () => ({ args: { value: "patched" } }));
+		harness.hooks.on("after_tool", () => ({ content: [{ type: "text", text: "post-processed" }] }));
 
 		const run = harness.prompt("use the tool");
 		await vi.waitFor(async () => {
@@ -63,11 +64,23 @@ describe("AgentHarness manual tool drive", () => {
 		});
 		expect(await harness.executeAction()).toEqual({ kind: "execute_tool", toolCallId: "tool-1", toolName: "echo" });
 		await vi.waitFor(async () => {
+			expect(await harness.peekAction()).toEqual({ kind: "hook", name: "after_tool" });
+		});
+		expect(await harness.executeAction()).toEqual({ kind: "hook", name: "after_tool" });
+		await vi.waitFor(async () => {
 			expect(await harness.peekAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 2 });
 		});
 		expect(await harness.executeAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 2 });
 		expect(await run).toMatchObject({ ok: true, value: { kind: "completed" } });
 		expect(executed).toEqual(["patched"]);
+		const toolResult = (await harness.session.findEntriesOnBranch({ order: "oldestFirst" })).find(
+			(entry) => entry.type === "message" && entry.message.role === "toolResult",
+		);
+		const toolContent =
+			toolResult?.type === "message" && toolResult.message.role === "toolResult"
+				? toolResult.message.content
+				: undefined;
+		expect(toolContent).toEqual([{ type: "text", text: "post-processed" }]);
 		await harness.close();
 	});
 });
