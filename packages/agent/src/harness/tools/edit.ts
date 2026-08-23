@@ -50,6 +50,7 @@ export interface EditToolDetails {
 	diff: string;
 	patch: string;
 	firstChangedLine?: number;
+	modifiedFiles: readonly string[];
 }
 
 function prepareEditArguments(input: unknown): EditToolInput {
@@ -132,6 +133,7 @@ export function createEditTool<TContext extends ExecutionToolContext = Execution
 						diff: diffResult.diff,
 						patch: generateUnifiedPatch(path, baseContent, newContent),
 						firstChangedLine: diffResult.firstChangedLine,
+						modifiedFiles: [absolutePath],
 					},
 				};
 			});

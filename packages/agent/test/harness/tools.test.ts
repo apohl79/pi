@@ -166,6 +166,12 @@ describe("AgentHarness tools", () => {
 			);
 
 			expect(textOutput(result)).toContain("Applied patch to 2 file(s)");
+			expect(result.details).toMatchObject({
+				modifiedFiles: expect.arrayContaining([
+					expect.stringContaining("patch.txt"),
+					expect.stringContaining("added.txt"),
+				]),
+			});
 			expect(getOrThrow(await context.env.readTextFile("patch.txt"))).toBe("ONE\ntwo\n");
 			expect(getOrThrow(await context.env.readTextFile("added.txt"))).toBe("created\n");
 		});
@@ -316,6 +322,7 @@ describe("AgentHarness tools", () => {
 			);
 
 			expect(textOutput(result)).toBe("Successfully wrote 5 bytes to nested/dir/file.txt");
+			expect(result.details).toMatchObject({ modifiedFiles: [expect.stringContaining("nested/dir/file.txt")] });
 			expect(getOrThrow(await context.env.readTextFile("nested/dir/file.txt"))).toBe("hello");
 		});
 
