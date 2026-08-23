@@ -16,6 +16,15 @@ describe("InMemoryV2InputRegistry", () => {
 		await expect(registry.respond(request.id, { mode: "Safe" })).rejects.toThrow("not pending");
 	});
 
+	test("rejects answers for undeclared questions", async () => {
+		const registry = new InMemoryV2InputRegistry();
+		const request = await registry.create("session-1", [{ id: "mode", prompt: "Choose mode" }]);
+		await expect(registry.respond(request.id, { other: "unexpected" })).rejects.toThrow(
+			"Answer for unknown question other",
+		);
+		expect(await registry.read(request.id)).toMatchObject({ status: "pending" });
+	});
+
 	test("auto-resolves a pending request on the server deadline", async () => {
 		const registry = new InMemoryV2InputRegistry();
 		const request = await registry.create("session-1", [{ id: "confirm", prompt: "Continue?" }], 1);
