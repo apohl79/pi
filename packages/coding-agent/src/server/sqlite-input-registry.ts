@@ -1,5 +1,10 @@
 import type { V2InputQuestion, V2InputRegistry, V2InputRequest } from "@earendil-works/pi-server";
-import { InMemoryV2InputRegistry } from "@earendil-works/pi-server";
+import {
+	cancelV2InputRequest,
+	createV2InputRequest,
+	InMemoryV2InputRegistry,
+	respondV2InputRequest,
+} from "@earendil-works/pi-server";
 import type { SqliteDatabase, SqliteDatabaseFactory } from "@earendil-works/pi-session-backend-sqlite-node";
 
 interface InputRow {
@@ -35,8 +40,9 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 	): Promise<V2InputRequest> {
 		return this.#enqueue(async () => {
 			await this.#ensureLoaded();
-			const request = await this.#memory.create(sessionId, questions, autoResolutionMs);
+			const request = createV2InputRequest(sessionId, questions, autoResolutionMs);
 			await this.#save(request);
+			this.#memory.restore(request);
 			this.#requests.set(request.id, request);
 			return request;
 		});
@@ -49,11 +55,17 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 	}
 
 	respond(requestId: string, answers: Readonly<Record<string, string>>): Promise<V2InputRequest> {
-		return this.#mutate(() => this.#memory.respond(requestId, answers));
+		return this.#mutate(async () => {
+			const next = respondV2InputRequest(await this.#memory.read(requestId), answers);
+			return { durable: next, commit: () => this.#memory.respond(requestId, answers) };
+		});
 	}
 
 	cancel(requestId: string): Promise<V2InputRequest> {
-		return this.#mutate(() => this.#memory.cancel(requestId));
+		return this.#mutate(async () => {
+			const next = cancelV2InputRequest(await this.#memory.read(requestId));
+			return { durable: next, commit: () => this.#memory.cancel(requestId) };
+		});
 	}
 
 	async wait(requestId: string): Promise<V2InputRequest> {
@@ -75,10 +87,10 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 			if (requestId === undefined) return undefined;
 			const request = this.#requests.get(requestId);
 			if (request?.status !== "responded") return undefined;
-			this.#consumed.add(requestId);
 			(await this.#database())
 				.prepare("INSERT OR IGNORE INTO v2_input_consumed (request_id) VALUES (?)")
 				.run(requestId);
+			this.#consumed.add(requestId);
 			return structuredClone(request.answers ?? {});
 		});
 	}
@@ -91,11 +103,14 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 		this.#loaded = false;
 	}
 
-	async #mutate(operation: () => Promise<V2InputRequest>): Promise<V2InputRequest> {
+	async #mutate(
+		operation: () => Promise<{ durable: V2InputRequest; commit: () => Promise<V2InputRequest> }>,
+	): Promise<V2InputRequest> {
 		return this.#enqueue(async () => {
 			await this.#ensureLoaded();
-			const request = await operation();
-			await this.#save(request);
+			const transition = await operation();
+			await this.#save(transition.durable);
+			const request = await transition.commit();
 			this.#requests.set(request.id, request);
 			if (request.status === "responded") {
 				const ids = this.#responded.get(request.sessionId) ?? [];

@@ -90,6 +90,46 @@ function validateDeadline(autoResolutionMs: number | undefined): void {
 		throw new Error("autoResolutionMs must be non-negative");
 }
 
+export function createV2InputRequest(
+	sessionId: string,
+	questions: readonly V2InputQuestion[],
+	autoResolutionMs?: number,
+): V2InputRequest {
+	validateQuestions(questions);
+	validateDeadline(autoResolutionMs);
+	return {
+		id: randomUUID(),
+		sessionId,
+		questions: questions.map((question) => ({
+			...question,
+			...(question.options ? { options: question.options.map((option) => ({ ...option })) } : {}),
+		})),
+		status: "pending",
+		...(autoResolutionMs === undefined ? {} : { deadlineAt: Date.now() + autoResolutionMs }),
+	};
+}
+
+export function respondV2InputRequest(
+	request: V2InputRequest,
+	answers: Readonly<Record<string, string>>,
+): V2InputRequest {
+	if (request.status !== "pending") throw new Error(`Input request ${request.id} is not pending`);
+	for (const question of request.questions) {
+		const answer = answers[question.id];
+		if (answer === undefined) continue;
+		if (question.options && !question.options.some((option) => option.label === answer || option.value === answer))
+			throw new Error(`Answer for ${question.id} is not one of the offered options`);
+		if (!question.allowFreeform && question.options === undefined && answer.trim().length === 0)
+			throw new Error(`Answer for ${question.id} must not be empty`);
+	}
+	return { ...request, status: "responded", answers: { ...answers } };
+}
+
+export function cancelV2InputRequest(request: V2InputRequest): V2InputRequest {
+	if (request.status !== "pending") throw new Error(`Input request ${request.id} is not pending`);
+	return { ...request, status: "cancelled" };
+}
+
 export interface V2InputRegistry {
 	create(sessionId: string, questions: readonly V2InputQuestion[], autoResolutionMs?: number): Promise<V2InputRequest>;
 	read(requestId: string): Promise<V2InputRequest>;
@@ -109,18 +149,7 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 		questions: readonly V2InputQuestion[],
 		autoResolutionMs?: number,
 	): Promise<V2InputRequest> {
-		validateQuestions(questions);
-		validateDeadline(autoResolutionMs);
-		const request: V2InputRequest = {
-			id: randomUUID(),
-			sessionId,
-			questions: questions.map((question) => ({
-				...question,
-				...(question.options ? { options: question.options.map((option) => ({ ...option })) } : {}),
-			})),
-			status: "pending",
-			...(autoResolutionMs === undefined ? {} : { deadlineAt: Date.now() + autoResolutionMs }),
-		};
+		const request = createV2InputRequest(sessionId, questions, autoResolutionMs);
 		const state: InputState = { request, waiters: [] };
 		if (autoResolutionMs !== undefined) {
 			state.timer = setTimeout(() => {
@@ -150,16 +179,7 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 
 	async respond(requestId: string, answers: Readonly<Record<string, string>>): Promise<V2InputRequest> {
 		const state = this.get(requestId);
-		if (state.request.status !== "pending") throw new Error(`Input request ${requestId} is not pending`);
-		for (const question of state.request.questions) {
-			const answer = answers[question.id];
-			if (answer === undefined) continue;
-			if (question.options && !question.options.some((option) => option.label === answer || option.value === answer))
-				throw new Error(`Answer for ${question.id} is not one of the offered options`);
-			if (!question.allowFreeform && question.options === undefined && answer.trim().length === 0)
-				throw new Error(`Answer for ${question.id} must not be empty`);
-		}
-		state.request = { ...state.request, status: "responded", answers: { ...answers } };
+		state.request = respondV2InputRequest(state.request, answers);
 		if (state.timer) clearTimeout(state.timer);
 		this.resolveWaiters(state);
 		return structuredClone(state.request);
@@ -167,8 +187,7 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 
 	async cancel(requestId: string): Promise<V2InputRequest> {
 		const state = this.get(requestId);
-		if (state.request.status !== "pending") throw new Error(`Input request ${requestId} is not pending`);
-		state.request = { ...state.request, status: "cancelled" };
+		state.request = cancelV2InputRequest(state.request);
 		if (state.timer) clearTimeout(state.timer);
 		this.resolveWaiters(state);
 		return structuredClone(state.request);
@@ -245,8 +264,9 @@ export class JsonlV2InputRegistry implements V2InputRegistry {
 	): Promise<V2InputRequest> {
 		await this.loaded;
 		const write = this.pendingWrite.then(async () => {
-			const request = await this.memory.create(sessionId, questions, autoResolutionMs);
+			const request = createV2InputRequest(sessionId, questions, autoResolutionMs);
 			await this.append(request);
+			this.memory.restore(request);
 			return request;
 		});
 		this.pendingWrite = write.then(
@@ -263,12 +283,18 @@ export class JsonlV2InputRegistry implements V2InputRegistry {
 
 	async respond(requestId: string, answers: Readonly<Record<string, string>>): Promise<V2InputRequest> {
 		await this.loaded;
-		return this.mutate(() => this.memory.respond(requestId, answers));
+		return this.mutate(async () => {
+			const next = respondV2InputRequest(await this.memory.read(requestId), answers);
+			return { durable: next, commit: () => this.memory.respond(requestId, answers) };
+		});
 	}
 
 	async cancel(requestId: string): Promise<V2InputRequest> {
 		await this.loaded;
-		return this.mutate(() => this.memory.cancel(requestId));
+		return this.mutate(async () => {
+			const next = cancelV2InputRequest(await this.memory.read(requestId));
+			return { durable: next, commit: () => this.memory.cancel(requestId) };
+		});
 	}
 
 	async wait(requestId: string): Promise<V2InputRequest> {
@@ -286,11 +312,13 @@ export class JsonlV2InputRegistry implements V2InputRegistry {
 		return this.memory.takeRespondedForSession(sessionId);
 	}
 
-	private async mutate(operation: () => Promise<V2InputRequest>): Promise<V2InputRequest> {
+	private async mutate(
+		operation: () => Promise<{ durable: V2InputRequest; commit: () => Promise<V2InputRequest> }>,
+	): Promise<V2InputRequest> {
 		const write = this.pendingWrite.then(async () => {
-			const request = await operation();
-			await this.append(request);
-			return request;
+			const transition = await operation();
+			await this.append(transition.durable);
+			return transition.commit();
 		});
 		this.pendingWrite = write.then(
 			() => undefined,

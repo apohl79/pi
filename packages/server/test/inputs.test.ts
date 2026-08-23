@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -54,5 +54,17 @@ describe("JsonlV2InputRegistry", () => {
 		expect(await second.read(pending.id)).toMatchObject({ sessionId: "session-1", status: "pending" });
 		expect(await second.pendingForSession("session-1")).toBe(pending.id);
 		expect(await second.read(answered.id)).toMatchObject({ status: "responded", answers: { mode: "Safe" } });
+	});
+
+	test("does not publish a request when durable creation fails", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-input-registry-failure-"));
+		const path = join(directory, "inputs.jsonl");
+		const registry = new JsonlV2InputRegistry(path);
+		await registry.pendingForSession("session-1");
+		await rm(directory, { recursive: true });
+		await writeFile(directory, "not a directory");
+
+		await expect(registry.create("session-1", [{ id: "confirm", prompt: "Continue?" }])).rejects.toThrow();
+		expect(await registry.pendingForSession("session-1")).toBeUndefined();
 	});
 });
