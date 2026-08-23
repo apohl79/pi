@@ -198,9 +198,24 @@ describe("InMemoryV2AgentRegistry", () => {
 			});
 		await spawn("parent-a", "one");
 		await spawn("parent-a", "two");
-		await expect(spawn("parent-a", "three")).rejects.toThrow("for parent parent-a");
-		await spawn("parent-b", "b-one");
-		await expect(spawn("parent-b", "b-two")).rejects.toThrow("active limit 3");
+		await expect(spawn("parent-a", "three")).rejects.toThrow("for parent /root");
+		await spawn("parent-b", "b-one", "/other");
+		await expect(spawn("parent-b", "b-two", "/other")).rejects.toThrow("active limit 3");
+	});
+
+	test("does not share a parent quota between paths in one session", async () => {
+		const registry = new InMemoryV2AgentRegistry({ maxDepth: 2, maxActive: 4, maxActivePerParent: 1 });
+		const spawn = (parentPath: string, taskName: string) =>
+			registry.spawn({
+				sessionId: "session-1",
+				parentPath,
+				taskName,
+				taskMessage: "work",
+				model: { provider: "test", id: "small" },
+			});
+		await spawn("/root", "one");
+		await spawn("/root/other", "two");
+		await expect(spawn("/root", "three")).rejects.toThrow("for parent /root");
 	});
 
 	test("rejects unsafe agent registry limits", () => {
