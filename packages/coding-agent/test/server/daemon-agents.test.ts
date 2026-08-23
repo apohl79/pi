@@ -378,6 +378,69 @@ describe("coding-agent daemon child agents", () => {
 		}
 	});
 
+	test("normalizes alias-equivalent child models from the model-facing tool path", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-agents-alias-tool-"));
+		directories.push(directory);
+		const models = createModels();
+		const parent = fauxProvider({
+			provider: "coding-agent-daemon-alias-parent-faux",
+			models: [
+				{ id: "parent-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+				{ id: "parent-model-20250101", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		const child = fauxProvider({
+			provider: "coding-agent-daemon-alias-child-faux",
+			models: [{ id: "child-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(parent.provider);
+		models.setProvider(child.provider);
+		parent.setResponses([
+			fauxAssistantMessage(
+				fauxToolCall("spawn_agent", {
+					taskName: "alias-child",
+					taskMessage: "use the role model",
+					role: "reviewer",
+					model: { provider: parent.provider.id, id: "parent-model-20250101" },
+				}),
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("parent complete"),
+		]);
+		child.setResponses([fauxAssistantMessage("child complete")]);
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: parent.getModel("parent-model")!,
+			agentRoles: { reviewer: { model: { provider: child.provider.id, id: "child-model" } } },
+			socketPath: join(directory, "server.sock"),
+			harness: { activeToolNames: ["spawn_agent"] },
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
+			try {
+				const operationId = await session.submit("delegate with alias");
+				await session.waitForOperation(operationId);
+				const agents = await session.listAgents();
+				expect(agents).toEqual([
+					expect.objectContaining({ model: { provider: child.provider.id, id: "child-model" } }),
+				]);
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
 	test("keeps a running child alive when the parent turn completes", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-agents-parent-complete-"));
 		directories.push(directory);
