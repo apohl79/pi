@@ -39,10 +39,15 @@ import {
 	type ExperimentalCliRuntimeOptions,
 } from "../cli/experimental/runtime.ts";
 import type { TransportAddress } from "../cli/experimental/transport-address.ts";
+import { acquireCodexMarketplacePlugin, type CodexPluginAcquisitionOptions } from "../core/codex-plugin-acquisition.ts";
 import { CodexPluginActivationStore } from "../core/codex-plugin-activation.ts";
 import { runMigrations } from "../migrations.ts";
 import { type CodingAgentV2AgentRegistryOptions, createCodingAgentV2AgentRegistry } from "./agent-registry.ts";
-import { ActivatingV2PluginRegistry } from "./plugin-registry.ts";
+import {
+	AcquiringV2PluginRegistry,
+	ActivatingV2PluginRegistry,
+	type CodexPluginMarketplaceResolver,
+} from "./plugin-registry.ts";
 import { createRuntimeManifest } from "./runtime-manifest.ts";
 import { SqliteForensicRecorder } from "./sqlite-forensic-recorder.ts";
 import { SqliteV2InputRegistry } from "./sqlite-input-registry.ts";
@@ -76,6 +81,8 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	images?: V2ImageService;
 	files?: V2FileReferenceService;
 	pluginRegistry?: V2PluginRegistry;
+	pluginMarketplaceResolver?: CodexPluginMarketplaceResolver;
+	pluginAcquisition?: CodexPluginAcquisitionOptions;
 	pluginActivationStore?: CodexPluginActivationStore;
 	apps?: V2AppRegistry;
 	operationStore?: V2OperationStore;
@@ -313,10 +320,27 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 				createNodeSqliteFactory(),
 				options.usageStorePath ?? join(options.agentDir, "usage.sqlite"),
 			);
+		const pluginAcquisition = options.pluginAcquisition;
+		const pluginMarketplaceResolver =
+			options.pluginMarketplaceResolver ??
+			(pluginAcquisition === undefined
+				? undefined
+				: async (marketplace: Parameters<CodexPluginMarketplaceResolver>[0], pluginName: string) => {
+						const acquired = await acquireCodexMarketplacePlugin(marketplace.source, pluginName, {
+							...pluginAcquisition,
+							baseRoot: pluginAcquisition.baseRoot ?? options.cwd,
+						});
+						return { root: acquired.root, manifest: acquired.manifest };
+					});
 		const pluginRegistry =
 			options.pluginRegistry === undefined
 				? new ActivatingV2PluginRegistry(
-						new JsonV2PluginRegistry(join(options.agentDir, "plugins.json")),
+						pluginMarketplaceResolver === undefined
+							? new JsonV2PluginRegistry(join(options.agentDir, "plugins.json"))
+							: new AcquiringV2PluginRegistry(
+									new JsonV2PluginRegistry(join(options.agentDir, "plugins.json")),
+									pluginMarketplaceResolver,
+								),
 						options.pluginActivationStore ??
 							new CodexPluginActivationStore(join(options.agentDir, "plugins-cache")),
 					)

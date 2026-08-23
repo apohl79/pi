@@ -133,7 +133,7 @@ export interface RemoteV2PluginInstallOptions {
 	readonly name: string;
 	readonly marketplace: string;
 	readonly version: string;
-	readonly manifest: Record<string, unknown>;
+	readonly manifest?: Record<string, unknown>;
 	readonly root?: string;
 	readonly scope?: "user" | "project";
 }

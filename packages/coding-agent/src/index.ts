@@ -83,7 +83,9 @@ export {
 	resolveLocalCodexMarketplacePlugin,
 } from "./core/codex-plugin.ts";
 export {
+	acquireCodexMarketplacePlugin,
 	acquireCodexPlugin,
+	type CodexMarketplacePluginAcquisition,
 	type CodexPluginAcquisition,
 	type CodexPluginAcquisitionAdapter,
 	CodexPluginAcquisitionError,
@@ -493,7 +495,11 @@ export {
 	type ModelInstructionResolverOptions,
 	type ResolvedModelInstructionProfile,
 } from "./server/model-instructions.ts";
-export { ActivatingV2PluginRegistry } from "./server/plugin-registry.ts";
+export {
+	AcquiringV2PluginRegistry,
+	ActivatingV2PluginRegistry,
+	type CodexPluginMarketplaceResolver,
+} from "./server/plugin-registry.ts";
 export {
 	createPluginSamplingInput,
 	type PluginSamplingDiagnostic,
