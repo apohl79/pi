@@ -820,6 +820,8 @@ export class PiServerV2 {
 		const payload = objectPayload(command);
 		if (typeof payload.taskName !== "string" || typeof payload.taskMessage !== "string")
 			throw new Error("agent/spawn requires taskName and taskMessage");
+		if (payload.parentPath !== undefined && typeof payload.parentPath !== "string")
+			throw new Error("agent/spawn parentPath must be a string");
 		const modelPayload =
 			typeof payload.model === "object" && payload.model !== null && !Array.isArray(payload.model)
 				? (payload.model as Record<string, unknown>)
@@ -856,6 +858,8 @@ export class PiServerV2 {
 	private async waitAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const agentId = agentIdFrom(command, payload);
+		if (payload.timeoutMs !== undefined && typeof payload.timeoutMs !== "number")
+			throw new Error("agent/wait timeoutMs must be a number");
 		await this.sendResponse(state, id, {
 			command: command.command,
 			agent: await this.agents.wait(agentId, typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined),

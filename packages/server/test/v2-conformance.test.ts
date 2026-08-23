@@ -1530,6 +1530,19 @@ describe("PiServer v2 operation acceptance", () => {
 		});
 		const agent = (spawned as unknown as { result: { agent: { id: string; path: string } } }).result.agent;
 		expect(agent.path).toBe("/root/research");
+		expect(
+			await client.request({ command: "agent/wait", payload: { agentId: agent.id, timeoutMs: "0" } }),
+		).toMatchObject({
+			ok: false,
+			error: { message: "agent/wait timeoutMs must be a number" },
+		});
+		expect(
+			await client.request({
+				command: "agent/spawn",
+				sessionId: "session-1",
+				payload: { taskName: "bad-parent", taskMessage: "inspect", parentPath: 1 },
+			}),
+		).toMatchObject({ ok: false, error: { message: "agent/spawn parentPath must be a string" } });
 		expect(await client.request({ command: "agent/list", sessionId: "session-1" })).toMatchObject({
 			ok: true,
 			result: { agents: [{ id: agent.id, state: "running" }] },
