@@ -30,4 +30,15 @@ describe("AdapterV2WebService", () => {
 		expect(() => assertSafeWebUrl("http://[::1]/admin")).toThrow("private network");
 		expect(() => assertSafeWebUrl("https://user:pass@example.test")).toThrow("credentials");
 	});
+
+	test("bounds extracts in UTF-8 bytes without splitting code points", async () => {
+		const adapter: V2WebAdapter = {
+			execute: async () => [{ id: "unicode", title: "Unicode", source: "fake", retrievedAt: 1, extract: "🙂z" }],
+		};
+		const service = new AdapterV2WebService(adapter, { maxExtractBytes: 4 });
+
+		expect(await service.execute("session-1", { operation: "search_query", query: "unicode" })).toMatchObject([
+			{ extract: "🙂" },
+		]);
+	});
 });

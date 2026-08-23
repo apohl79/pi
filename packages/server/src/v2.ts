@@ -890,6 +890,7 @@ export class PiServerV2 {
 		const image = await this.images.generate(command.sessionId, {
 			prompt: payload.prompt,
 			...(typeof payload.sourceDigest === "string" ? { sourceDigest: payload.sourceDigest } : {}),
+			sourceOperationId: id,
 		});
 		await this.usage.record({
 			responseId: `${id}:image`,

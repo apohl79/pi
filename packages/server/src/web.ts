@@ -108,9 +108,18 @@ export class AdapterV2WebService implements V2WebService {
 		return results.slice(0, policy.maxResults).map((result) => ({
 			...result,
 			...(result.url ? { url: assertSafeWebUrl(result.url, policy).toString() } : {}),
-			...(result.extract ? { extract: result.extract.slice(0, policy.maxExtractBytes) } : {}),
+			...(result.extract ? { extract: truncateUtf8(result.extract, policy.maxExtractBytes) } : {}),
 		}));
 	}
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+	if (maxBytes <= 0) return "";
+	const bytes = Buffer.from(value, "utf8");
+	if (bytes.length <= maxBytes) return value;
+	let end = maxBytes;
+	while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
+	return bytes.subarray(0, end).toString("utf8");
 }
 
 export class UnavailableV2WebService implements V2WebService {

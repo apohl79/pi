@@ -392,11 +392,12 @@ describe("PiServer v2 operation acceptance", () => {
 			new LocalV2FileReferenceService({ projectRoot: directory, homeDirectory: directory }),
 			new InMemoryV2BlobStore(),
 			{
-				generate: async () => ({
+				generate: async (request) => ({
 					data: new Uint8Array([1]),
 					mimeType: "image/png",
 					provider: "fake",
 					model: "image-fast",
+					sourceOperationId: request.sourceOperationId,
 				}),
 			},
 		);
@@ -422,7 +423,14 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(viewed).toMatchObject({ ok: true, result: { image: { mimeType: "image/png", size: 4 } } });
 		expect(generated).toMatchObject({
 			ok: true,
-			result: { image: { provider: "fake", model: "image-fast", mimeType: "image/png" } },
+			result: {
+				image: {
+					provider: "fake",
+					model: "image-fast",
+					mimeType: "image/png",
+					sourceOperationId: expect.any(String),
+				},
+			},
 		});
 	});
 

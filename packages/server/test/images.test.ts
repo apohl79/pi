@@ -46,10 +46,13 @@ describe("BlobV2ImageService", () => {
 			},
 		);
 
-		expect(await service.generate("session-1", { prompt: "draw a tree" })).toMatchObject({
+		expect(
+			await service.generate("session-1", { prompt: "draw a tree", sourceOperationId: "operation-1" }),
+		).toMatchObject({
 			mimeType: "image/png",
 			provider: "fake",
 			model: "image-fast",
+			sourceOperationId: "operation-1",
 			dimensions: { width: 1, height: 2 },
 			costUsd: 0.01,
 		});

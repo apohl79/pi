@@ -78,6 +78,7 @@ export interface CodingAgentImageGenerationResult {
 	size: number;
 	provider: string;
 	model: string;
+	sourceOperationId?: string;
 	dimensions?: Readonly<{ width: number; height: number }>;
 	promptHash: string;
 	costUsd?: number;
