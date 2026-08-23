@@ -235,6 +235,11 @@ export interface SessionRegister {
 	value: JsonValue;
 }
 
+export interface EntryPlacement {
+	entry: ProvisionedEntry;
+	lane: string;
+}
+
 export type EntryOrder = "newestFirst" | "oldestFirst";
 
 export interface EntryCursor {
@@ -356,6 +361,11 @@ export interface SessionTransactionStorage<TMetadata extends SessionMetadata = S
 		writes: readonly RegisterWrite[],
 	): Promise<{ records: TRecord[]; registers: SessionRegister[] }>;
 	getRegister(namespace: string, key: string): Promise<SessionRegister | undefined>;
+	appendAtomicTransaction(
+		entries: readonly EntryPlacement[],
+		records: readonly NewRecord[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ entries: Entry[]; records: LaneRecord[]; registers: SessionRegister[] }>;
 }
 
 export interface SessionTree {

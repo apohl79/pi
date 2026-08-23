@@ -4,6 +4,7 @@ import { SessionState } from "./state.ts";
 import {
 	type BranchBounds,
 	type Entry,
+	type EntryPlacement,
 	type EntryQuery,
 	type ForkOptions,
 	type LanePointer,
@@ -139,6 +140,18 @@ export class InMemorySessionStorage implements SessionStorage, SessionTransactio
 
 	async getRegister(namespace: string, key: string): Promise<SessionRegister | undefined> {
 		return this.state.getRegister(namespace, key);
+	}
+
+	async appendAtomicTransaction(
+		entries: readonly EntryPlacement[],
+		records: readonly NewRecord[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ entries: Entry[]; records: LaneRecord[]; registers: SessionRegister[] }> {
+		const committedEntries: Entry[] = [];
+		for (const placement of entries)
+			committedEntries.push(await this.appendEntry(placement.entry as ProvisionedEntry<Entry>, placement.lane));
+		const result = await this.appendTransaction(records, writes);
+		return { entries: committedEntries, records: result.records, registers: result.registers };
 	}
 
 	async getEntry(id: string): Promise<Entry | undefined> {

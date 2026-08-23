@@ -23,6 +23,27 @@ describe("InMemorySessionRepo conformance", () => {
 });
 
 describe("Session with in-memory storage", () => {
+	it("publishes entries, records, and registers through the atomic seam", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "atomic", createdAt: 1 }));
+		const result = await session.appendAtomicTransaction(
+			[
+				{
+					lane: "main",
+					entry: {
+						type: "message",
+						id: "entry-1",
+						message: { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },
+					},
+				},
+			],
+			[],
+			[{ op: "set", namespace: "op.meta", key: "run-1", value: { kind: "run" } }],
+		);
+		expect(result.entries.map((entry) => entry.id)).toEqual(["entry-1"]);
+		expect(await session.getLeafId()).toBe("entry-1");
+		expect(await session.getRegister("op.meta", "run-1")).toMatchObject({ value: { kind: "run" } });
+	});
+
 	it("commits records and register writes through one transaction seam", async () => {
 		const session = new Session(new InMemorySessionStorage({ id: "transaction", createdAt: 1 }));
 		const result = await session.appendTransaction(

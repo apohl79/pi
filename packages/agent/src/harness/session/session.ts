@@ -3,6 +3,7 @@ import type { AgentMessage } from "../../types.ts";
 import type {
 	BranchBounds,
 	Entry,
+	EntryPlacement,
 	EntryQuery,
 	IdGenerator,
 	LanePointer,
@@ -241,6 +242,21 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> implem
 			throw new SessionError("storage", "Session backend does not support registers");
 		}
 		return storage.getRegister(namespace, key);
+	}
+
+	async appendAtomicTransaction(
+		entries: readonly EntryPlacement[],
+		records: readonly NewRecord[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ entries: Entry[]; records: LaneRecord[]; registers: SessionRegister[] }> {
+		for (const entry of entries) assertJsonSerializable(entry);
+		for (const record of records) assertJsonSerializable(record);
+		for (const write of writes) assertJsonSerializable(write);
+		const storage = this.storage as unknown as SessionTransactionStorage;
+		if (typeof storage.appendAtomicTransaction !== "function") {
+			throw new SessionError("storage", "Session backend does not support atomic entry transactions");
+		}
+		return storage.appendAtomicTransaction(entries, records, writes);
 	}
 
 	async findRecords<K extends LaneRecord["type"]>(
