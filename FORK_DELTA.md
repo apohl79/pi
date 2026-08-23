@@ -33,6 +33,7 @@ boundary is introduced.
 | Server-default RPC compatibility bridge | Fork core | Normal CLI RPC must enter the daemon-owned session boundary for durable state and operation ownership; the legacy direct RPC entry point remains available for v1 compatibility. |
 | SQLite coding-agent service and durable session runtime | Fork-dependent extension | The existing harness is reusable, but it needs a server-owned session adapter and persistent operation boundary. |
 | Critical diagnostics, encrypted capsules, and offline verification | Fork core | Causal evidence and atomic acceptance require the authoritative server and persistence paths. |
+| Protocol command forensic spans | Fork core | Only the server transport boundary can correlate every request outcome with its connection, session, and operation identity without exposing command payload content. |
 | Processes, files, blobs, web, images, plans, and structured input | Fork-dependent extension | These are provider-neutral server adapters exposed through v2; their ownership must remain outside the TUI. |
 | Cross-model child-agent graph and scheduling | Fork-dependent extension | The existing agent APIs do not provide daemon-owned graph identity, leases, or remote lifecycle events. |
 | Codex plugin and marketplace compatibility | Stock-compatible extension | Manifest parsing, acquisition, activation, and sampling can use adapter boundaries without changing provider APIs. |
