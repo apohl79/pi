@@ -1,3 +1,6 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	decodeCbor,
 	encodeServerMessageV2,
@@ -7,6 +10,7 @@ import {
 	type ServerSnapshotV2,
 } from "@earendil-works/pi-protocol";
 import { describe, expect, test } from "vitest";
+import { ClientDiagnosticSpool } from "../src/diagnostics.ts";
 import type { ByteTransport, ByteTransportHandlers } from "../src/transport.ts";
 import { PiClientV2 } from "../src/v2.ts";
 
@@ -150,6 +154,30 @@ describe("PiClientV2", () => {
 		});
 		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
 		await connection;
+		client.dispose();
+	});
+
+	test("records pre-connect and transport lifecycle evidence in the configured spool", async () => {
+		const pair = transportPair();
+		const directory = await mkdtemp(join(tmpdir(), "pi-client-v2-"));
+		const spool = new ClientDiagnosticSpool({ path: join(directory, "client.jsonl"), clientInstanceId: "client-1" });
+		const client = new PiClientV2({
+			transportFactory: pair.factory,
+			diagnostics: {
+				manifest: { runtime: "node v22", platform: "linux", arch: "x64" },
+				spool,
+			},
+		});
+		const connection = client.connect();
+		await new Promise<void>((resolve) => setTimeout(resolve, 20));
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
+		await connection;
+		client.disconnect();
+		expect(await spool.read()).toMatchObject([
+			{ event: "client.connecting" },
+			{ event: "client.connected" },
+			{ event: "client.disconnected" },
+		]);
 		client.dispose();
 	});
 

@@ -16,12 +16,17 @@ import {
 	type SessionMetadataV2,
 	type SessionSnapshotV2,
 } from "@earendil-works/pi-protocol";
+import type { ClientDiagnosticSpool } from "./diagnostics.ts";
 import type { ByteTransport, ByteTransportFactory, ByteTransportHandlers } from "./transport.ts";
 
 export interface PiClientV2Options {
 	readonly transportFactory: ByteTransportFactory;
 	readonly maxFrameLength?: number;
-	readonly diagnostics?: { readonly manifest: ClientDiagnosticManifestV2; readonly afterSeq?: number };
+	readonly diagnostics?: {
+		readonly manifest: ClientDiagnosticManifestV2;
+		readonly afterSeq?: number;
+		readonly spool?: ClientDiagnosticSpool;
+	};
 }
 
 export type V2SessionLeaseMode = "control" | "observer";
@@ -68,6 +73,8 @@ export class PiClientV2 {
 		if (this.disposed) throw new Error("PiClientV2 is disposed");
 		if (this.connectedValue || this.handshake) throw new Error("PiClientV2 is already connecting or connected");
 		const effectiveLastEvent = lastEvent ?? this.lastEventCursorValue;
+		if (this.options.diagnostics?.spool !== undefined)
+			await this.recordDiagnostic({ event: "client.connecting", severity: "info" });
 		this.decoder = new FrameDecoder({ maxFrameLength: this.options.maxFrameLength ?? DEFAULT_MAX_FRAME_LENGTH });
 		const snapshot = new Promise<ServerSnapshotV2>((resolve, reject) => {
 			this.handshake = { resolve, reject };
@@ -79,14 +86,27 @@ export class PiClientV2 {
 		};
 		try {
 			this.transport = await this.options.transportFactory(handlers);
+			const diagnostics = this.options.diagnostics;
 			await this.send({
 				type: "hello",
 				version: PROTOCOL_V2_VERSION,
 				...(effectiveLastEvent === undefined ? {} : { lastEvent: effectiveLastEvent }),
-				...(this.options.diagnostics === undefined ? {} : { diagnostics: this.options.diagnostics }),
+				...(diagnostics === undefined
+					? {}
+					: {
+							diagnostics: {
+								manifest: diagnostics.manifest,
+								...(diagnostics.afterSeq === undefined ? {} : { afterSeq: diagnostics.afterSeq }),
+							},
+						}),
 			});
-			return await snapshot;
+			const result = await snapshot;
+			if (this.options.diagnostics?.spool !== undefined)
+				await this.recordDiagnostic({ event: "client.connected", severity: "info" });
+			return result;
 		} catch (error) {
+			if (this.options.diagnostics?.spool !== undefined)
+				await this.recordDiagnostic({ event: "client.connect_failed", severity: "error" });
 			this.fail(error instanceof Error ? error : new Error(String(error)));
 			throw error;
 		}
@@ -95,6 +115,8 @@ export class PiClientV2 {
 	disconnect(): void {
 		if (!this.transport && !this.handshake && !this.connectedValue) return;
 		this.fail(new Error("PiClientV2 disconnected"));
+		if (this.options.diagnostics?.spool !== undefined)
+			void this.recordDiagnostic({ event: "client.disconnected", severity: "info" });
 		this.transport?.close();
 		this.transport = undefined;
 	}
@@ -147,6 +169,14 @@ export class PiClientV2 {
 	private async send(message: ClientMessageV2): Promise<void> {
 		if (!this.transport) throw new Error("PiClientV2 has no transport");
 		await this.transport.send(encodeClientMessageV2(message, { maxFrameLength: this.options.maxFrameLength }));
+	}
+
+	private async recordDiagnostic(input: Parameters<ClientDiagnosticSpool["append"]>[0]): Promise<void> {
+		try {
+			await this.options.diagnostics?.spool?.append(input);
+		} catch {
+			// Local diagnostics are best-effort and must not change protocol behavior.
+		}
 	}
 
 	private receive(chunk: Uint8Array): void {
