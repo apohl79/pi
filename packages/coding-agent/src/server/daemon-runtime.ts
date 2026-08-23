@@ -4,6 +4,7 @@ import { PiClientV2 } from "@earendil-works/pi-client";
 import { ClientDiagnosticSpool } from "@earendil-works/pi-client/diagnostics";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import {
+	createNativeV2PtyLauncher,
 	type DiagnosticIntegrityCheck,
 	FileV2BlobStore,
 	type ForensicRecorder,
@@ -151,7 +152,7 @@ export async function createCodingAgentDaemonRuntime(
 				);
 	const diagnosticContent =
 		options.diagnosticKeyPath === undefined ? undefined : new LocalDiagnosticCapsuleStore(options.diagnosticKeyPath);
-	const processes = options.processes ?? new NodeV2ProcessRegistry();
+	const processes = options.processes ?? new NodeV2ProcessRegistry({ ptyLauncher: createNativeV2PtyLauncher() });
 	const inputs =
 		options.inputs ??
 		(options.inputStorePath === undefined
@@ -511,7 +512,12 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			clientDiagnosticSpoolPath:
 				options.clientDiagnosticSpoolPath ?? join(options.agentDir, "client-diagnostics.jsonl"),
 			lifecycleMarkerPath: options.lifecycleMarkerPath ?? join(options.agentDir, "daemon-state.json"),
-			processes: options.processes ?? new JsonlV2ProcessRegistry(join(options.agentDir, "processes.jsonl")),
+			processes:
+				options.processes ??
+				new JsonlV2ProcessRegistry(
+					join(options.agentDir, "processes.jsonl"),
+					new NodeV2ProcessRegistry({ ptyLauncher: createNativeV2PtyLauncher() }),
+				),
 		});
 		return {
 			...runtime,

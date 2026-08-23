@@ -2,7 +2,12 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { InMemoryV2ProcessRegistry, JsonlV2ProcessRegistry, NodeV2ProcessRegistry } from "../src/processes.ts";
+import {
+	createNativeV2PtyLauncher,
+	InMemoryV2ProcessRegistry,
+	JsonlV2ProcessRegistry,
+	NodeV2ProcessRegistry,
+} from "../src/processes.ts";
 
 describe("InMemoryV2ProcessRegistry", () => {
 	test("keeps bounded cursor-based output and explicit terminal state", async () => {
@@ -84,6 +89,19 @@ describe("InMemoryV2ProcessRegistry", () => {
 		const completed = await registry.wait(started.processId);
 
 		expect(completed).toMatchObject({ state: "exited", exitCode: 0, output: "hello", cursor: 5 });
+	});
+
+	test.runIf(process.platform !== "win32")("runs a production-native PTY command", async () => {
+		const registry = new NodeV2ProcessRegistry({ ptyLauncher: createNativeV2PtyLauncher() });
+		const started = await registry.start({
+			sessionId: "session-native-pty",
+			command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("process.stdin.once('data', d => { process.stdout.write('pty:' + d); process.exit(0); })")}`,
+			pty: true,
+		});
+		await registry.write(started.processId, "hello\n");
+		const completed = await registry.wait(started.processId);
+		expect(completed).toMatchObject({ state: "exited", exitCode: 0, pty: true });
+		expect(completed.output).toContain("pty:hello");
 	});
 
 	test("reports Node output cursors in UTF-8 bytes", async () => {

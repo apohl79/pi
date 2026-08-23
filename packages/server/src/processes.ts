@@ -223,6 +223,46 @@ function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLau
 	});
 }
 
+/** Create the default host PTY boundary used by production server runtimes. */
+export function createNativeV2PtyLauncher(): V2PtyLauncher {
+	return {
+		spawn(request) {
+			if (process.platform === "win32") {
+				throw new Error("Native PTY execution requires a Windows host PTY launcher");
+			}
+			const argv = parseArgv(request.command);
+			const relay = [
+				"import errno, os, pty, select, sys",
+				"pid, fd = pty.fork()",
+				"if pid == 0:",
+				"    os.chdir(sys.argv[1])",
+				"    os.execvpe(sys.argv[2], sys.argv[2:], os.environ)",
+				"status = None",
+				"while True:",
+				"    readable, _, _ = select.select([fd, sys.stdin.buffer], [], [], 0.1)",
+				"    if fd in readable:",
+				"        try: os.write(1, os.read(fd, 4096))",
+				"        except OSError as error:",
+				"            if error.errno in (errno.EIO, errno.EBADF): break",
+				"    if sys.stdin.buffer in readable:",
+				"        data = os.read(0, 4096)",
+				"        if not data: os.close(fd); break",
+				"        os.write(fd, data)",
+				"    waited, status = os.waitpid(pid, os.WNOHANG)",
+				"    if waited == pid: break",
+				"if status is None: _, status = os.waitpid(pid, 0)",
+				"sys.exit(os.waitstatus_to_exitcode(status))",
+			].join("\n");
+			return spawn("python3", ["-c", relay, request.cwd ?? process.cwd(), ...argv], {
+				cwd: request.cwd,
+				env: { ...process.env, ...request.env },
+				stdio: ["pipe", "pipe", "pipe"],
+				detached: true,
+			});
+		},
+	};
+}
+
 const FORBIDDEN_SHELL_CHARACTERS = new Set([";", "|", "&", ">", "<", "`", "$", "(", ")"]);
 
 /** Parse the restricted argv-like process command without invoking a shell. */
