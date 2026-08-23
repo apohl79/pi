@@ -1118,6 +1118,14 @@ export class PiServerV2 {
 	private async startAppAuth(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		if (typeof payload.id !== "string") throw new Error("app/auth/start requires id");
+		const standalone = await this.apps.read(payload.id);
+		if (!standalone && this.plugins.startAppAuth !== undefined) {
+			await this.sendResponse(state, id, {
+				command: command.command,
+				auth: await this.plugins.startAppAuth(payload.id, payload),
+			});
+			return;
+		}
 		await this.sendResponse(state, id, {
 			command: command.command,
 			auth: await this.apps.startAuth(payload.id, payload),

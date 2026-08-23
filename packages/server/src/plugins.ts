@@ -21,6 +21,12 @@ export type V2PluginApp = Readonly<{
 	metadata?: Readonly<Record<string, unknown>>;
 }>;
 
+export type V2PluginAppAuthStart = Readonly<{
+	appId: string;
+	state: "pending";
+	authorizationUrl?: string;
+}>;
+
 export type V2Marketplace = Readonly<{
 	name: string;
 	source: string;
@@ -69,6 +75,7 @@ export interface V2PluginRegistry {
 	}): Promise<V2Plugin>;
 	uninstallPlugin(id: string): Promise<void>;
 	setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin>;
+	startAppAuth?(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthStart>;
 }
 
 function requireName(value: string, field: string): string {
@@ -271,6 +278,34 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		this.plugins.set(id, updated);
 		return structuredClone(updated);
 	}
+
+	async startAppAuth(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthStart> {
+		const normalizedId = requireName(id, "app id");
+		for (const [pluginId, plugin] of this.plugins) {
+			const app = (plugin.appDescriptors ?? []).find((candidate) => candidate.id === normalizedId);
+			if (!app) continue;
+			if (app.auth === "unsupported") throw new Error(`App does not support authentication: ${normalizedId}`);
+			const updatedApp = {
+				...app,
+				auth: "pending" as const,
+				...(typeof payload.authorizationUrl === "string"
+					? { metadata: { ...app.metadata, authorizationUrl: payload.authorizationUrl } }
+					: {}),
+			};
+			this.plugins.set(pluginId, {
+				...plugin,
+				appDescriptors: (plugin.appDescriptors ?? []).map((candidate) =>
+					candidate.id === normalizedId ? updatedApp : candidate,
+				),
+			});
+			return {
+				appId: normalizedId,
+				state: "pending",
+				...(typeof payload.authorizationUrl === "string" ? { authorizationUrl: payload.authorizationUrl } : {}),
+			};
+		}
+		throw new Error(`Unknown app: ${normalizedId}`);
+	}
 }
 
 /** JSON-backed registry with atomic replacement and restart recovery. */
@@ -364,6 +399,13 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 	async setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin> {
 		await this.ensureLoaded();
 		const value = await this.memory.setEnabled(id, enabled, scope);
+		await this.persist();
+		return value;
+	}
+
+	async startAppAuth(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthStart> {
+		await this.ensureLoaded();
+		const value = await this.memory.startAppAuth(id, payload);
 		await this.persist();
 		return value;
 	}
