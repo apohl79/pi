@@ -173,4 +173,19 @@ describe("formatRemoteV2Session", () => {
 		});
 		expect(output).toContain("Input request pending · input-1");
 	});
+
+	test("renders usage and degraded recovery indicators without guessing cost", () => {
+		const output = formatRemoteV2Session({
+			lifecycle: { status: "ready" },
+			snapshot: {
+				...snapshot,
+				usage: { ...snapshot.usage, input: 8, output: 3, cacheRead: 2, pricingState: "unknown" },
+				persistence: { ...snapshot.persistence, recoveryState: "needsResolution" },
+				diagnostics: { ...snapshot.diagnostics, degraded: true },
+			},
+		});
+		expect(output).toContain("Usage input=8 output=3 cacheRead=2 cost=unknown");
+		expect(output).toContain("Persistence needsResolution");
+		expect(output).toContain("Diagnostics degraded");
+	});
 });

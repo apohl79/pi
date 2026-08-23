@@ -86,6 +86,13 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 		lines.push(
 			`Agent ${sanitizeTranscriptText(agent.path)} · ${sanitizeTranscriptText(agent.state)} · ${sanitizeTranscriptText(agent.model.provider)}/${sanitizeTranscriptText(agent.model.id)}`,
 		);
+	const cost = snapshot.usage.costUsd === undefined ? "unknown" : `$${snapshot.usage.costUsd.toFixed(6)}`;
+	lines.push(
+		`Usage input=${snapshot.usage.input} output=${snapshot.usage.output} cacheRead=${snapshot.usage.cacheRead} cost=${cost}`,
+	);
+	if (snapshot.persistence.recoveryState !== "clean")
+		lines.push(`Persistence ${sanitizeTranscriptText(snapshot.persistence.recoveryState)}`);
+	if (snapshot.diagnostics.degraded) lines.push("Diagnostics degraded");
 	if (snapshot.goal) {
 		lines.push(
 			`Goal ${sanitizeTranscriptText(snapshot.goal.status)} · ${sanitizeTranscriptText(snapshot.goal.objective).slice(0, normalizedOptions.maxGoalCharacters)}`,
