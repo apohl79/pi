@@ -1,5 +1,5 @@
 import type { CommandV2, OperationAccepted, SessionSnapshotV2 } from "@earendil-works/pi-protocol";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { CodingAgentV2AgentRegistry } from "../../src/server/agent-registry.ts";
 import type { CodingAgentV2Runtime, CodingAgentV2Service } from "../../src/server/v2-service.ts";
 
@@ -33,7 +33,7 @@ class FixtureRuntime implements CodingAgentV2Runtime {
 	}
 }
 
-function fixture() {
+function fixture(options?: ConstructorParameters<typeof CodingAgentV2AgentRegistry>[1]) {
 	const runtime = new FixtureRuntime();
 	const service: CodingAgentV2Service = {
 		listSessions: async () => [],
@@ -41,7 +41,7 @@ function fixture() {
 		openSession: async () => runtime,
 		createSession: async () => ({ sessionId: "child-session", runtime }),
 	};
-	return { runtime, registry: new CodingAgentV2AgentRegistry(service) };
+	return { runtime, registry: new CodingAgentV2AgentRegistry(service, options) };
 }
 
 describe("CodingAgentV2AgentRegistry", () => {
@@ -138,5 +138,37 @@ describe("CodingAgentV2AgentRegistry", () => {
 		runtime.release();
 		expect((await registry.wait(agent.id)).state).toBe("complete");
 		expect(runtime.commands.map((command) => command.command)).toEqual(["turn/start", "turn/followUp"]);
+	});
+
+	test("does not restart while an interrupted operation is still releasing", async () => {
+		const { registry, runtime } = fixture();
+		runtime.blocked = true;
+		const agent = await registry.spawn({
+			sessionId: "parent-session",
+			parentPath: "root",
+			taskName: "worker",
+			taskMessage: "initial task",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		await vi.waitFor(() => expect(runtime.commands).toHaveLength(1));
+		await registry.interrupt(agent.id);
+		await expect(registry.followUp(agent.id, "restart too soon")).rejects.toThrow("active agent");
+		runtime.release();
+	});
+
+	test("bounds queued follow-ups", async () => {
+		const { registry, runtime } = fixture({ maxMessages: 1 });
+		runtime.blocked = true;
+		const agent = await registry.spawn({
+			sessionId: "parent-session",
+			parentPath: "root",
+			taskName: "worker",
+			taskMessage: "initial task",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		await vi.waitFor(() => expect(runtime.commands).toHaveLength(1));
+		await registry.followUp(agent.id, "queued task");
+		await expect(registry.followUp(agent.id, "overflow task")).rejects.toThrow("queue limit");
+		runtime.release();
 	});
 });

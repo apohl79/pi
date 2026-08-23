@@ -100,4 +100,26 @@ describe("formatRemoteV2Session", () => {
 		expect(output).toContain("Session session-1 · phase=turn · model=faux/model operation=op-1");
 		expect(output).not.toMatch(/[\u0000\u0007\u001b]/);
 	});
+
+	test("renders bounded active-agent summaries", () => {
+		const output = formatRemoteV2Session(
+			{
+				lifecycle: { status: "ready" },
+				snapshot: {
+					...snapshot,
+					agents: [
+						{
+							id: "agent-1",
+							path: "/root/worker",
+							taskName: "worker",
+							state: "running",
+							model: { provider: "anthropic", id: "sonnet" },
+						},
+					],
+				},
+			},
+			{ maxAgentItems: 1 },
+		);
+		expect(output).toContain("Agent /root/worker · running · anthropic/sonnet");
+	});
 });
