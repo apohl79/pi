@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import {
 	type AgentHarness,
 	type CompactionSettings,
@@ -20,6 +21,7 @@ import type {
 	V2WebService,
 } from "@earendil-works/pi-server";
 import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
+import { loadSkillsFromDir } from "../core/skills.ts";
 import {
 	type CodingAgentAgentTools,
 	type CodingAgentLifecycleHook,
@@ -122,6 +124,21 @@ export async function createCodingAgentV2SqliteService(
 					: [],
 			),
 		);
+		const pluginSkills = (
+			await Promise.all(
+				activePlugins.flatMap((plugin) =>
+					plugin.root === undefined
+						? []
+						: plugin.resources.skills.map(async (skillPath) => {
+								const root = resolve(plugin.root!);
+								const path = resolve(root, skillPath);
+								if (path !== root && !path.startsWith(`${root}/`)) return [];
+								const loaded = loadSkillsFromDir({ dir: path, source: plugin.id });
+								return loaded.skills.map((skill) => ({ ...skill, name: `${plugin.id}:${skill.name}` }));
+							}),
+				),
+			)
+		).flat();
 		const threadMessages = await createPluginSamplingInput(
 			env,
 			activePlugins.map((plugin, activationOrder) => ({
@@ -134,11 +151,17 @@ export async function createCodingAgentV2SqliteService(
 			message.role === "user" && typeof message.content === "string" ? [message.content] : [],
 		);
 		const threadContextPrompt = threadContext.length > 0 ? threadContext.join("\n\n") : undefined;
+		const baseSystemPromptOptions = options.harness?.systemPromptOptions;
 		const systemPromptOptions =
 			threadContextPrompt === undefined
-				? options.harness?.systemPromptOptions
+				? pluginSkills.length === 0
+					? baseSystemPromptOptions
+					: { ...baseSystemPromptOptions, skills: [...(baseSystemPromptOptions?.skills ?? []), ...pluginSkills] }
 				: {
-						...options.harness?.systemPromptOptions,
+						...baseSystemPromptOptions,
+						...(pluginSkills.length === 0
+							? {}
+							: { skills: [...(baseSystemPromptOptions?.skills ?? []), ...pluginSkills] }),
 						appendSystemPrompt: [options.harness?.systemPromptOptions?.appendSystemPrompt, threadContextPrompt]
 							.filter((value): value is string => value !== undefined && value.length > 0)
 							.join("\n\n"),
