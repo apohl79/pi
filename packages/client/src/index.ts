@@ -16,3 +16,5 @@ export type {
 	PiClientOptions,
 	Unsubscribe,
 } from "./types.ts";
+export type { PiClientV2Options } from "./v2.ts";
+export { PiClientV2 } from "./v2.ts";
