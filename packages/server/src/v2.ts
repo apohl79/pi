@@ -975,6 +975,8 @@ export class PiServerV2 {
 		this.requireControl(state, command.sessionId);
 		const payload = objectPayload(command);
 		if (!Array.isArray(payload.items)) throw new Error("plan/update requires items");
+		if (payload.version !== undefined && typeof payload.version !== "number")
+			throw new Error("plan/update version must be a number");
 		const items = payload.items as Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
 		const plan = await this.plans.update(command.sessionId, {
 			items,
