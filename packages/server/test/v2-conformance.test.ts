@@ -110,12 +110,16 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	async accept(operationId: string): Promise<OperationAccepted> {
 		const accepted = { operationId, sessionRevision: 2, eventSeq: 2 };
 		this.accepted.push(accepted);
+		this.current = { ...this.current, phase: "turn" };
 		return accepted;
 	}
 
 	async run(operationId: string, command: CommandV2): Promise<void> {
 		this.commands.push(structuredClone(command));
-		if (this.fail) throw new Error("runtime failed");
+		if (this.fail) {
+			this.current = { ...this.current, phase: "failed" };
+			throw new Error("runtime failed");
+		}
 		await this.release.promise;
 		this.started.resolve(undefined);
 		if (command.command === "session/name/set") {
@@ -129,6 +133,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 		}
 		this.current = {
 			...this.current,
+			phase: "idle",
 			revision: 3,
 			eventSeq: 3,
 		};
@@ -265,6 +270,10 @@ describe("PiServer v2 operation acceptance", () => {
 			operationId: expect.any(String),
 			payload: { name: "Renamed session", nameSource: "explicit", nameRevision: 2 },
 		});
+		const phaseEvent = await client.next(
+			(message) => message.type === "event" && message.event === "session_phase_changed",
+		);
+		expect(phaseEvent).toMatchObject({ event: "session_phase_changed", payload: { phase: "idle" } });
 	});
 
 	test("accepts deterministic in-memory v2 handshakes and fragmented requests", async () => {
@@ -1236,7 +1245,7 @@ describe("PiServer v2 operation acceptance", () => {
 		const second = await connectUnixTestClientV2(server.addresses[0]!);
 		await second.hello({ sessionId: "session-1", eventSeq: 2 });
 		const replay = await second.next((message) => message.type === "event" && message.event === "operation_terminal");
-		expect(replay).toMatchObject({ type: "event", seq: 4, payload: { state: "complete" } });
+		expect(replay).toMatchObject({ type: "event", seq: 5, payload: { state: "complete" } });
 		await second.close();
 	});
 
@@ -1264,7 +1273,7 @@ describe("PiServer v2 operation acceptance", () => {
 		);
 		expect(terminal).toMatchObject({
 			type: "event",
-			payload: { state: "failed", error: "runtime failed", snapshot: { id: "session-1", phase: "idle" } },
+			payload: { state: "failed", error: "runtime failed", snapshot: { id: "session-1", phase: "failed" } },
 		});
 		await client.close();
 	});
