@@ -74,11 +74,13 @@ export function applyRemoteFileCompletion(
 	tokenStart: number,
 	item: Pick<RemoteV2FileCompletion, "reference" | "kind">,
 ): string {
-	if (item.kind === "file") return `${input.slice(0, tokenStart)}${item.reference}`;
+	const typedToken = input.slice(tokenStart);
+	const marker = typedToken.startsWith("@") && !item.reference.startsWith("@") ? "@" : "";
+	const reference = `${marker}${item.reference}`;
+	if (item.kind === "file") return `${input.slice(0, tokenStart)}${reference}`;
 	const separator = item.reference.includes("\\") && !item.reference.includes("/") ? "\\" : "/";
-	const reference =
-		item.reference.endsWith("/") || item.reference.endsWith("\\") ? item.reference : `${item.reference}${separator}`;
-	return `${input.slice(0, tokenStart)}${reference}`;
+	const descended = reference.endsWith("/") || reference.endsWith("\\") ? reference : `${reference}${separator}`;
+	return `${input.slice(0, tokenStart)}${descended}`;
 }
 
 export function parseRemoteV2Command(input: string): RemoteV2Command {
