@@ -10,6 +10,7 @@
 			"@earendil-works/pi-client": ["../client/dist/index.d.ts"],
 			"@earendil-works/pi-client/unix": ["../client/dist/unix.d.ts"],
 			"@earendil-works/pi-server": ["../server/dist/index.d.ts"],
+			"@earendil-works/pi-server-extension-api": ["../server-extension-api/dist/index.d.ts"],
 			"@earendil-works/pi-protocol": ["../protocol/dist/index.d.ts"],
 			"@earendil-works/pi-tui": ["../tui/dist/index.d.ts"],
 			"@earendil-works/pi-tui/*": ["../tui/dist/*.d.ts", "../tui/dist/components/*.d.ts"]
