@@ -1,6 +1,10 @@
 import type { SessionSnapshotV2 } from "@earendil-works/pi-protocol";
 import { describe, expect, test } from "vitest";
-import { formatRemoteV2Session, type RemoteV2SessionViewOptions } from "../../src/client/remote-v2-view.ts";
+import {
+	createRemoteV2StatuslinePayload,
+	formatRemoteV2Session,
+	type RemoteV2SessionViewOptions,
+} from "../../src/client/remote-v2-view.ts";
 
 const options: RemoteV2SessionViewOptions = { maxTranscriptItems: 1, maxTranscriptCharacters: 32 };
 const snapshot: SessionSnapshotV2 = {
@@ -141,5 +145,57 @@ describe("formatRemoteV2Session", () => {
 			},
 		});
 		expect(output).toContain("operation=op-reconnected (running)");
+	});
+
+	test("projects authoritative state into the statusline payload", () => {
+		const payload = createRemoteV2StatuslinePayload(
+			{
+				lifecycle: { status: "ready" },
+				snapshot: {
+					...snapshot,
+					name: "Remote task",
+					usage: { ...snapshot.usage, input: 8, output: 3, costUsd: 0.42 },
+					context: { ...snapshot.context, usedPercentage: 25 },
+					goal: {
+						id: "goal",
+						objective: "task",
+						status: "active",
+						tokenBudget: 20,
+						tokensUsed: 5,
+						activeTimeSeconds: 1,
+						createdAt: 1,
+						updatedAt: 1,
+					},
+					plan: {
+						version: 1,
+						items: [
+							{ step: "done", status: "completed" },
+							{ step: "next", status: "pending" },
+						],
+					},
+					agents: [
+						{
+							id: "agent",
+							path: "/root/agent",
+							taskName: "agent",
+							state: "running",
+							model: { provider: "faux", id: "model" },
+						},
+					],
+				},
+			},
+			{ cwd: "/work", transcriptPath: "/tmp/session.jsonl", projectDir: "/work", addedDirs: ["/shared"] },
+		);
+		expect(payload).toMatchObject({
+			harness: "pi",
+			session_id: "session-1",
+			session_name: "Remote task",
+			cost: { total_cost_usd: 0.42, pricing_state: "known" },
+			context_window: { total_input_tokens: 8, total_output_tokens: 3, remaining_percentage: 75 },
+			task_indicator: { text: "Tasks 1/2", completed: 1, total: 2 },
+			goal: { status: "active", remaining_tokens: 15 },
+			agents: { active: 1, total: 1 },
+			server: { connected: true, phase: "turn", detachable: true },
+		});
 	});
 });
