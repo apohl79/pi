@@ -1,5 +1,5 @@
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import { type Component, Text } from "@earendil-works/pi-tui";
+import { type Component, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { StatuslineCommand, StatuslineRunner, StatuslineSnapshot } from "../server/statusline.ts";
 import type { RemoteV2Session, RemoteV2SessionState } from "./remote-v2-session.ts";
 
@@ -124,9 +124,9 @@ export class RemoteV2StatuslineComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		void width;
-		if (this.#snapshot.output) return [this.#snapshot.output];
-		if (this.#snapshot.error) return [`statusline error: ${this.#snapshot.error}`];
+		if (this.#snapshot.output) return [truncateToWidth(this.#snapshot.output, Math.max(1, width), "")];
+		if (this.#snapshot.error)
+			return [truncateToWidth(`statusline error: ${this.#snapshot.error}`, Math.max(1, width), "")];
 		return [];
 	}
 
