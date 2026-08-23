@@ -60,7 +60,7 @@ export class ClientDiagnosticSpool {
 			event: input.event,
 			severity: input.severity ?? "info",
 			timestamp: input.timestamp ?? Date.now(),
-			...(input.fields === undefined ? {} : { fields: structuredClone(input.fields) }),
+			...(input.fields === undefined ? {} : { fields: sanitizeClientDiagnosticFields(input.fields) }),
 		};
 		this.records.push(record);
 		const trimmed = this.trim();
@@ -179,6 +179,39 @@ export class ClientDiagnosticSpool {
 			}
 		}
 	}
+}
+
+const SENSITIVE_CLIENT_FIELD =
+	/(?:api[_ -]?key|authorization|cookie|credential|password|private[_ -]?key|secret|token)/iu;
+
+function sanitizeClientDiagnosticValue(value: JsonValue, key?: string, depth = 0): JsonValue {
+	if (depth >= 6) return "[redacted]";
+	if (key !== undefined && SENSITIVE_CLIENT_FIELD.test(key)) return "[redacted]";
+	if (typeof value === "string") {
+		return value
+			.replace(/\bBearer\s+[^\s"'`,;}\]]+/giu, "Bearer [redacted]")
+			.replace(
+				/(?:api[_ -]?key|authorization|cookie|credential|password|secret|token)\s*[:=]\s*[^\s,;}\]]+/giu,
+				"[redacted]",
+			)
+			.replace(/\b(?:sk|rk|pk)-[A-Za-z0-9][A-Za-z0-9_-]{8,}\b/gu, "[redacted]");
+	}
+	if (Array.isArray(value))
+		return value.slice(0, 32).map((item) => sanitizeClientDiagnosticValue(item, undefined, depth + 1));
+	if (value !== null && typeof value === "object") {
+		const output: Record<string, JsonValue> = {};
+		for (const [childKey, childValue] of Object.entries(value).slice(0, 32))
+			output[childKey] = sanitizeClientDiagnosticValue(childValue, childKey, depth + 1);
+		return output;
+	}
+	return value;
+}
+
+function sanitizeClientDiagnosticFields(fields: Record<string, JsonValue>): Record<string, JsonValue> {
+	const output: Record<string, JsonValue> = {};
+	for (const [key, value] of Object.entries(fields).slice(0, 32))
+		output[key] = sanitizeClientDiagnosticValue(value, key, 1);
+	return output;
 }
 
 /** Merge client-local records into a server diagnostic bundle when identities match. */

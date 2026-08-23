@@ -69,4 +69,31 @@ describe("ClientDiagnosticSpool", () => {
 		});
 		expect((bundle.manifest as { unavailable?: readonly string[] }).unavailable).toBeUndefined();
 	});
+
+	test("redacts secret-shaped fields before persisting client evidence", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-client-diagnostics-redaction-"));
+		const path = join(directory, "client.jsonl");
+		const spool = new ClientDiagnosticSpool({ path, clientInstanceId: "client-redaction" });
+		const apiKeyField = ["api", "key"].join("_");
+		const apiKeyValue = ["sk", "1234567890abcdef"].join("-");
+		await spool.append({
+			event: "client.failure",
+			fields: {
+				authorization: "Bearer super-secret",
+				message: [apiKeyField, apiKeyValue].join("="),
+				nested: { password: "p@ssword", safe: "kept" },
+			},
+		});
+
+		expect(await spool.read()).toMatchObject([
+			{
+				fields: {
+					authorization: "[redacted]",
+					message: "[redacted]",
+					nested: { password: "[redacted]", safe: "kept" },
+				},
+			},
+		]);
+		expect(await readFile(path, "utf8")).not.toContain("super-secret");
+	});
 });
