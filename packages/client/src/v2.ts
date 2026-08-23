@@ -101,6 +101,7 @@ export class PiClientV2 {
 		const snapshot = new Promise<ServerSnapshotV2>((resolve, reject) => {
 			this.handshake = { resolve, reject };
 		});
+		void snapshot.catch(() => undefined);
 		const generation = ++this.transportGeneration;
 		const handlers: ByteTransportHandlers = {
 			onData: (chunk) => {
