@@ -28,6 +28,44 @@ describe("coding-agent v2 service adapter", () => {
 		);
 	});
 
+	test("rejects goal pause and resume when goals are not configured", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-goal-config-faux",
+			models: [{ id: "goal-config-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const session = new Session(new InMemorySessionStorage({ id: "goal-config-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+			systemPrompt: "goal configuration",
+		});
+		try {
+			const service = createCodingAgentV2Service(models, [
+				{
+					metadata: { id: "goal-config-session", createdAt: 1, updatedAt: 1 },
+					harness: created.harness,
+				},
+			]);
+			const runtime = await service.openSession("goal-config-session");
+			for (const command of ["goal/pause", "goal/resume"] as const) {
+				await expect(
+					runtime.run(command, { command, sessionId: "goal-config-session", payload: {} }),
+				).rejects.toThrow("Goals are not configured");
+				expect((await runtime.snapshot()).activeOperation).toMatchObject({ state: "failed", kind: command });
+			}
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("delivers durable child completions on the parent next turn", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
