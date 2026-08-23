@@ -112,6 +112,13 @@ export interface OperationStartedRecord extends RecordBase {
 		  };
 }
 
+/** Complete durable checkpoint metadata for an open operation. */
+export interface OperationState {
+	kind: OperationStartedRecord["intent"]["kind"];
+	status: "running" | "cancel_requested";
+	phase: "accepted" | "executing";
+}
+
 export interface AbortRequestedRecord extends RecordBase {
 	type: "abort_requested";
 	runId: string;

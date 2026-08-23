@@ -1235,14 +1235,19 @@ describe("AgentHarness v2 scaffold", () => {
 		});
 		models.setProvider(faux.provider);
 		faux.setResponses([fauxAssistantMessage("manual response")]);
+		const session = createSession("manual");
 		const { harness } = await AgentHarness.create({
 			models,
 			model: faux.getModel(),
-			session: createSession("manual"),
+			session,
 			drive: "manual",
 		});
 		const run = harness.prompt("manual prompt");
 		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		const started = (await session.findRecords({ type: "operation_started" }))[0]!;
+		expect(await session.getRegister("op.state", started.id)).toMatchObject({
+			value: { kind: "run", status: "running", phase: "executing" },
+		});
 		expect(await harness.peekAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 1 });
 		expect(await harness.executeAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 1 });
 		expect(await run).toMatchObject({ ok: true, value: { kind: "completed" } });

@@ -46,6 +46,7 @@ import type {
 	NewRecord,
 	OperationFinishedRecord,
 	OperationStartedRecord,
+	OperationState,
 	ProvisionedEntry,
 	QueueCancelledRecord,
 	QueueEnqueuedRecord,
@@ -722,7 +723,7 @@ export class AgentHarness implements AgentLane {
 							op: "set",
 							namespace: "op.state",
 							key: record.id,
-							value: { kind: record.intent.kind, status: "running" },
+							value: { kind: record.intent.kind, status: "running", phase: "accepted" } satisfies OperationState,
 						},
 					],
 				);
@@ -827,6 +828,7 @@ export class AgentHarness implements AgentLane {
 		this.watchBus.emit({ type: "run_start", lane: this.name, runId });
 		const controller = new AbortController();
 		this.activeRun = { id: runId, controller };
+		await this.setOperationPhase(runId, "executing");
 		try {
 			const entries = await this.session.findEntriesOnBranch({ order: "oldestFirst" });
 			const persisted = buildSessionContext(entries);
@@ -1663,7 +1665,7 @@ export class AgentHarness implements AgentLane {
 						op: "set" as const,
 						namespace: "op.state",
 						key: openRun.id,
-						value: { kind: "run", status: "cancel_requested" },
+						value: { kind: "run", status: "cancel_requested", phase: "executing" } satisfies OperationState,
 					},
 				],
 			);
@@ -1864,6 +1866,27 @@ export class AgentHarness implements AgentLane {
 		return result;
 	}
 
+	private async setOperationPhase(runId: string, phase: OperationState["phase"]): Promise<void> {
+		const transaction = this.registerSession();
+		if (!transaction) return;
+		const register = await transaction.getRegister("op.state", runId);
+		if (!register || typeof register.value !== "object" || register.value === null || Array.isArray(register.value))
+			return;
+		const value = register.value as Partial<OperationState>;
+		if (value.kind === undefined || value.status === undefined) return;
+		await transaction.appendTransaction(
+			[],
+			[
+				{
+					op: "set",
+					namespace: "op.state",
+					key: runId,
+					value: { kind: value.kind, status: value.status, phase } satisfies OperationState,
+				},
+			],
+		);
+	}
+
 	private async appendRunAcceptance(record: NewRecord<OperationStartedRecord>): Promise<boolean> {
 		const transaction = this.registerSession();
 		if (transaction && record.intent.kind === "run") {
@@ -1877,7 +1900,12 @@ export class AgentHarness implements AgentLane {
 						key: record.id,
 						value: durableClone(record.intent) as unknown as JsonValue,
 					},
-					{ op: "set", namespace: "op.state", key: record.id, value: { kind: "run", status: "running" } },
+					{
+						op: "set",
+						namespace: "op.state",
+						key: record.id,
+						value: { kind: "run", status: "running", phase: "accepted" } satisfies OperationState,
+					},
 				],
 			);
 			return true;
