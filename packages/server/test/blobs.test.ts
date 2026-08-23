@@ -13,6 +13,12 @@ describe("InMemoryV2BlobStore", () => {
 		expect(second.digest).toBe(first.digest);
 		expect(await store.stat(first.digest)).toEqual({ digest: first.digest, mimeType: "text/plain", size: 5 });
 		expect(new TextDecoder().decode(await store.read(first.digest))).toBe("hello");
+		await expect(store.put(new TextEncoder().encode("hello"), "text/plain; charset=utf-8")).rejects.toThrow(
+			"MIME type",
+		);
+		await expect(store.put(new TextEncoder().encode("hello"), "text/plain\nX-Injected: yes")).rejects.toThrow(
+			"MIME type",
+		);
 		await expect(store.put(new TextEncoder().encode("world"), "text/plain")).rejects.toThrow("Blob count");
 		await expect(store.put(new Uint8Array(33), "application/octet-stream")).rejects.toThrow("maximum size");
 	});
