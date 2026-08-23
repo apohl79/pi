@@ -1,7 +1,33 @@
 import { describe, expect, test } from "vitest";
-import { normalizeSessionName, parseArgs } from "../src/cli/args.ts";
+import { isServerDefaultCompatible, normalizeSessionName, parseArgs } from "../src/cli/args.ts";
 
 describe("parseArgs", () => {
+	describe("server-default compatibility", () => {
+		test("accepts session, model, thinking, and TUI options", () => {
+			expect(
+				isServerDefaultCompatible(
+					parseArgs([
+						"--name",
+						"demo",
+						"--provider",
+						"faux",
+						"--model",
+						"model",
+						"--thinking",
+						"high",
+						"--tui-mode",
+						"fullscreen",
+					]),
+				),
+			).toBe(true);
+		});
+
+		test("rejects client-local file and legacy runtime options", () => {
+			expect(isServerDefaultCompatible(parseArgs(["@README.md"]))).toBe(false);
+			expect(isServerDefaultCompatible(parseArgs(["--system-prompt", "custom"]))).toBe(false);
+			expect(isServerDefaultCompatible(parseArgs(["--provider", "faux"]))).toBe(false);
+		});
+	});
 	describe("--version flag", () => {
 		test("parses --version flag", () => {
 			const result = parseArgs(["--version"]);

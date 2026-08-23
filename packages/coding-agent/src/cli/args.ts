@@ -68,6 +68,45 @@ export function normalizeSessionName(value: string): string | undefined {
 	return name.length > 0 ? name : undefined;
 }
 
+/** Return whether parsed options are supported by the server-default runner. */
+export function isServerDefaultCompatible(options: Args): boolean {
+	return (
+		!(options.provider !== undefined && options.model === undefined) &&
+		options.apiKey === undefined &&
+		options.systemPrompt === undefined &&
+		options.appendSystemPrompt === undefined &&
+		options.continue !== true &&
+		options.resume !== true &&
+		options.noSession !== true &&
+		options.session === undefined &&
+		options.sessionId === undefined &&
+		options.fork === undefined &&
+		options.sessionDir === undefined &&
+		options.models === undefined &&
+		options.tools === undefined &&
+		options.excludeTools === undefined &&
+		options.noTools !== true &&
+		options.noBuiltinTools !== true &&
+		options.extensions === undefined &&
+		options.noExtensions !== true &&
+		options.export === undefined &&
+		options.noSkills !== true &&
+		options.skills === undefined &&
+		options.promptTemplates === undefined &&
+		options.noPromptTemplates !== true &&
+		options.themes === undefined &&
+		options.useTheme === undefined &&
+		options.noThemes !== true &&
+		options.noContextFiles !== true &&
+		options.listModels === undefined &&
+		options.offline !== true &&
+		options.projectTrustOverride === undefined &&
+		options.fileArgs.length === 0 &&
+		options.unknownFlags.size === 0 &&
+		options.diagnostics.every((diagnostic) => diagnostic.type !== "error")
+	);
+}
+
 export function parseArgs(args: string[]): Args {
 	const result: Args = {
 		messages: [],

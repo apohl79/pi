@@ -181,6 +181,8 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>)
 						}),
 					);
 				} else if (
+					message.request.command === "session/model/set" ||
+					message.request.command === "session/thinking/set" ||
 					message.request.command === "session/steering-mode/set" ||
 					message.request.command === "session/follow-up-mode/set" ||
 					message.request.command === "session/compaction/set" ||
@@ -633,6 +635,44 @@ describe("experimental CLI runtime", () => {
 			options: { print: true, messages: ["hello"], fileArgs: [], unknownFlags: new Map(), diagnostics: [] },
 		});
 		expect(output).toEqual(["remote reply"]);
+		runtime.close();
+	});
+
+	test("applies server-default model and thinking options before the prompt", async () => {
+		const requests: Array<{ command: string; payload?: unknown }> = [];
+		const server = clientFactory(requests);
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: () => {},
+			writeText: () => {},
+		});
+		await runtime.runPi({
+			command: "pi",
+			options: {
+				print: true,
+				provider: "faux",
+				model: "model",
+				thinking: "high",
+				messages: ["hello"],
+				fileArgs: [],
+				unknownFlags: new Map(),
+				diagnostics: [],
+			},
+		});
+		expect(requests.map((request) => request.command)).toEqual([
+			"session/create",
+			"session/attach",
+			"session/read",
+			"model/list",
+			"session/model/set",
+			"session/thinking/set",
+			"turn/start",
+			"session/detach",
+		]);
+		expect(requests[4]?.payload).toEqual({ provider: "faux", id: "model" });
+		expect(requests[5]?.payload).toEqual({ level: "high" });
 		runtime.close();
 	});
 

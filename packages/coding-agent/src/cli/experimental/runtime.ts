@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import type { Readable } from "node:stream";
 import type { PiClientV2, PiSessionV2Handle } from "@earendil-works/pi-client";
 import type { ClientDiagnosticSpool } from "@earendil-works/pi-client/diagnostics";
-import type { CommandV2, JsonValue } from "@earendil-works/pi-protocol";
+import type { CommandV2, JsonValue, ModelMetadata, ModelRef } from "@earendil-works/pi-protocol";
 import { verifyDiagnosticBundle } from "@earendil-works/pi-server";
 import { RemoteV2Session } from "../../client/remote-v2-session.ts";
 import type { Args } from "../args.ts";
@@ -51,6 +51,21 @@ export type ExperimentalCliRuntime = ExperimentalCliContext & {
 	runRpc(options: Args): Promise<void>;
 	close(): void;
 };
+
+function resolveRemoteModel(options: Args, models: readonly ModelMetadata[]): ModelRef | undefined {
+	if (options.model === undefined && options.provider === undefined) return undefined;
+	const requested = options.model?.trim();
+	const slash = requested?.indexOf("/") ?? -1;
+	const provider = options.provider ?? (slash > 0 ? requested?.slice(0, slash) : undefined);
+	const id = slash > 0 ? requested?.slice(slash + 1) : requested;
+	if (id === undefined || id.length === 0) throw new Error("Server-default model selection requires --model <model>");
+	const matches = models.filter((model) => (provider === undefined || model.provider === provider) && model.id === id);
+	if (matches.length > 1 && provider === undefined)
+		throw new Error(`Model id is ambiguous: ${id}; specify --provider`);
+	const match = matches[0];
+	if (match === undefined) throw new Error(`Model not found: ${provider}/${id}`);
+	return { provider: match.provider, id: match.id };
+}
 
 export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOptions): ExperimentalCliRuntime {
 	const clients = new Set<PiClientV2>();
@@ -171,6 +186,9 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 			cwd: process.cwd(),
 		});
 		try {
+			const model = resolveRemoteModel(command.options, await client.listModels());
+			if (model !== undefined) await session.setModel(model);
+			if (command.options.thinking !== undefined) await session.setThinking(command.options.thinking);
 			if (!command.options.print && command.options.mode !== "json") {
 				if (options.runInteractive === undefined)
 					throw new Error("Server-default interactive runner is unavailable");
