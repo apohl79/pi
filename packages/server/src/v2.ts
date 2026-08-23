@@ -237,6 +237,7 @@ export class PiServerV2 {
 	private readonly eventDeliveryTails = new WeakMap<V2ConnectionState, Promise<void>>();
 	private readonly agentWatches = new Set<string>();
 	private readonly operations = new Map<string, OperationRecordV2>();
+	private readonly pendingRecoveryReports = new Map<string, OperationRecordV2[]>();
 	private readonly pendingRequests = new Map<string, CommandV2>();
 	private readonly disposedRuntimes = new WeakSet<PiSessionRuntimeV2>();
 	private closing = false;
@@ -340,7 +341,12 @@ export class PiServerV2 {
 						}
 					: operation;
 			this.operations.set(recovered.operationId, recovered);
-			if (recovered !== operation) await this.operationStore.putOperation(recovered);
+			if (recovered !== operation) {
+				await this.operationStore.putOperation(recovered);
+				const reports = this.pendingRecoveryReports.get(recovered.sessionId) ?? [];
+				reports.push(recovered);
+				this.pendingRecoveryReports.set(recovered.sessionId, reports);
+			}
 		}
 		for (const event of stored.events) {
 			const history = this.eventHistory.get(event.sessionId) ?? [];
@@ -702,6 +708,22 @@ export class PiServerV2 {
 			lease: mode,
 			session: toProtocolJsonValue(await this.snapshotForSession(command.sessionId, runtime)),
 		});
+		const recoveryReports = this.pendingRecoveryReports.get(command.sessionId);
+		if (recoveryReports !== undefined) {
+			this.pendingRecoveryReports.delete(command.sessionId);
+			for (const operation of recoveryReports) {
+				await this.broadcastEvent(
+					command.sessionId,
+					runtime,
+					{
+						state: operation.state,
+						reason: operation.error ?? "Operation was suspended by daemon restart",
+					},
+					operation.operationId,
+					"recovery_report",
+				);
+			}
+		}
 	}
 
 	private async readSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

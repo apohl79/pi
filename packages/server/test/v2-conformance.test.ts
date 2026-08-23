@@ -1700,6 +1700,12 @@ describe("PiServer v2 operation acceptance", () => {
 			error: { code: "request_failed", message: "Session session-1 is not attached" },
 		});
 		await client.request({ command: "session/attach", sessionId: "session-1", payload: { mode: "observer" } });
+		const recovery = await client.next((message) => message.type === "event" && message.event === "recovery_report");
+		expect(recovery).toMatchObject({
+			event: "recovery_report",
+			operationId: "crashed-operation",
+			payload: { state: "suspended", reason: "Operation was suspended by daemon restart" },
+		});
 		const operation = await client.request({ command: "operation/read", operationId: "crashed-operation" });
 		expect(operation).toMatchObject({
 			ok: true,
