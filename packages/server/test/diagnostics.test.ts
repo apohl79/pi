@@ -142,6 +142,17 @@ describe("verifyDiagnosticBundle", () => {
 			eventsSha256: createHash("sha256").update(serialized).digest("hex"),
 		};
 		expect(verifyDiagnosticBundle({ manifest, events })).toEqual({ valid: true });
+		expect(
+			verifyDiagnosticBundle({
+				manifest,
+				events,
+				runtimeManifest: { schemaVersion: 1, runtime: "node v22", platform: "linux", arch: "x64" },
+			}),
+		).toEqual({ valid: true });
+		expect(verifyDiagnosticBundle({ manifest, events, runtimeManifest: { schemaVersion: 1 } })).toMatchObject({
+			valid: false,
+			reason: "Diagnostic bundle contains an invalid runtime manifest",
+		});
 		expect(verifyDiagnosticBundle({ manifest: { ...manifest, lastSeq: 3 }, events })).toMatchObject({ valid: false });
 		expect(verifyDiagnosticBundle({ events })).toMatchObject({ valid: false });
 	});

@@ -44,6 +44,7 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	diagnosticStorePath?: string;
 	diagnosticKeyPath?: string;
 	serverId?: string;
+	runtimeManifest?: ServerDaemonOptions["runtimeManifest"];
 	agents?: ServerDaemonOptions["agents"];
 	inputs?: V2InputRegistry;
 	inputStorePath?: string;
@@ -121,6 +122,7 @@ export async function createCodingAgentDaemonRuntime(
 		service,
 		socketPath: options.socketPath,
 		...(options.serverId === undefined ? {} : { serverId: options.serverId }),
+		...(options.runtimeManifest === undefined ? {} : { runtimeManifest: options.runtimeManifest }),
 		...(agents === undefined ? {} : { agents }),
 		inputs,
 		processes,
