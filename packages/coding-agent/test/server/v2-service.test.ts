@@ -381,7 +381,8 @@ describe("coding-agent v2 service adapter", () => {
 			const opened = await createCodingAgentV2Service(models, [
 				{ metadata: { id: "frozen-policy-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
 			]).openSession("frozen-policy-session");
-			await opened.accept("frozen-operation");
+			const accepted = await opened.accept("frozen-operation");
+			expect(accepted.compactionPolicy).toMatchObject({ enabled: false, reserveTokens: 123, keepRecentTokens: 456 });
 			await created.harness.setCompactionSettings({ enabled: true, reserveTokens: 999, keepRecentTokens: 888 });
 			expect((await opened.snapshot()).activeOperation?.compactionPolicy).toMatchObject({
 				enabled: false,

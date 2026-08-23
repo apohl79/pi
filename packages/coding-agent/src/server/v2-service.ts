@@ -545,7 +545,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			acceptedSeq: this.eventSeq,
 			compactionPolicy: policy,
 		};
-		return { operationId: _operationId, sessionRevision: this.revision, eventSeq: this.eventSeq };
+		return {
+			operationId: _operationId,
+			sessionRevision: this.revision,
+			eventSeq: this.eventSeq,
+			compactionPolicy: policy,
+		};
 	}
 
 	async run(_operationId: string, command: CommandV2): Promise<void> {
