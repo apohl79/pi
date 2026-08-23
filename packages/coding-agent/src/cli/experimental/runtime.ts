@@ -1,4 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
+import type { Readable } from "node:stream";
 import type { PiClientV2, PiSessionV2Handle } from "@earendil-works/pi-client";
 import type { ClientDiagnosticSpool } from "@earendil-works/pi-client/diagnostics";
 import type { CommandV2, JsonValue } from "@earendil-works/pi-protocol";
@@ -12,6 +13,7 @@ import type { DiagnosticsCommand } from "./commands/diagnostics.ts";
 import type { PiCommand } from "./commands/pi.ts";
 import type { ServerCommand } from "./commands/server.ts";
 import type { SessionsCommand } from "./commands/sessions.ts";
+import { runServerRpc } from "./server-rpc.ts";
 import type { TransportAddress } from "./transport-address.ts";
 
 export type ExperimentalDaemonController = {
@@ -28,6 +30,8 @@ export type ExperimentalCliRuntimeOptions = {
 	write(value: unknown): void;
 	writeText?(value: string): void;
 	runInteractive?(session: RemoteV2Session, options: Args): Promise<void>;
+	rpcInput?: Readable;
+	rpcOutput?(value: unknown): void;
 	onAttach?(handle: PiSessionV2Handle): void | Promise<void>;
 };
 
@@ -44,6 +48,7 @@ function resultOf(response: Awaited<ReturnType<PiClientV2["request"]>>): Record<
 }
 
 export type ExperimentalCliRuntime = ExperimentalCliContext & {
+	runRpc(options: Args): Promise<void>;
 	close(): void;
 };
 
@@ -193,8 +198,19 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 			closeClient(client);
 		}
 	};
+	const runRpc = async (commandOptions: Args): Promise<void> => {
+		await runServerRpc({
+			daemonStart: () => options.daemon.start(),
+			createClient: () => connect(options.defaultConnect),
+			cwd: process.cwd(),
+			options: commandOptions,
+			...(options.rpcInput === undefined ? {} : { input: options.rpcInput }),
+			...(options.rpcOutput === undefined ? {} : { output: options.rpcOutput }),
+		});
+	};
 	return {
 		runPi,
+		runRpc,
 		runServer,
 		runClient,
 		runAttach,
