@@ -104,6 +104,8 @@ export interface DiagnosticBundleScope {
 export interface DiagnosticBundleProjections {
 	readonly sessions: readonly DiagnosticValue[];
 	readonly operations: readonly DiagnosticValue[];
+	/** Canonical operation lifecycle events, when exported by a server that supports the projection. */
+	readonly operationEvents?: readonly DiagnosticValue[];
 	readonly usage: DiagnosticValue;
 	readonly plugins: DiagnosticValue;
 	readonly blobs: readonly DiagnosticValue[];
@@ -209,6 +211,8 @@ function isDiagnosticProjections(value: unknown): value is DiagnosticBundleProje
 		projections.sessions.every(isDiagnosticValue) &&
 		Array.isArray(projections.operations) &&
 		projections.operations.every(isDiagnosticValue) &&
+		(projections.operationEvents === undefined ||
+			(Array.isArray(projections.operationEvents) && projections.operationEvents.every(isDiagnosticValue))) &&
 		isDiagnosticValue(projections.usage) &&
 		isDiagnosticValue(projections.plugins) &&
 		Array.isArray(projections.blobs) &&
