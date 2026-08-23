@@ -163,6 +163,39 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("applies server agent updates without requiring a refresh", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 2,
+			revision: 2,
+			event: "agent_updated",
+			payload: {
+				agent: {
+					id: "agent-1",
+					path: "/root/research",
+					taskName: "research",
+					state: "running",
+					model: { provider: "faux", id: "model" },
+				},
+			},
+		});
+		expect(session.snapshot?.agents).toEqual([
+			{
+				id: "agent-1",
+				path: "/root/research",
+				taskName: "research",
+				state: "running",
+				model: { provider: "faux", id: "model" },
+			},
+		]);
+		await session.dispose();
+	});
+
 	test("rejects mutating commands after detach and reports listener failures", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });

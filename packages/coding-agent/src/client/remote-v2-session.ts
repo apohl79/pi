@@ -5,6 +5,7 @@ import type {
 	V2SessionLeaseMode,
 } from "@earendil-works/pi-client";
 import type {
+	AgentSummary,
 	CommandV2,
 	JsonValue,
 	ModelRef,
@@ -288,6 +289,12 @@ export class RemoteV2Session {
 			} else if (isPlanSnapshot(plan)) {
 				this.#snapshot = { ...this.#snapshot, plan: structuredClone(plan) };
 			}
+		} else if (event.event === "agent_updated" && this.#snapshot) {
+			const agent = asRecord(event.payload)?.agent;
+			if (isAgentSummary(agent)) {
+				const current = this.#snapshot.agents.filter((item) => item.id !== agent.id);
+				this.#snapshot = { ...this.#snapshot, agents: [...current, structuredClone(agent)] };
+			}
 		}
 		this.#emit();
 	}
@@ -344,5 +351,18 @@ function isPlanSnapshot(value: unknown): value is PlanSnapshot {
 				(entry.status === "pending" || entry.status === "in_progress" || entry.status === "completed")
 			);
 		})
+	);
+}
+
+function isAgentSummary(value: unknown): value is AgentSummary {
+	const record = asRecord(value);
+	const model = asRecord(record?.model);
+	return (
+		typeof record?.id === "string" &&
+		typeof record.path === "string" &&
+		typeof record.taskName === "string" &&
+		["idle", "running", "awaitingInput", "complete", "failed", "interrupted"].includes(record.state as string) &&
+		typeof model?.provider === "string" &&
+		typeof model.id === "string"
 	);
 }
