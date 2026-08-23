@@ -6,7 +6,7 @@ test("keeps required implementation and production-test evidence present", () =>
 	const result = auditForkSpec();
 	assert.deepEqual(result.failures, []);
 	assert.ok(result.checkedFiles >= 27);
-	assert.ok(result.checkedPatterns >= 28);
+	assert.ok(result.checkedPatterns >= 30);
 });
 
 test("resolves URL-encoded repository paths portably", () => {

@@ -67,6 +67,8 @@ const requiredPatterns = [
 	["agent lifecycle state-machine evidence", "packages/server/test/agents.test.ts", "lifecycle state machine"],
 	["v1 compatibility evidence", "packages/protocol/test/v2-contract.test.ts", "rejects v1 messages"],
 	["storage publication-ordering evidence", "packages/session-backends/sqlite-node/test/repository.test.ts", "does not publish connection state when an append transaction fails"],
+	["in-memory acceptance evidence", "packages/server/test/v2-conformance.test.ts", "connectInMemoryTestClientV2"],
+	["faux-provider integration evidence", "packages/coding-agent/test/server/daemon-three-provider-routing.test.ts", "fauxProvider"],
 ];
 
 export function auditForkSpec() {
