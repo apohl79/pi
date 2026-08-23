@@ -310,7 +310,16 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 	let piExtensionLoadErrors: readonly { path: string; error: string }[] = [];
 	if (discoveredPiExtensions === undefined) {
 		const resourceLoader = new DefaultResourceLoader({ cwd: options.cwd, agentDir: options.agentDir });
-		await resourceLoader.reload();
+		try {
+			await resourceLoader.reload();
+		} catch (error) {
+			await diagnostics.record({
+				kind: "pi_extension_load",
+				severity: "error",
+				payload: { error: error instanceof Error ? error.message.slice(0, 500) : "unknown" },
+			});
+			throw error;
+		}
 		const extensionsResult = resourceLoader.getExtensions();
 		discoveredPiExtensions = extensionsResult.extensions;
 		piExtensionLoadErrors = extensionsResult.errors;
