@@ -65,6 +65,7 @@ const requiredPatterns = [
 	["terminal snapshot evidence", "packages/tui/test/editor.test.ts", "undo snapshots"],
 	["cross-platform TUI evidence", ".github/workflows/ci.yml", "@earendil-works/pi-tui"],
 	["agent lifecycle state-machine evidence", "packages/server/test/agents.test.ts", "lifecycle state machine"],
+	["v1 compatibility evidence", "packages/protocol/test/v2-contract.test.ts", "rejects v1 messages"],
 ];
 
 export function auditForkSpec() {
