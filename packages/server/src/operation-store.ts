@@ -34,7 +34,7 @@ type StoreRecord =
 const OPERATION_STATES = new Set(["accepted", "running", "complete", "failed", "aborted", "suspended"]);
 
 function isNonNegativeInteger(value: unknown): value is number {
-	return typeof value === "number" && Number.isInteger(value) && value >= 0;
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 export function validateV2OperationRecord(value: unknown): asserts value is OperationRecordV2 {

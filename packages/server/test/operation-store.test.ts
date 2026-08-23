@@ -69,4 +69,25 @@ describe("JsonlV2OperationStore", () => {
 		);
 		await expect(new JsonlV2OperationStore(path).load()).rejects.toThrow("Invalid operation store operation id");
 	});
+
+	test("rejects unsafe operation and event cursors", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-operation-store-unsafe-"));
+		directories.push(directory);
+		const path = join(directory, "operations.jsonl");
+		await writeFile(
+			path,
+			`${JSON.stringify({
+				kind: "event",
+				value: {
+					type: "event",
+					sessionId: "session-1",
+					seq: Number.MAX_SAFE_INTEGER + 1,
+					revision: 1,
+					event: "ready",
+				},
+			})}\n`,
+			"utf8",
+		);
+		await expect(new JsonlV2OperationStore(path).load()).rejects.toThrow("Invalid operation store event cursor");
+	});
 });
