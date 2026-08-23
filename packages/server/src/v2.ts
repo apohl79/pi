@@ -223,6 +223,7 @@ export class PiServerV2 {
 	private readonly apps: V2AppRegistry;
 	private readonly plans: V2PlanRegistry;
 	private readonly inputs: V2InputRegistry;
+	private readonly unsubscribeInputChanges: (() => void) | undefined;
 	private readonly files: V2FileReferenceService;
 	private readonly web: V2WebService;
 	private readonly images: V2ImageService;
@@ -280,12 +281,25 @@ export class PiServerV2 {
 		this.apps = options.apps ?? new InMemoryV2AppRegistry();
 		this.plans = options.plans ?? new InMemoryV2PlanRegistry();
 		this.inputs = options.inputs ?? new InMemoryV2InputRegistry();
+		this.unsubscribeInputChanges = this.inputs.onChange?.((request) => {
+			void this.broadcastInputRequestChange(request);
+		});
 		this.files =
 			options.files ?? new LocalV2FileReferenceService({ projectRoot: process.cwd(), allowAbsolute: false });
 		this.web = options.web ?? new UnavailableV2WebService();
 		this.images = options.images ?? new BlobV2ImageService(this.files, this.blobs);
 		this.plugins = options.plugins ?? new InMemoryV2PluginRegistry();
 		this.usage = options.usage ?? new InMemoryV2UsageLedger();
+	}
+
+	private async broadcastInputRequestChange(request: Awaited<ReturnType<V2InputRegistry["read"]>>): Promise<void> {
+		try {
+			const runtime = await this.service.openSession(request.sessionId);
+			this.trackRuntime(runtime);
+			await this.broadcastEvent(request.sessionId, runtime, { request }, undefined, "input_request_updated");
+		} catch (error) {
+			this.onError?.(error instanceof Error ? error : new Error(String(error)));
+		}
 	}
 
 	get addresses(): readonly string[] {
@@ -353,6 +367,7 @@ export class PiServerV2 {
 	async close(): Promise<void> {
 		if (this.closing) return;
 		this.closing = true;
+		this.unsubscribeInputChanges?.();
 		await Promise.all(this.listeners.map((listener) => listener.close()));
 		await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state)));
 		await Promise.all(Array.from(this.runtimes, (runtime) => this.disposeRuntime(runtime)));
