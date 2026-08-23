@@ -50,7 +50,7 @@ describe("coding-agent daemon queue recall", () => {
 			await client.request({ command: "session/name/auto/set", sessionId, payload: { enabled: false } });
 			const blob = await client.request({
 				command: "blob/put",
-				payload: { data: "aGVsbG8=", mimeType: "image/png" },
+				payload: { data: "aGVsbG8=", encoding: "base64", mimeType: "image/png" },
 			});
 			if (!blob.ok || !("result" in blob)) throw new Error("Blob upload failed");
 			const digest = (blob.result as { blob: { digest: string } }).blob.digest;
