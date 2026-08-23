@@ -118,7 +118,9 @@ function clientWithRequests(withQueue = false): { client: PiClientV2; commands: 
 									? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
 									: message.request.command === "plugin/list"
 										? { plugins: [{ id: "demo", enabled: true }] }
-										: { command: message.request.command }) as JsonValue,
+										: message.request.command === "process/list"
+											? { processes: [] }
+											: { command: message.request.command }) as JsonValue,
 					};
 			handlers?.onData(encodeServerMessageV2(response));
 		},
@@ -298,6 +300,7 @@ describe("remote v2 interactive command boundary", () => {
 		expect(commands).toEqual([
 			"session/attach",
 			"session/read",
+			"process/list",
 			"turn/followUp",
 			"agent/followUp",
 			"agent/interrupt",

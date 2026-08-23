@@ -47,6 +47,7 @@
 		"@earendil-works/pi-ai": "^0.84.2",
 		"@earendil-works/pi-client": "^0.84.2",
 		"@earendil-works/pi-codex-plugin-compat": "^0.84.2",
+		"@earendil-works/pi-file-references": "^0.84.2",
 		"@earendil-works/pi-protocol": "^0.84.2",
 		"@earendil-works/pi-server": "^0.84.2",
 		"@earendil-works/pi-model-instructions": "^0.84.2",
