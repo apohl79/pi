@@ -163,6 +163,7 @@ export async function createCodingAgentV2SqliteService(
 		const goals = new GoalManager(session);
 		const compaction = options.compaction?.(model);
 		const inputRegistry = options.inputs;
+		let disposing = false;
 		const usageLedger = options.usage;
 		const aggregateSessionUsage = async (): Promise<V2UsageAggregate> => {
 			if (usageLedger === undefined) return aggregateUsageEntries([]);
@@ -365,20 +366,23 @@ export async function createCodingAgentV2SqliteService(
 						requestUserInput: async (request, signal) => {
 							const recovered = await inputRegistry.takeRespondedForSession(metadata.id);
 							if (recovered !== undefined) return recovered;
-							const pending = await inputRegistry.create(
-								metadata.id,
-								request.questions,
-								request.autoResolutionMs,
-							);
-							if (signal?.aborted) {
-								await inputRegistry.cancel(pending.id).catch(() => {});
+							const pendingId = await inputRegistry.pendingForSession(metadata.id);
+							const recoveredPending = pendingId !== undefined;
+							const pending =
+								pendingId === undefined
+										? await inputRegistry.create(metadata.id, request.questions, request.autoResolutionMs)
+										: await inputRegistry.read(pendingId);
+							if (signal?.aborted && !recoveredPending) {
+								if (!disposing) await inputRegistry.cancel(pending.id).catch(() => {});
 								throw new Error("Input request aborted");
 							}
 							const abort = signal
 								? new Promise<never>((_, reject) => {
 										const onAbort = () => {
-											reject(new Error("Input request aborted"));
-											void inputRegistry.cancel(pending.id).catch(() => {});
+											if (!disposing && !recoveredPending) {
+												reject(new Error("Input request aborted"));
+												void inputRegistry.cancel(pending.id).catch(() => {});
+											}
 										};
 										signal.addEventListener("abort", onAbort, { once: true });
 									})
@@ -443,6 +447,9 @@ export async function createCodingAgentV2SqliteService(
 		return {
 			metadata: sessionMetadata(metadata),
 			harness: created.harness,
+			onDispose: () => {
+				disposing = true;
+			},
 			recoveryState: created.suspended.length === 0 ? "clean" : "needsResolution",
 			...(instructionProfile === undefined ? {} : { instructionProfile }),
 			...(pluginSetHash === undefined ? {} : { pluginSetHash }),
