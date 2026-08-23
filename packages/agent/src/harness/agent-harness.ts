@@ -983,7 +983,10 @@ export class AgentHarness implements AgentLane {
 					lane: this.name,
 					runId,
 					outcome: result.error.code === "aborted" ? "aborted" : "failed",
-					error: { code: result.error.code, message: result.error.message },
+					error: {
+						code: result.error.code,
+						message: sanitizeErrorMessage(result.error.message, result.error.code),
+					},
 				});
 				if (result.error.code === "aborted") {
 					return ResultValue.ok({
@@ -996,7 +999,10 @@ export class AgentHarness implements AgentLane {
 					runId,
 					kind: "failed",
 					leafId: (await this.session.getLeafId()) ?? "",
-					error: { code: result.error.code, message: result.error.message },
+					error: {
+						code: result.error.code,
+						message: sanitizeErrorMessage(result.error.message, result.error.code),
+					},
 				});
 			}
 			const entry = await this.durableSession.appendEntry<CompactionEntry>(
@@ -1113,7 +1119,10 @@ export class AgentHarness implements AgentLane {
 						lane: this.name,
 						runId,
 						outcome: generated.error.code === "aborted" ? "aborted" : "failed",
-						error: { code: generated.error.code, message: generated.error.message },
+						error: {
+							code: generated.error.code,
+							message: sanitizeErrorMessage(generated.error.message, generated.error.code),
+						},
 					});
 					return ResultValue.ok({
 						runId,
@@ -1122,7 +1131,10 @@ export class AgentHarness implements AgentLane {
 							: {
 									kind: "failed" as const,
 									leafId: oldLeafId,
-									error: { code: generated.error.code, message: generated.error.message },
+									error: {
+										code: generated.error.code,
+										message: sanitizeErrorMessage(generated.error.message, generated.error.code),
+									},
 								}),
 					});
 				}
