@@ -31,7 +31,7 @@ import { connectInMemoryTestClientV2, connectUnixTestClientV2, Deferred } from "
 import { createUnixServerV2 } from "../src/transports/unix/preset.ts";
 import { InMemoryV2UsageLedger } from "../src/usage-ledger.ts";
 import { type PiServerServiceV2, PiServerV2, type PiSessionRuntimeV2 } from "../src/v2.ts";
-import { AdapterV2WebService, type V2WebOperation } from "../src/web.ts";
+import { AdapterV2WebService, type V2WebOperation, type V2WebRequest } from "../src/web.ts";
 
 const runtimes: TestRuntime[] = [];
 const servers: Array<Awaited<ReturnType<typeof createUnixServerV2>>> = [];
@@ -685,6 +685,48 @@ describe("PiServer v2 operation acceptance", () => {
 		expect({ receivedOperation, receivedLocation }).toEqual({
 			receivedOperation: "weather",
 			receivedLocation: "Berlin",
+		});
+		const receivedRequests: V2WebRequest[] = [];
+		const typedServer = createUnixServerV2(service, {
+			path: join(directory, "typed-web.sock"),
+			web: new AdapterV2WebService({
+				execute: async (request) => {
+					receivedRequests.push(request);
+					return [];
+				},
+			}),
+		});
+		servers.push(typedServer);
+		await typedServer.start();
+		const typedClient = await connectUnixTestClientV2(typedServer.addresses[0]!);
+		await typedClient.hello();
+		await typedClient.request({ command: "session/attach", sessionId: "session-1" });
+		for (const payload of [
+			{ operation: "finance", ticker: "AMD", market: "USA" },
+			{ operation: "sports", league: "nba", team: "GSW", opponent: "LAL", numGames: 3, locale: "en-US" },
+			{ operation: "time", utcOffset: "+01:00" },
+		] satisfies readonly V2WebRequest[]) {
+			expect(
+				await typedClient.request({
+					command: "web",
+					sessionId: "session-1",
+					payload: payload as unknown as JsonValue,
+				}),
+			).toMatchObject({ ok: true });
+		}
+		expect(receivedRequests).toEqual([
+			{ operation: "finance", ticker: "AMD", market: "USA" },
+			{ operation: "sports", league: "nba", team: "GSW", opponent: "LAL", numGames: 3, locale: "en-US" },
+			{ operation: "time", utcOffset: "+01:00" },
+		]);
+		const invalidNumGames = await typedClient.request({
+			command: "web",
+			sessionId: "session-1",
+			payload: { operation: "sports", numGames: 0 },
+		});
+		expect(invalidNumGames).toMatchObject({
+			ok: false,
+			error: { message: "web numGames must be a positive integer" },
 		});
 		const invalidDuration = await client.request({
 			command: "web",
