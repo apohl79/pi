@@ -1,7 +1,7 @@
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModels, fauxProvider } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import { afterEach, describe, expect, test } from "vitest";
@@ -105,6 +105,75 @@ describe("production remote v2 filesystem references", () => {
 				});
 			} finally {
 				await session.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("preserves server and local references in one prompt across reattach", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-remote-files-prompt-"));
+		const localDirectory = await mkdtemp(join(tmpdir(), "pi-remote-files-local-"));
+		directories.push(directory, localDirectory);
+		const serverPath = join(directory, "server-note.txt");
+		const localPath = join(localDirectory, "client-note.txt");
+		await writeFile(serverPath, "server prompt content", "utf8");
+		await writeFile(localPath, "client prompt content", "utf8");
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-remote-files-prompt-faux",
+			models: [{ id: "remote-files-prompt-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		const prompts: string[] = [];
+		faux.setResponses([
+			(context) => {
+				prompts.push(JSON.stringify(context.messages));
+				return fauxAssistantMessage("references received");
+			},
+		]);
+		models.setProvider(faux.provider);
+		const socketPath = join(directory, "server.sock");
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath,
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({ transportFactory: createUnixTransportFactory({ path: socketPath }) });
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const first = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
+			const sessionId = first.id;
+			try {
+				const serverFile = await first.resolveFile(`@server:${serverPath}`);
+				const localFile = await first.uploadLocalFileReference(localPath, "text/plain");
+				const operationId = await first.submit([
+					{ type: "text", text: "Compare these files" },
+					{ type: "mention", name: "server note", path: serverFile.reference },
+					{ type: "mention", name: "client note", path: localFile.reference },
+				]);
+				await first.waitForOperation(operationId);
+				expect(prompts).toHaveLength(1);
+				expect(prompts[0]).toContain(serverFile.reference);
+				expect(prompts[0]).toContain(localFile.reference);
+				expect(first.snapshot?.transcript).toEqual(
+					expect.arrayContaining([expect.objectContaining({ role: "assistant", text: "references received" })]),
+				);
+			} finally {
+				await first.dispose();
+			}
+			if (!sessionId) throw new Error("Session id unavailable");
+			const reattached = await RemoteV2Session.open(client, sessionId, { mode: "control" });
+			try {
+				expect(JSON.stringify(reattached.snapshot?.transcript)).toContain(`@server:${serverPath}`);
+				expect(JSON.stringify(reattached.snapshot?.transcript)).toContain(`@local:${localPath}`);
+			} finally {
+				await reattached.dispose();
 			}
 		} finally {
 			client.dispose();
