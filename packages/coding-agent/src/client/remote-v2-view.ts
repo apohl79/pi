@@ -78,7 +78,11 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	const maxCharacters = normalizedOptions.maxTranscriptCharacters;
 	const model = `${sanitizeTranscriptText(snapshot.model.provider)}/${sanitizeTranscriptText(snapshot.model.id)}`;
 	const operation =
-		state.lifecycle.status === "busy" ? ` operation=${sanitizeTranscriptText(state.lifecycle.operationId)}` : "";
+		state.lifecycle.status === "busy"
+			? ` operation=${sanitizeTranscriptText(state.lifecycle.operationId)}`
+			: snapshot.activeOperation === undefined
+				? ""
+				: ` operation=${sanitizeTranscriptText(snapshot.activeOperation.operationId)} (${sanitizeTranscriptText(snapshot.activeOperation.state)})`;
 	const lines = [
 		`Session ${sanitizeTranscriptText(snapshot.id)} · phase=${sanitizeTranscriptText(snapshot.phase)} · model=${model}${operation}`,
 	];
@@ -86,7 +90,12 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 		lines.push(
 			`Agent ${sanitizeTranscriptText(agent.path)} · ${sanitizeTranscriptText(agent.state)} · ${sanitizeTranscriptText(agent.model.provider)}/${sanitizeTranscriptText(agent.model.id)}`,
 		);
-	const cost = snapshot.usage.costUsd === undefined ? "unknown" : `$${snapshot.usage.costUsd.toFixed(6)}`;
+	const cost =
+		snapshot.usage.pricingState === "known" && snapshot.usage.costUsd !== undefined
+			? `$${snapshot.usage.costUsd.toFixed(6)}`
+			: snapshot.usage.pricingState === "subscription"
+				? "subscription"
+				: "unknown";
 	lines.push(
 		`Usage input=${snapshot.usage.input} output=${snapshot.usage.output} cacheRead=${snapshot.usage.cacheRead} cost=${cost}`,
 	);
