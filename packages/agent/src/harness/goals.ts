@@ -152,7 +152,7 @@ export class GoalManager {
 			...(patch.activeTimeSeconds === undefined ? { activeTimeSeconds } : {}),
 			updatedAt: timestamp,
 		};
-		if (goal.tokenBudget !== undefined && goal.tokensUsed > goal.tokenBudget && goal.status === "active")
+		if (goal.tokenBudget !== undefined && goal.tokensUsed >= goal.tokenBudget && goal.status === "active")
 			goal.status = "budgetLimited";
 		await this.session.appendCustomEntry(GOAL_ENTRY_TYPE, goal);
 		return structuredClone(goal);

@@ -53,10 +53,17 @@ describe("durable GoalManager", () => {
 		const create = tools.find((tool) => tool.name === "create_goal");
 		const read = tools.find((tool) => tool.name === "get_goal");
 		const update = tools.find((tool) => tool.name === "update_goal");
-		if (!create || !read || !update) throw new Error("Expected goal tools");
-		await create.execute("create", { objective: "Ship the feature", token_budget: 10 }, undefined, undefined);
-		expect((await read.execute("read", {}, undefined, undefined)).details.goal?.objective).toBe("Ship the feature");
-		await expect(update.execute("update", { status: "complete" }, undefined, undefined)).resolves.toMatchObject({
+		expect(create).toBeDefined();
+		expect(read).toBeDefined();
+		expect(update).toBeDefined();
+		const createTool = create as NonNullable<typeof create>;
+		const readTool = read as NonNullable<typeof read>;
+		const updateTool = update as NonNullable<typeof update>;
+		await createTool.execute("create", { objective: "Ship the feature", token_budget: 10 }, undefined, undefined);
+		expect((await readTool.execute("read", {}, undefined, undefined)).details.goal?.objective).toBe(
+			"Ship the feature",
+		);
+		await expect(updateTool.execute("update", { status: "complete" }, undefined, undefined)).resolves.toMatchObject({
 			details: { goal: { status: "complete" } },
 		});
 	});
@@ -96,7 +103,9 @@ describe("durable GoalManager", () => {
 	test("attributes provider tokens and stops at the token budget", async () => {
 		const manager = new GoalManager(new Session(new InMemorySessionStorage({ id: "goal-usage", createdAt: 1 })));
 		await manager.create("Bound the work", 10);
-		const limited = await manager.recordUsage(11);
+		const exhausted = await manager.recordUsage(10);
+		expect(exhausted).toMatchObject({ tokensUsed: 10, status: "budgetLimited" });
+		const limited = await manager.recordUsage(1);
 		expect(limited).toMatchObject({ tokensUsed: 11, status: "budgetLimited" });
 		await expect(manager.recordUsage(1)).resolves.toMatchObject({ tokensUsed: 12, status: "budgetLimited" });
 	});
