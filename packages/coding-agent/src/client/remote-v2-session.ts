@@ -29,7 +29,8 @@ export interface RemoteV2SessionState {
 export type RemoteV2PromptPart =
 	| { readonly type: "text"; readonly text: string }
 	| { readonly type: "image"; readonly digest: string; readonly mimeType: string }
-	| { readonly type: "blob"; readonly digest: string; readonly mimeType: string };
+	| { readonly type: "blob"; readonly digest: string; readonly mimeType: string }
+	| { readonly type: "mention"; readonly name: string; readonly path: string };
 
 export type RemoteV2PromptContent = readonly RemoteV2PromptPart[];
 
@@ -42,6 +43,7 @@ function promptPayload(input: string | RemoteV2PromptContent, label: string): Js
 	if (input.length === 0) throw new Error(`${label} cannot be empty`);
 	const content: JsonValue[] = input.map((part): JsonValue => {
 		if (part.type === "text") return { type: "text", text: part.text } as JsonValue;
+		if (part.type === "mention") return { type: "mention", name: part.name, path: part.path } as JsonValue;
 		return { type: part.type, digest: part.digest, mimeType: part.mimeType } as JsonValue;
 	});
 	return {

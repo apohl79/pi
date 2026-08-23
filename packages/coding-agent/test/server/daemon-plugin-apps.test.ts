@@ -1,10 +1,11 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModels, fauxProvider } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import { afterEach, describe, expect, test } from "vitest";
+import { RemoteV2Session } from "../../src/client/remote-v2-session.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemon-runtime.ts";
 
 const directories: string[] = [];
@@ -37,6 +38,14 @@ describe("coding-agent daemon plugin apps", () => {
 			ok: true,
 			result: { auth: { appId: "calendar-plugin@local:calendar", state: "authenticated" } },
 		});
+		expect(result.mention).toMatchObject({
+			transcript: expect.arrayContaining([
+				expect.objectContaining({
+					role: "user",
+					content: expect.arrayContaining([expect.objectContaining({ type: "text", text: "@Calendar" })]),
+				}),
+			]),
+		});
 	});
 });
 
@@ -46,6 +55,7 @@ async function runPluginAppsScenario(): Promise<{
 	auth: unknown;
 	completed: unknown;
 	afterAuth: unknown;
+	mention: unknown;
 }> {
 	const directory = await mkdtemp(join(tmpdir(), "pi-daemon-plugin-apps-"));
 	directories.push(directory);
@@ -56,6 +66,13 @@ async function runPluginAppsScenario(): Promise<{
 			{ id: "coding-agent-daemon-plugin-apps-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
 		],
 	});
+	let providerPrompt = "";
+	faux.setResponses([
+		(context) => {
+			providerPrompt = JSON.stringify(context.messages.at(-1)?.content ?? "");
+			return fauxAssistantMessage("mention accepted");
+		},
+	]);
 	models.setProvider(faux.provider);
 	const runtime = await createConfiguredCodingAgentDaemonRuntime({
 		agentDir: directory,
@@ -103,7 +120,28 @@ async function runPluginAppsScenario(): Promise<{
 			command: "app/read",
 			payload: { id: "calendar-plugin@local:calendar" },
 		});
-		return { listed, read, auth, completed, afterAuth };
+		const invalidSession = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
+		try {
+			await expect(
+				invalidSession.submit([{ type: "mention", name: "Missing", path: "app://missing" }]),
+			).rejects.toThrow("Unknown or disabled app mention");
+		} finally {
+			await invalidSession.dispose();
+		}
+		const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
+		try {
+			const operationId = await session.submit([
+				{ type: "text", text: "Inspect this connector" },
+				{ type: "mention", name: "Calendar", path: "app://calendar-plugin@local:calendar" },
+				{ type: "mention", name: "Calendar plugin", path: "plugin://calendar-plugin@local" },
+			]);
+			await session.waitForOperation(operationId);
+		} finally {
+			await session.dispose();
+		}
+		expect(providerPrompt).toContain("@Calendar");
+		expect(providerPrompt).toContain("@Calendar plugin");
+		return { listed, read, auth, completed, afterAuth, mention: session.snapshot };
 	} finally {
 		client.dispose();
 		await runtime.close();
