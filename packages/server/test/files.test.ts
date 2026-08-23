@@ -69,6 +69,20 @@ describe("LocalV2FileReferenceService", () => {
 		);
 	});
 
+	test("resolves Windows-style home references", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-files-windows-home-"));
+		directories.push(root);
+		await mkdir(join(root, "nested"));
+		await writeFile(join(root, "nested", "notes.ts"), "export const answer = 42;");
+		const service = new LocalV2FileReferenceService({ projectRoot: root, homeDirectory: root });
+
+		expect(await service.resolve("session-1", "~\\nested\\notes.ts")).toMatchObject({
+			reference: "~\\nested\\notes.ts",
+			path: await realpath(join(root, "nested", "notes.ts")),
+			kind: "file",
+		});
+	});
+
 	test("rejects traversal and symlink escapes", async () => {
 		const root = await mkdtemp(join(tmpdir(), "pi-files-"));
 		const outside = await mkdtemp(join(tmpdir(), "pi-files-outside-"));
