@@ -30,6 +30,7 @@ import type {
 import { hashV2PluginSet } from "@earendil-works/pi-server";
 import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import { resolveCodexPluginResourceOnDisk } from "../core/codex-plugin.ts";
+import type { Extension } from "../core/extensions/types.ts";
 import { loadSkillsFromDir } from "../core/skills.ts";
 import {
 	type CodingAgentAgentTools,
@@ -40,6 +41,7 @@ import {
 } from "./create-harness.ts";
 import { type ServerRuntimeExtension, ServerRuntimeExtensionHost } from "./extension-host.ts";
 import { importLegacySessions, type LegacySessionImportOptions } from "./legacy-session-import.ts";
+import { adaptPiExtensionSampling } from "./pi-extension-adapter.ts";
 import { createPluginSamplingInput } from "./plugin-sampling.ts";
 import {
 	type CodingAgentV2Service,
@@ -85,6 +87,8 @@ export interface CodingAgentV2SqliteServiceOptions {
 	blobs?: V2BlobStore;
 	plans?: V2PlanRegistry;
 	serverExtensions?: readonly ServerRuntimeExtension[];
+	/** Pi-native extensions whose request-only sampling registrations should run server-side. */
+	piExtensions?: readonly Extension[];
 	agentRegistry?: V2AgentRegistry | (() => V2AgentRegistry | undefined);
 	harness?: Omit<CreateCodingAgentHarnessOptions, "session" | "models" | "model" | "env" | "sessionFile">;
 }
@@ -200,6 +204,10 @@ export async function createCodingAgentV2SqliteService(
 					});
 		if (extensionHost !== undefined) {
 			for (const extension of options.serverExtensions ?? []) await extensionHost.register(extension);
+			for (const extension of options.piExtensions ?? []) {
+				const adapted = adaptPiExtensionSampling(extension);
+				if (adapted !== undefined) await extensionHost.register(adapted);
+			}
 		}
 		const usageLedger = options.usage;
 		const aggregateSessionUsage = async (): Promise<V2UsageAggregate> => {
