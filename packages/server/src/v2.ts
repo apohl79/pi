@@ -27,6 +27,7 @@ import { InMemoryV2InputRegistry, type V2InputRegistry } from "./inputs.ts";
 import type { PiServerListener } from "./listener.ts";
 import { InMemoryV2OperationStore, type V2OperationStore } from "./operation-store.ts";
 import { InMemoryV2PlanRegistry, type V2PlanRegistry } from "./plans.ts";
+import { InMemoryV2PluginRegistry, type V2PluginRegistry } from "./plugins.ts";
 import { InMemoryV2ProcessRegistry, type V2ProcessRegistry } from "./processes.ts";
 import { toProtocolJsonValue } from "./protocol.ts";
 import type { MaybePromise } from "./types.ts";
@@ -58,6 +59,7 @@ export interface PiServerV2Options {
 	plans?: V2PlanRegistry;
 	inputs?: V2InputRegistry;
 	files?: V2FileReferenceService;
+	plugins?: V2PluginRegistry;
 }
 
 type V2ConnectionState = {
@@ -156,6 +158,7 @@ export class PiServerV2 {
 	private readonly plans: V2PlanRegistry;
 	private readonly inputs: V2InputRegistry;
 	private readonly files: V2FileReferenceService;
+	private readonly plugins: V2PluginRegistry;
 	private readonly connections = new Set<V2ConnectionState>();
 	private readonly eventHistory = new Map<string, EventEnvelopeV2[]>();
 	private readonly operations = new Map<string, OperationRecordV2>();
@@ -188,6 +191,7 @@ export class PiServerV2 {
 		this.inputs = options.inputs ?? new InMemoryV2InputRegistry();
 		this.files =
 			options.files ?? new LocalV2FileReferenceService({ projectRoot: process.cwd(), allowAbsolute: false });
+		this.plugins = options.plugins ?? new InMemoryV2PluginRegistry();
 	}
 
 	get addresses(): readonly string[] {
@@ -393,6 +397,16 @@ export class PiServerV2 {
 			if (command.command === "diagnostics/export") return void (await this.diagnosticsExport(state, id, command));
 			if (command.command === "diagnostics/verify") return void (await this.diagnosticsVerify(state, id, command));
 			if (command.command === "diagnostics/doctor") return void (await this.diagnosticsDoctor(state, id, command));
+			if (command.command === "marketplace/add") return void (await this.addMarketplace(state, id, command));
+			if (command.command === "marketplace/list") return void (await this.listMarketplaces(state, id, command));
+			if (command.command === "marketplace/upgrade") return void (await this.upgradeMarketplace(state, id, command));
+			if (command.command === "marketplace/remove") return void (await this.removeMarketplace(state, id, command));
+			if (command.command === "plugin/list") return void (await this.listPlugins(state, id, command));
+			if (command.command === "plugin/read") return void (await this.readPlugin(state, id, command));
+			if (command.command === "plugin/install") return void (await this.installPlugin(state, id, command));
+			if (command.command === "plugin/uninstall") return void (await this.uninstallPlugin(state, id, command));
+			if (command.command === "plugin/enable") return void (await this.setPluginEnabled(state, id, command, true));
+			if (command.command === "plugin/disable") return void (await this.setPluginEnabled(state, id, command, false));
 			if (command.command === "session/detach") return void (await this.detach(state, id, command));
 			if (
 				command.command === "turn/start" ||
@@ -480,7 +494,7 @@ export class PiServerV2 {
 	private async readSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("session/read requires sessionId");
 		const runtime = this.requireAttached(state, command.sessionId);
-		await this.sendResponse(state, id, {
+		await this.sendBoundedPluginResponse(state, id, {
 			command: command.command,
 			session: toProtocolJsonValue(await this.snapshotForSession(command.sessionId, runtime)),
 		});
@@ -509,7 +523,7 @@ export class PiServerV2 {
 			...(typeof payload.pty === "boolean" ? { pty: payload.pty } : {}),
 		});
 		this.processSessions.set(process.processId, command.sessionId);
-		await this.sendResponse(state, id, {
+		await this.sendBoundedPluginResponse(state, id, {
 			command: command.command,
 			process: process as unknown as Record<string, unknown>,
 		});
@@ -856,6 +870,163 @@ export class PiServerV2 {
 				{ name: "sequence", ok: sequenceOk },
 			],
 		});
+	}
+
+	private async addMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
+		const payload = objectPayload(command);
+		if (typeof payload.name !== "string" || typeof payload.source !== "string")
+			throw new Error("marketplace/add requires name and source");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			marketplace: await this.plugins.addMarketplace(payload.name, payload.source),
+		});
+	}
+
+	private async listMarketplaces(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
+		await this.sendBoundedPluginResponse(state, id, {
+			command: command.command,
+			marketplaces: (await this.plugins.listMarketplaces()).slice(0, MAX_V2_ARRAY_ITEMS),
+		});
+	}
+
+	private async upgradeMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
+		const payload = objectPayload(command);
+		if (typeof payload.name !== "string") throw new Error("marketplace/upgrade requires name");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			marketplace: await this.plugins.upgradeMarketplace(payload.name),
+		});
+	}
+
+	private async removeMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
+		const payload = objectPayload(command);
+		if (typeof payload.name !== "string") throw new Error("marketplace/remove requires name");
+		await this.plugins.removeMarketplace(payload.name);
+		await this.sendResponse(state, id, { command: command.command, name: payload.name });
+	}
+
+	private async listPlugins(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
+		const payload = objectPayload(command);
+		await this.sendBoundedPluginResponse(state, id, {
+			command: command.command,
+			plugins: (await this.plugins.listPlugins(payload.installedOnly === true)).slice(0, MAX_V2_ARRAY_ITEMS),
+		});
+	}
+
+	private async readPlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
+		const payload = objectPayload(command);
+		if (typeof payload.id !== "string") throw new Error("plugin/read requires id");
+		const plugin = await this.plugins.readPlugin(payload.id);
+		if (!plugin) throw new Error(`Unknown plugin: ${payload.id}`);
+		await this.sendBoundedPluginResponse(state, id, { command: command.command, plugin });
+	}
+
+	private async installPlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
+		const payload = objectPayload(command);
+		if (
+			typeof payload.name !== "string" ||
+			typeof payload.marketplace !== "string" ||
+			typeof payload.version !== "string" ||
+			typeof payload.manifest !== "object" ||
+			payload.manifest === null ||
+			Array.isArray(payload.manifest)
+		)
+			throw new Error("plugin/install requires name, marketplace, version, and manifest");
+		const manifest = payload.manifest as Record<string, unknown>;
+		const boundedResources = (value: unknown): string[] =>
+			Array.isArray(value)
+				? value
+						.filter((item): item is string => typeof item === "string")
+						.slice(0, 256)
+						.map((item) => item.slice(0, 1024))
+				: [];
+		const preview = {
+			id: `${payload.name}@${payload.marketplace}`,
+			name: payload.name,
+			marketplace: payload.marketplace,
+			version: payload.version,
+			manifestDigest: "0".repeat(64),
+			...(typeof payload.root === "string" ? { root: payload.root } : {}),
+			enabled: true,
+			scope: payload.scope === "project" ? "project" : "user",
+			provenance: "manifest",
+			resources: {
+				skills: boundedResources(manifest.skills),
+				commands: boundedResources(manifest.commands),
+				apps: Array.isArray(manifest.apps) ? manifest.apps.length : manifest.apps === undefined ? 0 : 1,
+				hooks: Array.isArray(manifest.hooks) ? manifest.hooks.length : manifest.hooks === undefined ? 0 : 1,
+			},
+		};
+		try {
+			encodeServerMessageV2(
+				{ type: "response", id, ok: true, result: toProtocolJsonValue({ command: command.command, plugin: preview }) },
+				{ maxFrameLength: this.maxFrameLength },
+			);
+		} catch {
+			throw new Error("Plugin response exceeds the maximum frame size");
+		}
+		await this.sendBoundedPluginResponse(state, id, {
+			command: command.command,
+			plugin: await this.plugins.installPlugin({
+				name: payload.name,
+				marketplace: payload.marketplace,
+				version: payload.version,
+				manifest,
+				...(typeof payload.root === "string" ? { root: payload.root } : {}),
+				...(payload.scope === "user" || payload.scope === "project" ? { scope: payload.scope } : {}),
+			}),
+		});
+	}
+
+	private async uninstallPlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		this.requireControl(state, command);
+		const payload = objectPayload(command);
+		if (typeof payload.id !== "string") throw new Error("plugin/uninstall requires id");
+		await this.plugins.uninstallPlugin(payload.id);
+		await this.sendResponse(state, id, { command: command.command, id: payload.id });
+	}
+
+	private async setPluginEnabled(
+		state: V2ConnectionState,
+		id: string,
+		command: CommandV2,
+		enabled: boolean,
+	): Promise<void> {
+		this.requireControl(state, command);
+		const payload = objectPayload(command);
+		if (typeof payload.id !== "string") throw new Error(`${command.command} requires id`);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			plugin: await this.plugins.setEnabled(
+				payload.id,
+				enabled,
+				payload.scope === "user" || payload.scope === "project" ? payload.scope : undefined,
+			),
+		});
+	}
+
+	private requireControl(state: V2ConnectionState, command: CommandV2): void {
+		if (!command.sessionId) throw new Error(`${command.command} requires sessionId`);
+		this.requireAttached(state, command.sessionId);
+	}
+
+	private async sendBoundedPluginResponse(state: V2ConnectionState, id: string, result: Record<string, unknown>): Promise<void> {
+		try {
+			encodeServerMessageV2(
+				{ type: "response", id, ok: true, result: toProtocolJsonValue(result) },
+				{ maxFrameLength: this.maxFrameLength },
+			);
+		} catch {
+			throw new Error("Plugin response exceeds the maximum frame size");
+		}
+		await this.sendResponse(state, id, result);
 	}
 
 	private async diagnosticEvents(afterSeq = 0): Promise<Awaited<ReturnType<ForensicRecorder["read"]>>> {
