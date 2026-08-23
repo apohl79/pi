@@ -868,6 +868,19 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("cleans up local state when disposal detach fails", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		pair.failNext("session/detach");
+
+		await expect(session.dispose()).rejects.toThrow("invalid_request: forced attach failure");
+		expect(session.state.lifecycle).toEqual({ status: "disposed" });
+		expect(session.id).toBeUndefined();
+		await session.dispose();
+	});
+
 	test("exposes lease transfer and remote control actions", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });
