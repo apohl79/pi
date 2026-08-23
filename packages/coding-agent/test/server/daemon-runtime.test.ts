@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
@@ -358,6 +358,50 @@ describe("coding-agent daemon runtime", () => {
 				payload: { operation: "search_query", query: "configured" },
 			});
 			expect(response).toMatchObject({ ok: true, result: { results: [{ id: "result-1", source: "faux" }] } });
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("resolves execution-host files through the production daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-files-"));
+		directories.push(directory);
+		await writeFile(join(directory, "host-note.txt"), "host content", "utf8");
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-files-faux",
+			models: [{ id: "coding-agent-daemon-files-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			expect(created).toMatchObject({ ok: true, result: { session: { id: expect.any(String) } } });
+			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
+			const sessionId = (created.result as { session: { id: string } }).session.id;
+			const resolved = await client.request({
+				command: "filesystem/reference/read",
+				sessionId,
+				payload: { reference: "host-note.txt" },
+			});
+			expect(resolved).toMatchObject({
+				ok: true,
+				result: { file: { path: await realpath(join(directory, "host-note.txt")) } },
+			});
 		} finally {
 			client.dispose();
 			await runtime.close();

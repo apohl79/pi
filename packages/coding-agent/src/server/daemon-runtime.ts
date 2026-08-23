@@ -8,9 +8,11 @@ import {
 	JsonlForensicRecorder,
 	JsonlV2PlanRegistry,
 	LocalDiagnosticCapsuleStore,
+	LocalV2FileReferenceService,
 	NodeV2ProcessRegistry,
 	ServerDaemon,
 	type ServerDaemonOptions,
+	type V2FileReferenceService,
 	type V2ImageService,
 	type V2InputRegistry,
 	type V2ProcessRegistry,
@@ -38,6 +40,7 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	processes?: V2ProcessRegistry;
 	web?: V2WebService;
 	images?: V2ImageService;
+	files?: V2FileReferenceService;
 	diagnostics?: ServerDaemonOptions["diagnostics"];
 	createServer?: ServerDaemonOptions["createServer"];
 	write(value: unknown): void;
@@ -101,6 +104,7 @@ export async function createCodingAgentDaemonRuntime(
 		processes,
 		...(options.web === undefined ? {} : { web: options.web }),
 		...(options.images === undefined ? {} : { images: options.images }),
+		...(options.files === undefined ? {} : { files: options.files }),
 		plans,
 		diagnostics,
 		...(diagnosticContent === undefined ? {} : { diagnosticContent }),
@@ -150,6 +154,9 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			...options,
 			repository,
 			env,
+			files:
+				options.files ??
+				new LocalV2FileReferenceService({ projectRoot: options.cwd, cwd: options.cwd, allowAbsolute: true }),
 			planStorePath: options.planStorePath ?? join(options.agentDir, "plans.jsonl"),
 			diagnosticStorePath: options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"),
 			diagnosticKeyPath: options.diagnosticKeyPath ?? join(options.agentDir, "diagnostic-keys.json"),
