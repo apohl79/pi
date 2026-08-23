@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-protocol";
 import { describe, expect, test, vi } from "vitest";
 import { ClientDiagnosticSpool } from "../src/diagnostics.ts";
+import type { ForkSessionV2Options } from "../src/index.ts";
 import type { ByteTransport, ByteTransportHandlers } from "../src/transport.ts";
 import { PiClientV2 } from "../src/v2.ts";
 
@@ -48,6 +49,11 @@ const snapshot: ServerSnapshotV2 = {
 };
 
 describe("PiClientV2", () => {
+	test("exports fork options for typed remote callers", () => {
+		const options: ForkSessionV2Options = { name: "review", scope: "branch", position: "at" };
+		expect(options).toEqual({ name: "review", scope: "branch", position: "at" });
+	});
+
 	test("handshakes, correlates requests, and publishes events", async () => {
 		const pair = transportPair();
 		const client = new PiClientV2({ transportFactory: pair.factory });
