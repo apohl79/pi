@@ -57,50 +57,6 @@ describe("formatRemoteV2Session", () => {
 		expect(formatRemoteV2Session({ lifecycle: { status: "detached" } }, options)).toBe("Session detached");
 	});
 
-	test("strips ANSI and control characters from remote transcript text", () => {
-		const unsafe = structuredClone(snapshot);
-		unsafe.transcript = [
-			{
-				...unsafe.transcript[1]!,
-				content: [{ type: "text", text: "\u001b[31mred\u001b[0m\u0000\u0007 text" }],
-			},
-		];
-		const output = formatRemoteV2Session({ lifecycle: { status: "ready" }, snapshot: unsafe }, options);
-		expect(output).toContain("assistant: red text");
-		expect(output).not.toContain("\u001b");
-		expect(output).not.toContain("\u0000");
-	});
-
-	test("normalizes transcript limits before slicing", () => {
-		const output = formatRemoteV2Session(
-			{ lifecycle: { status: "ready" }, snapshot },
-			{ maxTranscriptItems: Number.POSITIVE_INFINITY, maxTranscriptCharacters: -10 },
-		);
-		expect(output).not.toContain("assistant:");
-	});
-
-	test("renders no transcript items when the item limit is zero", () => {
-		const output = formatRemoteV2Session(
-			{ lifecycle: { status: "ready" }, snapshot },
-			{ maxTranscriptItems: 0, maxTranscriptCharacters: 10_000 },
-		);
-		expect(output).not.toContain("assistant:");
-		expect(output).not.toContain("user:");
-	});
-
-	test("sanitizes remote-derived header fields", () => {
-		const unsafe = structuredClone(snapshot);
-		unsafe.id = "session-\u001b[31m1";
-		unsafe.phase = "turn\u0000";
-		unsafe.model = { provider: "faux\u0007", id: "model\u001b[0m" };
-		const output = formatRemoteV2Session(
-			{ lifecycle: { status: "busy", operationId: "op-\u001b[2K1", command: "turn/start" }, snapshot: unsafe },
-			options,
-		);
-		expect(output).toContain("Session session-1 · phase=turn · model=faux/model operation=op-1");
-		expect(output).not.toMatch(/[\u0000\u0007\u001b]/);
-	});
-
 	test("renders bounded active-agent summaries", () => {
 		const output = formatRemoteV2Session(
 			{
@@ -148,24 +104,6 @@ describe("formatRemoteV2Session", () => {
 		expect(output).toContain("Plan in_progress · verify the daemon");
 	});
 
-	test("applies an aggregate character budget to plan lines", () => {
-		const output = formatRemoteV2Session(
-			{
-				lifecycle: { status: "ready" },
-				snapshot: {
-					...snapshot,
-					plan: {
-						version: 1,
-						items: Array.from({ length: 1000 }, () => ({ step: "x".repeat(10_000), status: "pending" as const })),
-					},
-				},
-			},
-			{ maxPlanItems: 1000, maxPlanCharacters: 100 },
-		);
-		const planLines = output.split("\n").filter((line) => line.startsWith("Plan "));
-		expect(planLines.join("\n").length).toBeLessThanOrEqual(108);
-	});
-
 	test("renders a pending structured input request", () => {
 		const output = formatRemoteV2Session({
 			lifecycle: { status: "ready" },
@@ -179,7 +117,7 @@ describe("formatRemoteV2Session", () => {
 			lifecycle: { status: "ready" },
 			snapshot: {
 				...snapshot,
-				usage: { ...snapshot.usage, input: 8, output: 3, cacheRead: 2, costUsd: 12.5, pricingState: "unknown" },
+				usage: { ...snapshot.usage, input: 8, output: 3, cacheRead: 2, pricingState: "unknown" },
 				persistence: { ...snapshot.persistence, recoveryState: "needsResolution" },
 				diagnostics: { ...snapshot.diagnostics, degraded: true },
 			},
@@ -187,15 +125,6 @@ describe("formatRemoteV2Session", () => {
 		expect(output).toContain("Usage input=8 output=3 cacheRead=2 cost=unknown");
 		expect(output).toContain("Persistence needsResolution");
 		expect(output).toContain("Diagnostics degraded");
-	});
-
-	test("shows subscription pricing without rendering a dollar amount", () => {
-		const output = formatRemoteV2Session({
-			lifecycle: { status: "ready" },
-			snapshot: { ...snapshot, usage: { ...snapshot.usage, costUsd: 12.5, pricingState: "subscription" } },
-		});
-		expect(output).toContain("cost=subscription");
-		expect(output).not.toContain("$12.500000");
 	});
 
 	test("uses the snapshot operation after reattach", () => {

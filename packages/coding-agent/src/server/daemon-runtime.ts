@@ -46,7 +46,6 @@ export async function createCodingAgentDaemonRuntime(
 ): Promise<CodingAgentDaemonRuntime> {
 	const service = await createCodingAgentV2SqliteService(options);
 	const agents = options.agents ?? (service.createSession ? createCodingAgentV2AgentRegistry(service) : undefined);
-	const ownsAgents = options.agents === undefined && agents !== undefined && "dispose" in agents;
 	const daemon = new ServerDaemon({
 		service,
 		socketPath: options.socketPath,
@@ -66,10 +65,8 @@ export async function createCodingAgentDaemonRuntime(
 			stop: () => daemon.stop(),
 		},
 		defaultConnect,
-		createClient: (address, auth) => {
-			if (auth !== undefined) throw new Error("Experimental client authentication is not supported by Unix transport yet");
-			return new PiClientV2({ transportFactory: createUnixTransportFactory({ path: address.path }) });
-		},
+		createClient: (address) =>
+			new PiClientV2({ transportFactory: createUnixTransportFactory({ path: address.path }) }),
 		write: options.write,
 		onAttach: options.onAttach,
 	});
@@ -79,21 +76,7 @@ export async function createCodingAgentDaemonRuntime(
 		cli,
 		close: async () => {
 			cli.close();
-			const errors: unknown[] = [];
-			try {
-				await daemon.stop();
-			} catch (error) {
-				errors.push(error);
-			}
-			if (ownsAgents) {
-				try {
-					await (agents as { dispose(): Promise<void> }).dispose();
-				} catch (error) {
-					errors.push(error);
-				}
-			}
-			if (errors.length === 1) throw errors[0];
-			if (errors.length > 1) throw new AggregateError(errors, "Failed to close coding-agent daemon runtime");
+			await daemon.stop();
 		},
 	};
 }
@@ -114,39 +97,14 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			repository,
 			env,
 			close: async () => {
-				const errors: unknown[] = [];
-				try {
-					await runtime.close();
-				} catch (error) {
-					errors.push(error);
-				}
-				try {
-					await repository.close();
-				} catch (error) {
-					errors.push(error);
-				}
-				try {
-					await env.cleanup();
-				} catch (error) {
-					errors.push(error);
-				}
-				if (errors.length === 1) throw errors[0];
-				if (errors.length > 1) throw new AggregateError(errors, "Failed to close configured daemon runtime");
+				await runtime.close();
+				await repository.close();
+				await env.cleanup();
 			},
 		};
 	} catch (error) {
-		const errors: unknown[] = [error];
-		try {
-			await repository.close();
-		} catch (cleanupError) {
-			errors.push(cleanupError);
-		}
-		try {
-			await env.cleanup();
-		} catch (cleanupError) {
-			errors.push(cleanupError);
-		}
-		if (errors.length === 1) throw error;
-		throw new AggregateError(errors, "Failed to create configured daemon runtime");
+		await repository.close();
+		await env.cleanup();
+		throw error;
 	}
 }

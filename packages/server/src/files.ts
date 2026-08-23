@@ -1,7 +1,6 @@
-import { lstat, open, readdir, realpath } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { MAX_V2_ARRAY_ITEMS } from "@earendil-works/pi-protocol";
 
 export type V2FileReferenceKind = "file" | "directory";
 
@@ -35,8 +34,7 @@ export interface V2FileReferenceOptions {
 
 type FileScope = "project" | "relative" | "home" | "absolute";
 
-// Leave room for the base64 payload and response envelope within the default 4 MiB frame.
-const DEFAULT_MAX_READ_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MAX_READ_BYTES = 8 * 1024 * 1024;
 
 function cleanReference(reference: string): string {
 	const value = reference.trim();
@@ -80,7 +78,15 @@ function mimeTypeFor(path: string): string | undefined {
 				? "application/json"
 				: extension === "md"
 					? "text/markdown"
-					: undefined;
+					: extension === "png"
+						? "image/png"
+						: extension === "jpg" || extension === "jpeg"
+							? "image/jpeg"
+							: extension === "webp"
+								? "image/webp"
+								: extension === "gif"
+									? "image/gif"
+									: undefined;
 }
 
 export class LocalV2FileReferenceService implements V2FileReferenceService {
@@ -95,10 +101,7 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 		this.cwd = resolve(options.cwd ?? options.projectRoot);
 		this.homeDirectory = resolve(options.homeDirectory ?? homedir());
 		this.allowAbsolute = options.allowAbsolute ?? true;
-		const maxReadBytes = options.maxReadBytes ?? DEFAULT_MAX_READ_BYTES;
-		if (!Number.isSafeInteger(maxReadBytes) || maxReadBytes < 1)
-			throw new Error("maxReadBytes must be a positive safe integer");
-		this.maxReadBytes = maxReadBytes;
+		this.maxReadBytes = options.maxReadBytes ?? DEFAULT_MAX_READ_BYTES;
 	}
 
 	async complete(sessionId: string, prefix: string): Promise<readonly V2FileCompletion[]> {
@@ -110,31 +113,18 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 		const candidate = isAbsolute(logical) ? logical : resolve(base, logical);
 		const directory = await this.directoryForCompletion(candidate);
 		const prefixName = candidate === directory ? "" : candidate.slice(directory.length + 1);
-		const resolvedDirectory = await realpath(directory);
-		if (!(await this.allowed(resolvedDirectory))) return [];
 		const entries = await readdir(directory, { withFileTypes: true });
-		const completions = await Promise.all(
-			entries
-				.filter((entry) => entry.name.startsWith(prefixName))
-				.slice(0, MAX_V2_ARRAY_ITEMS)
-				.map(async (entry): Promise<V2FileCompletion | undefined> => {
-					const path = resolve(directory, entry.name);
-					if (!this.allowedLexically(path)) return undefined;
-					try {
-						const resolved = await realpath(path);
-						if (!(await this.allowed(resolved))) return undefined;
-						const stats = await lstat(resolved);
-						return {
-							reference: referenceFor(scope, base, path),
-							path,
-							kind: stats.isDirectory() ? "directory" : "file",
-						} satisfies V2FileCompletion;
-					} catch {
-						return undefined;
-					}
-				}),
-		);
-		return completions.filter((entry): entry is V2FileCompletion => entry !== undefined).slice(0, MAX_V2_ARRAY_ITEMS);
+		return entries
+			.filter((entry) => entry.name.startsWith(prefixName))
+			.map((entry) => {
+				const path = resolve(directory, entry.name);
+				return {
+					reference: referenceFor(scope, base, path),
+					path,
+					kind: entry.isDirectory() ? "directory" : "file",
+				} satisfies V2FileCompletion;
+			})
+			.filter((entry) => this.allowedLexically(entry.path));
 	}
 
 	async resolve(sessionId: string, reference: string): Promise<V2FileReference> {
@@ -156,34 +146,9 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 	): Promise<{ readonly file: V2FileReference; readonly data: Uint8Array }> {
 		const file = await this.resolve(sessionId, reference);
 		if (file.kind !== "file") throw new Error("File reference must resolve to a file");
-		const handle = await open(file.path, "r");
-		try {
-			const currentPath = await realpath(file.path);
-			if (currentPath !== file.path || !(await this.allowed(currentPath)))
-				throw new Error("File reference changed outside the accessible filesystem");
-			const stats = await handle.stat();
-			if (!stats.isFile()) throw new Error("File reference must resolve to a regular file");
-			if (stats.size > this.maxReadBytes)
-				throw new Error(`File exceeds maximum size of ${this.maxReadBytes} bytes`);
-			const chunks: Buffer[] = [];
-			let total = 0;
-			while (total < this.maxReadBytes) {
-				const buffer = Buffer.alloc(Math.min(64 * 1024, this.maxReadBytes - total));
-				const result = await handle.read(buffer, 0, buffer.length, total);
-				if (result.bytesRead === 0) break;
-				chunks.push(buffer.subarray(0, result.bytesRead));
-				total += result.bytesRead;
-			}
-			const extra = Buffer.alloc(1);
-			const result = await handle.read(extra, 0, 1, total);
-			if (result.bytesRead > 0) throw new Error(`File exceeds maximum size of ${this.maxReadBytes} bytes`);
-			return {
-				file: { ...file, size: total },
-				data: new Uint8Array(Buffer.concat(chunks, total)),
-			};
-		} finally {
-			await handle.close();
-		}
+		if ((file.size ?? 0) > this.maxReadBytes)
+			throw new Error(`File exceeds maximum size of ${this.maxReadBytes} bytes`);
+		return { file, data: new Uint8Array(await readFile(file.path)) };
 	}
 
 	private async authorize(reference: string): Promise<string> {

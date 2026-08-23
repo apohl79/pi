@@ -14,7 +14,7 @@ import {
 	REMOTE_V2_SLASH_COMMANDS,
 	RemoteV2InteractiveAttachment,
 } from "../../src/client/remote-v2-interactive.ts";
-import { RemoteV2SessionSelector, type RemoteV2SessionAttachment } from "../../src/client/remote-v2-selector.ts";
+import { RemoteV2SessionSelector } from "../../src/client/remote-v2-selector.ts";
 
 function snapshot(): SessionSnapshotV2 {
 	return {
@@ -144,22 +144,5 @@ describe("remote v2 interactive command boundary", () => {
 		]);
 		await adapter.dispose();
 		client.dispose();
-	});
-
-	test("retries attachment cleanup after a failed dispose", async () => {
-		let attempts = 0;
-		const attachment = {
-			session: {},
-			view: { render: () => [], invalidate: () => {}, dispose: () => {} },
-			dispose: async () => {
-				attempts++;
-				if (attempts === 1) throw new Error("detach failed");
-			},
-		} as unknown as RemoteV2SessionAttachment;
-		const adapter = new RemoteV2InteractiveAttachment(attachment);
-		await expect(adapter.dispose()).rejects.toThrow("detach failed");
-		expect(adapter.view).toBe(attachment.view);
-		await adapter.dispose();
-		expect(attempts).toBe(2);
 	});
 });

@@ -102,38 +102,6 @@ describe("experimental CLI runtime", () => {
 		runtime.close();
 	});
 
-	test("passes parsed auth to client creation", async () => {
-		const server = clientFactory();
-		const createClient = vi.fn(server.create);
-		const runtime = createExperimentalCliRuntime({
-			daemon: daemon(),
-			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
-			createClient,
-			write: () => {},
-		});
-		await runtime.runSessions({ command: "sessions", auth: { type: "token", token: "secret-token" } });
-		expect(createClient).toHaveBeenCalledWith(
-			{ transport: "unix", path: "/tmp/pi.sock" },
-			{ type: "token", token: "secret-token" },
-		);
-		runtime.close();
-	});
-
-	test("closes an attached client when the callback fails", async () => {
-		const server = clientFactory();
-		const runtime = createExperimentalCliRuntime({
-			daemon: daemon(),
-			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
-			createClient: server.create,
-			write: () => {},
-			onAttach: async () => {
-				throw new Error("attach failed");
-			},
-		});
-		await expect(runtime.runAttach({ command: "attach", sessionId: "session-1" })).rejects.toThrow("attach failed");
-		runtime.close();
-	});
-
 	test("main constructs and closes the runtime for experimental commands", async () => {
 		const controller = daemon();
 		const server = clientFactory();

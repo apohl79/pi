@@ -4,7 +4,6 @@ import { RemoteV2Session } from "./remote-v2-session.ts";
 import { RemoteV2SessionView, type RemoteV2SessionViewOptions } from "./remote-v2-view.ts";
 
 export type RemoteV2SessionStatus = "idle" | "running" | "awaiting-input" | "suspended" | "goal-active" | "failed";
-const MAX_CONCURRENT_SESSION_READS = 8;
 
 export interface RemoteV2SessionEntry extends SessionMetadataV2 {
 	readonly phase: SessionPhaseV2;
@@ -28,17 +27,7 @@ export class RemoteV2SessionSelector {
 
 	async list(): Promise<readonly RemoteV2SessionEntry[]> {
 		const metadata = await this.#client.listSessions();
-		const results: RemoteV2SessionEntry[] = new Array(metadata.length);
-		let nextIndex = 0;
-		const readNext = async (): Promise<void> => {
-			while (nextIndex < metadata.length) {
-				const index = nextIndex++;
-				results[index] = await this.#readEntry(metadata[index]!);
-			}
-		};
-		const workerCount = Math.min(MAX_CONCURRENT_SESSION_READS, metadata.length);
-		await Promise.all(Array.from({ length: workerCount }, () => readNext()));
-		return results;
+		return Promise.all(metadata.map((entry) => this.#readEntry(entry)));
 	}
 
 	attach(sessionId: string, mode: V2SessionLeaseMode = "observer"): Promise<RemoteV2Session> {
@@ -50,42 +39,25 @@ export class RemoteV2SessionSelector {
 		options: { readonly mode?: V2SessionLeaseMode; readonly view?: RemoteV2SessionViewOptions } = {},
 	): Promise<RemoteV2SessionAttachment> {
 		const session = await this.attach(sessionId, options.mode);
-		try {
-			const view = new RemoteV2SessionView(session, options.view);
-			return {
-				session,
-				view,
-				dispose: async () => {
-					view.dispose();
-					await session.dispose();
-				},
-			};
-		} catch (error) {
-			await session.dispose().catch(() => {});
-			throw error;
-		}
+		const view = new RemoteV2SessionView(session, options.view);
+		return {
+			session,
+			view,
+			dispose: async () => {
+				view.dispose();
+				await session.dispose();
+			},
+		};
 	}
 
 	async #readEntry(metadata: SessionMetadataV2): Promise<RemoteV2SessionEntry> {
 		const handle = await this.#client.openSession(metadata.id, "observer");
-		let result: RemoteV2SessionEntry;
 		try {
 			const snapshot = await handle.read();
-			result = { ...metadata, phase: snapshot.phase, status: sessionStatus(snapshot), snapshot };
-		} catch (error) {
-			try {
-				await handle.detach();
-			} catch (cleanupError) {
-				throw new AggregateError([error, cleanupError], "Failed to read and detach remote session");
-			}
-			throw error;
-		}
-		try {
+			return { ...metadata, phase: snapshot.phase, status: sessionStatus(snapshot), snapshot };
+		} finally {
 			await handle.detach();
-		} catch (cleanupError) {
-			throw new Error("Failed to detach remote session after read", { cause: cleanupError });
 		}
-		return result;
 	}
 }
 

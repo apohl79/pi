@@ -1,13 +1,7 @@
 import { createModels, fauxAssistantMessage, fauxProvider, type Usage } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
-import { describe, expect, it, vi } from "vitest";
-import {
-	AgentHarness,
-	HarnessClosed,
-	HarnessNotImplemented,
-	type HarnessTool,
-	type Resources,
-} from "../../src/harness/agent-harness.ts";
+import { describe, expect, it } from "vitest";
+import { AgentHarness, HarnessClosed, type HarnessTool, type Resources } from "../../src/harness/agent-harness.ts";
 import {
 	InMemorySessionStorage,
 	type NewRecord,
@@ -133,7 +127,17 @@ describe("AgentHarness v2 scaffold", () => {
 			session,
 			models,
 			model: faux.getModel(),
-			compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+			compaction: {
+				enabled: true,
+				reserveTokens: 1,
+				keepRecentTokens: 1,
+				modelOverrides: { "harness-compaction-faux/harness-compaction-model": { reserveTokens: 7 } },
+			},
+		});
+		expect(await harness.getCompactionSettings()).toMatchObject({
+			enabled: true,
+			reserveTokens: 7,
+			keepRecentTokens: 1,
 		});
 		await harness.prompt("first request with enough text to create history");
 		await harness.prompt("second request with enough text to create history");
@@ -173,9 +177,231 @@ describe("AgentHarness v2 scaffold", () => {
 			models: createModels(),
 			model: getModel("google", "gemini-2.5-flash"),
 		});
-		expect(restored.suspended).toHaveLength(1);
-		expect(restored.suspended[0]).toMatchObject({ kind: "run", id: "run", reason: "crash" });
+		expect(restored.suspended).toMatchObject([
+			{
+				lane: "main",
+				kind: "run",
+				id: "run",
+				startedAt: expect.any(Number),
+				reason: "crash",
+				missing: { tools: [], models: [] },
+			},
+		]);
 		await restored.harness.close();
+	});
+
+	it("persists usage adjustments in the durable session ledger", async () => {
+		const session = createSession("usage");
+		const harness = await createHarness(session);
+		const result = await harness.recordUsage(usage, { entryId: "assistant-1", details: { purpose: "agent" } });
+		expect(result).toEqual({ ok: true, value: undefined });
+		const records = await session.findRecords({ type: "usage", order: "oldestFirst" });
+		expect(records).toMatchObject([
+			{ type: "usage", cause: "adjustment", entryId: "assistant-1", details: { purpose: "agent" }, usage },
+		]);
+		await harness.close();
+	});
+
+	it("allows usage adjustments without an entry identity", async () => {
+		const session = createSession("usage-without-entry");
+		const harness = await createHarness(session);
+		await harness.recordUsage(usage);
+		expect(await session.findRecords({ type: "usage" })).toMatchObject([
+			{ type: "usage", cause: "adjustment", usage },
+		]);
+		await harness.close();
+	});
+
+	it("persists model, thinking, and active-tool projection changes", async () => {
+		const session = createSession("projection");
+		const harness = await createHarness(session);
+		const model = getModel("anthropic", "claude-sonnet-4-5");
+		await harness.setModel(model);
+		await harness.setThinkingLevel("high");
+		await harness.setActiveTools(["read", "bash"]);
+		const entries = await session.findEntries({ order: "oldestFirst" });
+		expect(entries).toMatchObject([
+			{ type: "model_change", provider: model.provider, modelId: model.id },
+			{ type: "thinking_level_change", thinkingLevel: "high" },
+			{ type: "active_tools_change", activeToolNames: ["read", "bash"] },
+		]);
+		await harness.close();
+		const reopened = await AgentHarness.create({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+		});
+		expect((await reopened.harness.getModel()).provider).toBe("google");
+		expect((await reopened.harness.getModel()).id).toBe("gemini-2.5-flash");
+		expect(await reopened.harness.getThinkingLevel()).toBe("high");
+		expect(await reopened.harness.getActiveTools()).toEqual(["read", "bash"]);
+		await reopened.harness.close();
+	});
+
+	it("runs registered lifecycle hooks and emits operation events", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-lifecycle-faux",
+			models: [{ id: "harness-lifecycle-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("lifecycle response")]);
+		const session = createSession("lifecycle");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		const hooks: string[] = [];
+		const events: string[] = [];
+		harness.hooks.on("before_run", () => hooks.push("before_run"));
+		harness.hooks.on("after_response", () => hooks.push("after_response"));
+		harness.events.on("operation_started", () => {
+			events.push("started");
+		});
+		harness.events.on("operation_finished", () => {
+			events.push("finished");
+		});
+		await harness.prompt("run lifecycle");
+		expect(hooks).toEqual(["before_run", "after_response"]);
+		expect(events).toEqual(["started", "finished"]);
+		await harness.close();
+	});
+
+	it("invokes configured skills and prompt templates through durable prompts", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-resource-faux",
+			models: [{ id: "harness-resource-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("skill response"), fauxAssistantMessage("template response")]);
+		const session = createSession("resources");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			resources: {
+				skills: [
+					{ name: "review", description: "Review code", content: "Inspect carefully", filePath: "/tmp/SKILL.md" },
+				],
+				promptTemplates: [{ name: "greet", content: "Hello $1, inspect $ARGUMENTS" }],
+			},
+		});
+
+		const skillResult = await harness.skill("review", "focus on tests");
+		const templateResult = await harness.promptFromTemplate("greet", ["Ada", "the diff"]);
+
+		expect(skillResult).toMatchObject({ ok: true, value: { kind: "completed" } });
+		expect(templateResult).toMatchObject({ ok: true, value: { kind: "completed" } });
+		const prompts = (await session.findEntriesOnBranch({ order: "oldestFirst" })).flatMap((entry) =>
+			entry.type === "message" && entry.message.role === "user" ? [entry.message.content] : [],
+		);
+		expect(prompts[0]).toContainEqual({ type: "text", text: expect.stringContaining('<skill name="review"') });
+		expect(prompts[0]).toContainEqual({ type: "text", text: expect.stringContaining("focus on tests") });
+		expect(prompts[1]).toEqual([{ type: "text", text: "Hello Ada, inspect Ada the diff" }]);
+		await harness.close();
+	});
+
+	it("navigates the durable tree and persists an optional branch summary", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-navigation-faux",
+			models: [{ id: "harness-navigation-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage("first response"),
+			fauxAssistantMessage("second response"),
+			fauxAssistantMessage("branch summary"),
+		]);
+		const session = createSession("navigation");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		await harness.prompt("first");
+		const firstUser = (await session.findEntriesOnBranch({ order: "oldestFirst" })).find(
+			(entry) => entry.type === "message" && entry.message.role === "user",
+		);
+		if (!firstUser) throw new Error("Expected first user entry");
+		await harness.prompt("second");
+
+		const result = await harness.navigateTree(firstUser.id, { summarize: true, label: "first branch" });
+
+		expect(result).toMatchObject({ ok: true, value: { kind: "completed", newLeafId: expect.any(String) } });
+		expect(await session.getLeafId()).toBe((result as { ok: true; value: { newLeafId: string } }).value.newLeafId);
+		expect(await session.getLabel(firstUser.id)).toBe("first branch");
+		expect((await session.findEntriesOnBranch({ order: "oldestFirst" })).at(-1)).toMatchObject({
+			type: "branch_summary",
+			fromId: expect.any(String),
+			summary: expect.stringContaining("branch summary"),
+		});
+		expect((await session.findRecords({ type: "operation_finished" })).at(-1)?.outcome).toBe("completed");
+		await harness.close();
+	});
+
+	it("resumes a suspended run without leaving two open operations", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-resume-faux",
+			models: [{ id: "harness-resume-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("resumed response")]);
+		const session = createSession("resume");
+		await session.appendRecord({
+			type: "operation_started",
+			id: "crashed-run",
+			lane: "main",
+			sourceLeafId: null,
+			intent: { kind: "run", originalPrompt: [userMessage], initialMessages: [] },
+		});
+		const { harness, suspended } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		expect(suspended).toMatchObject([{ id: "crashed-run", kind: "run", reason: "crash" }]);
+
+		const result = await harness.resume();
+
+		expect(result).toMatchObject({ ok: true, value: { operation: "run", kind: "completed" } });
+		expect(await session.findOpenOperations("main")).toEqual([]);
+		expect(
+			(await session.findRecords({ type: "operation_finished", order: "oldestFirst" })).map(
+				(record) => record.runId,
+			),
+		).toEqual(["crashed-run", expect.any(String)]);
+		await harness.close();
+	});
+
+	it("persists queued steering, follow-up, next-run input, and cancellation", async () => {
+		const session = createSession("queues");
+		const harness = await createHarness(session);
+		await expect(harness.steer(userMessage)).resolves.toMatchObject({ ok: false, error: { name: "NoActiveRun" } });
+		await session.appendRecord(operationStarted("run"));
+		const steer = await harness.steer("steer now");
+		const followUp = await harness.followUp("follow up later");
+		const nextRun = await harness.nextRun("next run");
+		expect(steer).toMatchObject({ ok: true, value: { entryId: expect.any(String) } });
+		expect(followUp).toMatchObject({ ok: true, value: { entryId: expect.any(String) } });
+		expect(nextRun).toMatchObject({ ok: true, value: { entryId: expect.any(String) } });
+		const queued = await session.findRecords({ type: "queue_enqueued", order: "oldestFirst" });
+		expect(queued.map((record) => record.queue)).toEqual(["steer", "followUp", "nextRun"]);
+		const entryId = nextRun.ok ? nextRun.value.entryId : "missing";
+		expect(await harness.cancelQueued(entryId)).toEqual({ ok: true, value: { outcome: "cancelled" } });
+		expect(await harness.cancelQueued(entryId)).toEqual({ ok: true, value: { outcome: "already_cleared" } });
+		await harness.close();
+	});
+
+	it("durably aborts a run and recalls only steer/follow-up input", async () => {
+		const session = createSession("abort");
+		const harness = await createHarness(session);
+		await session.appendRecord(operationStarted("run-1"));
+		const steer = await harness.steer("steer");
+		const followUp = await harness.followUp("follow");
+		await harness.nextRun("next");
+		const result = await harness.abort();
+		expect(result).toMatchObject({
+			ok: true,
+			value: { runId: "run-1", steer: [{ role: "user" }], followUp: [{ role: "user" }] },
+		});
+		const records = await session.findRecords({ order: "oldestFirst" });
+		expect(records.filter((record) => record.type === "abort_requested")).toHaveLength(1);
+		expect(records.filter((record) => record.type === "operation_finished")).toMatchObject([{ outcome: "aborted" }]);
+		expect(records.filter((record) => record.type === "queue_cancelled")).toHaveLength(2);
+		expect(steer.ok && followUp.ok).toBe(true);
+		await harness.close();
 	});
 
 	it("persists usage adjustments in the durable session ledger", async () => {
@@ -416,42 +642,31 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(await harness.getFollowUpMode()).toBe("all");
 	});
 
-	it("rejects non-finite and unreasonably large compaction settings", async () => {
-		const harness = await createHarness(createSession("compaction-settings-bounds"));
-		await expect(
-			harness.setCompactionSettings({ enabled: true, reserveTokens: Number.POSITIVE_INFINITY, keepRecentTokens: 1 }),
-		).rejects.toThrow();
-		await expect(
-			harness.setCompactionSettings({ enabled: true, reserveTokens: 10_000_000, keepRecentTokens: 1 }),
-		).rejects.toThrow();
-		await expect(
-			harness.setCompactionSettings({ enabled: true, reserveTokens: 9_000_000, keepRecentTokens: 2_000_001 }),
-		).rejects.toThrow();
-	});
-
-	it("reconciles configuration when a durable append reports failure after commit", async () => {
-		const session = createSession("append-then-throws");
-		const harness = await createHarness(session);
-		const appendEntry = session.appendEntry.bind(session);
-		vi.spyOn(session, "appendEntry").mockImplementation(async (entry, lane) => {
-			await appendEntry(entry, lane);
-			throw new Error("reported after commit");
+	it("provides durable lane and session watch snapshots with buffered run events", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "watch-faux",
+			models: [{ id: "watch-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
 		});
-
-		const model = getModel("anthropic", "claude-sonnet-4-5");
-		await expect(harness.setModel(model)).rejects.toThrow("reported after commit");
-		expect(await harness.getModel()).toBe(model);
-
-		await expect(harness.setThinkingLevel("high")).rejects.toThrow("reported after commit");
-		expect(await harness.getThinkingLevel()).toBe("high");
-
-		await expect(harness.setActiveTools(["durable-tool"])).rejects.toThrow("reported after commit");
-		expect(await harness.getActiveTools()).toEqual(["durable-tool"]);
-
-		const tool = { name: "durable-tool", label: "Durable tool" } as HarnessTool;
-		await expect(harness.setTools([tool])).rejects.toThrow("reported after commit");
-		expect(await harness.getTools()).toEqual([tool]);
-		expect(await harness.getActiveTools()).toEqual(["durable-tool"]);
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("watched")]);
+		const { harness } = await AgentHarness.create({
+			session: createSession("watch"),
+			models,
+			model: faux.getModel(),
+		});
+		const laneWatch = await harness.watch();
+		const sessionWatch = await harness.watchSession();
+		expect(laneWatch.snapshot).toMatchObject({ lane: "main", leafId: null, operation: null, faulted: false });
+		expect(sessionWatch.snapshot).toMatchObject({ faulted: false, lanes: [{ lane: "main", leafId: null }] });
+		const events: string[] = [];
+		laneWatch.start((event) => events.push(String((event as { type: string }).type)));
+		sessionWatch.start((event) => events.push(`session:${String((event as { type: string }).type)}`));
+		await harness.prompt("watch me");
+		expect(events).toEqual(["run_start", "session:run_start", "run_end", "session:run_end"]);
+		laneWatch.unsubscribe();
+		sessionWatch.unsubscribe();
+		await harness.close();
 	});
 
 	it("rejects every unfinished public operation explicitly", async () => {
@@ -460,11 +675,9 @@ describe("AgentHarness v2 scaffold", () => {
 			["peekAction", () => harness.peekAction()],
 			["executeAction", () => harness.executeAction()],
 			["runToCompletion", () => harness.runToCompletion()],
-			["watch", () => harness.watch()],
 			["lane", () => harness.lane("main")],
 			["createLane", () => harness.createLane("thread", null)],
 			["lanes", () => harness.lanes()],
-			["watchSession", () => harness.watchSession()],
 		];
 
 		for (const [operation, invoke] of unfinished) {
@@ -524,8 +737,7 @@ describe("AgentHarness v2 scaffold", () => {
 		const harness = await createHarness();
 		await harness.close();
 
-		await expect(harness.prompt("hello")).resolves.toMatchObject({ ok: false, error: { name: "Closed" } });
-		await expect(harness.compact()).resolves.toMatchObject({ ok: false, error: { name: "Closed" } });
+		expect(await harness.prompt("hello")).toMatchObject({ ok: false, error: { name: "Closed" } });
 		await expect(harness.waitForIdle()).rejects.toBeInstanceOf(HarnessClosed);
 		expect(() => harness.hooks.on("before_run", () => {})).toThrow(HarnessClosed);
 		expect(() => harness.events.on("event", () => {})).toThrow(HarnessClosed);

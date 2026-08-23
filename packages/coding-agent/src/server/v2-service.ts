@@ -28,7 +28,7 @@ function finiteTimestamp(value: unknown, fallback = 0): number {
 }
 
 function boundedString(value: unknown): string {
-	return typeof value === "string" ? value.slice(0, MAX_V2_STRING_LENGTH) : "";
+	return typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, " ").slice(0, MAX_V2_STRING_LENGTH) : "";
 }
 
 function boundedRequired(value: unknown, max = MAX_V2_STRING_LENGTH): string | undefined {
@@ -46,7 +46,7 @@ function redactText(value: string): string {
 		.replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "[redacted]")
 		.replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, "[redacted]")
 		.replace(/([\"']?(?:api[_ -]?key|access[_ -]?token|token|secret|password|authorization|credential)[\"']?)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)/gi, "$1=[redacted]")
-		.replace(/[\u0000-\u001f\u007f]/g, " ")
+		.replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, " ")
 		.replace(/\s+/g, " ")
 		.trim()
 		.slice(0, MAX_V2_STRING_LENGTH);
@@ -138,9 +138,7 @@ function aggregateUsage(records: readonly LaneRecord[], branchEntryIds: Readonly
 }
 
 function contentParts(message: AgentMessage): Array<Record<string, unknown>> {
-	const redact =
-		(message.role === "assistant" && (message.stopReason === "error" || message.stopReason === "deferred" || message.stopReason === "aborted")) ||
-		(message.role === "toolResult" && message.isError === true);
+	const redact = true;
 	if (typeof message !== "object" || message === null || !Array.isArray((message as { content?: unknown }).content)) {
 		return [{ type: "text", text: redact ? redactText(boundedString(messageText(message))) : boundedString(messageText(message)) }];
 	}
@@ -166,7 +164,7 @@ function contentParts(message: AgentMessage): Array<Record<string, unknown>> {
 
 function queueContent(message: AgentMessage): Array<Record<string, unknown>> {
 	const parts = contentParts(message).filter((part) => part.type === "text" || part.type === "image");
-	return parts.length > 0 ? parts : [{ type: "text", text: boundedString(messageText(message)) }];
+	return parts.length > 0 ? parts : [{ type: "text", text: redactText(boundedString(messageText(message))) }];
 }
 
 function targetMessage(target: unknown): AgentMessage {
@@ -212,7 +210,7 @@ function transcriptItem(entry: Extract<Entry, { type: "message" }>): SessionSnap
 			toolName,
 			input: null,
 			content: contentParts(message) as never,
-			...(message.details === undefined ? {} : { details: jsonValue(message.details, 0, new Set<object>(), message.isError === true) }),
+			...(message.details === undefined ? {} : { details: jsonValue(message.details, 0, new Set<object>(), true) }),
 			...(usage(message.usage) === undefined ? {} : { usage: usage(message.usage) }),
 			timestamp,
 			status: message.isError ? "error" : "complete",
@@ -337,6 +335,18 @@ function sessionNameValue(command: CommandV2, value: unknown): string {
 	const sanitized = redactText(requireBoundedNonEmptyString(command, value, "name")).slice(0, 256).trim();
 	if (sanitized.length === 0) throw new Error(`${command.command} requires a non-empty name after sanitization`);
 	return sanitized;
+}
+
+export function normalizeGeneratedName(value: string): string | undefined {
+	const cleaned = value.replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, " ").replace(/^(?:title|session\s+name)\s*[:-]\s*/i, "").replace(/\s+/g, " ").replace(/^[\'\"`]+|[\'\"`]+$/g, "").trim();
+	if (/^(?:answer|sure|okay|ok|here you go)\b[.!]?$/i.test(cleaned)) return undefined;
+	if (/(?:sk|pk|api[_-]?key|bearer|token|password|secret|authorization)\s*[:=]\s*\S+/i.test(cleaned)) return undefined;
+	const words = cleaned.split(" ").filter(Boolean).slice(0, 7);
+	if (words.length < 2) return undefined;
+	const joined = words.join(" ");
+	let name = joined.slice(0, 32);
+	if (joined.length > 32) name = name.replace(/\s+\S*$/, "").trimEnd();
+	return name.split(" ").length < 2 ? undefined : name;
 }
 
 function commandPayload(command: CommandV2): Record<string, unknown> {
@@ -721,9 +731,9 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		} else if (runCommand === "session/name/generate") {
 			const generated =
 				typeof payload.name === "string" && payload.name.trim().length > 0
-					? sessionNameValue(command, payload.name)
+					? normalizeGeneratedName(payload.name)
 					: "Untitled session";
-			if (this.nameSource !== "explicit") {
+			if (generated && this.nameSource !== "explicit") {
 				await harness.session.setName(generated);
 				this.sessionName = generated;
 				this.nameSource = "generated";

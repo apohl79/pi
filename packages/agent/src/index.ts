@@ -58,6 +58,7 @@ export {
 export {
 	type CompactionPreparation,
 	type CompactionSettings,
+	type CompactionSettingsOverride,
 	type CompactResult,
 	calculateContextTokens,
 	compact,
@@ -70,6 +71,7 @@ export {
 	generateSummaryWithUsage,
 	getLastAssistantUsage,
 	prepareCompaction,
+	resolveCompactionSettings,
 	serializeConversation,
 	shouldCompact,
 } from "./harness/compaction/compaction.ts";

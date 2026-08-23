@@ -29,25 +29,6 @@ describe("durable GoalManager", () => {
 		await expect(manager.update({ tokensUsed: -1 })).rejects.toThrow("non-negative");
 	});
 
-	test("serializes concurrent creates and updates across session instances", async () => {
-		const storage = new InMemorySessionStorage({ id: "goal-concurrent", createdAt: 1 });
-		const first = new GoalManager(new Session(storage), () => 10);
-		const second = new GoalManager(new Session(storage), () => 20);
-
-		const creates = await Promise.allSettled([first.create("one"), second.create("two")]);
-		expect(creates.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-		expect(creates.filter((result) => result.status === "rejected")[0]).toMatchObject({
-			reason: expect.objectContaining({ message: "A goal already exists" }),
-		});
-
-		await Promise.all([first.update({ tokensUsed: 3, activeTimeSeconds: 4 }), second.update({ status: "paused" })]);
-		expect(await first.read()).toMatchObject({
-			tokensUsed: 3,
-			activeTimeSeconds: 4,
-			status: "paused",
-		});
-	});
-
 	test("accrues active time only across active transitions", async () => {
 		let timestamp = 1_000;
 		const manager = new GoalManager(

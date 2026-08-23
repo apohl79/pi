@@ -23,7 +23,6 @@ function sessionMetadata(metadata: SqliteSessionMetadata): SessionMetadataV2 {
 		id: metadata.id,
 		createdAt: metadata.createdAt,
 		updatedAt: metadata.createdAt,
-		...(metadata.parentSessionId === undefined ? {} : { parentSessionId: metadata.parentSessionId }),
 		...(metadata.name === undefined ? {} : { sessionName: metadata.name }),
 		cwd: metadata.cwd,
 	};
@@ -71,7 +70,6 @@ export async function createCodingAgentV2SqliteService(
 			const session = await options.repository.create({
 				cwd,
 				...(typeof payload.id === "string" ? { id: payload.id } : {}),
-				...(typeof payload.parentSessionId === "string" ? { parentSessionId: payload.parentSessionId } : {}),
 			});
 			const metadata = await session.getMetadata();
 			metadataById.set(metadata.id, metadata);

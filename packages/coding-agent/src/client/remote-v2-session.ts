@@ -86,33 +86,12 @@ export class RemoteV2Session {
 	async attach(sessionId: string): Promise<void> {
 		this.#assertNotDisposed();
 		if (this.#handle?.sessionId === sessionId && this.#lifecycle.status === "ready") return;
-		const previous = this.#handle;
-		if (previous) {
-			await previous.detach();
-			this.#unsubscribe?.();
-			this.#unsubscribe = undefined;
-			this.#handle = undefined;
-		}
-		let next: PiSessionV2Handle | undefined;
-		let unsubscribe: (() => void) | undefined;
-		try {
-			next = await this.#client.openSession(sessionId, this.#mode);
-			unsubscribe = next.onEvent((event) => this.#receiveEvent(event));
-			this.#handle = next;
-			this.#unsubscribe = unsubscribe;
-			await this.refresh();
-			this.#lifecycle = { status: "ready" };
-			this.#emit();
-		} catch (error) {
-			unsubscribe?.();
-			if (next) await next.detach().catch(() => {});
-			this.#unsubscribe = undefined;
-			this.#handle = undefined;
-			this.#snapshot = undefined;
-			this.#lastEvent = undefined;
-			this.#lifecycle = { status: "detached" };
-			throw error;
-		}
+		this.#unsubscribe?.();
+		this.#handle = await this.#client.openSession(sessionId, this.#mode);
+		this.#unsubscribe = this.#handle.onEvent((event) => this.#receiveEvent(event));
+		await this.refresh();
+		this.#lifecycle = { status: "ready" };
+		this.#emit();
 	}
 
 	async refresh(): Promise<ProtocolSnapshot> {
@@ -150,7 +129,7 @@ export class RemoteV2Session {
 	}
 
 	async abort(): Promise<string> {
-		return this.#accept("turn/abort", undefined, true);
+		return this.#accept("turn/abort");
 	}
 
 	async setModel(model: ModelRef): Promise<string> {
@@ -209,8 +188,8 @@ export class RemoteV2Session {
 		this.#listeners.clear();
 	}
 
-	#accept(command: CommandV2["command"], payload?: JsonValue, allowBusy = false): Promise<string> {
-		this.#assertControl(allowBusy);
+	#accept(command: CommandV2["command"], payload?: JsonValue): Promise<string> {
+		this.#assertControl();
 		const request = this.#client.request({
 			command,
 			sessionId: this.#handle!.sessionId,
@@ -229,7 +208,7 @@ export class RemoteV2Session {
 		this.#lastEvent = event;
 		if (event.event === "operation_accepted") {
 			const payload = asRecord(event.payload);
-			if (event.operationId && this.#lifecycle.status !== "busy")
+			if (event.operationId)
 				this.#lifecycle = {
 					status: "busy",
 					operationId: event.operationId,
@@ -237,11 +216,6 @@ export class RemoteV2Session {
 				};
 			void payload;
 		} else if (event.event === "operation_terminal") {
-			if (
-				this.#lifecycle.status !== "busy" ||
-				(event.operationId !== undefined && event.operationId !== this.#lifecycle.operationId)
-			)
-				return;
 			const snapshot = asRecord(event.payload)?.snapshot;
 			if (isSnapshot(snapshot)) this.#snapshot = structuredClone(snapshot);
 			this.#lifecycle = { status: "ready" };
@@ -263,12 +237,11 @@ export class RemoteV2Session {
 		if (!this.#handle) throw new Error("Session is not open");
 		return this.#handle;
 	}
-	#assertControl(allowBusy = false): void {
+	#assertControl(): void {
 		this.#assertNotDisposed();
 		if (this.#lifecycle.status === "detached" || !this.#handle) throw new Error("Session is not open");
 		const handle = this.#requireHandle();
 		if (handle.mode !== "control") throw new Error("Session requires a control lease");
-		if (!allowBusy && this.#lifecycle.status === "busy") throw new Error("Session operation is already in progress");
 	}
 	#assertNotDisposed(): void {
 		if (this.#lifecycle.status === "disposed") throw new Error("Remote v2 session is disposed");

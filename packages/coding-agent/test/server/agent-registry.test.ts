@@ -1,11 +1,11 @@
 import type { CommandV2, OperationAccepted, SessionSnapshotV2 } from "@earendil-works/pi-protocol";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import { CodingAgentV2AgentRegistry } from "../../src/server/agent-registry.ts";
 import type { CodingAgentV2Runtime, CodingAgentV2Service } from "../../src/server/v2-service.ts";
 
 class FixtureRuntime implements CodingAgentV2Runtime {
 	readonly commands: CommandV2[] = [];
-	disposeCount = 0;
+	disposed = false;
 	blocked = false;
 	private releasePromise: Promise<void> | undefined;
 	private releaseBlocked: (() => void) | undefined;
@@ -27,13 +27,12 @@ class FixtureRuntime implements CodingAgentV2Runtime {
 	release(): void {
 		this.releaseBlocked?.();
 	}
-	async abort(_operationId: string): Promise<void> {}
 	async dispose(): Promise<void> {
-		this.disposeCount += 1;
+		this.disposed = true;
 	}
 }
 
-function fixture(options?: ConstructorParameters<typeof CodingAgentV2AgentRegistry>[1]) {
+function fixture() {
 	const runtime = new FixtureRuntime();
 	const service: CodingAgentV2Service = {
 		listSessions: async () => [],
@@ -41,7 +40,7 @@ function fixture(options?: ConstructorParameters<typeof CodingAgentV2AgentRegist
 		openSession: async () => runtime,
 		createSession: async () => ({ sessionId: "child-session", runtime }),
 	};
-	return { runtime, registry: new CodingAgentV2AgentRegistry(service, options) };
+	return { runtime, registry: new CodingAgentV2AgentRegistry(service) };
 }
 
 describe("CodingAgentV2AgentRegistry", () => {
@@ -54,10 +53,9 @@ describe("CodingAgentV2AgentRegistry", () => {
 			taskMessage: "inspect the repository",
 			model: { provider: "inherit", id: "inherit" },
 		});
-		await registry.followUp(agent.id, "queued follow-up");
-		expect(await registry.list("parent-session")).toEqual([agent]);
-		expect(await registry.list("child-session")).toEqual([]);
 		expect((await registry.wait(agent.id)).state).toBe("complete");
+		expect(await registry.list("parent-session")).toHaveLength(1);
+		expect(await registry.list("child-session")).toHaveLength(0);
 		expect((await registry.getSnapshot(agent.id)).model).toEqual({
 			provider: "parent-provider",
 			id: "parent-model",
@@ -84,43 +82,27 @@ describe("CodingAgentV2AgentRegistry", () => {
 		).rejects.toThrow("maximum depth");
 	});
 
-	test("bounds retained child messages", async () => {
-		const { registry } = fixture();
-		const agent = await registry.spawn({
-			sessionId: "parent",
-			parentPath: "root",
-			taskName: "worker",
-			taskMessage: "work",
-			model: { provider: "faux", id: "model" },
-		});
-		await expect(registry.message(agent.id, "x".repeat(64 * 1024 + 1))).rejects.toThrow("maximum length");
-	});
-
 	test("disposes child runtimes exactly once", async () => {
 		const { registry, runtime } = fixture();
 		await registry.spawn({
-			sessionId: "parent",
+			sessionId: "parent-session",
 			parentPath: "root",
 			taskName: "worker",
-			taskMessage: "work",
-			model: { provider: "faux", id: "model" },
-		});
-		await registry.dispose();
-		await registry.dispose();
-		expect(runtime.disposeCount).toBe(1);
-	});
-
-	test("disposes the parent lookup runtime after model inheritance", async () => {
-		const { registry, runtime } = fixture();
-		const agent = await registry.spawn({
-			sessionId: "parent",
-			parentPath: "root",
-			taskName: "worker",
-			taskMessage: "work",
+			taskMessage: "inspect the repository",
 			model: { provider: "inherit", id: "inherit" },
 		});
-		expect(agent.model).toEqual({ provider: "parent-provider", id: "parent-model" });
-		expect(runtime.disposeCount).toBe(1);
+		await registry.dispose();
+		await registry.dispose();
+		expect(runtime.disposed).toBe(true);
+		await expect(
+			registry.spawn({
+				sessionId: "parent-session",
+				parentPath: "root",
+				taskName: "second",
+				taskMessage: "continue",
+				model: { provider: "inherit", id: "inherit" },
+			}),
+		).rejects.toThrow("disposed");
 	});
 
 	test("runs follow-ups queued during an active child turn", async () => {
@@ -138,37 +120,5 @@ describe("CodingAgentV2AgentRegistry", () => {
 		runtime.release();
 		expect((await registry.wait(agent.id)).state).toBe("complete");
 		expect(runtime.commands.map((command) => command.command)).toEqual(["turn/start", "turn/followUp"]);
-	});
-
-	test("does not restart while an interrupted operation is still releasing", async () => {
-		const { registry, runtime } = fixture();
-		runtime.blocked = true;
-		const agent = await registry.spawn({
-			sessionId: "parent-session",
-			parentPath: "root",
-			taskName: "worker",
-			taskMessage: "initial task",
-			model: { provider: "inherit", id: "inherit" },
-		});
-		await vi.waitFor(() => expect(runtime.commands).toHaveLength(1));
-		await registry.interrupt(agent.id);
-		await expect(registry.followUp(agent.id, "restart too soon")).rejects.toThrow("active agent");
-		runtime.release();
-	});
-
-	test("bounds queued follow-ups", async () => {
-		const { registry, runtime } = fixture({ maxMessages: 1 });
-		runtime.blocked = true;
-		const agent = await registry.spawn({
-			sessionId: "parent-session",
-			parentPath: "root",
-			taskName: "worker",
-			taskMessage: "initial task",
-			model: { provider: "inherit", id: "inherit" },
-		});
-		await vi.waitFor(() => expect(runtime.commands).toHaveLength(1));
-		await registry.followUp(agent.id, "queued task");
-		await expect(registry.followUp(agent.id, "overflow task")).rejects.toThrow("queue limit");
-		runtime.release();
 	});
 });

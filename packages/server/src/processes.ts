@@ -135,11 +135,11 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 		return outputView(process, cursor);
 	}
 
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> { return Promise.resolve(snapshot(this.get(processId))); }
+	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
+		return Promise.resolve(this.snapshot(this.get(processId)));
+	}
 
-	async read(processId: string, cursor: number): Promise<V2ProcessOutput> { return outputView(this.get(processId), cursor); }
-
-	wait(processId: string): Promise<V2ProcessSnapshot> {
+	async read(processId: string, cursor: number): Promise<V2ProcessOutput> {
 		const process = this.get(processId);
 		return process.state === "running" ? new Promise((resolve) => this.waiters.set(processId, [...(this.waiters.get(processId) ?? []), resolve])) : Promise.resolve(snapshot(process));
 	}
@@ -255,9 +255,20 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		return outputView(process, cursor);
 	}
 
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> { return Promise.resolve(snapshot(this.get(processId))); }
+	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
+		return Promise.resolve(this.snapshot(this.get(processId)));
+	}
 
-	async read(processId: string, cursor: number): Promise<V2ProcessOutput> { return outputView(this.get(processId), cursor); }
+	async read(processId: string, cursor: number): Promise<V2ProcessOutput> {
+		const process = this.get(processId);
+		if (!Number.isInteger(cursor) || cursor < 0) throw new Error("Process cursor must be a non-negative integer");
+		const baseCursor = process.totalBytes - process.output.length;
+		return {
+			output: process.output.slice(Math.max(0, cursor - baseCursor)),
+			cursor: process.totalBytes,
+			truncated: cursor < baseCursor,
+		};
+	}
 
 	wait(processId: string): Promise<V2ProcessSnapshot> {
 		const process = this.get(processId);

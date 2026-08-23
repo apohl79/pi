@@ -154,6 +154,11 @@ const ModelCostSchema = Type.Object({
 	...ModelCostRatesSchema,
 	tiers: Type.Optional(Type.Array(ModelCostTierSchema)),
 });
+const CompactionConfigSchema = Type.Object({
+	enabled: Type.Optional(Type.Boolean()),
+	reserveTokens: Type.Optional(Type.Number({ minimum: 0 })),
+	keepRecentTokens: Type.Optional(Type.Number({ minimum: 0 })),
+});
 
 const ModelDefinitionSchema = Type.Object({
 	id: Type.String({ minLength: 1 }),
@@ -169,6 +174,7 @@ const ModelDefinitionSchema = Type.Object({
 	samplingParams: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(ProviderCompatSchema),
+	compaction: Type.Optional(CompactionConfigSchema),
 });
 
 const ModelOverrideSchema = Type.Object({
@@ -190,6 +196,7 @@ const ModelOverrideSchema = Type.Object({
 	samplingParams: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(ProviderCompatSchema),
+	compaction: Type.Optional(CompactionConfigSchema),
 });
 
 const ProviderConfigSchema = Type.Object({
@@ -213,6 +220,7 @@ const validateModelsConfig = Compile(ModelsConfigSchema);
 export type ModelsJsonModel = Static<typeof ModelDefinitionSchema>;
 export type ModelsJsonModelOverride = Static<typeof ModelOverrideSchema>;
 export type ModelsJsonProvider = Static<typeof ProviderConfigSchema>;
+export type ModelsJsonCompaction = Static<typeof CompactionConfigSchema>;
 type ModelsJson = Static<typeof ModelsConfigSchema>;
 
 function formatValidationPath(error: TLocalizedValidationError): string {
@@ -291,6 +299,15 @@ export class ModelConfig {
 
 	getProviderIds(): readonly string[] {
 		return [...this.providers.keys()];
+	}
+
+	getCompactionOverride(providerId: string, modelId: string): ModelsJsonCompaction | undefined {
+		const provider = this.providers.get(providerId);
+		if (!provider) return undefined;
+		const model = provider.models?.find((candidate) => candidate.id === modelId)?.compaction;
+		const override = provider.modelOverrides?.[modelId]?.compaction;
+		if (!model && !override) return undefined;
+		return { ...model, ...override };
 	}
 
 	getError(): string | undefined {
