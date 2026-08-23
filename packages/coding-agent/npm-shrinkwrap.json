@@ -15,6 +15,7 @@
 				"@earendil-works/pi-protocol": "^0.84.2",
 				"@earendil-works/pi-server": "^0.84.2",
 				"@earendil-works/pi-model-instructions": "^0.84.2",
+				"@earendil-works/pi-session-naming": "^0.84.2",
 				"@earendil-works/pi-server-extension-api": "^0.84.2",
 				"@earendil-works/pi-session-backend-sqlite-node": "0.84.2",
 				"@earendil-works/pi-tui": "^0.84.2",
@@ -581,6 +582,14 @@
 				"@earendil-works/pi-ai": "^0.84.2",
 				"@earendil-works/pi-agent-core": "^0.84.2"
 			},
+			"engines": {
+				"node": ">=22.19.0"
+			}
+		},
+		"node_modules/@earendil-works/pi-session-naming": {
+			"version": "0.84.2",
+			"resolved": "https://registry.npmjs.org/@earendil-works/pi-session-naming/-/pi-session-naming-0.84.2.tgz",
+			"license": "MIT",
 			"engines": {
 				"node": ">=22.19.0"
 			}
