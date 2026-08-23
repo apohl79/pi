@@ -1014,6 +1014,34 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(runtime.disposeCount).toBe(1);
 	});
 
+	test("keeps an explicitly detached runtime alive for same-daemon reattach", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-detach-reattach-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const first = await connectUnixTestClientV2(server.addresses[0]!);
+		await first.hello();
+		await first.request({ command: "session/attach", sessionId: "session-1", payload: { mode: "control" } });
+		const runtime = service.sessions.get("session-1")!;
+
+		await expect(first.request({ command: "session/detach", sessionId: "session-1" })).resolves.toMatchObject({
+			ok: true,
+			result: { command: "session/detach", sessionId: "session-1" },
+		});
+		expect(runtime.disposeCount).toBe(0);
+
+		const second = await connectUnixTestClientV2(server.addresses[0]!);
+		await second.hello();
+		await expect(
+			second.request({ command: "session/attach", sessionId: "session-1", payload: { mode: "control" } }),
+		).resolves.toMatchObject({ ok: true, result: { lease: "control", session: { id: "session-1" } } });
+		expect(runtime.disposeCount).toBe(0);
+		await first.close();
+		await second.close();
+	});
+
 	test("allows one controller and observer lease per session", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-leases-"));
 		directories.push(directory);

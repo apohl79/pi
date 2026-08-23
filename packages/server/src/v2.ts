@@ -1516,10 +1516,8 @@ export class PiServerV2 {
 
 	private async detach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("session/detach requires sessionId");
-		const runtime = state.sessions.get(command.sessionId);
 		state.sessions.delete(command.sessionId);
 		this.releaseControlFor(state, command.sessionId);
-		if (runtime && !this.hasRuntimeReference(runtime)) await this.disposeRuntime(runtime);
 		await this.sendResponse(state, id, { command: command.command, sessionId: command.sessionId });
 	}
 
