@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
@@ -12,6 +12,51 @@ afterEach(async () => {
 });
 
 describe("production daemon migration", () => {
+	test("imports a legacy session through the daemon and preserves its source backup", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-daemon-legacy-import-"));
+		directories.push(directory);
+		const safePath = `--${directory.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+		const sessionDirectory = join(directory, "sessions", safePath);
+		const sourcePath = join(sessionDirectory, "2026-01-01T00-00-00-000Z_legacy-session.jsonl");
+		await mkdir(sessionDirectory, { recursive: true });
+		await writeFile(
+			sourcePath,
+			`${JSON.stringify({ kind: "header", version: 4, id: "legacy-session", createdAt: 1, cwd: directory })}\n${JSON.stringify({ kind: "entry", lane: "main", id: "legacy-entry", seq: 1, type: "message", parentId: null, timestamp: 2, message: { role: "user", content: "legacy prompt", timestamp: 2 } })}\n`,
+		);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-legacy-import-faux",
+			models: [
+				{
+					id: "coding-agent-daemon-legacy-import-model",
+					reasoning: false,
+					contextWindow: 32_000,
+					maxTokens: 1_000,
+				},
+			],
+		});
+		models.setProvider(faux.provider);
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "pi.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		try {
+			expect(await runtime.service.listSessions()).toEqual([
+				expect.objectContaining({ id: "legacy-session", cwd: directory }),
+			]);
+			expect(await readFile(sourcePath, "utf8")).toContain("legacy prompt");
+			const files = await readdir(sessionDirectory);
+			expect(files.filter((file) => file.includes(".legacy-backup-"))).toHaveLength(1);
+		} finally {
+			await runtime.close();
+		}
+	});
+
 	test("moves a legacy root session before opening the runtime", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-daemon-migration-"));
 		directories.push(directory);
