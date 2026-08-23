@@ -1,0 +1,3 @@
+# Server process registry resource bounds
+
+`NodeV2ProcessRegistry` owns child-process lifecycle and retains completed process snapshots. Active capacity is reserved before `spawn`, released when a child reaches terminal state, and released if spawning throws or emits a startup error; termination only marks the process until its child closes. `maxActiveProcesses`, `maxWriteBytes`, and `maxQueuedWriteBytes` are positive-integer constructor limits. Writes exceeding `maxWriteBytes` are rejected before data is sent to stdin, and concurrent writes are accounted per process and rejected when their queued byte total would exceed `maxQueuedWriteBytes`; accepted writes await the stdin write callback so Node stream backpressure is respected.
