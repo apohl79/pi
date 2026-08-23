@@ -503,6 +503,18 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("deletes through the server-owned session boundary", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		await session.delete();
+		expect(pair.requests.find((request) => request.command === "session/delete")).toMatchObject({
+			sessionId: "session-1",
+		});
+		expect(session.state.lifecycle).toEqual({ status: "disposed" });
+	});
+
 	test("opens, reads authoritative state, and publishes terminal snapshots", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });
