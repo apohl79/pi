@@ -128,11 +128,39 @@ function memoryTransport() {
 														encoding: "base64",
 														data: "aGk=",
 													} as JsonValue)
-												: message.request.command === "plan/update"
+												: message.request.command === "web"
 													? ({
-															plan: { version: 1, items: [{ step: "Inspect", status: "in_progress" }] },
+															results: [{ id: "web-1", title: "Pi", source: "faux", retrievedAt: 1 }],
 														} as JsonValue)
-													: { command: message.request.command };
+													: message.request.command === "image/view"
+														? ({
+																image: {
+																	digest: "sha256:image",
+																	mimeType: "image/png",
+																	size: 4,
+																	reference: "project:image.png",
+																},
+															} as JsonValue)
+														: message.request.command === "image/generate"
+															? ({
+																	image: {
+																		digest: "sha256:generated",
+																		mimeType: "image/png",
+																		size: 4,
+																		reference: "blob:sha256:generated",
+																		provider: "faux",
+																		model: "image-model",
+																		promptHash: "hash",
+																	},
+																} as JsonValue)
+															: message.request.command === "plan/update"
+																? ({
+																		plan: {
+																			version: 1,
+																			items: [{ step: "Inspect", status: "in_progress" }],
+																		},
+																	} as JsonValue)
+																: { command: message.request.command };
 			const response: ServerMessageV2 =
 				message.request.command.startsWith("turn/") ||
 				message.request.command.startsWith("session/model") ||
@@ -327,6 +355,24 @@ describe("RemoteV2Session", () => {
 		]);
 		expect((await session.resolveFile("project:README.md")).mimeType).toBe("text/markdown");
 		expect((await session.readFile("project:README.md")).data).toBe("aGk=");
+		await session.dispose();
+	});
+
+	test("uses server web and image services", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		expect(await session.webRequest("search_query", { query: "pi" })).toEqual([
+			{ id: "web-1", title: "Pi", source: "faux", retrievedAt: 1 },
+		]);
+		expect((await session.viewImage("project:image.png")).mimeType).toBe("image/png");
+		expect((await session.generateImage("draw a terminal")).provider).toBe("faux");
+		expect(pair.requests.slice(-3).map((request) => request.command)).toEqual([
+			"web",
+			"image/view",
+			"image/generate",
+		]);
 		await session.dispose();
 	});
 

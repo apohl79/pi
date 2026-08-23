@@ -78,6 +78,32 @@ export interface RemoteV2FileRead {
 	readonly data: string;
 }
 
+export interface RemoteV2WebResult {
+	readonly id: string;
+	readonly url?: string;
+	readonly title: string;
+	readonly source: string;
+	readonly retrievedAt: number;
+	readonly extract?: string;
+	readonly mimeType?: string;
+	readonly blobDigest?: string;
+}
+
+export interface RemoteV2ImageView {
+	readonly digest: string;
+	readonly mimeType: string;
+	readonly size: number;
+	readonly reference: string;
+}
+
+export interface RemoteV2GeneratedImage extends RemoteV2ImageView {
+	readonly provider: string;
+	readonly model: string;
+	readonly dimensions?: Readonly<{ width: number; height: number }>;
+	readonly promptHash: string;
+	readonly costUsd?: number;
+}
+
 function promptPayload(input: string | RemoteV2PromptContent, label: string): JsonValue {
 	if (typeof input === "string") {
 		const text = input.trim();
@@ -449,6 +475,47 @@ export class RemoteV2Session {
 		return { file: structuredClone(result.file), encoding: "base64", data: result.data };
 	}
 
+	async webRequest(
+		operation: "search_query" | "open" | "click" | "find" | "screenshot" | "image_query",
+		options: {
+			readonly query?: string;
+			readonly url?: string;
+			readonly refId?: string;
+			readonly pattern?: string;
+		} = {},
+	): Promise<readonly RemoteV2WebResult[]> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({
+			command: "web",
+			sessionId: this.#requireHandle().sessionId,
+			payload: { operation, ...options },
+		});
+		if (!Array.isArray(result.results) || !result.results.every(isWebResult)) throw new Error("Invalid web response");
+		return result.results.map((item) => structuredClone(item));
+	}
+
+	async viewImage(reference: string): Promise<RemoteV2ImageView> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({
+			command: "image/view",
+			sessionId: this.#requireHandle().sessionId,
+			payload: { reference },
+		});
+		if (!isImageView(result.image)) throw new Error("Invalid image/view response");
+		return structuredClone(result.image);
+	}
+
+	async generateImage(prompt: string, sourceDigest?: string): Promise<RemoteV2GeneratedImage> {
+		this.#assertControl();
+		const result = await this.#direct({
+			command: "image/generate",
+			sessionId: this.#handle!.sessionId,
+			payload: { prompt, ...(sourceDigest === undefined ? {} : { sourceDigest }) },
+		});
+		if (!isGeneratedImage(result.image)) throw new Error("Invalid image/generate response");
+		return structuredClone(result.image);
+	}
+
 	async relinquishControl(): Promise<void> {
 		this.#assertNotDisposed();
 		const handle = this.#requireHandle();
@@ -652,5 +719,42 @@ function isFileCompletion(value: unknown): value is RemoteV2FileCompletion {
 		typeof record?.reference === "string" &&
 		typeof record.path === "string" &&
 		(record.kind === "file" || record.kind === "directory")
+	);
+}
+
+function isWebResult(value: unknown): value is RemoteV2WebResult {
+	const record = asRecord(value);
+	return (
+		typeof record?.id === "string" &&
+		typeof record.title === "string" &&
+		typeof record.source === "string" &&
+		typeof record.retrievedAt === "number" &&
+		(record.url === undefined || typeof record.url === "string") &&
+		(record.extract === undefined || typeof record.extract === "string") &&
+		(record.mimeType === undefined || typeof record.mimeType === "string") &&
+		(record.blobDigest === undefined || typeof record.blobDigest === "string")
+	);
+}
+
+function isImageView(value: unknown): value is RemoteV2ImageView {
+	const record = asRecord(value);
+	return (
+		typeof record?.digest === "string" &&
+		typeof record.mimeType === "string" &&
+		typeof record.size === "number" &&
+		typeof record.reference === "string"
+	);
+}
+
+function isGeneratedImage(value: unknown): value is RemoteV2GeneratedImage {
+	const record = asRecord(value);
+	const dimensions = asRecord(record?.dimensions);
+	return (
+		isImageView(value) &&
+		typeof record?.provider === "string" &&
+		typeof record.model === "string" &&
+		typeof record.promptHash === "string" &&
+		(record.costUsd === undefined || typeof record.costUsd === "number") &&
+		(dimensions === undefined || (typeof dimensions.width === "number" && typeof dimensions.height === "number"))
 	);
 }
