@@ -200,7 +200,7 @@ function queueContent(message: AgentMessage, references?: readonly PromptContent
 	);
 }
 
-export function normalizeGeneratedName(value: string): string | undefined {
+export function normalizeGeneratedName(value: string, options?: { secretFallback?: boolean }): string | undefined {
 	const cleaned = value
 		.replace(/[\u0000-\u001f\u007f]/g, " ")
 		.replace(/^(?:title|session\s+name)\s*[:-]\s*/i, "")
@@ -209,7 +209,8 @@ export function normalizeGeneratedName(value: string): string | undefined {
 		.replace(/^['"`]+|['"`]+$/g, "")
 		.trim();
 	if (/^(?:answer|sure|okay|ok|here you go)\b[.!]?$/i.test(cleaned)) return undefined;
-	if (/(?:sk|pk|api[_-]?key|bearer)\s*[:=]\s*\S+/i.test(cleaned)) return undefined;
+	if (/(?:sk|pk|api[_-]?key|bearer)\s*[:=]\s*\S+/i.test(cleaned))
+		return options?.secretFallback === true ? "Untitled session" : undefined;
 	const words = cleaned.split(" ").filter(Boolean).slice(0, 7);
 	if (words.length < 2) return undefined;
 	const joined = words.join(" ");
@@ -404,6 +405,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				.filter((content): content is { type: "text"; text: string } => content.type === "text")
 				.map((content) => content.text)
 				.join(" "),
+			{ secretFallback: true },
 		);
 		if (!generated || this.nameRevision !== initialRevision || this.nameSource !== initialSource) return;
 		if ((await this.definition.harness.session.getName()) !== initialName) return;
