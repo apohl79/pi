@@ -119,6 +119,10 @@ export function respondV2InputRequest(
 	answers: Readonly<Record<string, string>>,
 ): V2InputRequest {
 	if (request.status !== "pending") throw new Error(`Input request ${request.id} is not pending`);
+	const questionIds = new Set(request.questions.map((question) => question.id));
+	for (const questionId of Object.keys(answers)) {
+		if (!questionIds.has(questionId)) throw new Error(`Answer for unknown question ${questionId}`);
+	}
 	for (const question of request.questions) {
 		const answer = answers[question.id];
 		if (answer === undefined) continue;
