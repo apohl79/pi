@@ -7,8 +7,9 @@ describe("ServerRuntimeExtensionHost", () => {
 		const calls: string[] = [];
 		const extension: ServerRuntimeExtension = {
 			id: "audit",
+			capabilities: ["diagnostics", "state"],
 			async onOperationAccepted(context) {
-				calls.push(`${context.operation.type}:${context.model.id}`);
+				calls.push(`${context.operation.type}:${context.model.id}:${context.capabilities.join(",")}`);
 				await context.state.set("lastOperation", context.operation.id);
 			},
 			onOperationTerminal(context) {
@@ -28,7 +29,7 @@ describe("ServerRuntimeExtensionHost", () => {
 		await host.onOperationAccepted({ id: "op-1", type: "turn/start" });
 		host.onOperationTerminal({ id: "op-1", type: "turn/start" }, "ok");
 
-		expect(calls).toEqual(["turn/start:model-a", "terminal:op-1"]);
+		expect(calls).toEqual(["turn/start:model-a:diagnostics,state", "terminal:op-1"]);
 		expect(persisted).toEqual([{ extensionId: "audit", key: "lastOperation", value: "op-1" }]);
 		expect(await host.getState("audit", "lastOperation")).toBe("op-1");
 	});
@@ -39,6 +40,9 @@ describe("ServerRuntimeExtensionHost", () => {
 		await host.register(extension);
 
 		await expect(host.register(extension)).rejects.toThrow("already registered");
+		await expect(host.register({ id: "ui", scope: "client" })).rejects.toThrow(
+			"client-only extensions cannot register with the server host",
+		);
 		expect(() => host.registerClientCommand("client-command")).toThrow(
 			"server runtime extensions cannot register client commands",
 		);
