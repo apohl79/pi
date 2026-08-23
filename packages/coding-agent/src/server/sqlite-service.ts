@@ -49,6 +49,7 @@ export interface CodingAgentV2SqliteServiceOptions {
 	env: ExecutionEnv | ((metadata: SqliteSessionMetadata) => ExecutionEnv | Promise<ExecutionEnv>);
 	model: Model<Api> | ((metadata: SqliteSessionMetadata) => Model<Api> | Promise<Model<Api>>);
 	fastModel?: Model<Api>;
+	agentRoles?: Readonly<Record<string, CodingAgentRoleDefinition>>;
 	goalContinuation?: (context: {
 		goals: GoalManager;
 		harness: AgentHarness;
@@ -78,6 +79,12 @@ function sessionMetadata(metadata: SqliteSessionMetadata): SessionMetadataV2 {
 	};
 }
 
+export interface CodingAgentRoleDefinition {
+	readonly instructions?: string;
+	readonly toolNames?: readonly string[];
+	readonly model?: { readonly provider: string; readonly id: string };
+}
+
 export async function createCodingAgentV2SqliteService(
 	options: CodingAgentV2SqliteServiceOptions,
 ): Promise<CodingAgentV2Service> {
@@ -95,6 +102,9 @@ export async function createCodingAgentV2SqliteService(
 		session: Session<SqliteSessionMetadata>,
 		modelOverride?: Model<Api>,
 	): Promise<CodingAgentV2SessionDefinition> => {
+		const roleName =
+			typeof metadata.metadata?.codingAgentRole === "string" ? metadata.metadata.codingAgentRole : undefined;
+		const role = roleName === undefined ? undefined : options.agentRoles?.[roleName];
 		const storedModel = metadata.metadata?.codingAgentModel;
 		const storedModelOverride =
 			typeof storedModel === "object" &&
@@ -267,6 +277,13 @@ export async function createCodingAgentV2SqliteService(
 					};
 		const created = await createCodingAgentHarness({
 			...options.harness,
+			...(role?.instructions === undefined ? {} : { roleInstructions: role.instructions }),
+			activeToolNames:
+				role?.toolNames === undefined
+					? options.harness?.activeToolNames === undefined
+						? undefined
+						: [...options.harness.activeToolNames]
+					: [...role.toolNames],
 			...(modelInstructions === undefined ? {} : { modelInstructions }),
 			...(systemPromptOptions === undefined ? {} : { systemPromptOptions }),
 			session,
@@ -393,6 +410,9 @@ export async function createCodingAgentV2SqliteService(
 		},
 		create: async (payload) => {
 			const cwd = typeof payload.cwd === "string" && payload.cwd.length > 0 ? payload.cwd : process.cwd();
+			const roleName = typeof payload.role === "string" ? payload.role : undefined;
+			const role = roleName === undefined ? undefined : options.agentRoles?.[roleName];
+			if (roleName !== undefined && role === undefined) throw new Error(`Unknown coding-agent role: ${roleName}`);
 			const requestedModel =
 				typeof payload.model === "object" && payload.model !== null && !Array.isArray(payload.model)
 					? (payload.model as Record<string, unknown>)
@@ -401,7 +421,18 @@ export async function createCodingAgentV2SqliteService(
 				cwd,
 				...(typeof payload.id === "string" ? { id: payload.id } : {}),
 				...(typeof payload.parentSessionId === "string" ? { parentSessionId: payload.parentSessionId } : {}),
-				...(requestedModel === undefined ? {} : { metadata: { codingAgentModel: requestedModel } }),
+				...(requestedModel === undefined && role?.model === undefined
+					? roleName === undefined
+						? {}
+						: { metadata: { codingAgentRole: roleName } }
+					: {
+							metadata: {
+								...(requestedModel === undefined
+									? { codingAgentModel: role?.model }
+									: { codingAgentModel: requestedModel }),
+								...(roleName === undefined ? {} : { codingAgentRole: roleName }),
+							},
+						}),
 			});
 			const metadata = await session.getMetadata();
 			metadataById.set(metadata.id, metadata);
@@ -410,16 +441,17 @@ export async function createCodingAgentV2SqliteService(
 				await session.setName(name);
 				metadata.name = name;
 			}
+			const selectedModel = requestedModel ?? role?.model;
 			const modelOverride =
-				requestedModel &&
-				typeof requestedModel.provider === "string" &&
-				typeof requestedModel.id === "string" &&
-				requestedModel.provider !== "inherit" &&
-				requestedModel.id !== "inherit"
-					? options.models.getModel(requestedModel.provider, requestedModel.id)
+				selectedModel &&
+				typeof selectedModel.provider === "string" &&
+				typeof selectedModel.id === "string" &&
+				selectedModel.provider !== "inherit" &&
+				selectedModel.id !== "inherit"
+					? options.models.getModel(selectedModel.provider, selectedModel.id)
 					: undefined;
-			if (requestedModel && modelOverride === undefined)
-				throw new Error("Requested child model is not available in the configured model catalog");
+			if (selectedModel && modelOverride === undefined)
+				throw new Error("Requested child model or role model is not available in the configured model catalog");
 			return definition(metadata, session, modelOverride);
 		},
 		delete: async (sessionId) => {

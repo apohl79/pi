@@ -111,6 +111,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			parentSessionId: request.sessionId,
 			name: request.taskName,
 			model,
+			...(request.role === undefined ? {} : { role: request.role }),
 			id: agentId,
 		});
 		const summary: AgentSummary = {

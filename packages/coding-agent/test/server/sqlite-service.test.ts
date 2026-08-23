@@ -96,6 +96,13 @@ describe("coding-agent SQLite v2 service", () => {
 				models,
 				env,
 				model: faux.getModel(),
+				agentRoles: {
+					reviewer: {
+						instructions: "Review the requested change.",
+						toolNames: ["read"],
+						model: { provider: faux.getModel().provider, id: "coding-agent-v2-sqlite-small-model" },
+					},
+				},
 				pluginRegistry,
 				agentRegistry,
 				usage,
@@ -133,12 +140,9 @@ describe("coding-agent SQLite v2 service", () => {
 				id: "sqlite-child-session",
 				parentSessionId: "sqlite-session",
 				cwd: directory,
-				model: { provider: faux.getModel().provider, id: faux.getModel().id },
+				role: "reviewer",
 			});
-			expect((await child.runtime.snapshot()).instructionProfile).toMatchObject({
-				id: "sqlite-child-profile",
-				source: "text",
-			});
+			expect((await child.runtime.snapshot()).model).toMatchObject({ id: "coding-agent-v2-sqlite-small-model" });
 			const transcriptBeforeModelSwitch = (await created.runtime.snapshot()).transcript;
 			const enabledPluginSetHash = (await created.runtime.snapshot()).pluginSetHash;
 			await pluginRegistry.setEnabled("snapshot-plugin@local", false);

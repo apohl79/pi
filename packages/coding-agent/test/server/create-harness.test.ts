@@ -470,6 +470,24 @@ describe("coding-agent Harness construction", () => {
 		);
 	});
 
+	test("appends role instructions after model instructions", () => {
+		const prompt = buildCodingAgentHarnessSystemPrompt({
+			cwd: "/workspace",
+			tools: [],
+			activeToolNames: [],
+			modelInstruction: {
+				id: "model-profile",
+				source: "text",
+				mode: "append",
+				text: "Model profile",
+				contentHash: "hash",
+				byteLength: "Model profile".length,
+			},
+			roleInstructions: "Reviewer role",
+		});
+		expect(prompt.indexOf("Model profile")).toBeLessThan(prompt.indexOf("Reviewer role"));
+	});
+
 	test("preserves caller-supplied tools and activation", async () => {
 		const session = new Session(new InMemorySessionStorage({ id: "custom-harness-session", createdAt: 1 }));
 		const env = new NodeExecutionEnv({ cwd: "/workspace" });
