@@ -134,6 +134,17 @@ export const GoalSnapshotSchema = StrictObject({
 });
 export type GoalSnapshot = Static<typeof GoalSnapshotSchema>;
 
+export const UsageAggregateSchema = StrictObject({
+	input: NonNegativeIntegerSchema,
+	output: NonNegativeIntegerSchema,
+	cacheRead: NonNegativeIntegerSchema,
+	cacheWrite: NonNegativeIntegerSchema,
+	imageUnits: Type.Optional(NonNegativeIntegerSchema),
+	costUsd: Type.Optional(Type.Number({ minimum: 0 })),
+	pricingState: Type.Union([Type.Literal("known"), Type.Literal("unknown"), Type.Literal("subscription")]),
+});
+export type UsageAggregate = Static<typeof UsageAggregateSchema>;
+
 export const AgentSummarySchema = StrictObject({
 	id: IdSchema,
 	path: IdSchema,
@@ -147,19 +158,9 @@ export const AgentSummarySchema = StrictObject({
 		Type.Literal("interrupted"),
 	]),
 	model: ModelRefSchema,
+	usage: Type.Optional(UsageAggregateSchema),
 });
 export type AgentSummary = Static<typeof AgentSummarySchema>;
-
-export const UsageAggregateSchema = StrictObject({
-	input: NonNegativeIntegerSchema,
-	output: NonNegativeIntegerSchema,
-	cacheRead: NonNegativeIntegerSchema,
-	cacheWrite: NonNegativeIntegerSchema,
-	imageUnits: Type.Optional(NonNegativeIntegerSchema),
-	costUsd: Type.Optional(Type.Number({ minimum: 0 })),
-	pricingState: Type.Union([Type.Literal("known"), Type.Literal("unknown"), Type.Literal("subscription")]),
-});
-export type UsageAggregate = Static<typeof UsageAggregateSchema>;
 
 export const ContextUsageSchema = StrictObject({
 	inputTokens: NonNegativeIntegerSchema,

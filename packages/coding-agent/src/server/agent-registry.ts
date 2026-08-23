@@ -49,7 +49,7 @@ function isCompletionForAgent(entry: Entry, agentId: string): boolean {
 }
 
 interface ChildAgent {
-	readonly summary: AgentSummary;
+	summary: AgentSummary;
 	readonly parentSessionId: string;
 	readonly childSessionId: string;
 	readonly role?: string;
@@ -122,6 +122,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			taskName: request.taskName,
 			state: "running",
 			model: effectiveModel,
+			usage: (await created.runtime.snapshot()).usage,
 		};
 		const agent: ChildAgent = {
 			summary,
@@ -150,14 +151,15 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 
 	async list(sessionId: string): Promise<readonly AgentSummary[]> {
 		await this.hydrate(sessionId);
-		return [...this.agents.values()]
-			.filter((agent) => agent.parentSessionId === sessionId)
-			.map((agent) => this.snapshot(agent));
+		const owned = [...this.agents.values()].filter((agent) => agent.parentSessionId === sessionId);
+		await Promise.all(owned.map((agent) => this.refreshUsage(agent)));
+		return owned.map((agent) => this.snapshot(agent));
 	}
 
 	async getSnapshot(agentId: string): Promise<V2AgentSnapshot> {
 		await this.ensureAgent(agentId);
 		const agent = this.get(agentId);
+		await this.refreshUsage(agent);
 		return { ...this.snapshot(agent), sessionId: agent.parentSessionId };
 	}
 
@@ -172,6 +174,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				if (timeoutMs !== undefined) setTimeout(resolve, timeoutMs);
 			});
 		}
+		await this.refreshUsage(agent);
 		return this.snapshot(agent);
 	}
 
@@ -392,6 +395,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				taskName,
 				state: persisted?.state ?? (snapshot.phase === "idle" ? "complete" : "running"),
 				model: snapshot.model,
+				usage: snapshot.usage,
 			};
 			this.agents.set(metadata.id, {
 				summary,
@@ -462,6 +466,14 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 
 	private snapshot(agent: ChildAgent): AgentSummary {
 		return structuredClone({ ...agent.summary, state: agent.state });
+	}
+
+	private async refreshUsage(agent: ChildAgent): Promise<void> {
+		const usage = (await agent.runtime.snapshot()).usage;
+		const summary = { ...agent.summary };
+		if (usage === undefined) delete summary.usage;
+		else summary.usage = usage;
+		agent.summary = summary;
 	}
 
 	private get(agentId: string): ChildAgent {

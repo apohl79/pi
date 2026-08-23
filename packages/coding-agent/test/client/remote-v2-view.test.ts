@@ -78,13 +78,21 @@ describe("formatRemoteV2Session", () => {
 							taskName: "worker",
 							state: "running",
 							model: { provider: "anthropic", id: "sonnet" },
+							usage: {
+								input: 38_000,
+								output: 4_200,
+								cacheRead: 0,
+								cacheWrite: 0,
+								costUsd: 0.71,
+								pricingState: "known",
+							},
 						},
 					],
 				},
 			},
 			{ maxAgentItems: 1 },
 		);
-		expect(output).toContain("Agent /root/worker · running · anthropic/sonnet");
+		expect(output).toContain("Agent /root/worker · running · anthropic/sonnet · ↓38000 ↑4200 $0.71");
 	});
 
 	test("renders authoritative goal and plan state", () => {

@@ -116,6 +116,7 @@ describe("coding-agent daemon child agents", () => {
 						path: "/root/specialist",
 						state: "running",
 						model: { provider: "coding-agent-daemon-child-faux", id: "child-model" },
+						usage: { input: expect.any(Number), output: expect.any(Number) },
 					},
 				},
 			});
@@ -128,6 +129,7 @@ describe("coding-agent daemon child agents", () => {
 						id: agentId,
 						state: "complete",
 						model: { provider: "coding-agent-daemon-child-faux", id: "child-model" },
+						usage: { input: expect.any(Number), output: expect.any(Number) },
 					},
 				},
 			});
