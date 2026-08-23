@@ -6,6 +6,7 @@ import { CodingAgentV2AgentRegistry } from "../../src/server/agent-registry.ts";
 import type { CodingAgentV2Runtime, CodingAgentV2Service } from "../../src/server/v2-service.ts";
 
 class FixtureRuntime implements CodingAgentV2Runtime {
+	async cancelQueued(_entryId: string): Promise<void> {}
 	readonly commands: CommandV2[] = [];
 	disposed = false;
 	blocked = false;

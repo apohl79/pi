@@ -34,6 +34,7 @@ const commandNames = [
 	"turn/start",
 	"turn/steer",
 	"turn/followUp",
+	"turn/queue/cancel",
 	"turn/abort",
 	"turn/resume",
 	"turn/rollback",

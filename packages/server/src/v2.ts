@@ -63,6 +63,8 @@ function fileReferencePayload(file: Awaited<ReturnType<V2FileReferenceService["r
 export interface PiSessionRuntimeV2 {
 	snapshot(): MaybePromise<SessionSnapshotV2>;
 	accept(operationId: string): Promise<OperationAccepted>;
+	/** Cancel an exact queued steer/follow-up item when the runtime exposes queue control. */
+	cancelQueued?(entryId: string): Promise<void>;
 	/** Mark an accepted operation failed when durable operation acceptance cannot be persisted. */
 	rejectAccepted?(operationId: string, error: string): Promise<void>;
 	run(operationId: string, command: CommandV2): Promise<void>;
@@ -435,6 +437,7 @@ export class PiServerV2 {
 			if (command.command === "session/attach") return void (await this.attach(state, id, command));
 			if (command.command === "session/read") return void (await this.readSession(state, id, command));
 			if (command.command === "goal/read") return void (await this.readGoal(state, id, command));
+			if (command.command === "turn/queue/cancel") return void (await this.cancelQueued(state, id, command));
 			if (command.command === "process/start") return void (await this.startProcess(state, id, command));
 			if (command.command === "process/write") return void (await this.writeProcess(state, id, command));
 			if (command.command === "process/read") return void (await this.readProcess(state, id, command));
@@ -931,6 +934,27 @@ export class PiServerV2 {
 			state,
 			id,
 			plan === undefined ? { command: command.command } : { command: command.command, plan },
+		);
+	}
+
+	private async cancelQueued(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("turn/queue/cancel requires sessionId");
+		this.requireControl(state, command.sessionId);
+		const payload = objectPayload(command);
+		if (typeof payload.entryId !== "string" || payload.entryId.length === 0)
+			throw new Error("turn/queue/cancel requires entryId");
+		const runtime = state.sessions.get(command.sessionId) ?? (await this.service.openSession(command.sessionId));
+		this.trackRuntime(runtime);
+		state.sessions.set(command.sessionId, runtime);
+		if (runtime.cancelQueued === undefined) throw new Error("Queued message cancellation is not supported");
+		await runtime.cancelQueued(payload.entryId);
+		await this.sendResponse(state, id, { command: command.command, entryId: payload.entryId, cancelled: true });
+		await this.broadcastEvent(
+			command.sessionId,
+			runtime,
+			{ snapshot: await runtime.snapshot() },
+			undefined,
+			"session_snapshot",
 		);
 	}
 
