@@ -44,6 +44,7 @@ export {
 export {
 	type CreateServerAgentSessionOptions,
 	createServerAgentSession,
+	openServerAgentSession,
 	type ServerAgentSession,
 } from "./client/server-sdk.ts";
 // Config paths

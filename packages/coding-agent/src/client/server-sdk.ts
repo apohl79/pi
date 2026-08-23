@@ -35,6 +35,22 @@ export type ServerAgentSession = Readonly<{
 export async function createServerAgentSession(
 	options: CreateServerAgentSessionOptions = {},
 ): Promise<ServerAgentSession> {
+	return startServerAgentSession(options);
+}
+
+/** Reopen a durable daemon-owned SDK session after a client or daemon restart. */
+export async function openServerAgentSession(
+	sessionId: string,
+	options: CreateServerAgentSessionOptions = {},
+): Promise<ServerAgentSession> {
+	if (sessionId.trim().length === 0) throw new Error("Server SDK session id must not be empty");
+	return startServerAgentSession(options, sessionId);
+}
+
+async function startServerAgentSession(
+	options: CreateServerAgentSessionOptions,
+	sessionId?: string,
+): Promise<ServerAgentSession> {
 	const agentDir = options.agentDir ?? getAgentDir();
 	const cwd = options.cwd ?? process.cwd();
 	const socketPath = options.socketPath ?? join(agentDir, "pi.sock");
@@ -70,7 +86,10 @@ export async function createServerAgentSession(
 	try {
 		await runtime.daemon.start();
 		await client.connect();
-		const session = await RemoteV2Session.create(client, sessionOptions, remoteOptions);
+		const session =
+			sessionId === undefined
+				? await RemoteV2Session.create(client, sessionOptions, remoteOptions)
+				: await RemoteV2Session.open(client, sessionId, remoteOptions);
 		return {
 			runtime,
 			client,
