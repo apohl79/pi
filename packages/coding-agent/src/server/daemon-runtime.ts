@@ -8,6 +8,7 @@ import {
 	InMemoryV2InputRegistry,
 	InMemoryV2PlanRegistry,
 	JsonlForensicRecorder,
+	JsonlV2InputRegistry,
 	JsonlV2OperationStore,
 	JsonlV2PlanRegistry,
 	JsonV2PluginRegistry,
@@ -45,6 +46,7 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	serverId?: string;
 	agents?: ServerDaemonOptions["agents"];
 	inputs?: V2InputRegistry;
+	inputStorePath?: string;
 	processes?: V2ProcessRegistry;
 	web?: V2WebService;
 	images?: V2ImageService;
@@ -98,7 +100,11 @@ export async function createCodingAgentDaemonRuntime(
 	const diagnosticContent =
 		options.diagnosticKeyPath === undefined ? undefined : new LocalDiagnosticCapsuleStore(options.diagnosticKeyPath);
 	const processes = options.processes ?? new NodeV2ProcessRegistry();
-	const inputs = options.inputs ?? new InMemoryV2InputRegistry();
+	const inputs =
+		options.inputs ??
+		(options.inputStorePath === undefined
+			? new InMemoryV2InputRegistry()
+			: new JsonlV2InputRegistry(options.inputStorePath));
 	const service = await createCodingAgentV2SqliteService(
 		options.agentRegistry === undefined
 			? {
@@ -174,7 +180,9 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			...options,
 			repository,
 			env,
-			inputs: options.inputs ?? new InMemoryV2InputRegistry(),
+			inputs:
+				options.inputs ??
+				new JsonlV2InputRegistry(options.inputStorePath ?? join(options.agentDir, "inputs.jsonl")),
 			files:
 				options.files ??
 				new LocalV2FileReferenceService({ projectRoot: options.cwd, cwd: options.cwd, allowAbsolute: true }),
