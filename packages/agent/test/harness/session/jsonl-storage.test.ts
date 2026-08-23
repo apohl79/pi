@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Usage } from "@earendil-works/pi-ai";
@@ -476,6 +476,146 @@ describe("JSONL v4 per-session storage", () => {
 		expect((await reopen(root, restored)).getEntry("valid")).resolves.toEqual(valid);
 	});
 
+	it("bounds custom instructions in operation intents", async () => {
+		const root = createTempDir();
+		const session = await createRepository(root).create({ id: "intent-bounds", cwd: root });
+		await expect(
+			session.appendRecord({
+				type: "operation_started",
+				id: "oversized",
+				lane: "main",
+				sourceLeafId: null,
+				intent: { kind: "compaction", resultEntryId: "result", customInstructions: "x".repeat(16_385) },
+			}),
+		).rejects.toMatchObject({ code: "invalid_payload" });
+		expect(await session.findRecords()).toEqual([]);
+	});
+
+	it("rejects oversized persisted compaction replay payloads", async () => {
+		const root = createTempDir();
+		const session = await createRepository(root).create({ id: "compaction-bounds", cwd: root });
+		await expect(
+			session.appendEntry(
+				{
+					type: "compaction",
+					id: "oversized",
+					summary: "summary",
+					retainedTail: [userMessage("x".repeat(300_000))],
+					tokensBefore: 1,
+				},
+				"main",
+			),
+		).rejects.toMatchObject({ code: "invalid_payload" });
+		expect(await session.findEntries()).toEqual([]);
+	});
+
+	it("refreshes state when an external replacement keeps size and line count", async () => {
+		const root = createTempDir();
+		const session = await createRepository(root).create({ id: "same-shape", cwd: root });
+		await session.appendCustomEntry("old");
+		const metadata = await session.getMetadata();
+		const original = readFileSync(metadata.path, "utf8");
+		writeFileSync(metadata.path, original.replace('"old"', '"new"'));
+		await session.appendCustomEntry("tail");
+		const entries = await session.findEntries({ order: "oldestFirst" });
+		expect(entries.map((entry) => entry.type === "custom" && entry.customType)).toEqual(["new", "tail"]);
+	});
+
+	it("refreshes after an inode replacement with unchanged size and mtime", async () => {
+		const root = createTempDir();
+		const session = await createRepository(root).create({ id: "same-metadata", cwd: root });
+		await session.appendCustomEntry("old");
+		const metadata = await session.getMetadata();
+		const originalInfo = statSync(metadata.path);
+		const replacement = `${metadata.path}.replacement`;
+		writeFileSync(replacement, readFileSync(metadata.path, "utf8").replace('"old"', '"new"'));
+		utimesSync(replacement, originalInfo.atime, originalInfo.mtime);
+		renameSync(replacement, metadata.path);
+
+		await session.appendCustomEntry("tail");
+		expect((await session.findEntries({ order: "oldestFirst" })).map((entry) => entry.type === "custom" && entry.customType)).toEqual([
+			"new",
+			"tail",
+		]);
+	});
+
+	it("refreshes after an in-place replacement with unchanged size and mtime", async () => {
+		const root = createTempDir();
+		const session = await createRepository(root).create({ id: "same-inode-metadata", cwd: root });
+		await session.appendCustomEntry("old");
+		const metadata = await session.getMetadata();
+		const originalInfo = statSync(metadata.path);
+		const original = readFileSync(metadata.path, "utf8");
+		writeFileSync(metadata.path, original.replace('"old"', '"new"'));
+		utimesSync(metadata.path, originalInfo.atime, originalInfo.mtime);
+
+		await session.appendCustomEntry("tail");
+		expect((await session.findEntries({ order: "oldestFirst" })).map((entry) => entry.type === "custom" && entry.customType)).toEqual([
+			"new",
+			"tail",
+		]);
+	});
+
+	it("rolls back a partially applied external suffix after semantic failure", async () => {
+		const root = createTempDir();
+		const session = await createRepository(root).create({ id: "suffix-rollback", cwd: root });
+		const metadata = await session.getMetadata();
+		const external = await createRepository(root).open(metadata);
+		const valid = await external.appendEntry({ type: "custom", id: "external", customType: "note" }, "main");
+		const invalid = JSON.stringify({
+			kind: "entry",
+			seq: 2,
+			id: "invalid",
+			type: "custom",
+			parentId: "missing-parent",
+			timestamp: 1,
+			customType: "note",
+		});
+		appendFileSync(metadata.path, `${invalid}\n`);
+
+		await expect(session.appendCustomEntry("rejected")).rejects.toMatchObject({ code: "invalid_entry" });
+		expect(await session.getEntry(valid.id)).toBeUndefined();
+
+		const durablePrefix = readFileSync(metadata.path, "utf8").split("\n").slice(0, -2).join("\n") + "\n";
+		writeFileSync(metadata.path, durablePrefix);
+		const next = await session.appendCustomEntry("next");
+		expect(next.seq).toBe(2);
+		expect((await session.findEntries({ order: "oldestFirst" })).map((entry) => entry.id)).toEqual(["external", "next"]);
+	});
+
+	it("uses unchanged file metadata without rereading the session", async () => {
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+		const session = await new JsonlSessionRepo({ fs: env, sessionsRoot: root }).create({
+			id: "metadata-fast-path",
+			cwd: root,
+		});
+		const readTextFile = vi.spyOn(env, "readTextFile");
+
+		await session.appendCustomEntry("first");
+
+		expect(readTextFile).not.toHaveBeenCalled();
+	});
+
+	it("keeps a durable append successful when metadata refresh fails", async () => {
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+		const session = await new JsonlSessionRepo({ fs: env, sessionsRoot: root }).create({
+			id: "metadata-refresh-failure",
+			cwd: root,
+		});
+		const metadata = await session.getMetadata();
+		const existingInfo = await env.fileInfo(metadata.path);
+		vi.spyOn(env, "fileInfo").mockResolvedValueOnce(existingInfo).mockRejectedValueOnce(new Error("metadata unavailable"));
+
+		const entry = await session.appendCustomEntry("committed");
+
+		expect(entry.id).toBe("committed");
+		expect((await session.findEntries({ order: "oldestFirst" })).map((candidate) => candidate.id)).toEqual([
+			"committed",
+		]);
+	});
+
 	it("does not advance state or poison the write queue after an append failure", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
@@ -493,5 +633,25 @@ describe("JSONL v4 per-session storage", () => {
 
 		const reopened = await createRepository(root).open(await session.getMetadata());
 		expect(await reopened.getLog()).toEqual([{ kind: "entry", seq: 1, entry: committed }]);
+	});
+
+	it("does not replay a durably appended line after a reported append failure", async () => {
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+		const repository = new JsonlSessionRepo({ fs: env, sessionsRoot: root });
+		const session = await repository.create({ id: "append-then-fails", cwd: root });
+		const appendFile = env.appendFile.bind(env);
+		vi.spyOn(env, "appendFile").mockImplementationOnce(async (path, content) => {
+			await appendFile(path, content);
+			return { ok: false, error: new FileError("unknown", "reported after commit") };
+		});
+
+		await expect(session.appendCustomEntry("durably-committed")).rejects.toMatchObject({ code: "storage" });
+		const next = await session.appendCustomEntry("next");
+
+		const reopened = await createRepository(root).open(await session.getMetadata());
+		const entries = await reopened.findEntries({ order: "oldestFirst" });
+		expect(entries).toHaveLength(2);
+		expect(entries[1]?.id).toBe(next.id);
 	});
 });
