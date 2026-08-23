@@ -938,7 +938,26 @@ export class PiServerV2 {
 
 	private async diagnosticsTimeline(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
+		const sessionId = typeof payload.sessionId === "string" ? payload.sessionId : undefined;
+		const operationId = typeof payload.operationId === "string" ? payload.operationId : undefined;
 		const events = await this.diagnosticEvents(typeof payload.afterSeq === "number" ? payload.afterSeq : 0);
+		const [operationState, allUsageEntries] = await Promise.all([
+			this.operationStore.load(),
+			this.usage.read(sessionId === undefined ? {} : { sessionId }),
+		]);
+		const operations = operationState.operations.filter(
+			(operation) =>
+				(sessionId === undefined || operation.sessionId === sessionId) &&
+				(operationId === undefined || operation.operationId === operationId),
+		);
+		const usageEntries =
+			operationId === undefined
+				? allUsageEntries
+				: allUsageEntries.filter((entry) => entry.operationId === operationId);
+		const usageAggregate =
+			operationId === undefined
+				? await this.usage.aggregate(sessionId === undefined ? {} : { sessionId })
+				: aggregateV2UsageEntries(usageEntries);
 		await this.sendResponse(state, id, {
 			command: command.command,
 			events: events.filter(
@@ -946,6 +965,8 @@ export class PiServerV2 {
 					(typeof payload.sessionId !== "string" || event.sessionId === payload.sessionId) &&
 					(typeof payload.operationId !== "string" || event.operationId === payload.operationId),
 			),
+			operations: operations.map((operation) => toProtocolJsonValue(operation)),
+			usage: toProtocolJsonValue({ aggregate: usageAggregate, entries: usageEntries }),
 		});
 	}
 

@@ -253,6 +253,30 @@ describe("PiServer v2 operation acceptance", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-diagnostics-"));
 		directories.push(directory);
 		const diagnostics = new InMemoryForensicRecorder();
+		const operationStore = new InMemoryV2OperationStore();
+		await operationStore.putOperation({
+			operationId: "operation-1",
+			sessionId: "session-1",
+			state: "complete",
+			accepted: { operationId: "operation-1", sessionRevision: 2, eventSeq: 2 },
+		});
+		const usage = new InMemoryV2UsageLedger();
+		await usage.record({
+			responseId: "response-1",
+			sessionId: "session-1",
+			agentId: "agent-1",
+			operationId: "operation-1",
+			purpose: "agent",
+			provider: "test",
+			model: "small",
+			input: 3,
+			output: 2,
+			cacheRead: 0,
+			cacheWrite: 0,
+			pricing: "providerReported",
+			costUsd: 0.01,
+			createdAt: 1,
+		});
 		await diagnostics.record({
 			kind: "boot",
 			severity: "error",
@@ -273,6 +297,8 @@ describe("PiServer v2 operation acceptance", () => {
 		const server = createUnixServerV2(new TestService(), {
 			path: join(directory, "server.sock"),
 			diagnostics,
+			operationStore,
+			usage,
 			integrity: async (): Promise<readonly DiagnosticIntegrityCheck[]> => [
 				{ name: "sessions", ok: true, details: { count: 1 } },
 				{ name: "operations", ok: true, details: { operations: 2, events: 3 } },
@@ -300,7 +326,14 @@ describe("PiServer v2 operation acceptance", () => {
 			afterSeq: 3,
 		});
 		const status = await client.request({ command: "diagnostics/status" });
-		const timeline = await client.request({ command: "diagnostics/timeline", payload: { sessionId: "session-1" } });
+		const timeline = await client.request({
+			command: "diagnostics/timeline",
+			payload: { sessionId: "session-1" },
+		});
+		const operationTimeline = await client.request({
+			command: "diagnostics/timeline",
+			payload: { sessionId: "session-1", operationId: "operation-1" },
+		});
 		const exported = await client.request({ command: "diagnostics/export" });
 		const scopedExport = await client.request({
 			command: "diagnostics/export",
@@ -321,6 +354,19 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: {
 				events: [{ kind: "boot", payload: { token: "[REDACTED]" } }, { kind: "boot-follow-up" }],
+				operations: [{ operationId: "operation-1", sessionId: "session-1", state: "complete" }],
+				usage: {
+					aggregate: { responses: 1, input: 3, output: 2, costUsd: 0.01 },
+					entries: [{ responseId: "response-1", operationId: "operation-1" }],
+				},
+			},
+		});
+		expect(operationTimeline).toMatchObject({
+			ok: true,
+			result: {
+				events: [],
+				operations: [{ operationId: "operation-1" }],
+				usage: { aggregate: { responses: 1 }, entries: [{ operationId: "operation-1" }] },
 			},
 		});
 		expect(exported).toMatchObject({
@@ -332,8 +378,11 @@ describe("PiServer v2 operation acceptance", () => {
 					manifest: { unavailable: ["client-diagnostic-spool"], projectionsSha256: expect.any(String) },
 					projections: {
 						sessions: [],
-						operations: [],
-						usage: { aggregate: { responses: 0 }, entries: [] },
+						operations: [{ operationId: "operation-1", sessionId: "session-1", state: "complete" }],
+						usage: {
+							aggregate: { responses: 1, input: 3, output: 2, costUsd: 0.01 },
+							entries: [{ responseId: "response-1", operationId: "operation-1" }],
+						},
 						plugins: { marketplaces: [], plugins: [] },
 						blobs: [],
 					},
