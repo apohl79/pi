@@ -2,7 +2,17 @@ import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
-import { ServerDaemon, type ServerDaemonOptions, type V2InputRegistry } from "@earendil-works/pi-server";
+import {
+	InMemoryForensicRecorder,
+	InMemoryV2PlanRegistry,
+	JsonlForensicRecorder,
+	JsonlV2PlanRegistry,
+	ServerDaemon,
+	type ServerDaemonOptions,
+	type V2ImageService,
+	type V2InputRegistry,
+	type V2WebService,
+} from "@earendil-works/pi-server";
 import { createNodeSqliteFactory, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import {
 	createExperimentalCliRuntime,
@@ -16,9 +26,14 @@ import { type CodingAgentV2SqliteServiceOptions, createCodingAgentV2SqliteServic
 export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOptions, "repository"> & {
 	repository: SqliteSessionRepository;
 	socketPath: string;
+	planStorePath?: string;
+	diagnosticStorePath?: string;
 	serverId?: string;
 	agents?: ServerDaemonOptions["agents"];
 	inputs?: V2InputRegistry;
+	web?: V2WebService;
+	images?: V2ImageService;
+	diagnostics?: ServerDaemonOptions["diagnostics"];
 	createServer?: ServerDaemonOptions["createServer"];
 	write(value: unknown): void;
 	onAttach?: ExperimentalCliRuntimeOptions["onAttach"];
@@ -45,14 +60,38 @@ export type ConfiguredCodingAgentDaemonRuntime = CodingAgentDaemonRuntime & {
 export async function createCodingAgentDaemonRuntime(
 	options: CodingAgentDaemonRuntimeOptions,
 ): Promise<CodingAgentDaemonRuntime> {
-	const service = await createCodingAgentV2SqliteService(options);
+	let createdAgents: ServerDaemonOptions["agents"];
+	const plans =
+		options.plans ??
+		(options.planStorePath === undefined
+			? new InMemoryV2PlanRegistry()
+			: new JsonlV2PlanRegistry(options.planStorePath));
+	const diagnostics =
+		options.diagnostics ??
+		(options.diagnosticStorePath === undefined
+			? new InMemoryForensicRecorder()
+			: new JsonlForensicRecorder(options.diagnosticStorePath));
+	const service = await createCodingAgentV2SqliteService(
+		options.agentRegistry === undefined
+			? {
+					...options,
+					plans,
+					agentRegistry: () => createdAgents,
+				}
+			: { ...options, plans },
+	);
 	const agents = options.agents ?? (service.createSession ? createCodingAgentV2AgentRegistry(service) : undefined);
+	createdAgents = agents;
 	const daemon = new ServerDaemon({
 		service,
 		socketPath: options.socketPath,
 		...(options.serverId === undefined ? {} : { serverId: options.serverId }),
 		...(agents === undefined ? {} : { agents }),
 		...(options.inputs === undefined ? {} : { inputs: options.inputs }),
+		...(options.web === undefined ? {} : { web: options.web }),
+		...(options.images === undefined ? {} : { images: options.images }),
+		plans,
+		diagnostics,
 		...(options.createServer === undefined ? {} : { createServer: options.createServer }),
 	});
 	const defaultConnect: TransportAddress = { transport: "unix", path: options.socketPath };
@@ -93,7 +132,13 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 		databasePath: options.databasePath ?? join(options.agentDir, "server.sqlite"),
 	});
 	try {
-		const runtime = await createCodingAgentDaemonRuntime({ ...options, repository, env });
+		const runtime = await createCodingAgentDaemonRuntime({
+			...options,
+			repository,
+			env,
+			planStorePath: options.planStorePath ?? join(options.agentDir, "plans.jsonl"),
+			diagnosticStorePath: options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"),
+		});
 		return {
 			...runtime,
 			repository,

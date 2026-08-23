@@ -17,6 +17,7 @@ import type {
 	SessionSnapshotV2,
 	TranscriptItem,
 } from "@earendil-works/pi-protocol";
+import type { V2InputRegistry } from "@earendil-works/pi-server";
 import type { ServerRuntimeExtensionHost } from "./extension-host.ts";
 
 export interface CodingAgentV2SessionDefinition {
@@ -25,6 +26,7 @@ export interface CodingAgentV2SessionDefinition {
 	goals?: GoalManager;
 	goalContinuation?: GoalContinuationScheduler;
 	extensionHost?: ServerRuntimeExtensionHost;
+	inputs?: V2InputRegistry;
 }
 
 export interface CodingAgentV2Service {
@@ -302,12 +304,13 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async snapshot(): Promise<SessionSnapshotV2> {
-		const [leafId, thinkingLevel, stats, compaction, entries] = await Promise.all([
+		const [leafId, thinkingLevel, stats, compaction, entries, pendingInputRequestId] = await Promise.all([
 			this.definition.harness.getLeafId(),
 			this.definition.harness.getThinkingLevel(),
 			this.definition.harness.session.getStats(),
 			this.definition.harness.getCompactionSettings(),
 			this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }),
+			this.definition.inputs?.pendingForSession(this.definition.metadata.id),
 		]);
 		void leafId;
 		const [goal, persistedName] = await Promise.all([
@@ -334,7 +337,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			nameRevision: this.nameRevision,
 			revision: this.revision,
 			eventSeq: this.eventSeq,
-			phase: this.phase,
+			phase: pendingInputRequestId === undefined ? this.phase : "awaitingInput",
 			...(this.activeOperation === undefined ? {} : { activeOperation: { ...this.activeOperation } }),
 			model: { provider: this.model.provider, id: this.model.id },
 			thinkingLevel,

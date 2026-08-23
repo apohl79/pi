@@ -138,8 +138,8 @@ export type NavigationOutcome =
 	| { kind: "declined" | "aborted"; leafId: string | null }
 	| { kind: "failed"; leafId: string | null; error: OperationError };
 
-export type RunRejected = LaneBusy | InvalidMessage | UnknownSkill | UnknownTemplate | MissingIdentities | Closed;
-export type CompactionRejected = LaneBusy | NothingToCompact | MissingIdentities | Closed;
+export type RunRejected = LaneBusy | InvalidMessage | UnknownSkill | UnknownTemplate | Closed;
+export type CompactionRejected = LaneBusy | NothingToCompact | Closed;
 export type NavigationRejected = LaneBusy | UnknownTarget | Closed;
 export type ResumeRejected = LaneBusy | NothingToResume | MissingIdentities | Closed;
 export type QueueRejected = NoActiveRun | InvalidMessage | Closed;
@@ -210,8 +210,7 @@ export interface LaneSnapshot {
 	leafId: string | null;
 	operation: LaneInfo["operation"];
 	queues: { steer: QueuedItem[]; followUp: QueuedItem[]; nextRun: QueuedItem[] };
-	/** Deferred writes are not exposed by this harness snapshot implementation. */
-	pendingWrites?: { id: string; entry: ProvisionedEntry }[];
+	pendingWrites: { id: string; entry: ProvisionedEntry }[];
 	faulted: boolean;
 }
 
@@ -407,24 +406,6 @@ export class AgentHarness implements AgentLane {
 	private readonly lifecycle: LifecycleRegistry;
 	private readonly watchBus = new HarnessEventBus();
 	private closed = false;
-	private activeOperation:
-		| {
-				id: string;
-				kind: "run" | "compaction" | "navigation";
-				controller: AbortController;
-				done: Promise<void>;
-				resolveDone: () => void;
-		  }
-		| undefined;
-	private readonly finishedOperations = new Set<string>();
-	private readonly finishingOperations = new Map<string, Promise<void>>();
-	/** Serializes durable lifecycle mutations (abort, terminal records, queue admission). */
-	private lifecycleTail: Promise<void> = Promise.resolve();
-	/** Queue entries claimed by an in-flight run before their transcript entry is durable. */
-	private readonly claimedQueueItems = new Set<string>();
-	private missingModels: string[] = [];
-	private missingTools: string[] = [];
-	private static readonly finishedOperationCacheLimit = 1024;
 
 	private constructor(options: AgentHarnessOptions) {
 		this.durableSession = options.session;
@@ -447,11 +428,11 @@ export class AgentHarness implements AgentLane {
 		};
 		this.streamOptions = { ...(options.streamOptions ?? {}) };
 		this.retryPolicy = options.retry ?? { enabled: false, maxRetries: 0, baseDelayMs: 1000 };
-		this.compactionSettings = validateCompactionSettings(options.compaction ?? {
+		this.compactionSettings = options.compaction ?? {
 			enabled: true,
 			reserveTokens: 16384,
 			keepRecentTokens: 20000,
-		});
+		};
 		this.steeringMode = options.steeringMode ?? "one-at-a-time";
 		this.followUpMode = options.followUpMode ?? "one-at-a-time";
 	}
@@ -1179,27 +1160,6 @@ export class AgentHarness implements AgentLane {
 	async getModel(): Promise<Model<Api>> {
 		return this.model;
 	}
-	private async appendConfigurationEntry<TEntry extends Entry>(
-		entry: ProvisionedEntry<TEntry>,
-		apply: (committed: TEntry) => void,
-	): Promise<void> {
-		let committed: TEntry;
-		try {
-			committed = await this.durableSession.appendEntry(entry, "main");
-		} catch (error) {
-			// The backend may have committed the append before reporting a transport
-			// failure. Reconcile the in-memory view before propagating that failure so
-			// callers do not observe durable state and stale harness configuration.
-			try {
-				const recovered = await this.durableSession.getEntry(entry.id);
-				if (recovered?.type === entry.type) apply(recovered as TEntry);
-			} catch {
-				// Preserve the original append error when recovery is unavailable.
-			}
-			throw error;
-		}
-		apply(committed);
-	}
 	async setModel(model: Model<Api>): Promise<void> {
 		if (this.closed) throw new HarnessClosed();
 		this.model = model;
@@ -1293,7 +1253,7 @@ export class AgentHarness implements AgentLane {
 		return resolveCompactionSettings(this.compactionSettings, this.model.provider, this.model.id);
 	}
 	async setCompactionSettings(settings: CompactionSettings): Promise<void> {
-		this.compactionSettings = validateCompactionSettings(settings);
+		this.compactionSettings = { ...settings };
 	}
 	async getSteeringMode(): Promise<QueueMode> {
 		return this.steeringMode;
@@ -1313,16 +1273,6 @@ export class AgentHarness implements AgentLane {
 	}
 	async close(): Promise<void> {
 		this.closed = true;
-		const active = this.activeOperation;
-		active?.controller.abort();
-		if (active) {
-			await Promise.race([
-				active.done,
-				new Promise<void>((resolve) => {
-					setTimeout(resolve, 5_000);
-				}),
-			]);
-		}
 	}
 
 	private async laneSnapshot(lane: string): Promise<LaneSnapshot> {

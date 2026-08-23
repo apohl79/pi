@@ -151,6 +151,138 @@ describe("coding-agent Harness construction", () => {
 		}
 	});
 
+	test("exposes the provider-neutral web tool only when configured", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "web-tool-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: "/workspace" });
+		const created = await createCodingAgentHarness({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+			web: async (request) => [{ id: "result-1", title: request.operation, source: "fixture", retrievedAt: 1 }],
+		});
+		try {
+			const tool = (await created.harness.getTools()).find((candidate) => candidate.name === "web");
+			if (!tool) throw new Error("Expected web tool");
+			const result = await tool.execute("web-call", { operation: "search_query", query: "pi" });
+			expect(result.content).toEqual([
+				{
+					type: "text",
+					text: JSON.stringify([{ id: "result-1", title: "search_query", source: "fixture", retrievedAt: 1 }]),
+				},
+			]);
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("exposes view_image through the configured image boundary", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "image-tool-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: "/workspace" });
+		const created = await createCodingAgentHarness({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+			viewImage: async (reference) => ({ digest: "sha256:image", mimeType: "image/png", size: 3, reference }),
+		});
+		try {
+			const tool = (await created.harness.getTools()).find((candidate) => candidate.name === "view_image");
+			if (!tool) throw new Error("Expected view_image tool");
+			const result = await tool.execute("image-call", { reference: "project:image.png" });
+			expect(result.content).toEqual([
+				{
+					type: "text",
+					text: JSON.stringify({
+						digest: "sha256:image",
+						mimeType: "image/png",
+						size: 3,
+						reference: "project:image.png",
+					}),
+				},
+			]);
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("exposes the Codex-compatible child-agent tool set behind an injected registry", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "agent-tool-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: "/workspace" });
+		const created = await createCodingAgentHarness({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+			agents: {
+				spawn: async (request) => ({ id: "agent-1", ...request }),
+				list: async () => [{ id: "agent-1", state: "running" }],
+				wait: async (agentId) => ({ id: agentId, state: "complete" }),
+				message: async () => {},
+				followUp: async (agentId) => ({ id: agentId, state: "running" }),
+				interrupt: async (agentId) => ({ id: agentId, state: "interrupted" }),
+			},
+		});
+		try {
+			expect((await created.harness.getTools()).map((tool) => tool.name).slice(-6)).toEqual([
+				"spawn_agent",
+				"list_agents",
+				"wait_agent",
+				"send_message",
+				"followup_task",
+				"interrupt_agent",
+			]);
+			const spawn = (await created.harness.getTools()).find((tool) => tool.name === "spawn_agent");
+			if (!spawn) throw new Error("Expected spawn_agent tool");
+			expect(await spawn.execute("spawn-call", { taskName: "child", taskMessage: "Inspect the bug" })).toMatchObject(
+				{
+					content: [{ type: "text", text: expect.stringContaining('"taskName":"child"') }],
+				},
+			);
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("exposes update_plan through the injected server-owned plan boundary", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "plan-tool-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: "/workspace" });
+		const updates: unknown[] = [];
+		const created = await createCodingAgentHarness({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+			plans: {
+				update: async (input) => {
+					updates.push(input);
+					return { version: 1, items: input.items };
+				},
+			},
+		});
+		try {
+			const tool = (await created.harness.getTools()).find((candidate) => candidate.name === "update_plan");
+			if (!tool) throw new Error("Expected update_plan tool");
+			const result = await tool.execute("plan-call", {
+				items: [{ step: "implement", status: "in_progress" }],
+				version: 1,
+			});
+			expect(updates).toEqual([{ items: [{ step: "implement", status: "in_progress" }], version: 1 }]);
+			expect(result.content).toEqual([
+				{
+					type: "text",
+					text: JSON.stringify({ version: 1, items: [{ step: "implement", status: "in_progress" }] }),
+				},
+			]);
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("preserves coding-agent prompt snippets and guideline order", () => {
 		const prompt = buildCodingAgentHarnessSystemPrompt({
 			cwd: "/workspace",

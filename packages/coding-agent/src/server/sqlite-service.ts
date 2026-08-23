@@ -1,4 +1,5 @@
 import {
+	type CompactionSettings,
 	type ExecutionEnv,
 	GoalManager,
 	type SamplingInput,
@@ -7,9 +8,20 @@ import {
 } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { SessionMetadataV2 } from "@earendil-works/pi-protocol";
-import type { V2InputRegistry, V2PluginRegistry } from "@earendil-works/pi-server";
+import type {
+	V2AgentRegistry,
+	V2ImageService,
+	V2InputRegistry,
+	V2PlanRegistry,
+	V2PluginRegistry,
+	V2WebService,
+} from "@earendil-works/pi-server";
 import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
-import { type CreateCodingAgentHarnessOptions, createCodingAgentHarness } from "./create-harness.ts";
+import {
+	type CodingAgentAgentTools,
+	type CreateCodingAgentHarnessOptions,
+	createCodingAgentHarness,
+} from "./create-harness.ts";
 import { createPluginSamplingInput } from "./plugin-sampling.ts";
 import {
 	type CodingAgentV2Service,
@@ -23,8 +35,13 @@ export interface CodingAgentV2SqliteServiceOptions {
 	models: Models;
 	env: ExecutionEnv | ((metadata: SqliteSessionMetadata) => ExecutionEnv | Promise<ExecutionEnv>);
 	model: Model<Api> | ((metadata: SqliteSessionMetadata) => Model<Api> | Promise<Model<Api>>);
+	compaction?: (model: Model<Api>) => CompactionSettings | undefined;
 	pluginRegistry?: V2PluginRegistry;
 	inputs?: V2InputRegistry;
+	web?: V2WebService;
+	images?: V2ImageService;
+	plans?: V2PlanRegistry;
+	agentRegistry?: V2AgentRegistry | (() => V2AgentRegistry | undefined);
 	harness?: Omit<CreateCodingAgentHarnessOptions, "session" | "models" | "model" | "env" | "sessionFile">;
 }
 
@@ -51,7 +68,13 @@ export async function createCodingAgentV2SqliteService(
 			modelOverride ?? (typeof options.model === "function" ? await options.model(metadata) : options.model);
 		const env = typeof options.env === "function" ? await options.env(metadata) : options.env;
 		const goals = new GoalManager(session);
+		const compaction = options.compaction?.(model);
 		const inputRegistry = options.inputs;
+		const webService = options.web;
+		const imageService = options.images;
+		const planRegistry = options.plans;
+		const agentRegistry =
+			typeof options.agentRegistry === "function" ? options.agentRegistry() : options.agentRegistry;
 		const samplingInputFactory = async (): Promise<SamplingInput> => {
 			const configuredSamplingInput = options.harness?.samplingInputFactory
 				? await options.harness.samplingInputFactory()
@@ -78,6 +101,7 @@ export async function createCodingAgentV2SqliteService(
 			models: options.models,
 			model,
 			env,
+			...(compaction === undefined ? {} : { compaction }),
 			goals,
 			samplingInputFactory,
 			sessionFile: metadata.path,
@@ -110,8 +134,25 @@ export async function createCodingAgentV2SqliteService(
 							return resolved.answers ?? {};
 						},
 					}),
+			...(webService === undefined ? {} : { web: async (request) => webService.execute(metadata.id, request) }),
+			...(imageService === undefined
+				? {}
+				: { viewImage: async (reference) => imageService.view(metadata.id, reference) }),
+			...(planRegistry === undefined
+				? {}
+				: {
+						plans: {
+							update: async (input) => planRegistry.update(metadata.id, input),
+						},
+					}),
+			...(agentRegistry === undefined ? {} : { agents: createAgentTools(agentRegistry, metadata.id, model) }),
 		});
-		return { metadata: sessionMetadata(metadata), harness: created.harness, goals };
+		return {
+			metadata: sessionMetadata(metadata),
+			harness: created.harness,
+			goals,
+			...(inputRegistry === undefined ? {} : { inputs: inputRegistry }),
+		};
 	};
 	const store: CodingAgentV2SessionStore = {
 		list: async () => {
@@ -164,4 +205,23 @@ export async function createCodingAgentV2SqliteService(
 		},
 	};
 	return createCodingAgentV2ServiceFromStore(options.models, store);
+}
+
+function createAgentTools(registry: V2AgentRegistry, sessionId: string, model: Model<Api>): CodingAgentAgentTools {
+	return {
+		spawn: (request) =>
+			registry.spawn({
+				sessionId,
+				parentPath: `/${sessionId}`,
+				taskName: request.taskName,
+				taskMessage: request.taskMessage,
+				...(request.role === undefined ? {} : { role: request.role }),
+				model: request.model ?? { provider: model.provider, id: model.id },
+			}),
+		list: () => registry.list(sessionId),
+		wait: (agentId, timeoutMs) => registry.wait(agentId, timeoutMs),
+		message: (agentId, message) => registry.message(agentId, message),
+		followUp: (agentId, message) => registry.followUp(agentId, message),
+		interrupt: (agentId) => registry.interrupt(agentId),
+	};
 }

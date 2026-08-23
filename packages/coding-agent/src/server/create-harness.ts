@@ -36,6 +36,55 @@ export interface CodingAgentInputRequest {
 
 export type CodingAgentInputResponse = Readonly<Record<string, string>>;
 
+export type CodingAgentWebOperation = "search_query" | "open" | "click" | "find" | "screenshot" | "image_query";
+
+export interface CodingAgentWebRequest {
+	operation: CodingAgentWebOperation;
+	query?: string;
+	url?: string;
+	refId?: string;
+	pattern?: string;
+}
+
+export interface CodingAgentWebResult {
+	id: string;
+	url?: string;
+	title: string;
+	source: string;
+	retrievedAt: number;
+	extract?: string;
+	mimeType?: string;
+	blobDigest?: string;
+}
+
+export interface CodingAgentImageView {
+	digest: string;
+	mimeType: string;
+	size: number;
+	reference: string;
+}
+
+export interface CodingAgentAgentTools {
+	spawn(request: {
+		taskName: string;
+		taskMessage: string;
+		model?: { provider: string; id: string };
+		role?: string;
+	}): Promise<unknown>;
+	list(): Promise<unknown>;
+	wait(agentId: string, timeoutMs?: number): Promise<unknown>;
+	message(agentId: string, message: string): Promise<void>;
+	followUp(agentId: string, message: string): Promise<unknown>;
+	interrupt(agentId: string): Promise<unknown>;
+}
+
+export interface CodingAgentPlanTools {
+	update(input: {
+		items: readonly { step: string; status: "pending" | "in_progress" | "completed" }[];
+		version?: number;
+	}): Promise<unknown>;
+}
+
 const requestUserInputSchema = Type.Object({
 	questions: Type.Array(
 		Type.Object({
@@ -49,6 +98,50 @@ const requestUserInputSchema = Type.Object({
 		{ minItems: 1, maxItems: 3 },
 	),
 	autoResolutionMs: Type.Optional(Type.Integer({ minimum: 0 })),
+});
+
+const webSchema = Type.Object({
+	operation: Type.Union([
+		Type.Literal("search_query"),
+		Type.Literal("open"),
+		Type.Literal("click"),
+		Type.Literal("find"),
+		Type.Literal("screenshot"),
+		Type.Literal("image_query"),
+	]),
+	query: Type.Optional(Type.String()),
+	url: Type.Optional(Type.String()),
+	refId: Type.Optional(Type.String()),
+	pattern: Type.Optional(Type.String()),
+});
+
+const viewImageSchema = Type.Object({ reference: Type.String({ minLength: 1 }) });
+const spawnAgentSchema = Type.Object({
+	taskName: Type.String({ minLength: 1 }),
+	taskMessage: Type.String({ minLength: 1 }),
+	model: Type.Optional(Type.Object({ provider: Type.String({ minLength: 1 }), id: Type.String({ minLength: 1 }) })),
+	role: Type.Optional(Type.String({ minLength: 1 })),
+});
+const listAgentsSchema = Type.Object({});
+const waitAgentSchema = Type.Object({
+	agentId: Type.String({ minLength: 1 }),
+	timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+});
+const messageAgentSchema = Type.Object({
+	agentId: Type.String({ minLength: 1 }),
+	message: Type.String({ minLength: 1 }),
+});
+const followUpAgentSchema = messageAgentSchema;
+const interruptAgentSchema = Type.Object({ agentId: Type.String({ minLength: 1 }) });
+const updatePlanSchema = Type.Object({
+	items: Type.Array(
+		Type.Object({
+			step: Type.String({ minLength: 1 }),
+			status: Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed")]),
+		}),
+		{ minItems: 1, maxItems: 64 },
+	),
+	version: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 
 export interface CodingAgentHarnessTool extends HarnessTool {
@@ -83,6 +176,10 @@ export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOption
 		request: CodingAgentInputRequest,
 		signal: AbortSignal | undefined,
 	) => Promise<CodingAgentInputResponse>;
+	web?: (request: CodingAgentWebRequest) => Promise<readonly CodingAgentWebResult[]>;
+	viewImage?: (reference: string) => Promise<CodingAgentImageView>;
+	agents?: CodingAgentAgentTools;
+	plans?: CodingAgentPlanTools;
 }
 
 export interface BuildCodingAgentHarnessSystemPromptOptions {
@@ -205,6 +302,135 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 					const response = await requestUserInput(input as Static<typeof requestUserInputSchema>, signal);
 					return { content: [{ type: "text", text: JSON.stringify(response) }], details: { response } };
 				},
+			});
+		}
+		if (options.web) {
+			const web = options.web;
+			tools.push({
+				name: "web",
+				label: "web",
+				description: "Search or inspect the web through the configured server web adapter.",
+				parameters: webSchema,
+				execute: async (_toolCallId, input) => {
+					const results = await web(input as Static<typeof webSchema>);
+					return { content: [{ type: "text", text: JSON.stringify(results) }], details: { results } };
+				},
+			});
+		}
+		if (options.viewImage) {
+			const viewImage = options.viewImage;
+			tools.push({
+				name: "view_image",
+				label: "view_image",
+				description: "Inspect a local image through the configured server image service.",
+				parameters: viewImageSchema,
+				execute: async (_toolCallId, input) => {
+					const image = await viewImage((input as Static<typeof viewImageSchema>).reference);
+					return { content: [{ type: "text", text: JSON.stringify(image) }], details: { image } };
+				},
+			});
+		}
+		if (options.agents) {
+			const agents = options.agents;
+			tools.push(
+				{
+					name: "spawn_agent",
+					label: "spawn_agent",
+					description: "Start a child coding agent with an explicit task.",
+					parameters: spawnAgentSchema,
+					execute: async (_id, input) => ({
+						content: [
+							{
+								type: "text",
+								text: JSON.stringify(await agents.spawn(input as Static<typeof spawnAgentSchema>)),
+							},
+						],
+						details: {},
+					}),
+				},
+				{
+					name: "list_agents",
+					label: "list_agents",
+					description: "List child agents owned by this session.",
+					parameters: listAgentsSchema,
+					execute: async () => ({
+						content: [{ type: "text", text: JSON.stringify(await agents.list()) }],
+						details: {},
+					}),
+				},
+				{
+					name: "wait_agent",
+					label: "wait_agent",
+					description: "Wait for a child agent and return its current state.",
+					parameters: waitAgentSchema,
+					execute: async (_id, input) => {
+						const params = input as Static<typeof waitAgentSchema>;
+						return {
+							content: [
+								{ type: "text", text: JSON.stringify(await agents.wait(params.agentId, params.timeoutMs)) },
+							],
+							details: {},
+						};
+					},
+				},
+				{
+					name: "send_message",
+					label: "send_message",
+					description: "Send a message to a child agent.",
+					parameters: messageAgentSchema,
+					execute: async (_id, input) => {
+						const params = input as Static<typeof messageAgentSchema>;
+						await agents.message(params.agentId, params.message);
+						return { content: [{ type: "text", text: "Message sent." }], details: {} };
+					},
+				},
+				{
+					name: "followup_task",
+					label: "followup_task",
+					description: "Send a follow-up task to a child agent.",
+					parameters: followUpAgentSchema,
+					execute: async (_id, input) => {
+						const params = input as Static<typeof followUpAgentSchema>;
+						return {
+							content: [
+								{ type: "text", text: JSON.stringify(await agents.followUp(params.agentId, params.message)) },
+							],
+							details: {},
+						};
+					},
+				},
+				{
+					name: "interrupt_agent",
+					label: "interrupt_agent",
+					description: "Interrupt a running child agent.",
+					parameters: interruptAgentSchema,
+					execute: async (_id, input) => ({
+						content: [
+							{
+								type: "text",
+								text: JSON.stringify(
+									await agents.interrupt((input as Static<typeof interruptAgentSchema>).agentId),
+								),
+							},
+						],
+						details: {},
+					}),
+				},
+			);
+		}
+		if (options.plans) {
+			const plans = options.plans;
+			tools.push({
+				name: "update_plan",
+				label: "update_plan",
+				description: "Replace the server-owned ordered plan for the current task.",
+				parameters: updatePlanSchema,
+				execute: async (_id, input) => ({
+					content: [
+						{ type: "text", text: JSON.stringify(await plans.update(input as Static<typeof updatePlanSchema>)) },
+					],
+					details: {},
+				}),
 			});
 		}
 	}

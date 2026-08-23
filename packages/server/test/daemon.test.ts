@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { ServerDaemon, type ServerDaemonServer } from "../src/daemon.ts";
+import { InMemoryForensicRecorder } from "../src/diagnostics.ts";
 import type { PiServerServiceV2 } from "../src/v2.ts";
 
 function service(): PiServerServiceV2 {
@@ -53,5 +54,25 @@ describe("ServerDaemon", () => {
 		await expect(daemon.start()).rejects.toThrow("bind failed");
 		expect(daemon.status()).toEqual({ state: "stopped", addresses: [] });
 		expect(close).toHaveBeenCalledOnce();
+	});
+
+	test("passes injected diagnostics through to the owned server", async () => {
+		const diagnostics = new InMemoryForensicRecorder();
+		let received: unknown;
+		const daemon = new ServerDaemon({
+			service: service(),
+			socketPath: "/tmp/daemon-test.sock",
+			diagnostics,
+			createServer: (_service, options) => {
+				received = options.diagnostics;
+				return fakeServer(
+					async () => {},
+					async () => {},
+				);
+			},
+		});
+		await daemon.start();
+		expect(received).toBe(diagnostics);
+		await daemon.stop();
 	});
 });
