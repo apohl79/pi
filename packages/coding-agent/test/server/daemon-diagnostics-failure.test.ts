@@ -52,4 +52,48 @@ describe("production daemon diagnostic failure isolation", () => {
 			await runtime.close();
 		}
 	});
+
+	test("survives a failed diagnostic export destination", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-diag-export-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "pi-daemon-diagnostics-export-failure-faux",
+			models: [
+				{ id: "diagnostics-export-failure-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		const socketPath = join(directory, "server.sock");
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath,
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({ transportFactory: createUnixTransportFactory({ path: socketPath }) });
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
+			const sessionId = (created.result as { session: { id: string } }).session.id;
+			await expect(
+				runtime.cli.runDiagnostics({
+					command: "diagnostics",
+					action: "export",
+					sessionId,
+					output: join(directory, "missing", "bundle.json"),
+				}),
+			).rejects.toThrow();
+			const reread = await client.request({ command: "session/read", sessionId });
+			expect(reread).toMatchObject({ ok: true, result: { session: { id: sessionId, phase: "idle" } } });
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
 });
