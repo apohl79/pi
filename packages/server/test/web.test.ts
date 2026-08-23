@@ -64,7 +64,7 @@ describe("AdapterV2WebService", () => {
 		await expect(service.execute("session-1", { operation: "search_query" })).rejects.toThrow("result id");
 	});
 
-	test("requires screenshot results to reference image blobs", async () => {
+	test("requires screenshot and image-query results to reference image blobs", async () => {
 		const service = new AdapterV2WebService({
 			execute: async () => [
 				{
@@ -81,6 +81,9 @@ describe("AdapterV2WebService", () => {
 		await expect(
 			service.execute("session-1", { operation: "screenshot", url: "https://example.test/document.pdf" }),
 		).rejects.toThrow("image blob");
+		await expect(service.execute("session-1", { operation: "image_query", query: "document" })).rejects.toThrow(
+			"image blob",
+		);
 		const valid = new AdapterV2WebService({
 			execute: async () => [
 				{
