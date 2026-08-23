@@ -444,12 +444,66 @@ function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLau
 		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
 		return ptyLauncher.spawn(request);
 	}
-	return spawn(request.command, {
-		shell: true,
+	const argv = parseArgv(request.command);
+	return spawn(argv[0]!, argv.slice(1), {
+		shell: false,
 		cwd: request.cwd,
 		env: { ...process.env, ...request.env },
 		stdio: ["pipe", "pipe", "pipe"],
 	});
+}
+
+const FORBIDDEN_SHELL_CHARACTERS = new Set([";", "|", "&", ">", "<", "`", "$", "(", ")"]);
+
+/** Parse the restricted argv-like process command without invoking a shell. */
+function parseArgv(command: string): string[] {
+	if (command.length === 0 || command.length > 8_192) throw new Error("Process command must be 1-8192 characters");
+	const argv: string[] = [];
+	let token = "";
+	let tokenStarted = false;
+	let quote: "single" | "double" | undefined;
+	for (let index = 0; index < command.length; index += 1) {
+		const character = command[index]!;
+		if (quote === "single") {
+			if (character === "'") quote = undefined;
+			else token += character;
+			tokenStarted = true;
+			continue;
+		}
+		if (quote === "double") {
+			if (character === '"') quote = undefined;
+			else if (character === "\\") {
+				const next = command[++index];
+				if (next === undefined) throw new Error("Process command has a trailing escape");
+				token += next;
+			} else token += character;
+			tokenStarted = true;
+			continue;
+		}
+		if (FORBIDDEN_SHELL_CHARACTERS.has(character)) throw new Error("Process command contains shell metacharacters");
+		if (character === "'" || character === '"') {
+			quote = character === "'" ? "single" : "double";
+			tokenStarted = true;
+		} else if (character === "\\") {
+			const next = command[++index];
+			if (next === undefined) throw new Error("Process command has a trailing escape");
+			token += next;
+			tokenStarted = true;
+		} else if (/\s/.test(character)) {
+			if (tokenStarted) {
+				argv.push(token);
+				token = "";
+				tokenStarted = false;
+			}
+		} else {
+			token += character;
+			tokenStarted = true;
+		}
+	}
+	if (quote !== undefined) throw new Error("Process command has an unterminated quote");
+	if (tokenStarted) argv.push(token);
+	if (argv.length === 0) throw new Error("Process command cannot be empty");
+	return argv;
 }
 
 export class NodeV2ProcessRegistry implements V2ProcessRegistry {
@@ -463,7 +517,7 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		this.ptyLauncher = options.ptyLauncher;
 	}
 
-	start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
+	async start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
 		const child = spawnNodeProcess(request, this.ptyLauncher);
 		const state: NodeProcessState = {
 			processId: randomUUID(),
