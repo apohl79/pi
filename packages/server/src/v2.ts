@@ -90,6 +90,7 @@ const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 const MAX_REPLAY_EVENTS = 256;
 const MAX_REPLAY_BYTES = 16 * 1024 * 1024;
 const MAX_UINT32 = 0xffff_ffff;
+const MAX_AGENT_MESSAGE_EVENT_LENGTH = 4096;
 
 function validateBoundedOption(name: string, value: number | undefined, fallback: number, maximum: number): number {
 	const candidate = value ?? fallback;
@@ -142,6 +143,17 @@ function safeDiagnosticMessage(error: unknown): string {
 	return message;
 }
 
+function safeAgentMessage(message: string): string {
+	const normalized = message.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+	const redacted = normalized
+		.replace(/bearer\s+\S+/gi, "Bearer [redacted]")
+		.replace(/((?:api[_-]?key|token|secret|password)\s*[:=]\s*)\S+/gi, "$1[redacted]")
+		.replace(/\b(?:sk|pk|rk)-[a-z0-9_-]{8,}/gi, "[redacted]");
+	return redacted.length > MAX_AGENT_MESSAGE_EVENT_LENGTH
+		? `${redacted.slice(0, MAX_AGENT_MESSAGE_EVENT_LENGTH - 1)}…`
+		: redacted;
+}
+
 function referenceFrom(command: CommandV2, payload: Record<string, unknown>): string {
 	const reference = payload.reference ?? command.operationId;
 	if (typeof reference !== "string" || reference.length === 0) throw new Error("file reference is required");
@@ -169,6 +181,8 @@ export class PiServerV2 {
 	private readonly controls = new Map<string, string>();
 	private readonly runtimes = new Set<PiSessionRuntimeV2>();
 	private readonly eventHistory = new Map<string, EventEnvelopeV2[]>();
+	/** Serializes event reservation per session so concurrent broadcasts cannot reuse cursors. */
+	private readonly broadcastTails = new Map<string, Promise<void>>();
 	private readonly operations = new Map<string, OperationRecordV2>();
 	private readonly processSessions = new Map<string, string>();
 	private readonly agentSessions = new Map<string, string>();
@@ -772,7 +786,7 @@ export class PiServerV2 {
 		await this.sendResponse(state, id, { command: command.command, agentId });
 		const sessionId = (await this.agents.getSnapshot(agentId)).sessionId;
 		const runtime = state.sessions.get(sessionId);
-		if (runtime) await this.broadcastEvent(sessionId, runtime, { agentId, message }, undefined, "agent_message");
+		if (runtime) await this.broadcastEvent(sessionId, runtime, { agentId, message: safeAgentMessage(message) }, undefined, "agent_message");
 	}
 
 	private async followUpAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
@@ -1365,6 +1379,26 @@ export class PiServerV2 {
 	}
 
 	private async broadcastEvent(
+		sessionId: string,
+		runtime: PiSessionRuntimeV2,
+		payload: Record<string, unknown>,
+		operationId: string | undefined,
+		eventName: EventEnvelopeV2["event"],
+		sequence?: { eventSeq: number; revision: number },
+	): Promise<void> {
+		const previous = this.broadcastTails.get(sessionId) ?? Promise.resolve();
+		const current = previous.catch(() => undefined).then(() =>
+			this.broadcastEventInternal(sessionId, runtime, payload, operationId, eventName, sequence),
+		);
+		this.broadcastTails.set(sessionId, current);
+		try {
+			await current;
+		} finally {
+			if (this.broadcastTails.get(sessionId) === current) this.broadcastTails.delete(sessionId);
+		}
+	}
+
+	private async broadcastEventInternal(
 		sessionId: string,
 		runtime: PiSessionRuntimeV2,
 		payload: Record<string, unknown>,
