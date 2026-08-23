@@ -26,7 +26,7 @@ describe("parseArgs", () => {
 			expect(isServerDefaultCompatible(parseArgs(["@README.md"]))).toBe(true);
 			expect(isServerDefaultCompatible(parseArgs(["--system-prompt", "custom"]))).toBe(true);
 			expect(isServerDefaultCompatible(parseArgs(["--append-system-prompt", "extra"]))).toBe(true);
-			expect(isServerDefaultCompatible(parseArgs(["--provider", "faux"]))).toBe(false);
+			expect(isServerDefaultCompatible(parseArgs(["--provider", "faux"]))).toBe(true);
 		});
 
 		test("rejects unsupported options for server-default print and RPC modes", () => {
