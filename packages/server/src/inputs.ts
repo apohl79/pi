@@ -174,6 +174,7 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 				if (state.request.status === "pending") {
 					state.request = { ...state.request, status: "expired", answers: {} };
 					this.resolveWaiters(state);
+					this.notify(state.request);
 				}
 			}, autoResolutionMs);
 			state.timer.unref();
@@ -266,6 +267,7 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 			if (state.request.status === "pending") {
 				state.request = { ...state.request, status: "expired", answers: {} };
 				this.resolveWaiters(state);
+				this.notify(state.request);
 			}
 		}, delay);
 		state.timer.unref();
@@ -299,6 +301,7 @@ export class JsonlV2InputRegistry implements V2InputRegistry {
 
 	constructor(path: string) {
 		this.path = path;
+		this.memory.onChange?.((request) => this.notify(request));
 		this.loaded = this.load();
 	}
 
@@ -337,9 +340,6 @@ export class JsonlV2InputRegistry implements V2InputRegistry {
 		return this.mutate(async () => {
 			const next = respondV2InputRequest(await this.memory.read(requestId), answers);
 			return { durable: next, commit: () => this.memory.respond(requestId, answers) };
-		}).then((request) => {
-			this.notify(request);
-			return request;
 		});
 	}
 
@@ -348,9 +348,6 @@ export class JsonlV2InputRegistry implements V2InputRegistry {
 		return this.mutate(async () => {
 			const next = cancelV2InputRequest(await this.memory.read(requestId));
 			return { durable: next, commit: () => this.memory.cancel(requestId) };
-		}).then((request) => {
-			this.notify(request);
-			return request;
 		});
 	}
 
