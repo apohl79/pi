@@ -6,6 +6,9 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/abort",
 	"/detach",
 	"/follow-up",
+	"/goal",
+	"/goal-pause",
+	"/goal-resume",
 	"/model",
 	"/release-control",
 	"/resume",
@@ -18,6 +21,9 @@ export type RemoteV2Command =
 	| { readonly name: "abort" }
 	| { readonly name: "detach" }
 	| { readonly name: "follow-up"; readonly text: string }
+	| { readonly name: "goal"; readonly objective: string }
+	| { readonly name: "goal-pause" }
+	| { readonly name: "goal-resume" }
 	| { readonly name: "model"; readonly provider: string; readonly id: string }
 	| { readonly name: "release-control" }
 	| { readonly name: "resume" }
@@ -47,6 +53,15 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		const text = arguments_.join(" ").trim();
 		if (!text) throw new Error("/follow-up requires text");
 		return { name: "follow-up", text };
+	}
+	if (name === "/goal") {
+		const objective = arguments_.join(" ").trim();
+		if (!objective) throw new Error("/goal requires objective");
+		return { name: "goal", objective };
+	}
+	if (name === "/goal-pause" || name === "/goal-resume") {
+		if (arguments_.length > 0) throw new Error(`${name} does not accept arguments`);
+		return { name: name.slice(1) as "goal-pause" | "goal-resume" };
 	}
 	if (name === "/model") {
 		if (arguments_.length !== 1) throw new Error("/model requires <provider/model>");
@@ -103,6 +118,12 @@ export class RemoteV2InteractiveAttachment implements Component {
 				return { kind: "detached" };
 			case "follow-up":
 				return operation(await this.session.followUp(command.text));
+			case "goal":
+				return operation(await this.session.createGoal(command.objective));
+			case "goal-pause":
+				return operation(await this.session.pauseGoal());
+			case "goal-resume":
+				return operation(await this.session.resumeGoal());
 			case "model":
 				return operation(await this.session.setModel({ provider: command.provider, id: command.id }));
 			case "release-control":
