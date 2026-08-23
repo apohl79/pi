@@ -9,6 +9,8 @@ export interface ServerRuntimeOperation {
 	readonly model?: ServerRuntimeModel;
 }
 
+export type ServerRuntimeExtensionScope = "server" | "client" | "both";
+
 export interface ServerRuntimeExtensionState {
 	get<T>(key: string): Promise<T | undefined>;
 	set(key: string, value: unknown): Promise<void>;
@@ -17,11 +19,14 @@ export interface ServerRuntimeExtensionState {
 export interface ServerRuntimeExtensionContext {
 	readonly operation: ServerRuntimeOperation;
 	readonly model: ServerRuntimeModel;
+	readonly capabilities: readonly string[];
 	readonly state: ServerRuntimeExtensionState;
 }
 
 export interface ServerRuntimeExtension {
 	readonly id: string;
+	readonly scope?: ServerRuntimeExtensionScope;
+	readonly capabilities?: readonly string[];
 	onOperationAccepted?(context: ServerRuntimeExtensionContext): void | Promise<void>;
 	onOperationTerminal?(context: ServerRuntimeExtensionContext & { readonly outcome: string }): void | Promise<void>;
 }
@@ -42,6 +47,7 @@ export class ServerRuntimeExtensionHost {
 
 	public async register(extension: ServerRuntimeExtension): Promise<void> {
 		if (this.extensions.has(extension.id)) throw new Error(`Extension ${extension.id} is already registered`);
+		if (extension.scope === "client") throw new Error("client-only extensions cannot register with the server host");
 		this.extensions.set(extension.id, extension);
 	}
 
@@ -73,6 +79,7 @@ export class ServerRuntimeExtensionHost {
 		return {
 			operation,
 			model: operation.model ?? this.options.resolveModel(),
+			capabilities: extensionCapabilities(this.extensions.get(extensionId)),
 			state: {
 				get: async <T>(key: string) => this.getState<T>(extensionId, key),
 				set: async (key: string, value: unknown) => {
@@ -81,4 +88,9 @@ export class ServerRuntimeExtensionHost {
 			},
 		};
 	}
+}
+
+function extensionCapabilities(extension: ServerRuntimeExtension | undefined): readonly string[] {
+	if (extension?.capabilities === undefined) return [];
+	return extension.capabilities.map((capability) => capability.trim()).filter((capability) => capability.length > 0);
 }
