@@ -33,6 +33,7 @@
 			"@earendil-works/pi-model-instructions": ["./packages/model-instructions/src/index.ts"],
 			"@earendil-works/pi-session-naming": ["./packages/session-naming/src/index.ts"],
 			"@earendil-works/pi-server-extension-api": ["./packages/server-extension-api/src/index.ts"],
+			"@earendil-works/pi-web-tools": ["./packages/web-tools/src/index.ts"],
 			"typebox": ["./node_modules/typebox"],
 			"@earendil-works/pi-tui": ["./packages/tui/src/index.ts"],
 			"@earendil-works/pi-tui/*": ["./packages/tui/src/*"],
