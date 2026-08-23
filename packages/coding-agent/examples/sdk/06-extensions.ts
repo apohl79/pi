@@ -14,11 +14,13 @@
  */
 
 import {
-	createAgentSession,
+	createDirectAgentSession,
 	DefaultResourceLoader,
 	getAgentDir,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
+
+const createAgentSession = createDirectAgentSession;
 
 // Extensions are discovered automatically from standard locations.
 // You can also add paths via settings.json or DefaultResourceLoader options.

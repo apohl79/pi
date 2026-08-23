@@ -462,16 +462,17 @@ See [docs/packages.md](docs/packages.md).
 ### SDK
 
 ```typescript
-import { createAgentSession, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
+import { createAgentSession } from "@earendil-works/pi-coding-agent";
 
-const modelRuntime = await ModelRuntime.create();
-const { session } = await createAgentSession({
-  sessionManager: SessionManager.inMemory(),
-  modelRuntime,
-});
-
-await session.prompt("What files are in the current directory?");
+const handle = await createAgentSession({ cwd: process.cwd() });
+await handle.session.submit("What files are in the current directory?");
+await handle.close();
 ```
+
+The package-default `createAgentSession()` is server-owned and returns a durable
+remote session handle. Use `createDirectAgentSession()` for the direct runtime
+when an application explicitly needs local-only SDK services such as an
+in-memory `SessionManager`, custom resource loader, or direct extension host.
 
 For advanced multi-session runtime replacement, use `createAgentSessionRuntime()` and `AgentSessionRuntime`.
 

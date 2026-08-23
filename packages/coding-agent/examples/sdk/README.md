@@ -1,6 +1,7 @@
 # SDK Examples
 
-Programmatic usage of pi-coding-agent via `createAgentSession()` and `createAgentSessionRuntime()`.
+Programmatic usage of pi-coding-agent via the server-owned `createAgentSession()`
+and the direct-runtime `createDirectAgentSession()` escape hatch.
 
 The runtime example shows how to build a recreate function that closes over process-global fixed inputs and recreates cwd-bound services and sessions as the active session cwd changes.
 
@@ -34,7 +35,7 @@ npx tsx examples/sdk/01-minimal.ts
 ```typescript
 import { getModel } from "@earendil-works/pi-ai";
 import {
-  createAgentSession,
+  createDirectAgentSession,
   DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
@@ -44,24 +45,24 @@ import {
 const modelRuntime = await ModelRuntime.create();
 
 // Minimal
-const { session } = await createAgentSession({ modelRuntime });
+const { session } = await createDirectAgentSession({ modelRuntime });
 
 // Custom model
 const model = getModel("anthropic", "claude-opus-4-5");
-const { session } = await createAgentSession({ model, thinkingLevel: "high", modelRuntime });
+const { session } = await createDirectAgentSession({ model, thinkingLevel: "high", modelRuntime });
 
 // Modify prompt
 const loader = new DefaultResourceLoader({
   systemPromptOverride: (base) => `${base}\n\nBe concise.`,
 });
 await loader.reload();
-const { session } = await createAgentSession({ resourceLoader: loader, modelRuntime });
+const { session } = await createDirectAgentSession({ resourceLoader: loader, modelRuntime });
 
 // Read-only
-const { session } = await createAgentSession({ tools: ["read", "grep", "find", "ls"], modelRuntime });
+const { session } = await createDirectAgentSession({ tools: ["read", "grep", "find", "ls"], modelRuntime });
 
 // In-memory
-const { session } = await createAgentSession({
+const { session } = await createDirectAgentSession({
   sessionManager: SessionManager.inMemory(),
   modelRuntime,
 });
@@ -82,7 +83,7 @@ const resourceLoader = new DefaultResourceLoader({
 });
 await resourceLoader.reload();
 
-const { session } = await createAgentSession({
+const { session } = await createDirectAgentSession({
   model,
   modelRuntime: customRuntime,
   resourceLoader,

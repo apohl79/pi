@@ -6,13 +6,15 @@
  */
 
 import {
-	createAgentSession,
+	createDirectAgentSession,
 	createSyntheticSourceInfo,
 	DefaultResourceLoader,
 	getAgentDir,
 	SessionManager,
 	type Skill,
 } from "@earendil-works/pi-coding-agent";
+
+const createAgentSession = createDirectAgentSession;
 
 // Or define custom skills inline
 const customSkill: Skill = {

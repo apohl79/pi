@@ -41,9 +41,11 @@ export {
 	type RemoteV2StatuslinePayloadOptions,
 	type RemoteV2StatuslineSource,
 } from "./client/remote-v2-view.ts";
+/** The package-default SDK entry point is server-owned. */
 export {
 	type CreateServerAgentSessionOptions,
 	createServerAgentSession,
+	createServerAgentSession as createAgentSession,
 	openServerAgentSession,
 	type ServerAgentSession,
 } from "./client/server-sdk.ts";
@@ -286,7 +288,7 @@ export {
 	type CreateAgentSessionRuntimeResult,
 	type CreateAgentSessionServicesOptions,
 	// Factory
-	createAgentSession,
+	createAgentSession as createDirectAgentSession,
 	createAgentSessionFromServices,
 	createAgentSessionRuntime,
 	createAgentSessionServices,
