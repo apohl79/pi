@@ -24,6 +24,7 @@ import {
 	type DiagnosticBundleProjections,
 	type DiagnosticCapsule,
 	type DiagnosticContentStore,
+	type DiagnosticIntegrityCheck,
 	type DiagnosticIntegrityProvider,
 	type DiagnosticRuntimeManifest,
 	type DiagnosticValue,
@@ -1481,11 +1482,7 @@ export class PiServerV2 {
 				];
 			}
 		}
-		const checks = [
-			{ name: "recorder", ok: true },
-			{ name: "sequence", ok: sequenceOk },
-			...integrityChecks,
-		];
+		const checks = [{ name: "recorder", ok: true }, { name: "sequence", ok: sequenceOk }, ...integrityChecks];
 		await this.sendResponse(state, id, {
 			command: command.command,
 			ok: checks.every((check) => check.ok),
