@@ -23,7 +23,7 @@ import type {
 	SessionSnapshotV2,
 	TranscriptItem,
 } from "@earendil-works/pi-protocol";
-import type { V2InputRegistry, V2UsageLedger } from "@earendil-works/pi-server";
+import type { ForensicRecorder, V2InputRegistry, V2UsageLedger } from "@earendil-works/pi-server";
 import type { ServerRuntimeExtensionHost } from "./extension-host.ts";
 
 const AGENT_COMPLETION = "agent_completion";
@@ -95,6 +95,7 @@ export interface CodingAgentV2SessionDefinition {
 	extensionHost?: ServerRuntimeExtensionHost;
 	inputs?: V2InputRegistry;
 	usage?: V2UsageLedger;
+	forensicRecorder?: ForensicRecorder;
 	instructionProfile?: () => Promise<InstructionProfileSummary | undefined>;
 	pluginSetHash?: () => Promise<string>;
 	agents?: () => Promise<readonly AgentSummary[]>;
@@ -442,6 +443,15 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				version: 1,
 				entryId: completion.entryId,
 			});
+		for (const completion of completions)
+			void this.definition.forensicRecorder
+				?.record({
+					kind: "agent_completion_delivered",
+					sessionId: this.definition.metadata.id,
+					agentId: completion.agentId,
+					payload: { path: completion.path, state: completion.state, taskName: completion.taskName },
+				})
+				.catch(() => undefined);
 	}
 
 	private async ensureAutoNameLoaded(): Promise<void> {

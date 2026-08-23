@@ -373,6 +373,7 @@ export async function createCodingAgentV2SqliteService(
 			...(goalContinuation === undefined ? {} : { goalContinuation }),
 			...(inputRegistry === undefined ? {} : { inputs: inputRegistry }),
 			...(usageLedger === undefined ? {} : { usage: usageLedger }),
+			...(options.diagnostics === undefined ? {} : { forensicRecorder: options.diagnostics }),
 		};
 	};
 	const store: CodingAgentV2SessionStore = {
