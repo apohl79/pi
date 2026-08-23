@@ -12,6 +12,7 @@ const AGENT_COMPLETION = "agent_completion";
 interface PersistedAgentState {
 	readonly version: 1;
 	readonly state?: AgentSummary["state"];
+	readonly role?: string;
 	readonly inbox: readonly string[];
 	readonly followUps: readonly string[];
 }
@@ -20,6 +21,11 @@ function isPersistedAgentState(value: unknown): value is PersistedAgentState {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 	const state = value as Record<string, unknown>;
 	if (state.version !== 1 || !Array.isArray(state.inbox) || !Array.isArray(state.followUps)) return false;
+	if (
+		state.role !== undefined &&
+		(typeof state.role !== "string" || state.role.length === 0 || state.role.length > 128)
+	)
+		return false;
 	if (
 		state.state !== undefined &&
 		!(["idle", "running", "awaitingInput", "complete", "failed", "interrupted"] as const).includes(
@@ -46,6 +52,7 @@ interface ChildAgent {
 	readonly summary: AgentSummary;
 	readonly parentSessionId: string;
 	readonly childSessionId: string;
+	readonly role?: string;
 	readonly runtime: CodingAgentV2Runtime;
 	state: AgentSummary["state"];
 	inbox: string[];
@@ -117,6 +124,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			summary,
 			parentSessionId: request.sessionId,
 			childSessionId: created.sessionId,
+			...(request.role === undefined ? {} : { role: request.role }),
 			runtime: created.runtime,
 			state: "running",
 			inbox: [],
@@ -129,6 +137,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		this.recordDiagnostic("agent_spawned", agent, undefined, {
 			path: summary.path,
 			taskName: summary.taskName,
+			...(agent.role === undefined ? {} : { role: agent.role }),
 			model: `${summary.model.provider}/${summary.model.id}`,
 		});
 		await this.persist(agent);
@@ -291,6 +300,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				path: agent.summary.path,
 				taskName: agent.summary.taskName,
 				state: agent.state,
+				...(agent.role === undefined ? {} : { role: agent.role }),
 				model: agent.summary.model,
 			});
 		} catch (error) {
@@ -312,6 +322,8 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		if (!/^[A-Za-z0-9._-]+$/.test(request.taskName))
 			throw new Error("Agent taskName contains unsupported characters");
 		if (request.taskMessage.trim().length === 0) throw new Error("Agent taskMessage must not be empty");
+		if (request.role !== undefined && (request.role.trim().length === 0 || request.role.length > 128))
+			throw new Error("Agent role must be 1-128 characters");
 	}
 
 	private async resolveModel(request: V2AgentRequest): Promise<{ provider: string; id: string }> {
@@ -386,6 +398,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				state: summary.state,
 				inbox: persisted?.inbox.slice() ?? [],
 				followUps: persisted?.followUps.slice() ?? [],
+				...(persisted?.role === undefined ? {} : { role: persisted.role }),
 				waiters: [],
 				persistence: Promise.resolve(),
 				completionQueued: false,
@@ -399,6 +412,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		const state: PersistedAgentState = {
 			version: 1,
 			state: agent.state,
+			...(agent.role === undefined ? {} : { role: agent.role }),
 			inbox: agent.inbox.slice(),
 			followUps: agent.followUps.slice(),
 		};
