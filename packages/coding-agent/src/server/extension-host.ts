@@ -1,4 +1,5 @@
 import type { AgentMessage, SamplingInputContext } from "@earendil-works/pi-agent-core";
+import type { PiSessionRuntimeEventV2 } from "@earendil-works/pi-server";
 
 const DEFAULT_MAX_SAMPLING_MESSAGES = 128;
 const DEFAULT_MAX_SAMPLING_CHARACTERS = 32_000;
@@ -32,9 +33,11 @@ export interface ServerRuntimeExtension {
 	readonly id: string;
 	readonly scope?: ServerRuntimeExtensionScope;
 	readonly capabilities?: readonly string[];
+	readonly events?: readonly PiSessionRuntimeEventV2["event"][];
 	onOperationAccepted?(context: ServerRuntimeExtensionContext): void | Promise<void>;
 	onOperationTerminal?(context: ServerRuntimeExtensionContext & { readonly outcome: string }): void | Promise<void>;
 	contributeSamplingInput?(context: SamplingInputContext): AgentMessage[] | Promise<AgentMessage[]>;
+	onRuntimeEvent?(event: PiSessionRuntimeEventV2): void | Promise<void>;
 }
 
 export interface ServerRuntimeExtensionHookResult {
@@ -112,6 +115,15 @@ export class ServerRuntimeExtensionHost {
 			}
 		}
 		return { messages, outcomes };
+	}
+
+	public async dispatchRuntimeEvent(
+		event: PiSessionRuntimeEventV2,
+	): Promise<readonly ServerRuntimeExtensionHookResult[]> {
+		return this.dispatchHook((extension) => {
+			if (extension.events !== undefined && !extension.events.includes(event.event)) return;
+			return extension.onRuntimeEvent?.({ ...event, payload: { ...event.payload } });
+		});
 	}
 
 	public async getState<T>(extensionId: string, key: string): Promise<T | undefined> {
