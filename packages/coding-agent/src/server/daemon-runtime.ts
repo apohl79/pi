@@ -6,6 +6,7 @@ import {
 	InMemoryForensicRecorder,
 	InMemoryV2PlanRegistry,
 	JsonlForensicRecorder,
+	JsonlV2OperationStore,
 	JsonlV2PlanRegistry,
 	JsonV2PluginRegistry,
 	LocalDiagnosticCapsuleStore,
@@ -17,6 +18,7 @@ import {
 	type V2FileReferenceService,
 	type V2ImageService,
 	type V2InputRegistry,
+	type V2OperationStore,
 	type V2PluginRegistry,
 	type V2ProcessRegistry,
 	type V2WebService,
@@ -46,6 +48,8 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	files?: V2FileReferenceService;
 	pluginRegistry?: V2PluginRegistry;
 	apps?: V2AppRegistry;
+	operationStore?: V2OperationStore;
+	operationStorePath?: string;
 	diagnostics?: ServerDaemonOptions["diagnostics"];
 	createServer?: ServerDaemonOptions["createServer"];
 	write(value: unknown): void;
@@ -112,6 +116,7 @@ export async function createCodingAgentDaemonRuntime(
 		...(options.files === undefined ? {} : { files: options.files }),
 		...(options.pluginRegistry === undefined ? {} : { plugins: options.pluginRegistry }),
 		...(options.apps === undefined ? {} : { apps: options.apps }),
+		...(options.operationStore === undefined ? {} : { operationStore: options.operationStore }),
 		plans,
 		diagnostics,
 		...(diagnosticContent === undefined ? {} : { diagnosticContent }),
@@ -165,6 +170,9 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 				options.files ??
 				new LocalV2FileReferenceService({ projectRoot: options.cwd, cwd: options.cwd, allowAbsolute: true }),
 			pluginRegistry: options.pluginRegistry ?? new JsonV2PluginRegistry(join(options.agentDir, "plugins.json")),
+			operationStore:
+				options.operationStore ??
+				new JsonlV2OperationStore(options.operationStorePath ?? join(options.agentDir, "operations.jsonl")),
 			planStorePath: options.planStorePath ?? join(options.agentDir, "plans.jsonl"),
 			diagnosticStorePath: options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"),
 			diagnosticKeyPath: options.diagnosticKeyPath ?? join(options.agentDir, "diagnostic-keys.json"),
