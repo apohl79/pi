@@ -417,4 +417,62 @@ describe("coding-agent SQLite v2 service", () => {
 			await env.cleanup();
 		}
 	});
+
+	test("injects server-extension sampling without growing the transcript", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-v2-extension-sampling-"));
+		directories.push(directory);
+		const env = new NodeExecutionEnv({ cwd: directory });
+		const repository = new SqliteSessionRepository({
+			env,
+			sqlite: createNodeSqliteFactory(),
+			databasePath: "sessions.sqlite",
+		});
+		const models = createModels();
+		const observedRequests: string[][] = [];
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-extension-sampling-faux",
+			models: [{ id: "model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			(context) => {
+				observedRequests.push(
+					context.messages.flatMap((message) =>
+						message.role === "user" && typeof message.content === "string" ? [message.content] : [],
+					),
+				);
+				return fauxAssistantMessage("completed");
+			},
+		]);
+		const extension: ServerRuntimeExtension = {
+			id: "request-reminder",
+			contributeSamplingInput: () => [{ role: "user", content: "server reminder", timestamp: 0 }],
+		};
+		try {
+			const service = await createCodingAgentV2SqliteService({
+				repository,
+				models,
+				env,
+				model: faux.getModel(),
+				serverExtensions: [extension],
+				harness: { tools: [], activeToolNames: [] },
+			});
+			const created = await service.createSession!({ id: "extension-sampling-session", cwd: directory });
+			await created.runtime.run("extension-sampling-turn", {
+				command: "turn/start",
+				sessionId: created.sessionId,
+				payload: { text: "work" },
+			});
+
+			expect(observedRequests[0]).toContain("server reminder");
+			expect(
+				(await created.runtime.snapshot()).transcript.some((item) =>
+					JSON.stringify(item).includes("server reminder"),
+				),
+			).toBe(false);
+		} finally {
+			await repository.close();
+			await env.cleanup();
+		}
+	});
 });
