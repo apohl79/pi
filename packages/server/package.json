@@ -49,6 +49,7 @@
 	"dependencies": {
 		"@earendil-works/pi-ai": "^0.84.2",
 		"@earendil-works/pi-diagnostics": "^0.84.2",
+		"@earendil-works/pi-file-references": "^0.84.2",
 		"@earendil-works/pi-web-tools": "^0.84.2",
 		"@earendil-works/pi-protocol": "^0.84.2"
 	},
