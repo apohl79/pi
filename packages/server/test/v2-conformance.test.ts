@@ -694,6 +694,34 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.close();
 	});
 
+	test("runs only the injected safe repair provider when requested", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-diagnostics-repair-"));
+		directories.push(directory);
+		let calls = 0;
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			repairSafe: async () => {
+				calls += 1;
+				return [{ name: "branch-cache", ok: true, details: { sessions: 2 } }];
+			},
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const ordinary = await client.request({ command: "diagnostics/doctor" });
+		expect(ordinary).toMatchObject({ ok: true, result: { command: "diagnostics/doctor" } });
+		expect(ordinary).not.toHaveProperty("result.repairSafe");
+		expect(calls).toBe(0);
+		const repaired = await client.request({ command: "diagnostics/doctor", payload: { repairSafe: true } });
+		expect(repaired).toMatchObject({
+			ok: true,
+			result: { repairSafe: true, repairs: [{ name: "branch-cache", ok: true, details: { sessions: 2 } }] },
+		});
+		expect(calls).toBe(1);
+		await client.close();
+	});
+
 	test("enables metadata diagnostics when no recorder is injected", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-diagnostics-default-"));
 		directories.push(directory);
