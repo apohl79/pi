@@ -350,6 +350,7 @@ describe("PiServer v2 operation acceptance", () => {
 		const client = connectInMemoryTestClientV2(server.accept.bind(server));
 		await client.hello();
 		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const deltaEvent = client.next((message) => message.type === "event" && message.event === "session_delta");
 		const accepted = await client.request({
 			command: "session/name/set",
 			sessionId: "session-1",
@@ -370,6 +371,10 @@ describe("PiServer v2 operation acceptance", () => {
 			(message) => message.type === "event" && message.event === "session_phase_changed",
 		);
 		expect(phaseEvent).toMatchObject({ event: "session_phase_changed", payload: { phase: "idle" } });
+		expect(await deltaEvent).toMatchObject({
+			event: "session_delta",
+			payload: { delta: { name: "Renamed session", nameRevision: 2, phase: "idle" } },
+		});
 	});
 
 	test("emits an operation-updated event when execution starts", async () => {

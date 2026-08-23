@@ -1159,6 +1159,12 @@ export class RemoteV2Session {
 						? { status: "ready" }
 						: { status: "busy", operationId: operation.operationId, command: "turn/start" };
 			}
+		} else if (event.event === "session_delta" && this.#snapshot) {
+			const delta = asRecord(event.payload)?.delta;
+			if (delta !== undefined && delta !== null) {
+				const record = asRecord(delta);
+				if (record !== undefined) this.#snapshot = applySessionDelta(this.#snapshot, record);
+			}
 		} else if (event.event === "session_name_updated" && this.#snapshot) {
 			const payload = asRecord(event.payload);
 			const nameRevision = payload?.nameRevision;
@@ -1320,6 +1326,51 @@ function isInstructionProfile(value: unknown): value is NonNullable<ProtocolSnap
 
 function isSnapshot(value: unknown): value is ProtocolSnapshot {
 	return Check(SessionSnapshotV2Schema, value);
+}
+
+function applySessionDelta(snapshot: ProtocolSnapshot, delta: Record<string, unknown>): ProtocolSnapshot {
+	if (
+		("name" in delta && delta.name !== null && typeof delta.name !== "string") ||
+		("nameSource" in delta &&
+			delta.nameSource !== null &&
+			delta.nameSource !== "explicit" &&
+			delta.nameSource !== "generated" &&
+			delta.nameSource !== "derived") ||
+		("nameRevision" in delta && !isSafeNonNegativeInteger(delta.nameRevision)) ||
+		("phase" in delta && !isSessionPhase(delta.phase)) ||
+		("usage" in delta && !isUsageAggregate(delta.usage)) ||
+		("goal" in delta && delta.goal !== null && !isGoalSnapshot(delta.goal)) ||
+		("compactionPolicy" in delta && !isCompactionPolicy(delta.compactionPolicy)) ||
+		("instructionProfile" in delta &&
+			delta.instructionProfile !== null &&
+			!isInstructionProfile(delta.instructionProfile))
+	)
+		return snapshot;
+	const next = { ...snapshot };
+	if ("name" in delta) {
+		if (delta.name === null) delete next.name;
+		else if (typeof delta.name === "string") next.name = delta.name;
+	}
+	if ("nameSource" in delta) {
+		if (delta.nameSource === null) delete next.nameSource;
+		else if (delta.nameSource === "explicit" || delta.nameSource === "generated" || delta.nameSource === "derived")
+			next.nameSource = delta.nameSource;
+	}
+	if ("nameRevision" in delta && isSafeNonNegativeInteger(delta.nameRevision)) next.nameRevision = delta.nameRevision;
+	if ("phase" in delta && isSessionPhase(delta.phase)) next.phase = delta.phase;
+	if ("usage" in delta && isUsageAggregate(delta.usage)) next.usage = structuredClone(delta.usage);
+	if ("goal" in delta) {
+		if (delta.goal === null) delete next.goal;
+		else if (isGoalSnapshot(delta.goal)) next.goal = structuredClone(delta.goal);
+	}
+	if ("compactionPolicy" in delta && isCompactionPolicy(delta.compactionPolicy))
+		next.compactionPolicy = structuredClone(delta.compactionPolicy);
+	if ("instructionProfile" in delta) {
+		if (delta.instructionProfile === null) delete next.instructionProfile;
+		else if (isInstructionProfile(delta.instructionProfile))
+			next.instructionProfile = structuredClone(delta.instructionProfile);
+	}
+	return next;
 }
 
 function isInputRequestProjection(value: unknown): value is { readonly id: string; readonly status: string } {
