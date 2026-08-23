@@ -632,6 +632,17 @@ export class AgentHarness implements AgentLane {
 		return this.samplingInputFactory ? await this.samplingInputFactory() : this.samplingInput;
 	}
 
+	private async appendOperationStarted(record: NewRecord<OperationStartedRecord>): Promise<void> {
+		try {
+			await this.durableSession.appendRecord(record);
+		} catch (error) {
+			const open = await this.durableSession.findOpenOperations(this.name, { limit: 2 });
+			if (!open.some((operation) => operation.id === record.id)) throw error;
+			// The append may have committed before the backend reported an error.
+			// Continue only when this exact operation is durably visible.
+		}
+	}
+
 	private async estimateProviderRequestOverhead(
 		messages: readonly AgentMessage[] = [],
 		samplingInput?: SamplingInput,
@@ -703,7 +714,7 @@ export class AgentHarness implements AgentLane {
 				})),
 			},
 		};
-		await this.durableSession.appendRecord(started);
+		await this.appendOperationStarted(started);
 		this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
 		this.watchBus.emit({ type: "run_start", lane: this.name, runId });
 		try {
@@ -882,26 +893,17 @@ export class AgentHarness implements AgentLane {
 		const runId = this.durableSession.idGenerator.next();
 		const resultEntryId = this.durableSession.idGenerator.next();
 		await this.runLifecycleHook("before_compaction", { operationId: runId, model: this.model });
-		try {
-			await this.durableSession.appendRecord({
-				type: "operation_started",
-				id: runId,
-				lane: this.name,
-				sourceLeafId: await this.session.getLeafId(),
-				intent: {
-					kind: "compaction",
-					resultEntryId,
-					...(_options?.customInstructions === undefined
-						? {}
-						: { customInstructions: _options.customInstructions }),
-				},
-			});
-		} catch (error) {
-			const raced = await this.durableSession.findOpenOperations(this.name, { limit: 1 });
-			if (raced.length === 0) throw error;
-			// The append may have committed before the backend reported an error.
-			// Continue when our own operation is durably visible.
-		}
+		await this.appendOperationStarted({
+			type: "operation_started",
+			id: runId,
+			lane: this.name,
+			sourceLeafId: await this.session.getLeafId(),
+			intent: {
+				kind: "compaction",
+				resultEntryId,
+				...(_options?.customInstructions === undefined ? {} : { customInstructions: _options.customInstructions }),
+			},
+		});
 		try {
 			await this.park({ kind: "stream_assistant", step: "compaction", attempt: 1 });
 			const result = await compact(
@@ -1008,7 +1010,7 @@ export class AgentHarness implements AgentLane {
 		const runId = this.durableSession.idGenerator.next();
 		const summaryEntryId = summarize ? this.durableSession.idGenerator.next() : undefined;
 		await this.runLifecycleHook("before_navigation", { operationId: runId, targetId, summarize });
-		await this.durableSession.appendRecord({
+		await this.appendOperationStarted({
 			type: "operation_started",
 			id: runId,
 			lane: this.name,

@@ -15,12 +15,12 @@ function createSession(id = "session"): Session {
 	return new Session(new InMemorySessionStorage({ id, createdAt: 1 }));
 }
 
-class ThrowAfterCompactionStartStorage extends InMemorySessionStorage {
+class ThrowAfterOperationStartStorage extends InMemorySessionStorage {
 	private injected = false;
 
 	override async appendRecord<TRecord extends LaneRecord>(record: NewRecord<TRecord>): Promise<TRecord> {
 		const appended = await super.appendRecord(record);
-		if (!this.injected && record.type === "operation_started" && record.intent.kind === "compaction") {
+		if (!this.injected && record.type === "operation_started") {
 			this.injected = true;
 			throw new Error("compaction admission response lost after commit");
 		}
@@ -177,20 +177,37 @@ describe("AgentHarness v2 scaffold", () => {
 		});
 		models.setProvider(faux.provider);
 		faux.setResponses([fauxAssistantMessage("first response")]);
-		const session = new Session(new ThrowAfterCompactionStartStorage({ id: "compaction-admission", createdAt: 1 }));
+		const session = new Session(new ThrowAfterOperationStartStorage({ id: "compaction-admission", createdAt: 1 }));
 		const { harness } = await AgentHarness.create({
 			session,
 			models,
 			model: faux.getModel(),
 			compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
 		});
-		await harness.prompt("create durable history");
+		expect(await harness.prompt("create durable history")).toMatchObject({ ok: true, value: { kind: "completed" } });
 		faux.setResponses([fauxAssistantMessage("durable summary")]);
 
 		const result = await harness.compact();
 
 		expect(result).toMatchObject({ ok: true, value: { kind: "completed", entry: { type: "compaction" } } });
 		expect((await session.findRecords({ type: "operation_finished" })).at(-1)?.outcome).toBe("completed");
+		await harness.close();
+	});
+
+	it("recovers navigation admission when the start record was already committed", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-navigation-admission-faux",
+			models: [{ id: "harness-navigation-admission-model", contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const session = new Session(new ThrowAfterOperationStartStorage({ id: "navigation-admission", createdAt: 1 }));
+		await session.appendMessage(userMessage);
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+
+		const result = await harness.navigateTree(null);
+
+		expect(result).toMatchObject({ ok: true, value: { kind: "completed", newLeafId: null } });
 		await harness.close();
 	});
 
