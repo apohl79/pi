@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { ServerDaemon, type ServerDaemonServer } from "../src/daemon.ts";
 import { InMemoryForensicRecorder } from "../src/diagnostics.ts";
@@ -118,5 +121,34 @@ describe("ServerDaemon", () => {
 		const identities = new Set((await diagnostics.read()).map((event) => event.daemonInstanceId));
 		expect(identities).toHaveLength(2);
 		expect([...identities].every((identity) => typeof identity === "string" && identity.length > 0)).toBe(true);
+	});
+
+	test("persists clean shutdown and diagnoses an unclean previous generation", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-marker-"));
+		try {
+			const markerPath = join(directory, "daemon-state.json");
+			await writeFile(
+				markerPath,
+				JSON.stringify({ schemaVersion: 1, daemonInstanceId: "previous", state: "running", timestamp: 1 }),
+			);
+			const diagnostics = new InMemoryForensicRecorder();
+			const daemon = new ServerDaemon({
+				service: service(),
+				socketPath: join(directory, "daemon.sock"),
+				lifecycleMarkerPath: markerPath,
+				diagnostics,
+				createServer: () =>
+					fakeServer(
+						async () => {},
+						async () => {},
+					),
+			});
+			await daemon.start();
+			expect((await diagnostics.read()).map((event) => event.kind)).toContain("daemon_unclean_shutdown");
+			await daemon.stop();
+			expect(JSON.parse(await readFile(markerPath, "utf8"))).toMatchObject({ state: "clean" });
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 });

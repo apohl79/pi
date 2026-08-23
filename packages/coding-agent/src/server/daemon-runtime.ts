@@ -54,6 +54,7 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	diagnosticKeyPath?: string;
 	clientDiagnosticSpoolPath?: string;
 	clientInstanceId?: string;
+	lifecycleMarkerPath?: string;
 	integrity?: ServerDaemonOptions["integrity"];
 	serverId?: string;
 	runtimeManifest?: ServerDaemonOptions["runtimeManifest"];
@@ -140,6 +141,7 @@ export async function createCodingAgentDaemonRuntime(
 		service,
 		socketPath: options.socketPath,
 		...(options.serverId === undefined ? {} : { serverId: options.serverId }),
+		...(options.lifecycleMarkerPath === undefined ? {} : { lifecycleMarkerPath: options.lifecycleMarkerPath }),
 		...(options.runtimeManifest === undefined ? {} : { runtimeManifest: options.runtimeManifest }),
 		...(options.usage === undefined ? {} : { usage: options.usage }),
 		...(agents === undefined ? {} : { agents }),
@@ -383,6 +385,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			diagnosticKeyPath: options.diagnosticKeyPath ?? join(options.agentDir, "diagnostic-keys.json"),
 			clientDiagnosticSpoolPath:
 				options.clientDiagnosticSpoolPath ?? join(options.agentDir, "client-diagnostics.jsonl"),
+			lifecycleMarkerPath: join(options.agentDir, "daemon-state.json"),
 		});
 		return {
 			...runtime,
