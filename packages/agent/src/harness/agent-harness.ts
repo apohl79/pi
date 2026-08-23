@@ -1711,6 +1711,17 @@ export class AgentHarness implements AgentLane {
 			this.activeRun.controller.abort();
 			return ResultValue.ok({ runId: openRun.id, ...recalled });
 		}
+		const suspended = this.suspendedOperations.find((candidate) => candidate.id === openRun.id);
+		if (suspended?.deferred !== undefined) {
+			const model = this.models.getModel(suspended.deferred.provider, suspended.deferred.modelId);
+			if (model) {
+				try {
+					await this.models.cancelDeferred(model, suspended.deferred);
+				} catch {
+					// Provider cancellation is best effort; the durable abort owns the terminal outcome.
+				}
+			}
+		}
 		const finished: NewRecord<OperationFinishedRecord> = {
 			type: "operation_finished",
 			id: this.durableSession.idGenerator.next(),
