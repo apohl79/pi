@@ -54,7 +54,103 @@ const usage: Usage = {
 };
 
 describe("AgentHarness v2 scaffold", () => {
-	it("opens only record-free sessions before restore is implemented", async () => {
+	it("runs a deterministic prompt and persists its operation lifecycle", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-faux",
+			models: [{ id: "harness-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("hello from faux")]);
+		const session = createSession("prompt");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+
+		const result = await harness.prompt("hello");
+
+		expect(result).toMatchObject({ ok: true, value: { kind: "completed" } });
+		if (!result.ok || result.value.kind !== "completed") throw new Error("Expected completed prompt");
+		expect(result.value.finalMessage.content).toEqual([{ type: "text", text: "hello from faux" }]);
+		expect((await session.findRecords({ type: "operation_started" })).length).toBe(1);
+		expect((await session.findRecords({ type: "operation_finished" })).map((record) => record.outcome)).toEqual([
+			"completed",
+		]);
+		const messages = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		expect(messages.filter((entry) => entry.type === "message").map((entry) => entry.message.role)).toEqual([
+			"user",
+			"assistant",
+		]);
+		await harness.close();
+	});
+
+	it("runs idle callbacks after the durable lane is idle", async () => {
+		const harness = await createHarness();
+		let callbackCalled = false;
+		await harness.waitForIdle();
+		await harness.runWhenIdle(() => {
+			callbackCalled = true;
+		});
+		expect(callbackCalled).toBe(true);
+		await harness.close();
+	});
+
+	it("rolls back user turns while retaining historical entries", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-rollback-faux",
+			models: [{ id: "harness-rollback-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
+		const session = createSession("rollback");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		await harness.prompt("first");
+		await harness.prompt("second");
+
+		const result = await harness.rollback(1);
+
+		expect(result).toMatchObject({ ok: true, value: { removedTurns: 1, targetId: expect.any(String) } });
+		expect(
+			(await session.findEntriesOnBranch({ order: "oldestFirst" })).some(
+				(entry) => entry.type === "custom" && entry.customType === "conversation_rollback",
+			),
+		).toBe(true);
+		expect(
+			(await session.findEntries({ order: "oldestFirst" })).filter((entry) => entry.type === "message"),
+		).toHaveLength(4);
+		await harness.close();
+	});
+
+	it("compacts durable history and records the terminal operation", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-compaction-faux",
+			models: [{ id: "harness-compaction-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("first response"), fauxAssistantMessage("second response")]);
+		const session = createSession("compaction");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+		});
+		await harness.prompt("first request with enough text to create history");
+		await harness.prompt("second request with enough text to create history");
+		faux.setResponses([fauxAssistantMessage("durable summary"), fauxAssistantMessage("durable turn prefix")]);
+
+		const result = await harness.compact({ customInstructions: "focus on decisions" });
+
+		expect(result).toMatchObject({ ok: true, value: { kind: "completed", entry: { type: "compaction" } } });
+		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		expect(entries.some((entry) => entry.type === "compaction" && entry.summary.includes("durable summary"))).toBe(
+			true,
+		);
+		expect((await session.findRecords({ type: "operation_finished" })).at(-1)?.outcome).toBe("completed");
+		await harness.close();
+	});
+
+	it("discovers unfinished operations for crash recovery", async () => {
 		const session = createSession();
 		const { harness, suspended } = await AgentHarness.create({
 			session,

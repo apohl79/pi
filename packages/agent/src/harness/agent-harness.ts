@@ -67,6 +67,7 @@ export class UnknownQueueItem extends TaggedError("UnknownQueueItem")<{
 export class LaneExists extends TaggedError("LaneExists")<{ lane: string; message: string }> {}
 export class InvalidLane extends TaggedError("InvalidLane")<{ lane: string; reason: string; message: string }> {}
 export class NothingToCompact extends TaggedError("NothingToCompact")<{ lane: string; message: string }> {}
+export class InvalidRollback extends TaggedError("InvalidRollback")<{ lane: string; message: string }> {}
 export class Closed extends TaggedError("Closed")<{ message: string }> {}
 
 export class HarnessFault extends Error {
@@ -236,6 +237,10 @@ export type AbortRejected = NoActiveOperation | Closed;
 export type RunResult = ResultValue<{ runId: string } & RunOutcome, RunRejected>;
 export type CompactionResult = ResultValue<{ runId: string } & CompactionOutcome, CompactionRejected>;
 export type NavigationResult = ResultValue<{ runId: string } & NavigationOutcome, NavigationRejected>;
+export type RollbackResult = ResultValue<
+	{ targetId: string | null; removedTurns: number },
+	InvalidRollback | LaneBusy | Closed
+>;
 export type QueueResult = ResultValue<{ entryId: string }, QueueRejected>;
 export type CancelQueuedResult = ResultValue<
 	{ outcome: "cancelled" | "already_consumed" | "already_cleared" },
@@ -400,6 +405,7 @@ export interface AgentLane {
 	promptFromTemplate(name: string, args?: string[]): Promise<RunResult>;
 	compact(options?: { customInstructions?: string }): Promise<CompactionResult>;
 	navigateTree(targetId: string | null, options?: NavigateOptions): Promise<NavigationResult>;
+	rollback(turns: number): Promise<RollbackResult>;
 	resume(): Promise<ResumeResult>;
 	abort(): Promise<AbortResult>;
 	steer(text: string, images?: ImageContent[]): Promise<QueueResult>;
@@ -560,21 +566,28 @@ export class AgentHarness implements AgentLane {
 			);
 		const localRunId = this.durableSession.idGenerator.next();
 		const controller = new AbortController();
-		if (this.activeOperation) {
-			return ResultValue.err(
-				new LaneBusy({
-					lane: "main",
-					operationId: this.activeOperation.id,
-					operationKind: this.activeOperation.kind,
-					message: "Lane is busy",
-				}),
-			);
-		}
 		let resolveDone!: () => void;
 		const done = new Promise<void>((resolve) => {
 			resolveDone = resolve;
 		});
-		this.activeOperation = { id: localRunId, kind: "run", controller, done, resolveDone };
+		const busy = await this.withLifecycleLock(async () => {
+			if (this.closed) return { operationId: localRunId, operationKind: "run" as const, message: "Harness is closed" };
+			if (this.activeOperation)
+				return {
+					operationId: this.activeOperation.id,
+					operationKind: this.activeOperation.kind,
+					message: "Lane is busy",
+				};
+			const open = await this.openOperationsAcrossLanes();
+			if (open.length > 0)
+				return { operationId: open[0]!.id, operationKind: open[0]!.intent.kind, message: "Lane is busy" };
+			this.activeOperation = { id: localRunId, kind: "run", controller, done, resolveDone };
+			return undefined;
+		});
+		if (busy) {
+			if (busy.message === "Harness is closed") return ResultValue.err(new Closed({ message: busy.message }));
+			return ResultValue.err(new LaneBusy(busy));
+		}
 		let released = false;
 		const release = () => {
 			if (released) return;
@@ -582,24 +595,6 @@ export class AgentHarness implements AgentLane {
 			resolveDone();
 			if (this.activeOperation?.id === localRunId) this.activeOperation = undefined;
 		};
-		let open: OperationStartedRecord[];
-		try {
-			open = await this.durableSession.findOpenOperations("main", { limit: 1 });
-		} catch (error) {
-			release();
-			throw error;
-		}
-		if (open.length > 0) {
-			release();
-			return ResultValue.err(
-				new LaneBusy({
-					lane: "main",
-					operationId: open[0]!.id,
-					operationKind: open[0]!.intent.kind,
-					message: "Lane is busy",
-				}),
-			);
-		}
 		let prompts: AgentMessage[];
 		try {
 			prompts = this.normalizePromptInput(input, images);
@@ -830,6 +825,14 @@ export class AgentHarness implements AgentLane {
 			.catch(() => undefined)
 			.then(operation)
 			.finally(release);
+	}
+
+	private async openOperationsAcrossLanes(): Promise<OperationStartedRecord[]> {
+		const lanes = await this.durableSession.getLanes();
+		const operations = await Promise.all(
+			lanes.map((lane) => this.durableSession.findOpenOperations(lane.lane, { limit: 1 })),
+		);
+		return operations.flat();
 	}
 
 	private rememberFinishedOperation(runId: string): void {
@@ -1107,6 +1110,74 @@ export class AgentHarness implements AgentLane {
 	}
 	async navigateTree(_targetId: string | null, _options?: NavigateOptions): Promise<NavigationResult> {
 		return this.unavailable("navigateTree");
+	}
+	async rollback(turns: number): Promise<RollbackResult> {
+		return this.withLifecycleLock(async () => {
+		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		if (!Number.isInteger(turns) || turns < 1) {
+			return ResultValue.err(
+				new InvalidRollback({ lane: "main", message: "Rollback requires a positive turn count" }),
+			);
+		}
+		if (this.activeOperation)
+			return ResultValue.err(
+				new LaneBusy({
+					lane: "main",
+					operationId: this.activeOperation.id,
+					operationKind: this.activeOperation.kind,
+					message: "Lane is busy",
+				}),
+			);
+		const open = await this.openOperationsAcrossLanes();
+		if (open.length > 0) {
+			return ResultValue.err(
+				new LaneBusy({
+					lane: "main",
+					operationId: open[0]!.id,
+					operationKind: open[0]!.intent.kind,
+					message: "Lane is busy",
+				}),
+			);
+		}
+		const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
+		const userEntries = entries.filter(
+			(entry): entry is Extract<Entry, { type: "message" }> =>
+				entry.type === "message" && entry.message.role === "user",
+		);
+		if (turns > userEntries.length) {
+			return ResultValue.err(
+				new InvalidRollback({ lane: "main", message: "Rollback exceeds surviving user turns" }),
+			);
+		}
+		const target = turns === userEntries.length ? null : userEntries[userEntries.length - turns]!.parentId;
+		const previousTarget = await this.durableSession.getLeafId();
+		const rollbackId = this.durableSession.idGenerator.next();
+		await this.durableSession.moveLane("main", target);
+		try {
+			await this.durableSession.appendCustomEntry("conversation_rollback", {
+				rollbackId,
+				removedTurns: turns,
+				targetId: target,
+			});
+		} catch (error) {
+			const committed = (await this.durableSession.findEntriesOnBranch({ order: "newestFirst", limit: 1 })).some(
+				(entry) =>
+					entry.type === "custom" &&
+					entry.customType === "conversation_rollback" &&
+					typeof entry.data === "object" &&
+					entry.data !== null &&
+					(entry.data as { rollbackId?: unknown }).rollbackId === rollbackId,
+			);
+			if (committed) return ResultValue.ok({ targetId: target, removedTurns: turns });
+			try {
+				await this.durableSession.moveLane("main", previousTarget);
+			} catch (restoreError) {
+				throw new Error("Rollback reconciliation failed: lane restoration was not confirmed", { cause: restoreError });
+			}
+			throw error;
+		}
+		return ResultValue.ok({ targetId: target, removedTurns: turns });
+		});
 	}
 	async resume(): Promise<ResumeResult> {
 		return this.unavailable("resume");
