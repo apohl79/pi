@@ -101,7 +101,7 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 
 	async read(processId: string, cursor: number): Promise<V2ProcessOutput> {
 		const process = this.get(processId);
-		if (!Number.isInteger(cursor) || cursor < 0) throw new Error("Process cursor must be a non-negative integer");
+		if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error("Process cursor must be a non-negative integer");
 		const baseCursor = process.totalBytes - Buffer.byteLength(process.output, "utf8");
 		const start = Math.max(cursor, baseCursor);
 		return {
@@ -310,7 +310,7 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 
 	async read(processId: string, cursor: number): Promise<V2ProcessOutput> {
 		const process = this.get(processId);
-		if (!Number.isInteger(cursor) || cursor < 0) throw new Error("Process cursor must be a non-negative integer");
+		if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error("Process cursor must be a non-negative integer");
 		const baseCursor = process.totalBytes - Buffer.byteLength(process.output, "utf8");
 		return {
 			output: readUtf8FromCursor(process.output, Math.max(0, cursor - baseCursor)),
@@ -446,7 +446,8 @@ export class JsonlV2ProcessRegistry implements V2ProcessRegistry {
 		} catch (error) {
 			const snapshot = this.records.get(processId);
 			if (snapshot === undefined) throw error;
-			if (!Number.isInteger(cursor) || cursor < 0) throw new Error("Process cursor must be a non-negative integer");
+			if (!Number.isSafeInteger(cursor) || cursor < 0)
+				throw new Error("Process cursor must be a non-negative integer");
 			const baseCursor = snapshot.cursor - Buffer.byteLength(snapshot.output, "utf8");
 			return {
 				output: readUtf8FromCursor(snapshot.output, Math.max(0, cursor - baseCursor)),
