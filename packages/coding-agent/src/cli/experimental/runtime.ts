@@ -102,7 +102,10 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 			};
 			const result = resultOf(await client.request({ command: protocolCommand as CommandV2["command"], payload }));
 			if (command.action === "export" && command.output !== undefined) {
-				await writeFile(command.output, `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
+				const bundle = result.bundle;
+				if (typeof bundle !== "object" || bundle === null || Array.isArray(bundle))
+					throw new Error("diagnostics/export response did not contain a bundle");
+				await writeFile(command.output, `${JSON.stringify(bundle, null, 2)}\n`, { mode: 0o600 });
 			}
 			options.write(result);
 		} finally {
