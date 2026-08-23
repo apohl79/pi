@@ -60,7 +60,7 @@ export class ModelInstructionResolver {
 		const profile = matches[0];
 		if (!profile) return undefined;
 		const source = profile.text !== undefined ? "text" : "file";
-		const text = profile.text ?? (await this.readProfileFile(profile.file!));
+		const text = profile.text ?? (await this.readProfileFile(profile.id, profile.file!));
 		const bytes = Buffer.byteLength(text, "utf8");
 		if (bytes > this.maxBytes) throw new Error(`Model profile ${profile.id} exceeds ${this.maxBytes}-byte limit`);
 		return {
@@ -73,14 +73,29 @@ export class ModelInstructionResolver {
 		};
 	}
 
-	private async readProfileFile(file: string): Promise<string> {
+	private async readProfileFile(profileId: string, file: string): Promise<string> {
 		const requestedPath = resolve(this.cwd, file);
 		if (isAbsolute(file) && !this.isTrusted(requestedPath))
-			throw new Error(`Model profile file is outside trusted roots: ${file}`);
-		if (!this.isTrusted(requestedPath)) throw new Error(`Model profile file escapes trusted roots: ${file}`);
-		const path = await realpath(requestedPath);
-		if (!this.isTrusted(path)) throw new Error(`Model profile file resolves outside trusted roots: ${file}`);
-		return readFile(path, "utf8");
+			throw new Error(`Model profile ${profileId} file is outside trusted roots: ${file}`);
+		if (!this.isTrusted(requestedPath))
+			throw new Error(`Model profile ${profileId} file escapes trusted roots: ${file}`);
+		let path: string;
+		try {
+			path = await realpath(requestedPath);
+		} catch (error) {
+			throw new Error(
+				`Model profile ${profileId} file cannot be read: ${file} (${error instanceof Error ? error.message : String(error)})`,
+			);
+		}
+		if (!this.isTrusted(path))
+			throw new Error(`Model profile ${profileId} file resolves outside trusted roots: ${file}`);
+		try {
+			return await readFile(path, "utf8");
+		} catch (error) {
+			throw new Error(
+				`Model profile ${profileId} file cannot be read: ${file} (${error instanceof Error ? error.message : String(error)})`,
+			);
+		}
 	}
 
 	private isTrusted(path: string): boolean {
