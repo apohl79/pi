@@ -802,12 +802,14 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			kind: "pending",
 			state: "accepted",
 			acceptedSeq: this.eventSeq,
+			model: { provider: this.model.provider, id: this.model.id },
 			compactionPolicy: policy,
 		};
 		return {
 			operationId: _operationId,
 			sessionRevision: this.revision,
 			eventSeq: this.eventSeq,
+			model: { provider: this.model.provider, id: this.model.id },
 			compactionPolicy: policy,
 		};
 	}

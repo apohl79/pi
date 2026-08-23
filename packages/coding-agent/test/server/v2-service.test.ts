@@ -771,6 +771,7 @@ describe("coding-agent v2 service adapter", () => {
 				kind: "pending",
 				state: "accepted",
 				acceptedSeq: 2,
+				model: { provider: faux.getModel().provider, id: faux.getModel().id },
 			});
 			await runtime.run("operation-1", {
 				command: "turn/start",
