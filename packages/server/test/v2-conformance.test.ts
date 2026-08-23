@@ -1280,6 +1280,13 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.request({ command: "session/attach", sessionId: "session-1" });
 		const goal = await client.request({ command: "goal/read", sessionId: "session-1" });
 		expect(goal).toMatchObject({ ok: true, result: { command: "goal/read" } });
+		for (const [payload, message] of [
+			[{ turns: "1" }, "turn/rollback turns must be a number"],
+			[{ turns: 0 }, "turn/rollback turns must be a positive safe integer"],
+		] as const) {
+			const malformed = await client.request({ command: "turn/rollback", sessionId: "session-1", payload });
+			expect(malformed).toMatchObject({ ok: false, error: { code: "request_failed", message } });
+		}
 		for (const [command, payload, message] of [
 			["goal/create", { objective: "ship", tokenBudget: "100" }, "goal/create tokenBudget must be a number"],
 			["goal/update", { status: "invalid" }, "goal/update status is invalid"],
