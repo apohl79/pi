@@ -141,4 +141,21 @@ describe("RemoteV2Session", () => {
 		await expect(session.submit("blocked")).rejects.toThrow("Session is not open");
 		await session.dispose();
 	});
+
+	test("exposes lease transfer and remote control actions", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		expect(session.mode).toBe("control");
+		await session.relinquishControl();
+		expect(session.mode).toBe("observer");
+		await expect(session.followUp("later")).rejects.toThrow("control lease");
+		await session.acquireControl();
+		expect(session.mode).toBe("control");
+		expect(await session.followUp("later")).toBe("operation-1");
+		expect(await session.rollback()).toBe("operation-1");
+		await expect(session.rollback(0)).rejects.toThrow("positive integer");
+		await session.dispose();
+	});
 });
