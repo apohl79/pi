@@ -1135,6 +1135,7 @@ describe("PiServer v2 operation acceptance", () => {
 					provider: "fake",
 					model: "image-fast",
 					mimeType: "image/png",
+					reference: expect.stringMatching(/^blob:/),
 					sourceOperationId: expect.any(String),
 				},
 			},

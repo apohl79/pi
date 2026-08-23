@@ -12,6 +12,7 @@ export type V2GeneratedImage = Readonly<{
 	digest: string;
 	mimeType: string;
 	size: number;
+	reference: string;
 	provider: string;
 	model: string;
 	sourceOperationId?: string;
@@ -79,6 +80,12 @@ export class BlobV2ImageService implements V2ImageService {
 		sessionId: string,
 		reference: string,
 	): Promise<Readonly<{ digest: string; mimeType: string; size: number; reference: string }>> {
+		if (reference.startsWith("blob:")) {
+			const digest = reference.slice("blob:".length);
+			const blob = await this.blobs.stat(digest);
+			assertImageMime(blob.mimeType);
+			return { ...blob, reference };
+		}
 		const result = await this.files.read(sessionId, reference);
 		const mimeType = result.file.mimeType;
 		if (!mimeType) throw new Error("Image MIME type could not be determined");
@@ -109,6 +116,7 @@ export class BlobV2ImageService implements V2ImageService {
 			digest: blob.digest,
 			mimeType: blob.mimeType,
 			size: blob.size,
+			reference: `blob:${blob.digest}`,
 			provider: generated.provider,
 			model: generated.model,
 			...(request.sourceOperationId === undefined && generated.sourceOperationId === undefined
