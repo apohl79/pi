@@ -77,8 +77,14 @@ export function applyRemoteFileCompletion(
 	const typedToken = input.slice(tokenStart);
 	const marker = typedToken.startsWith("@") && !item.reference.startsWith("@") ? "@" : "";
 	const markedToken = typedToken.slice(marker.length);
-	const quote = markedToken.startsWith('"') || markedToken.startsWith("'") ? markedToken[0] : "";
-	const reference = `${marker}${quote}${item.reference}`;
+	const scope = /^(?:server|local|project):/u.exec(markedToken)?.[0] ?? "";
+	const quote =
+		markedToken.slice(scope.length).startsWith('"') || markedToken.slice(scope.length).startsWith("'")
+			? markedToken.slice(scope.length, scope.length + 1)
+			: "";
+	const completionReference =
+		scope !== "" && item.reference.startsWith(scope) ? item.reference.slice(scope.length) : item.reference;
+	const reference = `${marker}${scope}${quote}${completionReference}`;
 	if (item.kind === "file") return `${input.slice(0, tokenStart)}${reference}${quote}`;
 	const separator = item.reference.includes("\\") && !item.reference.includes("/") ? "\\" : "/";
 	const descended = reference.endsWith("/") || reference.endsWith("\\") ? reference : `${reference}${separator}`;

@@ -53,9 +53,16 @@ const DEFAULT_MAX_COMPLETION_MS = 250;
 function cleanReference(reference: string): string {
 	const value = reference.trim();
 	const unmarked = value.startsWith("@") ? value.slice(1) : value;
-	const quote = unmarked[0];
-	if ((quote === '"' || quote === "'") && unmarked.endsWith(quote)) return unmarked.slice(1, -1);
-	return quote === '"' || quote === "'" ? unmarked.slice(1) : unmarked;
+	const scope = /^(?:server|local|project):/u.exec(unmarked)?.[0] ?? "";
+	const scoped = unmarked.slice(scope.length);
+	const quote = scoped[0];
+	const cleaned =
+		(quote === '"' || quote === "'") && scoped.endsWith(quote)
+			? scoped.slice(1, -1)
+			: quote === '"' || quote === "'"
+				? scoped.slice(1)
+				: scoped;
+	return `${scope}${cleaned}`;
 }
 
 function scopeOf(reference: string): FileScope {

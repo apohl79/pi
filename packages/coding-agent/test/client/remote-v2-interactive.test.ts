@@ -155,6 +155,9 @@ describe("remote v2 interactive command boundary", () => {
 		expect(applyRemoteFileCompletion('inspect @"src', 8, { reference: "src/nested", kind: "directory" })).toBe(
 			'inspect @"src/nested/',
 		);
+		expect(
+			applyRemoteFileCompletion('inspect @server:"src', 8, { reference: "server:src/nested.ts", kind: "file" }),
+		).toBe('inspect @server:"src/nested.ts"');
 	});
 
 	test("parses discoverable commands without changing v1 slash commands", () => {
