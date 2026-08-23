@@ -1,5 +1,5 @@
 import type { V2AgentRegistry } from "./agents.ts";
-import type { ForensicRecorder } from "./diagnostics.ts";
+import type { DiagnosticContentStore, ForensicRecorder } from "./diagnostics.ts";
 import type { V2InputRegistry } from "./inputs.ts";
 import type { V2PlanRegistry } from "./plans.ts";
 import { createUnixServerV2 } from "./transports/unix/preset.ts";
@@ -29,6 +29,7 @@ export interface ServerDaemonOptions {
 	readonly inputs?: V2InputRegistry;
 	readonly plans?: V2PlanRegistry;
 	readonly diagnostics?: ForensicRecorder;
+	readonly diagnosticContent?: DiagnosticContentStore;
 	readonly createServer?: (service: PiServerServiceV2, options: UnixServerOptions) => ServerDaemonServer;
 }
 
@@ -89,14 +90,23 @@ export class ServerDaemon {
 
 	private async startInternal(): Promise<void> {
 		await this.recordDiagnostic("daemon_starting", { socketPath: this.options.socketPath });
-		const server = (this.options.createServer ?? defaultCreateServer)(this.options.service, {
-			path: this.options.socketPath,
-			...(this.options.serverId === undefined ? {} : { serverId: this.options.serverId }),
-			...(this.options.agents === undefined ? {} : { agents: this.options.agents }),
-			...(this.options.inputs === undefined ? {} : { inputs: this.options.inputs }),
-			...(this.options.plans === undefined ? {} : { plans: this.options.plans }),
-			...(this.options.diagnostics === undefined ? {} : { diagnostics: this.options.diagnostics }),
-		});
+		let server: ServerDaemonServer;
+		try {
+			server = (this.options.createServer ?? defaultCreateServer)(this.options.service, {
+				path: this.options.socketPath,
+				...(this.options.serverId === undefined ? {} : { serverId: this.options.serverId }),
+				...(this.options.agents === undefined ? {} : { agents: this.options.agents }),
+				...(this.options.inputs === undefined ? {} : { inputs: this.options.inputs }),
+				...(this.options.plans === undefined ? {} : { plans: this.options.plans }),
+				...(this.options.diagnostics === undefined ? {} : { diagnostics: this.options.diagnostics }),
+				...(this.options.diagnosticContent === undefined
+					? {}
+					: { diagnosticContent: this.options.diagnosticContent }),
+			});
+		} catch (error) {
+			this.state = "stopped";
+			throw error;
+		}
 		try {
 			await server.start();
 		} catch (error) {
