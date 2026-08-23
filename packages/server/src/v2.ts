@@ -1467,10 +1467,24 @@ export class PiServerV2 {
 			throw new Error("diagnostics/doctor repairSafe must be a boolean");
 		const events = await this.diagnosticEvents();
 		const sequenceOk = events.every((event, index) => index === 0 || event.seq === events[index - 1]!.seq + 1);
+		let integrityChecks: readonly DiagnosticIntegrityCheck[] = [];
+		if (this.integrity !== undefined) {
+			try {
+				integrityChecks = await this.integrity();
+			} catch (error) {
+				integrityChecks = [
+					{
+						name: "integrity",
+						ok: false,
+						details: { error: error instanceof Error ? error.name : "unknown" },
+					},
+				];
+			}
+		}
 		const checks = [
 			{ name: "recorder", ok: true },
 			{ name: "sequence", ok: sequenceOk },
-			...(this.integrity === undefined ? [] : await this.integrity()),
+			...integrityChecks,
 		];
 		await this.sendResponse(state, id, {
 			command: command.command,
