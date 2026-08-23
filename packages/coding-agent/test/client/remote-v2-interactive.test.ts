@@ -16,7 +16,7 @@ import {
 } from "../../src/client/remote-v2-interactive.ts";
 import { RemoteV2SessionSelector } from "../../src/client/remote-v2-selector.ts";
 
-function snapshot(): SessionSnapshotV2 {
+function snapshot(withQueue = false): SessionSnapshotV2 {
 	return {
 		id: "session-1",
 		nameRevision: 0,
@@ -26,7 +26,21 @@ function snapshot(): SessionSnapshotV2 {
 		model: { provider: "faux", id: "model" },
 		thinkingLevel: "off",
 		transcript: [],
-		queues: { steer: [], followUp: [] },
+		queues: {
+			steer: withQueue
+				? [
+						{
+							id: "queued-image",
+							content: [
+								{ type: "text", text: "restore me" },
+								{ type: "image", digest: "a".repeat(64), mimeType: "image/png" },
+							],
+							createdAt: 1,
+						},
+					]
+				: [],
+			followUp: [],
+		},
 		agents: [],
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, pricingState: "known" },
 		context: { inputTokens: 0, contextWindow: 16_000, usedPercentage: 0 },
@@ -46,7 +60,7 @@ function snapshot(): SessionSnapshotV2 {
 	};
 }
 
-function clientWithRequests(): { client: PiClientV2; commands: string[] } {
+function clientWithRequests(withQueue = false): { client: PiClientV2; commands: string[] } {
 	let handlers: ByteTransportHandlers | undefined;
 	const commands: string[] = [];
 	const transport: ByteTransport = {
@@ -98,7 +112,7 @@ function clientWithRequests(): { client: PiClientV2; commands: string[] } {
 									},
 								}
 							: message.request.command === "session/read"
-								? { session: snapshot() }
+								? { session: snapshot(withQueue) }
 								: message.request.command === "plan/update"
 									? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
 									: message.request.command === "plugin/list"
@@ -163,6 +177,7 @@ describe("remote v2 interactive command boundary", () => {
 		expect(parseRemoteV2Command("/name --clear")).toEqual({ name: "name", clear: true });
 		expect(parseRemoteV2Command("/name --generate")).toEqual({ name: "name", generate: true });
 		expect(parseRemoteV2Command("/name-auto off")).toEqual({ name: "name-auto", enabled: false });
+		expect(parseRemoteV2Command("/name --auto on")).toEqual({ name: "name-auto", enabled: true });
 		expect(parseRemoteV2Command('/plan [{"step":"ship","status":"pending"}]')).toEqual({
 			name: "plan",
 			items: [{ step: "ship", status: "pending" }],
@@ -183,7 +198,7 @@ describe("remote v2 interactive command boundary", () => {
 	});
 
 	test("dispatches remote actions through the attached controller and shares cleanup", async () => {
-		const { client, commands } = clientWithRequests();
+		const { client, commands } = clientWithRequests(true);
 		await client.connect();
 		const statuslineCommands: (string | undefined)[] = [];
 		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
@@ -219,6 +234,7 @@ describe("remote v2 interactive command boundary", () => {
 			kind: "status",
 			text: "queued message recalled",
 		});
+		adapter.handleInput("\n");
 		expect(await adapter.execute("/release-control")).toEqual({ kind: "control", mode: "observer" });
 		await adapter.execute("/take-control");
 		expect(await adapter.execute("/thinking high")).toEqual({ kind: "operation", operationId: "operation-1" });
@@ -263,6 +279,9 @@ describe("remote v2 interactive command boundary", () => {
 			"agent/interrupt",
 			"agent/message",
 			"turn/compact",
+			"session/read",
+			"turn/queue/cancel",
+			"turn/start",
 			"session/attach",
 			"session/attach",
 			"session/thinking/set",

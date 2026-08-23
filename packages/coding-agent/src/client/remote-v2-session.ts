@@ -360,15 +360,20 @@ export class RemoteV2Session {
 		return this.#accept("turn/followUp", promptPayload(input, "Session follow-up"));
 	}
 
-	async cancelQueued(entryId: string): Promise<void> {
+	async cancelQueued(entryId: string): Promise<RemoteV2PromptContent | undefined> {
 		this.#assertControl();
 		if (!entryId) throw new Error("Queue entry ID cannot be empty");
+		await this.refresh();
+		const queued = [...(this.#snapshot?.queues.steer ?? []), ...(this.#snapshot?.queues.followUp ?? [])].find(
+			(entry) => entry.id === entryId,
+		);
 		const response = await this.#client.request({
 			command: "turn/queue/cancel",
 			sessionId: this.#requireHandle().sessionId,
 			payload: { entryId },
 		});
 		if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
+		return queued === undefined ? undefined : (structuredClone(queued.content) as RemoteV2PromptContent);
 	}
 
 	async resume(): Promise<string> {

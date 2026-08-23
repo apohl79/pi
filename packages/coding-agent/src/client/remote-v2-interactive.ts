@@ -1,6 +1,7 @@
 import type { PlanItem, ThinkingLevel } from "@earendil-works/pi-protocol";
 import type { Component } from "@earendil-works/pi-tui";
 import type { RemoteV2SessionAttachment } from "./remote-v2-selector.ts";
+import type { RemoteV2PromptContent } from "./remote-v2-session.ts";
 
 export const REMOTE_V2_SLASH_COMMANDS = [
 	"/abort",
@@ -146,6 +147,11 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 	}
 	if (name === "/name") {
 		if (arguments_.length === 0) return { name: "name" };
+		if (arguments_[0] === "--auto") {
+			if (arguments_.length !== 2 || (arguments_[1] !== "on" && arguments_[1] !== "off"))
+				throw new Error("/name --auto requires on or off");
+			return { name: "name-auto", enabled: arguments_[1] === "on" };
+		}
 		if (arguments_.length === 1 && arguments_[0] === "--clear") return { name: "name", clear: true };
 		if (arguments_.length === 1 && arguments_[0] === "--generate") return { name: "name", generate: true };
 		if (arguments_[0].startsWith("--")) throw new Error("/name accepts a title, --clear, or --generate");
@@ -217,6 +223,7 @@ export class RemoteV2InteractiveAttachment implements Component {
 	static readonly MAX_INPUT_LENGTH = 4_000;
 	#disposed = false;
 	#input = "";
+	#recalledContent: RemoteV2PromptContent | undefined;
 	#status = "";
 	#completionSequence = 0;
 
@@ -261,7 +268,8 @@ export class RemoteV2InteractiveAttachment implements Component {
 			case "compact":
 				return operation(await this.session.compact(command.instructions));
 			case "dequeue":
-				await this.session.cancelQueued(command.entryId);
+				this.#recalledContent = await this.session.cancelQueued(command.entryId);
+				this.#input = this.#recalledContent === undefined ? "" : displayPromptContent(this.#recalledContent);
 				return { kind: "status", text: "queued message recalled" };
 			case "detach":
 				await this.dispose();
@@ -355,13 +363,17 @@ export class RemoteV2InteractiveAttachment implements Component {
 		}
 		if (data === "\r" || data === "\n") {
 			const input = this.#input.trim();
+			const recalledContent = this.#recalledContent;
+			this.#recalledContent = undefined;
 			this.#input = "";
 			if (!input) return;
 			const action = input.startsWith("/")
 				? this.execute(input).then((result) =>
 						result.kind === "operation" ? `operation ${result.operationId}` : result.kind,
 					)
-				: this.submit(input).then((operationId) => `operation ${operationId}`);
+				: (recalledContent === undefined ? this.submit(input) : this.session.submit(recalledContent)).then(
+						(operationId) => `operation ${operationId}`,
+					);
 			void action
 				.then((result) => {
 					this.#status = result;
@@ -374,12 +386,14 @@ export class RemoteV2InteractiveAttachment implements Component {
 			return;
 		}
 		if (data === "\u007f" || data === "\b") {
+			this.#recalledContent = undefined;
 			this.#completionSequence++;
 			this.#input = this.#input.slice(0, -1);
 			this.invalidate();
 			return;
 		}
 		if (data === "\t") {
+			this.#recalledContent = undefined;
 			void this.completeInput();
 			return;
 		}
@@ -389,6 +403,7 @@ export class RemoteV2InteractiveAttachment implements Component {
 			data !== "\u007f" &&
 			this.#input.length < RemoteV2InteractiveAttachment.MAX_INPUT_LENGTH
 		) {
+			this.#recalledContent = undefined;
 			this.#completionSequence++;
 			this.#input += data;
 			this.invalidate();
@@ -397,6 +412,7 @@ export class RemoteV2InteractiveAttachment implements Component {
 
 	private async completeInput(): Promise<void> {
 		const sequence = ++this.#completionSequence;
+		this.#recalledContent = undefined;
 		const tokenStart = Math.max(this.#input.lastIndexOf(" "), this.#input.lastIndexOf("\t")) + 1;
 		const prefix = this.#input.slice(tokenStart);
 		if (!prefix.startsWith("@")) return;
@@ -423,6 +439,25 @@ export class RemoteV2InteractiveAttachment implements Component {
 	#assertActive(): void {
 		if (this.#disposed) throw new Error("Remote v2 interactive attachment is disposed");
 	}
+}
+
+function displayPromptContent(content: RemoteV2PromptContent): string {
+	return content
+		.map((part) => {
+			switch (part.type) {
+				case "text":
+					return part.text;
+				case "image":
+					return `[image:${part.mimeType}]`;
+				case "blob":
+					return `[blob:${part.mimeType}]`;
+				case "mention":
+					return `@${part.name}:${part.path}`;
+				default:
+					return "";
+			}
+		})
+		.join("\n");
 }
 
 function operation(operationId: string): RemoteV2CommandResult {
