@@ -165,52 +165,150 @@ function memoryTransport() {
 																					promptHash: "hash",
 																				},
 																			} as JsonValue)
-																		: message.request.command === "diagnostics/status"
+																		: message.request.command === "marketplace/list"
 																			? ({
-																					capture: "metadata",
-																					degraded: false,
-																					lastCriticalEventSeq: 3,
-																					eventCount: 3,
+																					marketplaces: [
+																						{ name: "local", source: "file:///tmp/local" },
+																					],
 																				} as JsonValue)
-																			: message.request.command === "diagnostics/timeline"
+																			: message.request.command === "marketplace/add" ||
+																					message.request.command === "marketplace/upgrade"
 																				? ({
-																						events: [
-																							{ seq: 3, kind: "operation", outcome: "ok" },
-																						],
+																						marketplace: {
+																							name: "local",
+																							source: "file:///tmp/local",
+																						},
 																					} as JsonValue)
-																				: message.request.command === "diagnostics/export"
-																					? ({
-																							bundle: {
-																								manifest: {
-																									schemaVersion: 1,
-																									eventCount: 3,
-																									firstSeq: 1,
-																									lastSeq: 3,
-																									eventsSha256: "hash",
-																								},
-																								events: [],
-																							},
-																						} as JsonValue)
-																					: message.request.command === "diagnostics/verify"
-																						? ({ valid: true } as JsonValue)
-																						: message.request.command === "diagnostics/doctor"
+																				: message.request.command === "marketplace/remove"
+																					? ({ name: "local" } as JsonValue)
+																					: message.request.command === "plugin/list"
+																						? ({
+																								plugins: [
+																									{
+																										id: "plugin-1",
+																										name: "demo",
+																										enabled: true,
+																									},
+																								],
+																							} as JsonValue)
+																						: message.request.command === "plugin/read" ||
+																								message.request.command === "plugin/install" ||
+																								message.request.command === "plugin/enable" ||
+																								message.request.command === "plugin/disable"
 																							? ({
-																									ok: true,
-																									checks: [{ name: "recorder", ok: true }],
+																									plugin: {
+																										id: "plugin-1",
+																										name: "demo",
+																										enabled: true,
+																									},
 																								} as JsonValue)
-																							: message.request.command === "plan/update"
-																								? ({
-																										plan: {
-																											version: 1,
-																											items: [
-																												{
-																													step: "Inspect",
-																													status: "in_progress",
-																												},
-																											],
-																										},
-																									} as JsonValue)
-																								: { command: message.request.command };
+																							: message.request.command === "plugin/uninstall"
+																								? ({ id: "plugin-1" } as JsonValue)
+																								: message.request.command === "app/list"
+																									? ({
+																											apps: [{ id: "app-1", name: "Demo" }],
+																										} as JsonValue)
+																									: message.request.command === "app/read"
+																										? ({
+																												app: { id: "app-1", name: "Demo" },
+																											} as JsonValue)
+																										: message.request.command ===
+																													"app/auth/start" ||
+																												message.request.command ===
+																													"app/auth/complete"
+																											? ({
+																													auth: {
+																														appId: "app-1",
+																														state: "authenticated",
+																													},
+																												} as JsonValue)
+																											: message.request.command ===
+																													"usage/read"
+																												? ({
+																														aggregate: {
+																															input: 3,
+																															output: 2,
+																														},
+																														entries: [
+																															{
+																																turnId: "turn-1",
+																																input: 3,
+																															},
+																														],
+																													} as JsonValue)
+																												: message.request.command ===
+																														"diagnostics/status"
+																													? ({
+																															capture: "metadata",
+																															degraded: false,
+																															lastCriticalEventSeq: 3,
+																															eventCount: 3,
+																														} as JsonValue)
+																													: message.request.command ===
+																															"diagnostics/timeline"
+																														? ({
+																																events: [
+																																	{
+																																		seq: 3,
+																																		kind: "operation",
+																																		outcome: "ok",
+																																	},
+																																],
+																															} as JsonValue)
+																														: message.request.command ===
+																																"diagnostics/export"
+																															? ({
+																																	bundle: {
+																																		manifest: {
+																																			schemaVersion: 1,
+																																			eventCount: 3,
+																																			firstSeq: 1,
+																																			lastSeq: 3,
+																																			eventsSha256:
+																																				"hash",
+																																		},
+																																		events: [],
+																																	},
+																																} as JsonValue)
+																															: message.request
+																																		.command ===
+																																	"diagnostics/verify"
+																																? ({
+																																		valid: true,
+																																	} as JsonValue)
+																																: message.request
+																																			.command ===
+																																		"diagnostics/doctor"
+																																	? ({
+																																			ok: true,
+																																			checks: [
+																																				{
+																																					name: "recorder",
+																																					ok: true,
+																																				},
+																																			],
+																																		} as JsonValue)
+																																	: message.request
+																																				.command ===
+																																			"plan/update"
+																																		? ({
+																																				plan: {
+																																					version: 1,
+																																					items: [
+																																						{
+																																							step: "Inspect",
+																																							status:
+																																								"in_progress",
+																																						},
+																																					],
+																																				},
+																																			} as JsonValue)
+																																		: {
+																																				command:
+																																					message
+																																						.request
+																																						.command,
+																																			};
 			const response: ServerMessageV2 =
 				message.request.command.startsWith("turn/") ||
 				message.request.command.startsWith("session/model") ||
@@ -453,6 +551,23 @@ describe("RemoteV2Session", () => {
 		expect((await session.diagnosticsExport()).manifest).toMatchObject({ eventCount: 3 });
 		expect((await session.diagnosticsVerify()).valid).toBe(true);
 		expect((await session.diagnosticsDoctor()).ok).toBe(true);
+		await session.dispose();
+	});
+
+	test("controls remote plugins, apps, and usage", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		expect((await session.listMarketplaces())[0]).toMatchObject({ name: "local" });
+		expect(await session.addMarketplace("local", "file:///tmp/local")).toMatchObject({ name: "local" });
+		expect((await session.listPlugins(true))[0]).toMatchObject({ id: "plugin-1" });
+		expect(await session.readPlugin("plugin-1")).toMatchObject({ name: "demo" });
+		expect(await session.setPluginEnabled("plugin-1", true)).toMatchObject({ enabled: true });
+		expect((await session.listApps())[0]).toMatchObject({ id: "app-1" });
+		expect(await session.readApp("app-1")).toMatchObject({ name: "Demo" });
+		expect(await session.startAppAuth({ id: "app-1" })).toMatchObject({ state: "authenticated" });
+		expect((await session.readUsage({ sessionId: "session-1" })).entries).toHaveLength(1);
 		await session.dispose();
 	});
 

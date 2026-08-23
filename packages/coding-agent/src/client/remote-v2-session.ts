@@ -97,6 +97,24 @@ export interface RemoteV2DiagnosticsStatus {
 	readonly eventCount: number;
 }
 
+export interface RemoteV2UsageRead {
+	readonly aggregate: Record<string, unknown>;
+	readonly entries: readonly Record<string, unknown>[];
+}
+
+export interface RemoteV2PluginInstallOptions {
+	readonly name: string;
+	readonly marketplace: string;
+	readonly version: string;
+	readonly manifest: Record<string, unknown>;
+	readonly root?: string;
+	readonly scope?: "user" | "project";
+}
+
+export interface RemoteV2AppAuthOptions extends Record<string, unknown> {
+	readonly id: string;
+}
+
 export interface RemoteV2WebResult {
 	readonly id: string;
 	readonly url?: string;
@@ -516,6 +534,80 @@ export class RemoteV2Session {
 		return structuredClone(result.blob);
 	}
 
+	async listMarketplaces(): Promise<readonly Record<string, unknown>[]> {
+		const result = await this.#direct({ command: "marketplace/list" });
+		return records(result.marketplaces, "marketplace/list");
+	}
+
+	async addMarketplace(name: string, source: string): Promise<Record<string, unknown>> {
+		const result = await this.#direct({ command: "marketplace/add", payload: { name, source } });
+		return record(result.marketplace, "marketplace/add");
+	}
+
+	async upgradeMarketplace(name: string): Promise<Record<string, unknown>> {
+		const result = await this.#direct({ command: "marketplace/upgrade", payload: { name } });
+		return record(result.marketplace, "marketplace/upgrade");
+	}
+
+	async removeMarketplace(name: string): Promise<void> {
+		await this.#direct({ command: "marketplace/remove", payload: { name } });
+	}
+
+	async listPlugins(installedOnly = false): Promise<readonly Record<string, unknown>[]> {
+		const result = await this.#direct({ command: "plugin/list", payload: { installedOnly } });
+		return records(result.plugins, "plugin/list");
+	}
+
+	async readPlugin(id: string): Promise<Record<string, unknown>> {
+		const result = await this.#direct({ command: "plugin/read", payload: { id } });
+		return record(result.plugin, "plugin/read");
+	}
+
+	async installPlugin(options: RemoteV2PluginInstallOptions): Promise<Record<string, unknown>> {
+		const result = await this.#direct({ command: "plugin/install", payload: options as unknown as JsonValue });
+		return record(result.plugin, "plugin/install");
+	}
+
+	async uninstallPlugin(id: string): Promise<void> {
+		await this.#direct({ command: "plugin/uninstall", payload: { id } });
+	}
+
+	async setPluginEnabled(id: string, enabled: boolean, scope?: "user" | "project"): Promise<Record<string, unknown>> {
+		const result = await this.#direct({
+			command: enabled ? "plugin/enable" : "plugin/disable",
+			payload: { id, ...(scope === undefined ? {} : { scope }) },
+		});
+		return record(result.plugin, enabled ? "plugin/enable" : "plugin/disable");
+	}
+
+	async listApps(): Promise<readonly Record<string, unknown>[]> {
+		const result = await this.#direct({ command: "app/list" });
+		return records(result.apps, "app/list");
+	}
+
+	async readApp(id: string): Promise<Record<string, unknown>> {
+		const result = await this.#direct({ command: "app/read", payload: { id } });
+		return record(result.app, "app/read");
+	}
+
+	async startAppAuth(options: RemoteV2AppAuthOptions): Promise<Record<string, unknown>> {
+		const result = await this.#direct({ command: "app/auth/start", payload: options as unknown as JsonValue });
+		return record(result.auth, "app/auth/start");
+	}
+
+	async completeAppAuth(options: RemoteV2AppAuthOptions): Promise<Record<string, unknown>> {
+		const result = await this.#direct({ command: "app/auth/complete", payload: options as unknown as JsonValue });
+		return record(result.auth, "app/auth/complete");
+	}
+
+	async readUsage(filter: Record<string, string> = {}): Promise<RemoteV2UsageRead> {
+		const result = await this.#direct({ command: "usage/read", payload: filter as unknown as JsonValue });
+		return {
+			aggregate: record(result.aggregate, "usage/read"),
+			entries: records(result.entries, "usage/read"),
+		};
+	}
+
 	async diagnosticsStatus(): Promise<RemoteV2DiagnosticsStatus> {
 		this.#assertNotDisposed();
 		const result = await this.#direct({ command: "diagnostics/status" });
@@ -739,6 +831,18 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 		? (value as Record<string, unknown>)
 		: undefined;
+}
+
+function record(value: unknown, command: string): Record<string, unknown> {
+	const result = asRecord(value);
+	if (result === undefined) throw new Error(`Invalid ${command} response`);
+	return structuredClone(result);
+}
+
+function records(value: unknown, command: string): readonly Record<string, unknown>[] {
+	if (!Array.isArray(value) || !value.every((entry) => asRecord(entry) !== undefined))
+		throw new Error(`Invalid ${command} response`);
+	return value.map((entry) => structuredClone(asRecord(entry)!));
 }
 
 function isSnapshot(value: unknown): value is ProtocolSnapshot {
