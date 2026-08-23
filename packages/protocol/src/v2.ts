@@ -294,6 +294,7 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("app/list"),
 	Type.Literal("app/read"),
 	Type.Literal("app/auth/start"),
+	Type.Literal("app/auth/complete"),
 	Type.Literal("blob/put"),
 	Type.Literal("blob/read"),
 	Type.Literal("blob/stat"),
