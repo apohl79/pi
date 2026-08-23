@@ -49,7 +49,7 @@ export async function mergeClientDiagnosticBundle(
 			...manifest,
 			...(unavailableFromSpool || unavailable.length > 0
 				? { unavailable: [...unavailable, "client-diagnostic-spool"] }
-				: { unavailable: undefined }),
+				: {}),
 		},
 		...(unavailableFromSpool ? {} : { clientDiagnostics: { ...clientDiagnostics, afterSeq: latestSeq, records } }),
 	};

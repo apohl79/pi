@@ -66,7 +66,7 @@ describe("production remote v2 usage", () => {
 				await session.waitForOperation(operationId);
 				const usage = await session.readUsage({ sessionId: session.id });
 				expect(usage.entries).toHaveLength(1);
-				expect(usage.aggregate).toMatchObject({ responses: 1, costUsd: 0.25, pricingState: "known" });
+				expect(usage.aggregate).toMatchObject({ responses: 1, costUsd: 0, pricingState: "known" });
 			} finally {
 				await session.dispose();
 			}

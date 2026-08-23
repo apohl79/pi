@@ -49,7 +49,11 @@ describe("production remote v2 daemon restart", () => {
 				const operationId = await session.submit("persist this before restart");
 				await session.waitForOperation(operationId);
 				expect(session.snapshot?.transcript).toEqual(
-					expect.arrayContaining([expect.objectContaining({ text: "persisted across restart" })]),
+					expect.arrayContaining([
+						expect.objectContaining({
+							content: expect.arrayContaining([expect.objectContaining({ text: "persisted across restart" })]),
+						}),
+					]),
 				);
 			} finally {
 				await session.dispose();
@@ -67,7 +71,11 @@ describe("production remote v2 daemon restart", () => {
 			const restored = await RemoteV2Session.open(secondClient, sessionId!, { mode: "control" });
 			try {
 				expect(restored.snapshot?.transcript).toEqual(
-					expect.arrayContaining([expect.objectContaining({ text: "persisted across restart" })]),
+					expect.arrayContaining([
+						expect.objectContaining({
+							content: expect.arrayContaining([expect.objectContaining({ text: "persisted across restart" })]),
+						}),
+					]),
 				);
 				expect(restored.state.lifecycle).toEqual({ status: "ready" });
 			} finally {
