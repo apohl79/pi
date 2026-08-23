@@ -1,4 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { lstat, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import type { Readable } from "node:stream";
 import type { PiClientV2, PiSessionV2Handle } from "@earendil-works/pi-client";
 import { type ClientDiagnosticSpool, mergeClientDiagnosticBundle } from "@earendil-works/pi-client/diagnostics";
@@ -68,6 +69,23 @@ function resolveRemoteModel(options: Args, models: readonly ModelMetadata[]): Mo
 	const match = matches[0];
 	if (match === undefined) throw new Error(`Model not found: ${provider}/${id}`);
 	return { provider: match.provider, id: match.id };
+}
+
+async function assertDiagnosticExportDestination(path: string, decryptContent: boolean): Promise<void> {
+	if (!decryptContent) return;
+	const destination = resolve(path);
+	try {
+		const stats = await lstat(destination);
+		if (!stats.isFile() || stats.isSymbolicLink())
+			throw new Error("Decrypted diagnostic export requires a regular, non-symlink output file");
+		if ((stats.mode & 0o077) !== 0)
+			throw new Error("Refusing decrypted diagnostic export to a group/world-accessible output file");
+	} catch (error) {
+		if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+		const parent = await lstat(dirname(destination));
+		if (!parent.isDirectory() || (parent.mode & 0o077) !== 0)
+			throw new Error("Refusing decrypted diagnostic export in a group/world-accessible directory");
+	}
 }
 
 async function buildRemotePrompt(
@@ -201,6 +219,12 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 			};
 			const result = await read();
 			if (command.action === "export" && command.output !== undefined) {
+				await assertDiagnosticExportDestination(command.output, command.decryptContent === true);
+				if (command.decryptContent === true)
+					options.write({
+						warning:
+							"Decrypted diagnostic export may contain source code and conversation data; protect the output file.",
+					});
 				const bundle = await mergeClientDiagnosticBundle(result.bundle, options.diagnosticsSpool);
 				if (typeof bundle !== "object" || bundle === null || Array.isArray(bundle))
 					throw new Error("diagnostics/export response did not contain a bundle");
