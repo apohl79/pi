@@ -224,6 +224,17 @@ export type NewRecord<TRecord extends LaneRecord = LaneRecord> = TRecord extends
 	? Omit<TRecord, "seq" | "timestamp">
 	: never;
 
+export type RegisterWrite =
+	| { op: "set"; namespace: string; key: string; value: JsonValue }
+	| { op: "delete"; namespace: string; key: string };
+
+export interface SessionRegister {
+	namespace: string;
+	key: string;
+	seq: number;
+	value: JsonValue;
+}
+
 export type EntryOrder = "newestFirst" | "oldestFirst";
 
 export interface EntryCursor {
@@ -290,7 +301,8 @@ export type LogItem =
 	| { kind: "record"; seq: number; record: LaneRecord }
 	| { kind: "lane"; seq: number; lane: string; leafId: string | null }
 	| { kind: "fact"; seq: number; fact: "name"; name: string | undefined }
-	| { kind: "fact"; seq: number; fact: "label"; targetId: string; label: string | undefined };
+	| { kind: "fact"; seq: number; fact: "label"; targetId: string; label: string | undefined }
+	| { kind: "register"; seq: number; register: RegisterWrite };
 
 export interface LogOptions {
 	afterSeq?: number;
@@ -334,6 +346,16 @@ export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetad
 	getLabel(id: string): Promise<string | undefined>;
 	setLabel(id: string, label: string | undefined): Promise<void>;
 	getStats(): Promise<SessionStats>;
+}
+
+/** Optional atomic register seam used by the durable harness transition layer. */
+export interface SessionTransactionStorage<TMetadata extends SessionMetadata = SessionMetadata>
+	extends SessionStorage<TMetadata> {
+	appendTransaction<TRecord extends LaneRecord>(
+		records: readonly NewRecord<TRecord>[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ records: TRecord[]; registers: SessionRegister[] }>;
+	getRegister(namespace: string, key: string): Promise<SessionRegister | undefined>;
 }
 
 export interface SessionTree {

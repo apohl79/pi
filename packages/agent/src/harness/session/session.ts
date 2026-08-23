@@ -1,27 +1,28 @@
 import { uuidv7 } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "../../types.ts";
-import { assertBoundedEntryPayload } from "./state.ts";
-import {
-	type BranchBounds,
-	type Entry,
-	type EntryQuery,
-	type IdGenerator,
-	type LanePointer,
-	type LaneRecord,
-	type LogItem,
-	type LogOptions,
-	MAX_DURABLE_COMPACTION_TEXT_LENGTH,
-	type NewRecord,
-	type OperationStartedRecord,
-	type ProvisionedEntry,
-	type RecordBase,
-	type RecordQuery,
-	SessionError,
-	type SessionMetadata,
-	type SessionStats,
-	type SessionStorage,
-	type SessionTree,
+import type {
+	BranchBounds,
+	Entry,
+	EntryQuery,
+	IdGenerator,
+	LanePointer,
+	LaneRecord,
+	LogItem,
+	LogOptions,
+	NewRecord,
+	OperationStartedRecord,
+	ProvisionedEntry,
+	RecordBase,
+	RecordQuery,
+	RegisterWrite,
+	SessionMetadata,
+	SessionRegister,
+	SessionStats,
+	SessionStorage,
+	SessionTransactionStorage,
+	SessionTree,
 } from "./types.ts";
+import { SessionError } from "./types.ts";
 
 type JsonValidationFrame = { value: unknown } | { exit: object };
 
@@ -218,6 +219,30 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> implem
 		>;
 	}
 
+	async appendTransaction<TNewRecord extends NewRecord>(
+		records: readonly TNewRecord[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ records: (TNewRecord & Pick<RecordBase, "seq" | "timestamp">)[]; registers: SessionRegister[] }> {
+		for (const record of records) assertJsonSerializable(record);
+		for (const write of writes) assertJsonSerializable(write);
+		const storage = this.storage as unknown as SessionTransactionStorage;
+		if (typeof storage.appendTransaction !== "function") {
+			throw new SessionError("storage", "Session backend does not support atomic register transactions");
+		}
+		return storage.appendTransaction(records as readonly NewRecord<LaneRecord>[], writes) as unknown as Promise<{
+			records: (TNewRecord & Pick<RecordBase, "seq" | "timestamp">)[];
+			registers: SessionRegister[];
+		}>;
+	}
+
+	async getRegister(namespace: string, key: string): Promise<SessionRegister | undefined> {
+		const storage = this.storage as unknown as SessionTransactionStorage;
+		if (typeof storage.getRegister !== "function") {
+			throw new SessionError("storage", "Session backend does not support registers");
+		}
+		return storage.getRegister(namespace, key);
+	}
+
 	async findRecords<K extends LaneRecord["type"]>(
 		query: RecordQuery & { type: K },
 	): Promise<Extract<LaneRecord, { type: K }>[]>;
@@ -297,28 +322,12 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> implem
 
 	private async commitEntry<TEntry extends Entry>(entry: ProvisionedEntry<TEntry>, lane: string): Promise<TEntry> {
 		assertJsonSerializable(entry);
-		assertBoundedEntryPayload(entry as unknown as Entry, (reason) => invalidPayload(reason));
 		return this.storage.appendEntry(entry, lane);
 	}
 
 	private async commitRecord<TNewRecord extends NewRecord>(
 		record: TNewRecord,
 	): Promise<TNewRecord & Pick<RecordBase, "seq" | "timestamp">> {
-		if (record.type === "operation_started") {
-			const intent = record.intent;
-			const customInstructions = "customInstructions" in intent ? intent.customInstructions : undefined;
-			if (customInstructions !== undefined) {
-				if (typeof customInstructions !== "string") {
-					throw new SessionError("invalid_payload", "Operation customInstructions must be a string");
-				}
-				if (customInstructions.length > MAX_DURABLE_COMPACTION_TEXT_LENGTH) {
-					throw new SessionError(
-						"invalid_payload",
-						`Operation customInstructions exceeds ${MAX_DURABLE_COMPACTION_TEXT_LENGTH} characters`,
-					);
-				}
-			}
-		}
 		assertJsonSerializable(record);
 		return this.storage.appendRecord<LaneRecord>(record) as unknown as Promise<
 			TNewRecord & Pick<RecordBase, "seq" | "timestamp">
