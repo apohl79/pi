@@ -385,7 +385,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			diagnosticKeyPath: options.diagnosticKeyPath ?? join(options.agentDir, "diagnostic-keys.json"),
 			clientDiagnosticSpoolPath:
 				options.clientDiagnosticSpoolPath ?? join(options.agentDir, "client-diagnostics.jsonl"),
-			lifecycleMarkerPath: join(options.agentDir, "daemon-state.json"),
+			lifecycleMarkerPath: options.lifecycleMarkerPath ?? join(options.agentDir, "daemon-state.json"),
 		});
 		return {
 			...runtime,
