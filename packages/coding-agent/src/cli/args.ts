@@ -81,14 +81,9 @@ export function isServerDefaultCompatible(options: Args): boolean {
 		options.sessionDir === undefined &&
 		options.models === undefined &&
 		options.export === undefined &&
-		options.noSkills !== true &&
-		options.skills === undefined &&
-		options.promptTemplates === undefined &&
-		options.noPromptTemplates !== true &&
 		options.themes === undefined &&
 		options.useTheme === undefined &&
 		options.noThemes !== true &&
-		options.noContextFiles !== true &&
 		options.listModels === undefined &&
 		options.offline !== true &&
 		options.projectTrustOverride === undefined &&
