@@ -2467,6 +2467,12 @@ export class AgentHarness implements AgentLane {
 			await transaction.appendTransaction(
 				[record],
 				[
+					{
+						op: "set",
+						namespace: "lane.lastResult",
+						key: record.lane,
+						value: durableClone(record) as unknown as JsonValue,
+					},
 					{ op: "delete", namespace: "op.meta", key: record.runId },
 					{ op: "delete", namespace: "op.state", key: record.runId },
 					...cancelled.map((item) => ({

@@ -121,6 +121,9 @@ describe("AgentHarness v2 scaffold", () => {
 		expect((await session.findRecords({ type: "operation_finished" })).map((record) => record.outcome)).toEqual([
 			"completed",
 		]);
+		expect(await session.getRegister("lane.lastResult", "main")).toMatchObject({
+			value: { runId: started.id, outcome: "completed" },
+		});
 		const messages = await session.findEntriesOnBranch({ order: "oldestFirst" });
 		expect(messages.filter((entry) => entry.type === "message").map((entry) => entry.message.role)).toEqual([
 			"user",
