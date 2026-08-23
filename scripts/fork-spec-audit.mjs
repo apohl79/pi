@@ -27,6 +27,15 @@ const requiredFiles = [
 	"packages/coding-agent/test/client/remote-v2-production-files.test.ts",
 	"packages/coding-agent/test/client/remote-v2-production-diagnostics.test.ts",
 	"packages/coding-agent/test/server/daemon-compaction-policy.test.ts",
+	"packages/coding-agent/test/server/daemon-agent-restart.test.ts",
+	"packages/coding-agent/test/server/daemon-unsafe-tool-recovery.test.ts",
+	"packages/coding-agent/test/server/daemon-disk-full.test.ts",
+	"packages/coding-agent/test/server/daemon-migration.test.ts",
+	"packages/coding-agent/test/server/daemon-model-instructions.test.ts",
+	"packages/coding-agent/test/server/daemon-rpc-session-name.test.ts",
+	"packages/coding-agent/test/server/daemon-rollback-invariants.test.ts",
+	"packages/coding-agent/test/client/remote-v2-production-statusline.test.ts",
+	"packages/coding-agent/test/client/remote-v2-production-usage.test.ts",
 	".github/workflows/ci.yml",
 ];
 
@@ -42,6 +51,15 @@ const requiredPatterns = [
 	["client CI contract", ".github/workflows/ci.yml", "npm test --workspace=@earendil-works/pi-client"],
 	["server CI contract", ".github/workflows/ci.yml", "npm test --workspace=@earendil-works/pi-server"],
 	["SQLite CI contract", ".github/workflows/ci.yml", "npm test --workspace=@earendil-works/pi-session-backend-sqlite-node"],
+	["fork build identity", "FORK_DELTA.md", "Runtime build identity in diagnostics"],
+	["server-default CLI modes", "packages/coding-agent/src/cli.ts", "serverDefaultPrint"],
+	["six agent tools", "packages/coding-agent/src/server/create-harness.ts", 'name: "interrupt_agent"'],
+	["diagnostic bundle export", "packages/server/src/diagnostics.ts", "verifyDiagnosticBundle"],
+	["unsafe recovery evidence", "packages/coding-agent/test/server/daemon-unsafe-tool-recovery.test.ts", "replay"],
+	["model-specific compaction evidence", "packages/coding-agent/test/server/daemon-compaction-policy.test.ts", "model"],
+	["rollback evidence", "packages/coding-agent/test/server/daemon-rollback-invariants.test.ts", "rollback"],
+	["statusline evidence", "packages/coding-agent/test/client/remote-v2-production-statusline.test.ts", "statusline"],
+	["usage evidence", "packages/coding-agent/test/client/remote-v2-production-usage.test.ts", "cost"],
 ];
 
 export function auditForkSpec() {
