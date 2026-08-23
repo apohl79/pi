@@ -293,16 +293,6 @@ export async function createCodingAgentDaemonRuntime(
 export async function createConfiguredCodingAgentDaemonRuntime(
 	options: ConfiguredCodingAgentDaemonRuntimeOptions,
 ): Promise<ConfiguredCodingAgentDaemonRuntime> {
-	let discoveredPiExtensions = options.piExtensions;
-	let piExtensionLoadErrors: readonly { path: string; error: string }[] = [];
-	if (discoveredPiExtensions === undefined) {
-		const resourceLoader = new DefaultResourceLoader({ cwd: options.cwd, agentDir: options.agentDir });
-		await resourceLoader.reload();
-		const extensionsResult = resourceLoader.getExtensions();
-		discoveredPiExtensions = extensionsResult.extensions;
-		piExtensionLoadErrors = extensionsResult.errors;
-	}
-	const piExtensionCompatibility = (discoveredPiExtensions ?? []).map(inspectPiExtensionServerCompatibility);
 	const primaryDiagnostics =
 		options.diagnostics ??
 		new SqliteForensicRecorder(
@@ -316,6 +306,16 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			...(options.diagnosticLogMaxFiles === undefined ? {} : { maxFiles: options.diagnosticLogMaxFiles }),
 		}),
 	);
+	let discoveredPiExtensions = options.piExtensions;
+	let piExtensionLoadErrors: readonly { path: string; error: string }[] = [];
+	if (discoveredPiExtensions === undefined) {
+		const resourceLoader = new DefaultResourceLoader({ cwd: options.cwd, agentDir: options.agentDir });
+		await resourceLoader.reload();
+		const extensionsResult = resourceLoader.getExtensions();
+		discoveredPiExtensions = extensionsResult.extensions;
+		piExtensionLoadErrors = extensionsResult.errors;
+	}
+	const piExtensionCompatibility = (discoveredPiExtensions ?? []).map(inspectPiExtensionServerCompatibility);
 	for (const report of piExtensionCompatibility) {
 		if (report.unsupported.length === 0) continue;
 		await diagnostics.record({
