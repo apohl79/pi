@@ -62,4 +62,58 @@ describe("production remote v2 naming safety", () => {
 			await runtime.close();
 		}
 	});
+
+	test("normalizes repeated prefixes, control characters, and overlong output", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-remote-name-normalization-"));
+		directories.push(directory);
+		const cases = [
+			["Title: Session name: Fix remote resume", "Session name: Fix remote resume"],
+			["Title: Fix\u0000 remote session resume now", "Fix remote session resume now"],
+			["Title: A very long session title that exceeds the display limit", "A very long session title that"],
+		] as const;
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-remote-name-normalization-faux",
+			models: [{ id: "session-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses(
+			cases.flatMap(([title]) => [fauxAssistantMessage("turn complete"), fauxAssistantMessage(title)]),
+		);
+		const socketPath = join(directory, "server.sock");
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel("session-model")!,
+			fastModel: faux.getModel("session-model"),
+			socketPath,
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({ transportFactory: createUnixTransportFactory({ path: socketPath }) });
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			for (const [, expected] of cases) {
+				const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
+				try {
+					const operation = await session.submit("name this task");
+					await session.waitForOperation(operation);
+					for (let attempt = 0; attempt < 50; attempt++) {
+						await session.refresh();
+						if (session.snapshot?.name === expected) break;
+						if (attempt === 49) throw new Error(`Timed out waiting for normalized title ${expected}`);
+						await new Promise((resolve) => setTimeout(resolve, 10));
+					}
+					expect(session.snapshot?.name).toBe(expected);
+				} finally {
+					await session.dispose();
+				}
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
 });

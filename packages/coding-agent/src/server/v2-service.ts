@@ -203,7 +203,7 @@ function queueContent(message: AgentMessage, references?: readonly PromptContent
 export function normalizeGeneratedName(value: string, options?: { secretFallback?: boolean }): string | undefined {
 	const cleaned = value
 		.replace(/[\u0000-\u001f\u007f]/g, " ")
-		.replace(/^(?:title|session\s+name)\s*[:-]\s*/i, "")
+		.replace(/^(?:(?:title|session\s+name)\s*[:-]\s*)+/i, "")
 		.replace(/^here(?:'s| is)\s+(?:a|the)?\s*(?:title|session\s+name)\s*[:-]?\s*/i, "")
 		.replace(/\s+/g, " ")
 		.replace(/^['"`]+|['"`]+$/g, "")
