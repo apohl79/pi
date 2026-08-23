@@ -1296,6 +1296,9 @@ export class PiServerV2 {
 					throw new Error(`turn content item ${index} requires an image MIME type`);
 				if (typeof item.data === "string") return { type: "image", data: item.data, mimeType: item.mimeType };
 				if (typeof item.digest !== "string") throw new Error(`turn content item ${index} requires a blob digest`);
+				const blob = await this.blobs.stat(item.digest);
+				if (blob.mimeType !== item.mimeType)
+					throw new Error(`turn content item ${index} MIME type does not match blob metadata`);
 				const data = await this.blobs.read(item.digest);
 				return { type: "image", data: Buffer.from(data).toString("base64"), mimeType: item.mimeType };
 			}),
