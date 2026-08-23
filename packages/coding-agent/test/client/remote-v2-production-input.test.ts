@@ -101,7 +101,7 @@ describe("production remote v2 input", () => {
 			fauxAssistantMessage(
 				fauxToolCall("request_user_input", {
 					questions: [{ id: "choice", prompt: "Choose", options: [{ label: "Yes" }] }],
-					autoResolutionMs: 20,
+					autoResolutionMs: 200,
 				}),
 			),
 			fauxAssistantMessage("auto resolved"),
