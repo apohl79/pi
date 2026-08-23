@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { createServerAgentSession } from "../../src/client/server-sdk.ts";
+import { createServerAgentSession, openServerAgentSession } from "../../src/client/server-sdk.ts";
 
 describe("createServerAgentSession", () => {
 	it("discovers a configured-directory model without network refresh", async () => {
@@ -67,6 +67,50 @@ describe("createServerAgentSession", () => {
 				expect(handle.session.snapshot?.usage).toBeDefined();
 			} finally {
 				await handle.close();
+			}
+		} finally {
+			await rm(agentDir, { recursive: true, force: true });
+		}
+	});
+
+	it("reopens a durable session through the SDK after daemon shutdown", async () => {
+		const agentDir = await mkdtemp(join(tmpdir(), "pi-server-sdk-reopen-"));
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "server-sdk-reopen-faux",
+			models: [{ id: "server-sdk-reopen-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("reopen this durable session")]);
+		try {
+			const first = await createServerAgentSession({ agentDir, cwd: agentDir, models, model: faux.getModel() });
+			const sessionId = first.session.id;
+			expect(sessionId).toEqual(expect.any(String));
+			try {
+				const operationId = await first.session.submit("save this before shutdown");
+				await first.session.waitForOperation(operationId);
+			} finally {
+				await first.close();
+			}
+
+			const reopened = await openServerAgentSession(String(sessionId), {
+				agentDir,
+				cwd: agentDir,
+				models,
+				model: faux.getModel(),
+			});
+			try {
+				expect(reopened.session.snapshot?.transcript).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							content: expect.arrayContaining([
+								expect.objectContaining({ text: "reopen this durable session" }),
+							]),
+						}),
+					]),
+				);
+			} finally {
+				await reopened.close();
 			}
 		} finally {
 			await rm(agentDir, { recursive: true, force: true });

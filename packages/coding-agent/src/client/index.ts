@@ -22,6 +22,7 @@ export * from "./remote-v2-view.ts";
 export {
 	type CreateServerAgentSessionOptions,
 	createServerAgentSession,
+	openServerAgentSession,
 	type ServerAgentSession,
 } from "./server-sdk.ts";
 export {
