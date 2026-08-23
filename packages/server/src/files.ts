@@ -68,11 +68,11 @@ function isWithin(root: string, candidate: string): boolean {
 	return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
 }
 
-function referenceFor(scope: FileScope, root: string, path: string): string {
+function referenceFor(scope: FileScope, root: string, path: string, absoluteServerPath = false): string {
 	return scope === "project"
 		? `project:${relative(root, path) || "."}`
 		: scope === "server"
-			? `server:${relative(root, path) || "."}`
+			? `server:${absoluteServerPath ? path : relative(root, path) || "."}`
 			: scope === "home"
 				? `~/${relative(root, path)}`
 				: path;
@@ -129,6 +129,7 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 						: clean;
 		const base = scope === "project" ? this.projectRoot : scope === "home" ? this.homeDirectory : this.cwd;
 		const candidate = isAbsolute(logical) ? logical : resolve(base, logical);
+		const absoluteServerPath = scope === "server" && isAbsolute(logical);
 		const directory = await this.directoryForCompletion(candidate);
 		const prefixName = candidate === directory ? "" : candidate.slice(directory.length + 1);
 		const entries = await readdir(directory, { withFileTypes: true });
@@ -137,12 +138,12 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 				.filter((entry) => entry.name.startsWith(prefixName))
 				.map(async (entry): Promise<V2FileCompletion | undefined> => {
 					const path = resolve(directory, entry.name);
-					if (!this.allowedLexically(path, scope === "absolute")) return undefined;
+					if (!this.allowedLexically(path, scope === "absolute" || absoluteServerPath)) return undefined;
 					try {
 						const resolved = await realpath(path);
-						if (!(await this.allowed(resolved, scope === "absolute"))) return undefined;
+						if (!(await this.allowed(resolved, scope === "absolute" || absoluteServerPath))) return undefined;
 						return {
-							reference: referenceFor(scope, base, path),
+							reference: referenceFor(scope, base, path, absoluteServerPath),
 							path,
 							kind: entry.isDirectory() ? "directory" : "file",
 						} satisfies V2FileCompletion;
@@ -196,12 +197,14 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 						? reference.slice(2)
 						: reference;
 		const base = scope === "project" ? this.projectRoot : scope === "home" ? this.homeDirectory : this.cwd;
-		if (scope === "absolute" && !this.allowAbsolute) throw new Error("Absolute file references are disabled");
+		const absoluteServerPath = scope === "server" && isAbsolute(logical);
+		if ((scope === "absolute" || absoluteServerPath) && !this.allowAbsolute)
+			throw new Error("Absolute file references are disabled");
 		const candidate = scope === "absolute" ? resolve(reference) : resolve(base, logical);
-		if (!this.allowedLexically(candidate, scope === "absolute"))
+		if (!this.allowedLexically(candidate, scope === "absolute" || absoluteServerPath))
 			throw new Error(`File reference escapes the accessible filesystem: ${reference}`);
 		const resolved = await realpath(candidate);
-		if (!(await this.allowed(resolved, scope === "absolute")))
+		if (!(await this.allowed(resolved, scope === "absolute" || absoluteServerPath)))
 			throw new Error(`File reference escapes the accessible filesystem: ${reference}`);
 		return resolved;
 	}
