@@ -7,6 +7,7 @@ import type {
 } from "@earendil-works/pi-agent-core";
 import type { Api, ImageContent, Message, Model, Models, ThinkingLevel } from "@earendil-works/pi-ai";
 import type {
+	AgentSummary,
 	CommandNameV2,
 	CommandV2,
 	InstructionProfileSummary,
@@ -31,6 +32,7 @@ export interface CodingAgentV2SessionDefinition {
 	usage?: V2UsageLedger;
 	instructionProfile?: () => Promise<InstructionProfileSummary | undefined>;
 	pluginSetHash?: () => Promise<string>;
+	agents?: () => Promise<readonly AgentSummary[]>;
 }
 
 export interface CodingAgentV2Service {
@@ -390,11 +392,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.definition.usage?.aggregate({ sessionId: this.definition.metadata.id }),
 		]);
 		void leafId;
-		const [goal, persistedName, instructionProfile, pluginSetHash] = await Promise.all([
+		const [goal, persistedName, instructionProfile, pluginSetHash, agents] = await Promise.all([
 			this.definition.goals?.read(),
 			this.definition.harness.session.getName(),
 			this.definition.instructionProfile?.(),
 			this.definition.pluginSetHash?.(),
+			this.definition.agents?.(),
 		]);
 		const effectiveName = persistedName ?? this.sessionName;
 		const cacheRead = Math.max(0, stats.cachedTokens);
@@ -423,7 +426,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			transcript,
 			queues: { steer: [], followUp: [] },
 			...(goal === undefined ? {} : { goal }),
-			agents: [],
+			agents: agents === undefined ? [] : [...agents],
 			usage: {
 				input,
 				output,
