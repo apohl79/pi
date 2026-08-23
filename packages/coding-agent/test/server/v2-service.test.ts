@@ -808,6 +808,10 @@ describe("coding-agent v2 service adapter", () => {
 				},
 			]);
 			const runtime = await service.openSession("adapter-session");
+			const pluginDiagnostics: Array<Record<string, unknown>> = [];
+			runtime.onEvent?.((event) => {
+				if (event.event === "plugin_diagnostic") pluginDiagnostics.push(event.payload);
+			});
 			const accepted = await runtime.accept("operation-1");
 			expect((await runtime.snapshot()).activeOperation).toMatchObject({
 				operationId: "operation-1",
@@ -831,6 +835,17 @@ describe("coding-agent v2 service adapter", () => {
 			expect(usageSnapshot.output).toBeGreaterThan(0);
 			expect(turnSnapshot.transcript.map((item) => item.role)).toEqual(["user", "assistant"]);
 			expect(lifecycle).toEqual(["accepted:turn/start", "terminal:turn/start:completed"]);
+			expect(pluginDiagnostics).toEqual([
+				{ hook: "accepted", extensionId: "test-extension", status: "fulfilled" },
+				{
+					hook: "accepted",
+					extensionId: "failing-extension",
+					status: "rejected",
+					reason: "diagnostic-only extension failure",
+				},
+				{ hook: "terminal", extensionId: "test-extension", status: "fulfilled" },
+				{ hook: "terminal", extensionId: "failing-extension", status: "fulfilled" },
+			]);
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			expect(
 				(await diagnostics.read()).filter(
