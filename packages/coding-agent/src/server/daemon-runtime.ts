@@ -121,6 +121,8 @@ export type ConfiguredCodingAgentDaemonRuntimeOptions = Omit<CodingAgentDaemonRu
 	agentDir: string;
 	cwd: string;
 	databasePath?: string;
+	extensionPaths?: readonly string[];
+	noExtensions?: boolean;
 };
 
 export type ConfiguredCodingAgentDaemonRuntime = CodingAgentDaemonRuntime & {
@@ -309,7 +311,12 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 	let discoveredPiExtensions = options.piExtensions;
 	let piExtensionLoadErrors: readonly { path: string; error: string }[] = [];
 	if (discoveredPiExtensions === undefined) {
-		const resourceLoader = new DefaultResourceLoader({ cwd: options.cwd, agentDir: options.agentDir });
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: options.cwd,
+			agentDir: options.agentDir,
+			...(options.extensionPaths === undefined ? {} : { additionalExtensionPaths: [...options.extensionPaths] }),
+			...(options.noExtensions === undefined ? {} : { noExtensions: options.noExtensions }),
+		});
 		try {
 			await resourceLoader.reload();
 		} catch (error) {

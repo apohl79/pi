@@ -81,8 +81,6 @@ export function isServerDefaultCompatible(options: Args): boolean {
 		options.fork === undefined &&
 		options.sessionDir === undefined &&
 		options.models === undefined &&
-		options.extensions === undefined &&
-		options.noExtensions !== true &&
 		options.export === undefined &&
 		options.noSkills !== true &&
 		options.skills === undefined &&

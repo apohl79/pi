@@ -64,7 +64,9 @@ async function runCli(): Promise<void> {
 		parsedArgs.tools === undefined &&
 		parsedArgs.noTools !== true &&
 		parsedArgs.excludeTools === undefined &&
-		parsedArgs.noBuiltinTools !== true
+		parsedArgs.noBuiltinTools !== true &&
+		parsedArgs.extensions === undefined &&
+		parsedArgs.noExtensions !== true
 			? undefined
 			: {
 					...(parsedArgs.systemPrompt === undefined && parsedArgs.appendSystemPrompt === undefined
@@ -101,6 +103,8 @@ async function runCli(): Promise<void> {
 		},
 		fastModelResolver: (selectedModel) => modelRuntime.getModelRole(selectedModel.provider, "fast"),
 		harness: harnessOptions,
+		extensionPaths: parsedArgs.extensions,
+		noExtensions: parsedArgs.noExtensions,
 		socketPath: join(agentDir, "pi.sock"),
 		write: (value) => console.log(JSON.stringify(value)),
 		writeText: (value) => process.stdout.write(`${value}\n`),

@@ -464,6 +464,8 @@ describe("coding-agent daemon runtime", () => {
 			model: faux.getModel(),
 			diagnostics,
 			socketPath: join(directory, "server.sock"),
+			extensionPaths: [join(directory, "extensions", "sampling.ts")],
+			noExtensions: true,
 			harness: { tools: [], activeToolNames: [] },
 			write: () => {},
 		});
