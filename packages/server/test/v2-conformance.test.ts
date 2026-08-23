@@ -1044,6 +1044,7 @@ describe("PiServer v2 operation acceptance", () => {
 		const server = createUnixServerV2(new TestService(), {
 			path: join(directory, "server.sock"),
 			diagnostics,
+			daemonInstanceId: "daemon-v2-test",
 			processes: new InMemoryV2ProcessRegistry({ maxOutputBytes: 5 }),
 		});
 		servers.push(server);
@@ -1063,6 +1064,7 @@ describe("PiServer v2 operation acceptance", () => {
 		const terminated = await client.request({ command: "process/terminate", payload: { processId } });
 		expect(terminated).toMatchObject({ ok: true, result: { process: { state: "terminated", exitCode: 143 } } });
 		const diagnosticEvents = await diagnostics.read();
+		expect(new Set(diagnosticEvents.map((event) => event.daemonInstanceId))).toEqual(new Set(["daemon-v2-test"]));
 		expect(diagnosticEvents.map((event) => event.kind).filter((kind) => kind.startsWith("process_"))).toEqual([
 			"process_started",
 			"process_input_written",

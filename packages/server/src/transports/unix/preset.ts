@@ -39,6 +39,7 @@ export function createUnixServerV2(service: PiServerServiceV2, options: UnixServ
 		maxFrameLength: options.maxFrameLength,
 		handshakeTimeoutMs: options.handshakeTimeoutMs,
 		serverId: options.serverId,
+		daemonInstanceId: options.daemonInstanceId,
 		onError: options.onError,
 		diagnostics: options.diagnostics,
 		diagnosticContent: options.diagnosticContent,

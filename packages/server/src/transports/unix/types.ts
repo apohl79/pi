@@ -31,6 +31,7 @@ export interface UnixListenerOptions {
 }
 
 export interface UnixServerOptions extends Omit<PiServerOptions, "listeners">, UnixListenerOptions {
+	daemonInstanceId?: string;
 	diagnostics?: ForensicRecorder;
 	diagnosticContent?: DiagnosticContentStore;
 	integrity?: DiagnosticIntegrityProvider;

@@ -100,6 +100,24 @@ describe("ServerDaemon", () => {
 		await daemon.stop();
 	});
 
+	test("passes the generated daemon identity to the owned v2 server", async () => {
+		let received: unknown;
+		const daemon = new ServerDaemon({
+			service: service(),
+			socketPath: "/tmp/daemon-test.sock",
+			createServer: (_service, options) => {
+				received = options.daemonInstanceId;
+				return fakeServer(
+					async () => {},
+					async () => {},
+				);
+			},
+		});
+		await daemon.start();
+		await daemon.stop();
+		expect(received).toEqual(expect.any(String));
+	});
+
 	test("records daemon lifecycle markers", async () => {
 		const diagnostics = new InMemoryForensicRecorder();
 		const daemon = new ServerDaemon({
