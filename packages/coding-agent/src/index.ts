@@ -34,8 +34,10 @@ export {
 	formatRemoteV2Session,
 	RemoteV2SessionView,
 	type RemoteV2SessionViewOptions,
+	RemoteV2StatuslineController,
 	type RemoteV2StatuslinePayload,
 	type RemoteV2StatuslinePayloadOptions,
+	type RemoteV2StatuslineSource,
 } from "./client/remote-v2-view.ts";
 // Config paths
 export {

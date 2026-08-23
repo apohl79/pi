@@ -1,5 +1,6 @@
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { type Component, Text } from "@earendil-works/pi-tui";
+import type { StatuslineRunner, StatuslineSnapshot } from "../server/statusline.ts";
 import type { RemoteV2Session, RemoteV2SessionState } from "./remote-v2-session.ts";
 
 export interface RemoteV2SessionViewOptions {
@@ -42,6 +43,45 @@ export interface RemoteV2StatuslinePayload {
 	readonly goal?: { readonly status: string; readonly remaining_tokens?: number };
 	readonly agents: { readonly active: number; readonly total: number; readonly total_cost_usd?: number };
 	readonly server: { readonly connected: boolean; readonly phase: string; readonly detachable: boolean };
+}
+
+export interface RemoteV2StatuslineSource {
+	readonly state: RemoteV2SessionState;
+	subscribe(listener: (state: RemoteV2SessionState) => void): () => void;
+}
+
+/** Runs statusline commands locally while consuming server-authoritative session state. */
+export class RemoteV2StatuslineController {
+	readonly #runner: StatuslineRunner;
+	readonly #source: RemoteV2StatuslineSource;
+	readonly #options: RemoteV2StatuslinePayloadOptions;
+	readonly #unsubscribe: () => void;
+	#snapshot: StatuslineSnapshot = { pending: false };
+
+	constructor(source: RemoteV2StatuslineSource, runner: StatuslineRunner, options: RemoteV2StatuslinePayloadOptions) {
+		this.#source = source;
+		this.#runner = runner;
+		this.#options = options;
+		this.#unsubscribe = source.subscribe((state) => {
+			void this.refresh(state);
+		});
+	}
+
+	get snapshot(): StatuslineSnapshot {
+		return structuredClone(this.#snapshot);
+	}
+
+	async refresh(state = this.#source.state): Promise<StatuslineSnapshot> {
+		const payload = createRemoteV2StatuslinePayload(state, this.#options);
+		if (payload === undefined) return this.snapshot;
+		this.#snapshot = await this.#runner.update(payload);
+		return this.snapshot;
+	}
+
+	async dispose(): Promise<void> {
+		this.#unsubscribe();
+		await this.#runner.dispose();
+	}
 }
 
 /** Renderable TUI projection of one server-authoritative v2 session. */
