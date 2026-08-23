@@ -1,8 +1,17 @@
 import { Check } from "typebox/value";
 import { describe, expect, test } from "vitest";
 import {
+	ClientMessageV2Decoder,
+	ProtocolValidationError,
+	ServerMessageV2Decoder,
+	encodeCbor,
+	encodeClientMessageV2,
+	encodeServerMessageV2,
+	encodeFrame,
+	isClientMessageV2,
 	isOperationRecordV2,
 	isOperationSummary,
+	isServerMessageV2,
 	MAX_V2_ARRAY_ITEMS,
 	MAX_V2_JSON_DEPTH,
 	MAX_V2_STRING_LENGTH,
@@ -12,7 +21,11 @@ import {
 	QueueSnapshotSchema,
 	ServerSnapshotV2Schema,
 	SessionSnapshotV2Schema,
+	parseClientMessageV2,
 } from "../src/index.ts";
+
+const clientHello = { type: "hello", version: 2 } as const;
+const serverError = { type: "hello_error", error: { code: "invalid", message: "bad" } } as const;
 
 describe("protocol v2 contract schemas", () => {
 	test("requires canonical digests and safe MIME tokens", () => {
@@ -218,5 +231,104 @@ describe("protocol v2 contract schemas", () => {
 		expect(
 			Check(OperationSummarySchema, { operationId: "op-1", kind: "prompt", state: "failed", acceptedSeq: 1 }),
 		).toBe(true);
+	});
+
+	test("rejects non-finite numbers through public v2 validation paths", () => {
+		const message = { type: "request", id: "request-1", request: { command: "session/list" } };
+		expect(isClientMessageV2({ ...message, request: { ...message.request, payload: Number.NaN } })).toBe(false);
+		expect(isServerMessageV2({ type: "response", id: "request-1", ok: true, result: Number.POSITIVE_INFINITY })).toBe(
+			false,
+		);
+		expect(() => parseClientMessageV2({ ...message, request: { ...message.request, payload: Number.NEGATIVE_INFINITY } })).toThrow(
+			ProtocolValidationError,
+		);
+	});
+});
+
+describe("protocol v2 wire codecs", () => {
+	test("incrementally decodes fragmented and coalesced client frames", () => {
+		const first = encodeClientMessageV2(clientHello);
+		const second = encodeClientMessageV2({
+			type: "request",
+			id: "request-1",
+			request: { command: "session/list" },
+		});
+		const decoder = new ClientMessageV2Decoder();
+		const combined = new Uint8Array(first.byteLength + second.byteLength);
+		combined.set(first);
+		combined.set(second, first.byteLength);
+		const split = first.byteLength - 1;
+		expect([...decoder.push(combined.subarray(0, split)), ...decoder.push(combined.subarray(split))]).toEqual([
+			clientHello,
+			{ type: "request", id: "request-1", request: { command: "session/list" } },
+		]);
+		decoder.end();
+	});
+
+	test("incrementally decodes fragmented server frames", () => {
+		const wire = encodeServerMessageV2(serverError);
+		const decoder = new ServerMessageV2Decoder();
+		const messages = [...decoder.push(wire.subarray(0, 2)), ...decoder.push(wire.subarray(2))];
+		expect(messages).toEqual([serverError]);
+		decoder.end();
+	});
+
+	test("rejects oversized dynamic v2 payloads and messages", () => {
+		const oversized = "x".repeat(MAX_V2_STRING_LENGTH + 1);
+		expect(() =>
+			encodeClientMessageV2({
+				type: "request",
+				id: "request-1",
+				request: { command: "session/list", payload: oversized },
+			}),
+		).toThrow(ProtocolValidationError);
+		expect(() =>
+			encodeServerMessageV2({
+				type: "response",
+				id: "request-1",
+				ok: false,
+				error: { code: "invalid", message: oversized },
+			}),
+		).toThrow(ProtocolValidationError);
+		expect(() =>
+			encodeServerMessageV2({
+				type: "response",
+				id: "request-1",
+				ok: true,
+				result: { nested: oversized },
+			}),
+		).toThrow(ProtocolValidationError);
+		expect(() =>
+			encodeServerMessageV2({
+				type: "hello_error",
+				error: { code: "invalid", message: "bad", details: { nested: oversized } },
+			}),
+		).toThrow(ProtocolValidationError);
+	});
+
+	test("applies V2 CBOR container and depth limits before schema validation", () => {
+		const oversizedPayload = {
+			type: "request",
+			id: "request-1",
+			request: { command: "session/list", payload: Array.from({ length: MAX_V2_ARRAY_ITEMS + 1 }, () => true) },
+		};
+		const deepPayload = Array.from({ length: MAX_V2_JSON_DEPTH + 4 }, () => 0).reduceRight(
+			(value) => ({ nested: value }),
+			true as unknown,
+		);
+		const decoder = new ClientMessageV2Decoder();
+		expect(() => decoder.push(encodeFrame(encodeCbor(oversizedPayload)))).toThrow(ProtocolValidationError);
+		const deepDecoder = new ClientMessageV2Decoder();
+		expect(() =>
+			deepDecoder.push(
+				encodeFrame(
+					encodeCbor({
+						type: "request",
+						id: "request-1",
+						request: { command: "session/list", payload: deepPayload },
+					}),
+				),
+			),
+		).toThrow(ProtocolValidationError);
 	});
 });

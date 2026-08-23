@@ -14,6 +14,15 @@ import {
 	type ServerMessage,
 	ServerMessageSchema,
 } from "./schemas.ts";
+import {
+	type ClientMessageV2,
+	isClientMessageV2,
+	isServerMessageV2,
+	MAX_V2_ARRAY_ITEMS,
+	MAX_V2_JSON_DEPTH,
+	PROTOCOL_V2_VERSION,
+	type ServerMessageV2,
+} from "./v2.ts";
 
 export class ProtocolValidationError extends Error {
 	constructor(message: string, _value?: unknown) {
@@ -75,6 +84,13 @@ function encodeProtocolMessage<T>(
 	}
 }
 
+function parseV2Message<T>(value: unknown, check: (candidate: unknown) => candidate is T, kind: string): T {
+	if (!isProtocolValue(value) || !check(value)) {
+		throw new ProtocolValidationError(`Invalid ${kind} protocol v2 message`);
+	}
+	return value;
+}
+
 /** Validates and encodes one complete length-prefixed client message. */
 export function encodeClientMessage(message: ClientMessage, options?: FrameDecoderOptions): Uint8Array {
 	return encodeProtocolMessage(message, parseClientMessage, "client", options);
@@ -85,17 +101,40 @@ export function encodeServerMessage(message: ServerMessage, options?: FrameDecod
 	return encodeProtocolMessage(message, parseServerMessage, "server", options);
 }
 
+export function parseClientMessageV2(value: unknown): ClientMessageV2 {
+	return parseV2Message(value, isClientMessageV2, "client");
+}
+
+export function parseServerMessageV2(value: unknown): ServerMessageV2 {
+	return parseV2Message(value, isServerMessageV2, "server");
+}
+
+export function encodeClientMessageV2(message: ClientMessageV2, options?: FrameDecoderOptions): Uint8Array {
+	return encodeProtocolMessage(message, parseClientMessageV2, "client v2", options);
+}
+
+export function encodeServerMessageV2(message: ServerMessageV2, options?: FrameDecoderOptions): Uint8Array {
+	return encodeProtocolMessage(message, parseServerMessageV2, "server v2", options);
+}
+
 class ValidatedMessageDecoder<T> {
 	private failed = false;
 	private readonly frames: FrameDecoder;
 	private readonly kind: string;
 	private readonly maxFrameLength: number;
+	private readonly cborLimits: { maxContainerLength?: number; maxDepth?: number };
 	private readonly parse: (candidate: unknown) => T;
 
-	constructor(kind: string, parse: (candidate: unknown) => T, options?: FrameDecoderOptions) {
+	constructor(
+		kind: string,
+		parse: (candidate: unknown) => T,
+		options?: FrameDecoderOptions,
+		cborLimits: { maxContainerLength?: number; maxDepth?: number } = {},
+	) {
 		this.frames = new FrameDecoder(options);
 		this.kind = kind;
 		this.maxFrameLength = options?.maxFrameLength ?? DEFAULT_MAX_FRAME_LENGTH;
+		this.cborLimits = cborLimits;
 		this.parse = parse;
 	}
 
@@ -104,7 +143,14 @@ class ValidatedMessageDecoder<T> {
 		try {
 			const messages: T[] = [];
 			for (const frame of this.frames.push(chunk)) {
-				messages.push(this.parse(decodeCbor(frame, { maxByteLength: this.maxFrameLength })));
+				messages.push(
+					this.parse(
+						decodeCbor(frame, {
+							maxByteLength: this.maxFrameLength,
+							...this.cborLimits,
+						}),
+					),
+				);
 			}
 			return messages;
 		} catch (error) {
@@ -159,6 +205,46 @@ export class ServerMessageDecoder {
 	}
 }
 
+/** Incrementally decodes and validates framed v2 client messages. */
+export class ClientMessageV2Decoder {
+	private readonly decoder: ValidatedMessageDecoder<ClientMessageV2>;
+
+	constructor(options?: FrameDecoderOptions) {
+		this.decoder = new ValidatedMessageDecoder("client v2", parseClientMessageV2, options, {
+			maxContainerLength: MAX_V2_ARRAY_ITEMS,
+			maxDepth: MAX_V2_JSON_DEPTH + 3,
+		});
+	}
+
+	push(chunk: Uint8Array): ClientMessageV2[] {
+		return this.decoder.push(chunk);
+	}
+
+	end(): void {
+		this.decoder.end();
+	}
+}
+
+/** Incrementally decodes and validates framed v2 server messages. */
+export class ServerMessageV2Decoder {
+	private readonly decoder: ValidatedMessageDecoder<ServerMessageV2>;
+
+	constructor(options?: FrameDecoderOptions) {
+		this.decoder = new ValidatedMessageDecoder("server v2", parseServerMessageV2, options, {
+			maxContainerLength: MAX_V2_ARRAY_ITEMS,
+			maxDepth: MAX_V2_JSON_DEPTH + 3,
+		});
+	}
+
+	push(chunk: Uint8Array): ServerMessageV2[] {
+		return this.decoder.push(chunk);
+	}
+
+	end(): void {
+		this.decoder.end();
+	}
+}
+
 export function createClientMessageDecoder(options?: FrameDecoderOptions): ClientMessageDecoder {
 	return new ClientMessageDecoder(options);
 }
@@ -167,6 +253,18 @@ export function createServerMessageDecoder(options?: FrameDecoderOptions): Serve
 	return new ServerMessageDecoder(options);
 }
 
+export function createClientMessageV2Decoder(options?: FrameDecoderOptions): ClientMessageV2Decoder {
+	return new ClientMessageV2Decoder(options);
+}
+
+export function createServerMessageV2Decoder(options?: FrameDecoderOptions): ServerMessageV2Decoder {
+	return new ServerMessageV2Decoder(options);
+}
+
 export function isSupportedProtocolVersion(version: number): version is typeof PROTOCOL_VERSION {
 	return Number.isInteger(version) && version === PROTOCOL_VERSION;
+}
+
+export function isSupportedProtocolV2Version(version: number): version is typeof PROTOCOL_V2_VERSION {
+	return Number.isInteger(version) && version === PROTOCOL_V2_VERSION;
 }
