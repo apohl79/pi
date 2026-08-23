@@ -652,7 +652,11 @@ function createAgentTools(registry: V2AgentRegistry, sessionId: string, model: M
 				...(request.role === undefined ? {} : { role: request.role }),
 				...(request.forkTurns === undefined ? {} : { forkTurns: request.forkTurns }),
 				model: request.model ?? { provider: model.provider, id: model.id },
-				modelResolution: request.model === undefined ? "inherited" : "explicit",
+				modelResolution:
+					request.model === undefined ||
+					(request.model.provider === model.provider && request.model.id === model.id)
+						? "inherited"
+						: "explicit",
 			}),
 		list: () => registry.list(sessionId),
 		wait: (agentId, timeoutMs) => registry.wait(agentId, timeoutMs),
