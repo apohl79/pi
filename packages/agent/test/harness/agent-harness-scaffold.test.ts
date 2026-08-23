@@ -952,8 +952,14 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(nextRun).toMatchObject({ ok: true, value: { entryId: expect.any(String) } });
 		const queued = await session.findRecords({ type: "queue_enqueued", order: "oldestFirst" });
 		expect(queued.map((record) => record.queue)).toEqual(["steer", "followUp", "nextRun"]);
+		for (const record of queued) {
+			expect(await session.getRegister("pending.entry", record.target.id)).toMatchObject({
+				value: record.target,
+			});
+		}
 		const entryId = nextRun.ok ? nextRun.value.entryId : "missing";
 		expect(await harness.cancelQueued(entryId)).toEqual({ ok: true, value: { outcome: "cancelled" } });
+		expect(await session.getRegister("pending.entry", entryId)).toBeUndefined();
 		expect(await harness.cancelQueued(entryId)).toEqual({ ok: true, value: { outcome: "already_cleared" } });
 		await harness.close();
 	});
