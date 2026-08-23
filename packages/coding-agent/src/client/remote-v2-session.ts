@@ -1170,10 +1170,13 @@ export class RemoteV2Session {
 			const request = asRecord(event.payload)?.request;
 			if (isInputRequestProjection(request)) {
 				if (request.status === "pending") {
-					this.#snapshot = { ...this.#snapshot, pendingInputRequestId: request.id };
+					this.#snapshot = {
+						...this.#snapshot,
+						queues: { ...this.#snapshot.queues, pendingInputRequestId: request.id },
+					};
 				} else {
-					const { pendingInputRequestId: _pendingInputRequestId, ...snapshot } = this.#snapshot;
-					this.#snapshot = snapshot;
+					const { pendingInputRequestId: _pendingInputRequestId, ...queues } = this.#snapshot.queues;
+					this.#snapshot = { ...this.#snapshot, queues };
 				}
 			}
 		} else if (event.event === "plan_updated" && this.#snapshot) {

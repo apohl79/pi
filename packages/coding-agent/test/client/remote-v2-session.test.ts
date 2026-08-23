@@ -772,7 +772,7 @@ describe("RemoteV2Session", () => {
 			goal: { id: "goal-1", status: "active" },
 			compactionPolicy: { enabled: false, source: "model" },
 			instructionProfile: { id: "profile-1", source: "text" },
-			pendingInputRequestId: "request-1",
+			queues: { pendingInputRequestId: "request-1" },
 		});
 		pair.deliver({
 			type: "event",
@@ -782,7 +782,7 @@ describe("RemoteV2Session", () => {
 			event: "input_request_updated",
 			payload: { request: { id: "request-1", sessionId: "session-1", status: "responded" } },
 		});
-		expect(session.snapshot).not.toHaveProperty("pendingInputRequestId");
+		expect(session.snapshot?.queues).not.toHaveProperty("pendingInputRequestId");
 		await session.dispose();
 	});
 

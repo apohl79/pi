@@ -2,6 +2,8 @@ import { chmod, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs
 import { dirname } from "node:path";
 import type { JsonValue } from "@earendil-works/pi-protocol";
 
+export { mergeClientDiagnosticBundle } from "./diagnostics-core.ts";
+
 export type ClientDiagnosticSeverity = "debug" | "info" | "warn" | "error";
 
 export interface ClientDiagnosticRecordInput {
@@ -216,55 +218,6 @@ function sanitizeClientDiagnosticFields(fields: Record<string, JsonValue>): Reco
 }
 
 /** Merge client-local records into a server diagnostic bundle when identities match. */
-export async function mergeClientDiagnosticBundle(
-	bundle: unknown,
-	spool: ClientDiagnosticSpool | undefined,
-): Promise<Record<string, unknown>> {
-	if (typeof bundle !== "object" || bundle === null || Array.isArray(bundle))
-		throw new Error("diagnostics/export response did not contain a bundle");
-	if (spool === undefined) return bundle as Record<string, unknown>;
-	const source = bundle as Record<string, unknown>;
-	const clientDiagnostics =
-		typeof source.clientDiagnostics === "object" && source.clientDiagnostics !== null
-			? (source.clientDiagnostics as Record<string, unknown>)
-			: {};
-	const afterSeq = typeof clientDiagnostics.afterSeq === "number" ? clientDiagnostics.afterSeq : 0;
-	let records: Awaited<ReturnType<ClientDiagnosticSpool["read"]>> = [];
-	let latestSeq = afterSeq;
-	const remoteManifest =
-		typeof clientDiagnostics.manifest === "object" && clientDiagnostics.manifest !== null
-			? (clientDiagnostics.manifest as Record<string, unknown>)
-			: undefined;
-	const remoteClientInstanceId =
-		typeof remoteManifest?.clientInstanceId === "string" ? remoteManifest.clientInstanceId : undefined;
-	let unavailableFromSpool = remoteClientInstanceId !== spool.clientInstanceId;
-	if (!unavailableFromSpool) {
-		try {
-			records = await spool.read(afterSeq);
-			latestSeq = await spool.latestSeq();
-		} catch {
-			unavailableFromSpool = true;
-		}
-	}
-	const manifest =
-		typeof source.manifest === "object" && source.manifest !== null
-			? (source.manifest as Record<string, unknown>)
-			: {};
-	const unavailable = Array.isArray(manifest.unavailable)
-		? manifest.unavailable.filter((item): item is string => item !== "client-diagnostic-spool")
-		: [];
-	return {
-		...source,
-		manifest: {
-			...manifest,
-			...(unavailableFromSpool || unavailable.length > 0
-				? { unavailable: [...unavailable, "client-diagnostic-spool"] }
-				: { unavailable: undefined }),
-		},
-		...(unavailableFromSpool ? {} : { clientDiagnostics: { ...clientDiagnostics, afterSeq: latestSeq, records } }),
-	};
-}
-
 function positiveLimit(value: number, name: string): number {
 	if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError(`${name} must be a positive safe integer`);
 	return value;
