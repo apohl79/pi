@@ -21,6 +21,7 @@ describe("production daemon three-provider routing", () => {
 		const models = createModels();
 		const observed: string[] = [];
 		const reviewerTools: string[][] = [];
+		const rootPrompts: string[] = [];
 		const root = fauxProvider({
 			provider: "coding-agent-daemon-three-root-faux",
 			models: [
@@ -39,11 +40,16 @@ describe("production daemon three-provider routing", () => {
 		for (const provider of [root, child, reviewer]) models.setProvider(provider.provider);
 		const record =
 			(label: string, message: string): FauxResponseFactory =>
-			(_context, _options, _state, model) => {
+			(context, _options, _state, model) => {
+				if (label === "root") rootPrompts.push(JSON.stringify(context.messages));
 				observed.push(`${label}:${model.provider}/${model.id}`);
 				return fauxAssistantMessage(message);
 			};
-		root.setResponses([record("root", "root response"), record("root", "root follow-up")]);
+		root.setResponses([
+			record("root", "root response"),
+			record("root", "root follow-up"),
+			record("root", "root final response"),
+		]);
 		child.setResponses([record("child", "child response")]);
 		reviewer.setResponses([
 			(context, _options, _state, model) => {
@@ -94,13 +100,21 @@ describe("production daemon three-provider routing", () => {
 				expect(session.snapshot?.transcript).toEqual(transcriptBeforeSwitch);
 				const second = await session.submit("follow-up request");
 				await session.waitForOperation(second);
+				const third = await session.submit("final request");
+				await session.waitForOperation(third);
 				expect(observed).toEqual([
 					`root:${root.provider.id}/root-model`,
 					`child:${child.provider.id}/child-model`,
 					`reviewer:${reviewer.provider.id}/reviewer-model`,
 					`root:${root.provider.id}/root-follow-up-model`,
+					`root:${root.provider.id}/root-follow-up-model`,
 				]);
 				expect(reviewerTools).toEqual([["read"]]);
+				expect(rootPrompts[1]).toContain("[child agent completions]");
+				expect(rootPrompts[1]).toContain("/root/child (complete)");
+				expect(rootPrompts[1]).toContain("/root/reviewer (complete)");
+				expect(rootPrompts[1].match(/\[child agent completions\]/g)).toHaveLength(1);
+				expect(rootPrompts[2].match(/\[child agent completions\]/g)).toHaveLength(1);
 			} finally {
 				await session.dispose();
 			}
