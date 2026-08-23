@@ -1440,8 +1440,14 @@ export class PiServerV2 {
 		return this.send(state, { type: "response", id, ok: true, result: toProtocolJsonValue(result) });
 	}
 
-	private sendError(state: V2ConnectionState, id: string, code: string, message: string): Promise<void> {
-		return this.send(state, { type: "response", id, ok: false, error: { code, message } });
+	private async sendError(state: V2ConnectionState, id: string, code: string, message: string): Promise<void> {
+		if (state.closed) return;
+		try {
+			await this.send(state, { type: "response", id, ok: false, error: { code, message } });
+		} catch {
+			// The request may finish after the client has disconnected; no response can be delivered.
+			this.disconnect(state);
+		}
 	}
 
 	private send(state: V2ConnectionState, message: ServerMessageV2): Promise<void> {

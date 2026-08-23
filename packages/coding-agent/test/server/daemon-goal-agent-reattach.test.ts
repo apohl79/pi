@@ -145,7 +145,7 @@ describe("coding-agent daemon combined goal flow", () => {
 				result: { goal: { objective: "finish the flow", status: "active" } },
 			});
 			expect(await client.request({ command: "agent/list", sessionId })).toMatchObject({
-				result: { agents: [{ taskName: "specialist", state: "complete" }] },
+				result: { agents: [{ taskName: "specialist", state: "complete", startedAt: expect.any(Number) }] },
 			});
 			expect(await client.request({ command: "input/request/read", payload: { requestId } })).toMatchObject({
 				result: { request: { status: "pending", id: requestId } },
