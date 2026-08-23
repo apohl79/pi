@@ -14,6 +14,7 @@ import { RemoteV2SessionView, RemoteV2StatuslineComponent } from "./client/remot
 import { APP_NAME, getAgentDir } from "./config.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
+import { SettingsManager } from "./core/settings-manager.ts";
 import { main } from "./main.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "./server/daemon-runtime.ts";
@@ -53,6 +54,7 @@ async function runCli(): Promise<void> {
 		return;
 	}
 	const agentDir = getAgentDir();
+	const statuslineSettings = SettingsManager.create(process.cwd(), agentDir);
 	const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false });
 	const model = modelRuntime.getModels()[0];
 	if (model === undefined) throw new Error("No configured model is available for the experimental daemon");
@@ -82,6 +84,7 @@ async function runCli(): Promise<void> {
 				session,
 				view,
 				setStatusline: async (command) => {
+					statuslineSettings.setStatusLineCommand(command);
 					await statusline.setCommand(command);
 				},
 				dispose: async () => view.dispose(),
@@ -92,6 +95,7 @@ async function runCli(): Promise<void> {
 				{ cwd: process.cwd(), transcriptPath: "", projectDir: process.cwd() },
 				() => tui?.requestRender(),
 			);
+			await statusline.setCommand(statuslineSettings.getStatusLineCommand());
 			tui = createInteractiveTui({
 				tuiMode: options.tuiMode ?? "regular",
 				showHardwareCursor: false,

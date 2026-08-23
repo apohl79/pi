@@ -1,6 +1,6 @@
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { type Component, Text } from "@earendil-works/pi-tui";
-import type { StatuslineRunner, StatuslineSnapshot } from "../server/statusline.ts";
+import type { StatuslineCommand, StatuslineRunner, StatuslineSnapshot } from "../server/statusline.ts";
 import type { RemoteV2Session, RemoteV2SessionState } from "./remote-v2-session.ts";
 
 export interface RemoteV2SessionViewOptions {
@@ -90,7 +90,7 @@ export class RemoteV2StatuslineController {
 		return this.snapshot;
 	}
 
-	setCommand(command: string | undefined): Promise<StatuslineSnapshot> {
+	setCommand(command: StatuslineCommand | undefined): Promise<StatuslineSnapshot> {
 		this.#command = command;
 		return this.refresh();
 	}
@@ -119,7 +119,7 @@ export class RemoteV2StatuslineComponent implements Component {
 		this.#snapshot = this.#controller.snapshot;
 	}
 
-	setCommand(command: string | undefined): Promise<StatuslineSnapshot> {
+	setCommand(command: StatuslineCommand | undefined): Promise<StatuslineSnapshot> {
 		return this.#controller.setCommand(command);
 	}
 
