@@ -206,6 +206,12 @@ describe("AgentHarness v2 scaffold", () => {
 			model: faux.getModel(),
 			streamOptions: { deferred: true },
 		});
+		harness.hooks.on("after_response", (event) => ({
+			message: {
+				...(event as { message: AgentMessage }).message,
+				content: [{ type: "text", text: "transformed deferred response" }],
+			},
+		}));
 
 		const suspended = await harness.prompt("defer this");
 		expect(suspended).toMatchObject({ ok: true, value: { kind: "suspended" } });
@@ -221,6 +227,16 @@ describe("AgentHarness v2 scaffold", () => {
 		expect((await session.findRecords({ type: "operation_finished" })).map((record) => record.outcome)).toEqual([
 			"completed",
 		]);
+		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		expect(
+			entries.some(
+				(entry) =>
+					entry.type === "message" &&
+					entry.message.role === "assistant" &&
+					entry.message.content[0]?.type === "text" &&
+					entry.message.content[0].text === "transformed deferred response",
+			),
+		).toBe(true);
 		await harness.close();
 	});
 

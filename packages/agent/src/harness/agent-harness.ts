@@ -1842,7 +1842,22 @@ export class AgentHarness implements AgentLane {
 			);
 		}
 		try {
-			const message = await this.models.fetchDeferred(model, handle);
+			const fetchedMessage = await this.models.fetchDeferred(model, handle);
+			let message = sanitizeTranscriptMessage(fetchedMessage) as AssistantMessage;
+			const transformed = await this.runLifecycleHook("after_response", {
+				operationId: operation.id,
+				message: durableClone(message),
+			});
+			if (
+				transformed !== null &&
+				typeof transformed === "object" &&
+				"message" in transformed &&
+				transformed.message !== null &&
+				typeof transformed.message === "object" &&
+				"role" in transformed.message &&
+				transformed.message.role === "assistant"
+			)
+				message = sanitizeTranscriptMessage(transformed.message as AssistantMessage) as AssistantMessage;
 			const finalEntry = await this.session.appendMessage(durableClone(message));
 			if (message.stopReason !== "pending") {
 				await this.durableSession.appendRecord({
