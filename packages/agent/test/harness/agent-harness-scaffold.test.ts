@@ -666,10 +666,13 @@ describe("AgentHarness v2 scaffold", () => {
 		});
 		const { harness, suspended } = await AgentHarness.create({ session, models, model: faux.getModel() });
 		expect(suspended).toMatchObject([{ id: "crashed-run", kind: "run", reason: "crash" }]);
+		const resumeHooks: unknown[] = [];
+		harness.hooks.on("before_resume", (event) => resumeHooks.push(event));
 
 		const result = await harness.resume();
 
 		expect(result).toMatchObject({ ok: true, value: { operation: "run", kind: "completed" } });
+		expect(resumeHooks).toEqual([{ operationId: "crashed-run", kind: "run" }]);
 		expect(await session.findOpenOperations("main")).toEqual([]);
 		expect(
 			(await session.findRecords({ type: "operation_finished", order: "oldestFirst" })).map(
