@@ -481,7 +481,7 @@ describe("AgentHarness v2 scaffold", () => {
 		const laneWatch = await harness.watch();
 		const sessionWatch = await harness.watchSession();
 		expect(laneWatch.snapshot).toMatchObject({ lane: "main", leafId: null, operation: null, faulted: false });
-		expect(sessionWatch.snapshot).toMatchObject({ faulted: false, lanes: [{ lane: "main", leafId: null }] });
+		expect(sessionWatch.snapshot).toMatchObject({ faulted: false, lanes: [{ name: "main", leafId: null }] });
 		const events: string[] = [];
 		laneWatch.start((event) => events.push(String((event as { type: string }).type)));
 		sessionWatch.start((event) => events.push(`session:${String((event as { type: string }).type)}`));
@@ -498,9 +498,7 @@ describe("AgentHarness v2 scaffold", () => {
 			["peekAction", () => harness.peekAction()],
 			["executeAction", () => harness.executeAction()],
 			["runToCompletion", () => harness.runToCompletion()],
-			["lane", () => harness.lane("main")],
 			["createLane", () => harness.createLane("thread", null)],
-			["lanes", () => harness.lanes()],
 		];
 
 		for (const [operation, invoke] of unfinished) {
@@ -509,6 +507,14 @@ describe("AgentHarness v2 scaffold", () => {
 				operation,
 			});
 		}
+	});
+
+	it("exposes the durable main lane and lane inventory", async () => {
+		const harness = await createHarness();
+		expect(await harness.lane("main")).toBe(harness);
+		expect(await harness.lane("missing")).toBeUndefined();
+		expect(await harness.lanes()).toEqual([{ name: "main", leafId: null, operation: null }]);
+		await harness.close();
 	});
 
 	it("reports HarnessClosed for unfinished operations after close", async () => {
