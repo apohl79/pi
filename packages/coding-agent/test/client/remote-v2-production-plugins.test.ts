@@ -58,12 +58,84 @@ describe("production remote v2 plugin commands", () => {
 					enabled: false,
 					scope: "project",
 				});
-				expect(await session.upgradePlugin("reviewer@local", "2.0.0", { manifest })).toMatchObject({
+				expect(
+					await session.upgradePlugin("reviewer@local", "2.0.0", {
+						manifest: { ...manifest, version: "2.0.0" },
+					}),
+				).toMatchObject({
 					version: "2.0.0",
 				});
 				await session.uninstallPlugin("reviewer@local");
 				await session.removeMarketplace("local");
 				expect(await session.listPlugins(true)).toEqual([]);
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("preserves supported resources and reports unsupported MCP declarations", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-remote-plugin-compatibility-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-remote-plugin-compatibility-faux",
+			models: [
+				{ id: "remote-plugin-compatibility-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		const socketPath = join(directory, "server.sock");
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath,
+			pluginRegistry: new InMemoryV2PluginRegistry(),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({ transportFactory: createUnixTransportFactory({ path: socketPath }) });
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
+			try {
+				await session.addMarketplace("local", "/workspace/plugins");
+				const plugin = await session.installPlugin({
+					name: "compatibility",
+					marketplace: "local",
+					version: "1.0.0",
+					manifest: {
+						name: "compatibility",
+						version: "1.0.0",
+						skills: ["skills/review"],
+						commands: ["commands/review"],
+						apps: [{ id: "tracker", name: "Tracker", auth: "authenticated" }],
+						hooks: [{ event: "afterTurn", command: "hooks/after-turn" }],
+						mcpServers: { tracker: { command: "tracker-mcp" } },
+						context: {
+							thread: [
+								{ id: "thread-policy", slot: "developer_policy", position: "preamble", text: "Persist this" },
+							],
+							sampling: [
+								{ id: "sample-reminder", slot: "contextual_user", position: "supplement", text: "Per request" },
+							],
+						},
+					},
+				});
+				expect(plugin).toMatchObject({
+					resources: { skills: ["skills/review"], commands: ["commands/review"], apps: 1, hooks: 1 },
+					appDescriptors: [expect.objectContaining({ id: "compatibility@local:tracker", auth: "authenticated" })],
+					hookDescriptors: [expect.objectContaining({ event: "afterTurn", enabled: true })],
+					threadContext: [expect.objectContaining({ id: "thread-policy", text: "Persist this" })],
+					sampling: [expect.objectContaining({ id: "sample-reminder", text: "Per request" })],
+					diagnostics: [expect.objectContaining({ code: "unsupported_mcp_resource" })],
+				});
 			} finally {
 				await session.dispose();
 			}
