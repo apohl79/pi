@@ -46,15 +46,37 @@ describe("BlobV2ImageService", () => {
 			},
 		);
 
-		expect(
-			await service.generate("session-1", { prompt: "draw a tree", sourceOperationId: "operation-1" }),
-		).toMatchObject({
+		const generated = await service.generate("session-1", {
+			prompt: "draw a tree",
+			sourceOperationId: "operation-1",
+		});
+		expect(generated).toMatchObject({
 			mimeType: "image/png",
 			provider: "fake",
 			model: "image-fast",
+			reference: `blob:${generated.digest}`,
 			sourceOperationId: "operation-1",
 			dimensions: { width: 1, height: 2 },
 			costUsd: 0.01,
+		});
+	});
+
+	test("views generated images through their blob reference", async () => {
+		const blobs = new InMemoryV2BlobStore();
+		const service = new BlobV2ImageService(new LocalV2FileReferenceService({ projectRoot: "." }), blobs, {
+			generate: async () => ({
+				data: new Uint8Array([137, 80, 78, 71]),
+				mimeType: "image/png",
+				provider: "fake",
+				model: "image-fast",
+			}),
+		});
+		const generated = await service.generate("session-1", { prompt: "draw" });
+		expect(await service.view("session-1", generated.reference)).toEqual({
+			digest: generated.digest,
+			mimeType: "image/png",
+			size: 4,
+			reference: generated.reference,
 		});
 	});
 
