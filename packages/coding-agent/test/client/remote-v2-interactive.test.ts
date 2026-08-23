@@ -138,12 +138,15 @@ function clientWithRequests(withQueue = false): { client: PiClientV2; commands: 
 describe("remote v2 interactive command boundary", () => {
 	test("keeps directory completions open for descent while files submit exactly", () => {
 		expect(applyRemoteFileCompletion("inspect @src", 8, { reference: "src/nested", kind: "directory" })).toBe(
-			"inspect src/nested/",
+			"inspect @src/nested/",
 		);
 		expect(applyRemoteFileCompletion("inspect @src/", 8, { reference: "src/nested/", kind: "directory" })).toBe(
-			"inspect src/nested/",
+			"inspect @src/nested/",
 		);
 		expect(applyRemoteFileCompletion("inspect @src", 8, { reference: "src/nested.ts", kind: "file" })).toBe(
+			"inspect @src/nested.ts",
+		);
+		expect(applyRemoteFileCompletion("inspect src", 8, { reference: "src/nested.ts", kind: "file" })).toBe(
 			"inspect src/nested.ts",
 		);
 	});
