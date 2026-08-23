@@ -170,7 +170,11 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 				return success(id, "cycle_thinking_level", { level });
 			}
 			case "set_session_name":
-				await session.waitForOperation(await session.setName(command.name.trim()));
+				{
+					const name = command.name.trim();
+					if (!name) throw new Error("Session name cannot be empty");
+					await session.waitForOperation(await session.setName(name));
+				}
 				return success(id, "set_session_name");
 			case "get_session_stats":
 				return success(id, "get_session_stats", sessionStats(session.snapshot));
