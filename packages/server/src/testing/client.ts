@@ -19,6 +19,7 @@ import {
 	ServerMessageDecoder,
 	type ServerMessageV2,
 } from "@earendil-works/pi-protocol";
+import type { ByteConnection, ByteConnectionAcceptor, ByteConnectionHandler } from "../connection.ts";
 import { Deferred } from "./service.ts";
 
 interface MessageWaiter {
@@ -218,6 +219,48 @@ export class ProtocolTestClientV2 {
 		for (const waiter of this.waiters) waiter.reject(error);
 		this.waiters.clear();
 	}
+}
+
+/** Connects a protocol v2 test client directly to a server acceptor without a socket or network. */
+export function connectInMemoryTestClientV2(acceptor: ByteConnectionAcceptor): ProtocolTestClientV2 {
+	let client: ProtocolTestClientV2;
+	let handler: ByteConnectionHandler;
+	let closed = false;
+	const connection: ByteConnection = {
+		get closed() {
+			return closed;
+		},
+		async send(chunk) {
+			if (closed) throw new Error("In-memory connection is closed");
+			client.receive(chunk);
+		},
+		async close(finalChunk) {
+			if (closed) return;
+			if (finalChunk !== undefined) client.receive(finalChunk);
+			closed = true;
+			client.markClosed();
+		},
+	};
+	const channel: WireChannel = {
+		async send(chunk) {
+			if (closed) throw new Error("In-memory connection is closed");
+			handler.onData(chunk);
+		},
+		async sendFragmented(chunk, splitAt) {
+			if (splitAt <= 0 || splitAt >= chunk.byteLength) throw new RangeError("splitAt must be inside the frame");
+			await this.send(chunk.subarray(0, splitAt));
+			await this.send(chunk.subarray(splitAt));
+		},
+		async close() {
+			if (closed) return;
+			closed = true;
+			handler.onClose();
+			client.markClosed();
+		},
+	};
+	client = new ProtocolTestClientV2(channel);
+	handler = acceptor(connection);
+	return client;
 }
 
 export async function connectUnixTestClient(path: string): Promise<ProtocolTestClient> {
