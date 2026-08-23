@@ -10,6 +10,7 @@ interface ChildAgent {
 	readonly runtime: CodingAgentV2Runtime;
 	state: AgentSummary["state"];
 	messages: string[];
+	followUps: string[];
 	waiters: Array<() => void>;
 	activeOperationId?: string;
 	activeOperationAccepted: boolean;
@@ -90,6 +91,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			runtime: created.runtime,
 			state: "running",
 			messages: [request.taskMessage],
+			followUps: [],
 			waiters: [],
 			activeOperationAccepted: false,
 			abortRequested: false,
@@ -145,11 +147,11 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	async followUp(agentId: string, message: string): Promise<AgentSummary> {
 		const agent = this.get(agentId);
 		this.validateMessage(message);
-		if (agent.state === "running" || agent.state === "awaitingInput" || agent.activeOperationId !== undefined)
-			throw new Error(`Cannot follow up active agent ${agentId}`);
-		agent.state = "running";
 		this.appendMessage(agent, message);
-		void this.run(agent, "turn/followUp", message);
+		if (agent.state === "complete" || agent.state === "interrupted" || agent.state === "failed") {
+			agent.state = "running";
+			void this.run(agent, "turn/followUp", message);
+		} else agent.followUps.push(message);
 		return this.snapshot(agent);
 	}
 
@@ -169,6 +171,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	private async run(agent: ChildAgent, command: "turn/start" | "turn/followUp", text: string): Promise<void> {
+		let nextFollowUp: string | undefined;
 		try {
 			const operationId = randomUUID();
 			agent.activeOperationId = operationId;
@@ -184,14 +187,21 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				sessionId: agent.childSessionId,
 				payload: { text },
 			});
-			if (agent.state !== "interrupted") agent.state = "complete";
+			if (agent.state !== "interrupted") {
+				nextFollowUp = agent.followUps.shift();
+				if (nextFollowUp === undefined) agent.state = "complete";
+				else {
+					agent.state = "running";
+				}
+			}
 		} catch {
 			if (agent.state !== "interrupted") agent.state = "failed";
 		} finally {
 			agent.activeOperationId = undefined;
 			agent.activeOperationAccepted = false;
 			agent.abortRequested = false;
-			this.resolveWaiters(agent);
+			if (nextFollowUp !== undefined) void this.run(agent, "turn/followUp", nextFollowUp);
+			else if (agent.state !== "running") this.resolveWaiters(agent);
 		}
 	}
 
