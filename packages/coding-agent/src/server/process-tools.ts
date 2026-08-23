@@ -94,11 +94,12 @@ export function createProcessTools(
 		description: "Write input to a server-owned process or poll output after a cursor.",
 		parameters: writeStdinSchema,
 		execute: async (_toolCallId, input) => {
-			const output =
-				input.chars === undefined && input.eof !== true
-					? await processes.read(input.session_id, input.cursor ?? 0)
-					: await processes.write(input.session_id, input.chars ?? "", { eof: input.eof });
+			const cursor = input.cursor ?? (await processes.getSnapshot(input.session_id)).cursor;
+			if (input.chars !== undefined || input.eof === true) {
+				await processes.write(input.session_id, input.chars ?? "", { eof: input.eof });
+			}
 			await waitForYield(processes, input.session_id, input.yield_time_ms);
+			const output = await processes.read(input.session_id, cursor);
 			const process = await processes.getSnapshot(input.session_id);
 			const capped = capOutput(output.output, input.max_output_tokens);
 			return outputResult(formatOutput(capped.output, process.state), {
