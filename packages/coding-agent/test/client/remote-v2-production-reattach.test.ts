@@ -47,7 +47,10 @@ describe("production remote v2 reattach", () => {
 				await first.waitForOperation(operationId);
 				expect(first.snapshot?.transcript).toEqual(
 					expect.arrayContaining([
-						expect.objectContaining({ role: "assistant", text: "durable remote response" }),
+						expect.objectContaining({
+							role: "assistant",
+							content: [expect.objectContaining({ type: "text", text: "durable remote response" })],
+						}),
 					]),
 				);
 			} finally {
@@ -58,7 +61,10 @@ describe("production remote v2 reattach", () => {
 				expect(reattached.id).toBe(sessionId);
 				expect(reattached.snapshot?.transcript).toEqual(
 					expect.arrayContaining([
-						expect.objectContaining({ role: "assistant", text: "durable remote response" }),
+						expect.objectContaining({
+							role: "assistant",
+							content: [expect.objectContaining({ type: "text", text: "durable remote response" })],
+						}),
 					]),
 				);
 			} finally {
