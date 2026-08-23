@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import type { Readable } from "node:stream";
 import type { PiClientV2, PiSessionV2Handle } from "@earendil-works/pi-client";
-import type { ClientDiagnosticSpool } from "@earendil-works/pi-client/diagnostics";
+import { type ClientDiagnosticSpool, mergeClientDiagnosticBundle } from "@earendil-works/pi-client/diagnostics";
 import type { CommandV2, JsonValue, ModelMetadata, ModelRef } from "@earendil-works/pi-protocol";
 import { verifyDiagnosticBundle } from "@earendil-works/pi-server";
 import { type RemoteV2PromptPart, RemoteV2Session } from "../../client/remote-v2-session.ts";
@@ -201,7 +201,7 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 			};
 			const result = await read();
 			if (command.action === "export" && command.output !== undefined) {
-				const bundle = await mergeClientDiagnostics(result.bundle, options.diagnosticsSpool);
+				const bundle = await mergeClientDiagnosticBundle(result.bundle, options.diagnosticsSpool);
 				if (typeof bundle !== "object" || bundle === null || Array.isArray(bundle))
 					throw new Error("diagnostics/export response did not contain a bundle");
 				await writeFile(command.output, `${JSON.stringify(bundle, null, 2)}\n`, { mode: 0o600 });
@@ -304,54 +304,5 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 			for (const client of clients) client.dispose();
 			clients.clear();
 		},
-	};
-}
-
-async function mergeClientDiagnostics(
-	bundle: unknown,
-	spool: ClientDiagnosticSpool | undefined,
-): Promise<Record<string, unknown>> {
-	if (typeof bundle !== "object" || bundle === null || Array.isArray(bundle))
-		throw new Error("diagnostics/export response did not contain a bundle");
-	if (spool === undefined) return bundle as Record<string, unknown>;
-	const source = bundle as Record<string, unknown>;
-	const clientDiagnostics =
-		typeof source.clientDiagnostics === "object" && source.clientDiagnostics !== null
-			? (source.clientDiagnostics as Record<string, unknown>)
-			: {};
-	const afterSeq = typeof clientDiagnostics.afterSeq === "number" ? clientDiagnostics.afterSeq : 0;
-	let records: Awaited<ReturnType<ClientDiagnosticSpool["read"]>> = [];
-	let latestSeq = afterSeq;
-	const remoteManifest =
-		typeof clientDiagnostics.manifest === "object" && clientDiagnostics.manifest !== null
-			? (clientDiagnostics.manifest as Record<string, unknown>)
-			: undefined;
-	const remoteClientInstanceId =
-		typeof remoteManifest?.clientInstanceId === "string" ? remoteManifest.clientInstanceId : undefined;
-	let unavailableFromSpool = remoteClientInstanceId !== undefined && remoteClientInstanceId !== spool.clientInstanceId;
-	if (!unavailableFromSpool) {
-		try {
-			records = await spool.read(afterSeq);
-			latestSeq = await spool.latestSeq();
-		} catch {
-			unavailableFromSpool = true;
-		}
-	}
-	const manifest =
-		typeof source.manifest === "object" && source.manifest !== null
-			? (source.manifest as Record<string, unknown>)
-			: {};
-	const unavailable = Array.isArray(manifest.unavailable)
-		? manifest.unavailable.filter((item): item is string => item !== "client-diagnostic-spool")
-		: [];
-	return {
-		...source,
-		manifest: {
-			...manifest,
-			...(unavailableFromSpool || unavailable.length > 0
-				? { unavailable: [...unavailable, "client-diagnostic-spool"] }
-				: { unavailable: undefined }),
-		},
-		...(unavailableFromSpool ? {} : { clientDiagnostics: { ...clientDiagnostics, afterSeq: latestSeq, records } }),
 	};
 }

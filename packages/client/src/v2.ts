@@ -19,7 +19,7 @@ import {
 	type SessionMetadataV2,
 	type SessionSnapshotV2,
 } from "@earendil-works/pi-protocol";
-import type { ClientDiagnosticSpool } from "./diagnostics.ts";
+import { type ClientDiagnosticSpool, mergeClientDiagnosticBundle } from "./diagnostics.ts";
 import type { ByteTransport, ByteTransportFactory, ByteTransportHandlers } from "./transport.ts";
 import type { ListenerErrorHandler } from "./types.ts";
 
@@ -156,6 +156,11 @@ export class PiClientV2 {
 		if (this.disposed) return;
 		this.disconnect();
 		this.disposed = true;
+	}
+
+	/** Merge this client's retained diagnostic records into a server-exported bundle. */
+	mergeDiagnosticBundle(bundle: unknown): Promise<Record<string, unknown>> {
+		return mergeClientDiagnosticBundle(bundle, this.options.diagnostics?.spool);
 	}
 
 	onEvent(listener: (event: EventEnvelopeV2) => void): () => void {
