@@ -14,7 +14,9 @@ import {
 	type LaneRecord,
 	type NewRecord,
 	type OperationStartedRecord,
+	type RegisterWrite,
 	Session,
+	type SessionRegister,
 } from "../../src/harness/session/index.ts";
 import type { AgentMessage } from "../../src/types.ts";
 
@@ -45,6 +47,20 @@ class ThrowAfterOperationFinishedStorage extends InMemorySessionStorage {
 			throw new Error("terminal response lost after commit");
 		}
 		return appended;
+	}
+}
+
+class OperationStateCaptureStorage extends InMemorySessionStorage {
+	readonly operationStates: JsonValue[] = [];
+
+	override async appendTransaction<TRecord extends LaneRecord>(
+		records: readonly NewRecord<TRecord>[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ records: TRecord[]; registers: SessionRegister[] }> {
+		for (const write of writes) {
+			if (write.op === "set" && write.namespace === "op.state") this.operationStates.push(write.value);
+		}
+		return super.appendTransaction(records, writes);
 	}
 }
 
@@ -386,6 +402,34 @@ describe("AgentHarness v2 scaffold", () => {
 			true,
 		);
 		expect((await session.findRecords({ type: "operation_finished" })).at(-1)?.outcome).toBe("completed");
+		await harness.close();
+	});
+
+	it("publishes an executing checkpoint for compaction", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-compaction-checkpoint-faux",
+			models: [{ id: "harness-compaction-checkpoint-model", contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage("history"),
+			fauxAssistantMessage("history two"),
+			fauxAssistantMessage("checkpoint summary"),
+			fauxAssistantMessage("checkpoint prefix"),
+		]);
+		const storage = new OperationStateCaptureStorage({ id: "compaction-checkpoint", createdAt: 1 });
+		const session = new Session(storage);
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+		});
+		await harness.prompt("first request with enough text to create durable history for compaction");
+		await harness.prompt("second request with enough text to create durable history for compaction");
+		expect(await harness.compact()).toMatchObject({ ok: true, value: { kind: "completed" } });
+		expect(storage.operationStates).toContainEqual({ kind: "compaction", status: "running", phase: "executing" });
 		await harness.close();
 	});
 

@@ -1338,6 +1338,7 @@ export class AgentHarness implements AgentLane {
 				...(_options?.customInstructions === undefined ? {} : { customInstructions: _options.customInstructions }),
 			},
 		});
+		await this.setOperationPhase(runId, "executing");
 		try {
 			await this.park({ kind: "stream_assistant", step: "compaction", attempt: 1 });
 			const result = await compact(
@@ -1479,6 +1480,7 @@ export class AgentHarness implements AgentLane {
 				...(summaryEntryId ? { summaryEntryId } : {}),
 			},
 		});
+		await this.setOperationPhase(runId, "executing");
 		try {
 			let summary: BranchSummaryResult | undefined;
 			if (summarize && oldLeafId) {
