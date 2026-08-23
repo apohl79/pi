@@ -211,6 +211,61 @@ describe("coding-agent daemon runtime", () => {
 		}
 	});
 
+	test("records automatic session naming in the production usage ledger", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-session-name-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-session-name-faux",
+			models: [
+				{ id: "coding-agent-daemon-session-name-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("x"), fauxAssistantMessage("Durable session name")]);
+		const createRuntime = () =>
+			createConfiguredCodingAgentDaemonRuntime({
+				agentDir: directory,
+				cwd: directory,
+				models,
+				model: faux.getModel(),
+				fastModel: faux.getModel(),
+				socketPath: join(directory, "server.sock"),
+				harness: { tools: [], activeToolNames: [] },
+				write: () => {},
+			});
+		const runtime = await createRuntime();
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
+			const sessionId = (created.result as { session: { id: string } }).session.id;
+			await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			await client.request({ command: "turn/start", sessionId, payload: { text: "name this work" } });
+			for (let attempt = 0; attempt < 50; attempt++) {
+				const read = await client.request({ command: "session/read", sessionId });
+				if (
+					read.ok &&
+					"result" in read &&
+					(read.result as { session: { name?: string; phase: string } }).session.name === "Durable session name" &&
+					(read.result as { session: { name?: string; phase: string } }).session.phase === "idle"
+				)
+					break;
+				if (attempt === 49) throw new Error("Timed out waiting for automatic session naming");
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			const usage = await client.request({ command: "usage/read", payload: { sessionId, purpose: "sessionName" } });
+			expect(usage).toMatchObject({ result: { aggregate: { responses: 1, pricingState: "known" } } });
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
 	test("runs server-default print mode through the production daemon", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-daemon-print-e2e-"));
 		directories.push(directory);

@@ -230,7 +230,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		this.fastModel = options?.fastModel;
 	}
 
-	private async generateName(): Promise<void> {
+	private async generateName(operationId: string): Promise<void> {
 		if (!this.fastModel) return;
 		const initialSource = this.nameSource;
 		if (initialSource === "explicit") return;
@@ -291,6 +291,24 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			},
 			{ entryId: entries.at(-1)?.id, details: "purpose:sessionName" },
 		);
+		await this.definition.usage?.record({
+			responseId: response.responseId ?? `${operationId}:sessionName`,
+			sessionId: this.definition.metadata.id,
+			agentId: this.definition.metadata.id,
+			operationId,
+			turnId: operationId,
+			purpose: "sessionName",
+			provider: response.provider,
+			model: response.model,
+			input: response.usage.input,
+			output: response.usage.output,
+			cacheRead: response.usage.cacheRead,
+			cacheWrite: response.usage.cacheWrite,
+			...(response.usage.reasoning === undefined ? {} : { reasoning: response.usage.reasoning }),
+			pricing: "providerReported",
+			costUsd: response.usage.cost.total,
+			createdAt: response.timestamp ?? Date.now(),
+		});
 		this.sessionName = generated;
 		this.nameSource = "generated";
 		this.nameRevision += 1;
@@ -447,7 +465,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				await this.recordUsageLedger(_operationId, beforeEntryIds);
 				await this.recordGoalUsage(usageBefore);
 				goalUsageRecorded = true;
-				if (this.autoName) await this.generateName();
+				if (this.autoName) await this.generateName(_operationId);
 			} else if (runCommand === "turn/resume") {
 				const result = await harness.resume();
 				if (!result.ok) throw new Error(result.error.message);
@@ -510,7 +528,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			} else if (runCommand === "session/name/generate") {
 				const generated =
 					typeof payload.name === "string" && payload.name.trim().length > 0 ? payload.name.trim() : undefined;
-				if (generated === undefined) await this.generateName();
+				if (generated === undefined) await this.generateName(_operationId);
 				if (this.nameSource !== "explicit") {
 					if (generated !== undefined) {
 						this.sessionName = generated;

@@ -36,6 +36,7 @@ export interface CodingAgentV2SqliteServiceOptions {
 	models: Models;
 	env: ExecutionEnv | ((metadata: SqliteSessionMetadata) => ExecutionEnv | Promise<ExecutionEnv>);
 	model: Model<Api> | ((metadata: SqliteSessionMetadata) => Model<Api> | Promise<Model<Api>>);
+	fastModel?: Model<Api>;
 	compaction?: (model: Model<Api>) => CompactionSettings | undefined;
 	pluginRegistry?: V2PluginRegistry;
 	inputs?: V2InputRegistry;
@@ -208,7 +209,9 @@ export async function createCodingAgentV2SqliteService(
 			metadataById.delete(sessionId);
 		},
 	};
-	return createCodingAgentV2ServiceFromStore(options.models, store);
+	return createCodingAgentV2ServiceFromStore(options.models, store, {
+		...(options.fastModel === undefined ? {} : { fastModel: options.fastModel }),
+	});
 }
 
 function createAgentTools(registry: V2AgentRegistry, sessionId: string, model: Model<Api>): CodingAgentAgentTools {
