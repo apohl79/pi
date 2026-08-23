@@ -16,21 +16,12 @@ See [examples/sdk/](../examples/sdk/) for working examples from minimal to full 
 ## Quick Start
 
 ```typescript
-import { createAgentSession, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
+import { createAgentSession } from "@earendil-works/pi-coding-agent";
 
-const modelRuntime = await ModelRuntime.create();
-const { session } = await createAgentSession({
-  sessionManager: SessionManager.inMemory(),
-  modelRuntime,
-});
-
-session.subscribe((event) => {
-  if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-    process.stdout.write(event.assistantMessageEvent.delta);
-  }
-});
-
-await session.prompt("What files are in the current directory?");
+const handle = await createAgentSession({ cwd: process.cwd() });
+const operationId = await handle.session.submit("What files are in the current directory?");
+await handle.session.waitForOperation(operationId);
+await handle.close();
 ```
 
 ## Installation
@@ -48,11 +39,9 @@ turns, tools, and durable state; the client only holds the connection and
 session lease.
 
 ```typescript
-import {
-  createServerAgentSession,
-} from "@earendil-works/pi-coding-agent/client";
+import { createAgentSession } from "@earendil-works/pi-coding-agent";
 
-const handle = await createServerAgentSession({
+const handle = await createAgentSession({
   agentDir: "/tmp/pi-agent",
   cwd: process.cwd(),
 });
@@ -76,27 +65,33 @@ await reopened.close();
 ```
 
 Use the CLI or `createConfiguredCodingAgentDaemonRuntime()` when the daemon
-lifecycle is managed by the host. Use `createAgentSession()` only as the
+lifecycle is managed by the host. Use `createDirectAgentSession()` only as the
 explicit direct-runtime compatibility escape hatch when server ownership is
 not required. The lower-level `PiClientV2` and `RemoteV2Session` exports remain
 available for callers that connect to an independently managed daemon.
 
 ## Core Concepts
 
-### createAgentSession()
+### createDirectAgentSession()
 
-The main factory function for a single `AgentSession`.
+The direct-runtime factory for a single in-process `AgentSession`. The package
+default is the server-owned `createAgentSession()` described above.
 
-`createAgentSession()` uses a `ResourceLoader` to supply extensions, skills, prompt templates, themes, and context files. If you do not provide one, it uses `DefaultResourceLoader` with standard discovery.
+`createDirectAgentSession()` uses a `ResourceLoader` to supply extensions, skills, prompt templates, themes, and context files. If you do not provide one, it uses `DefaultResourceLoader` with standard discovery.
+
+The remaining advanced examples in this guide target the direct in-process
+runtime so they can show custom loaders, tools, and services. In those snippets,
+use `createDirectAgentSession` wherever the older example text says
+`createAgentSession`; use the server-owned quick start above for durable work.
 
 ```typescript
-import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import { createDirectAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 
 // Minimal: defaults with DefaultResourceLoader
-const { session } = await createAgentSession();
+const { session } = await createDirectAgentSession();
 
 // Custom: override specific options
-const { session } = await createAgentSession({
+const { session } = await createDirectAgentSession({
   model: myModel,
   tools: ["read", "bash"],
   sessionManager: SessionManager.inMemory(),
@@ -965,10 +960,10 @@ const contextFiles = loader.getAgentsFiles().agentsFiles;
 
 ## Return Value
 
-`createAgentSession()` returns:
+`createDirectAgentSession()` returns:
 
 ```typescript
-interface CreateAgentSessionResult {
+interface CreateDirectAgentSessionResult {
   // The session
   session: AgentSession;
   
@@ -992,7 +987,7 @@ interface LoadExtensionsResult {
 import { getModel } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import {
-  createAgentSession,
+  createDirectAgentSession,       // explicit in-process runtime
   DefaultResourceLoader,
   defineTool,
   ModelRuntime,
@@ -1037,7 +1032,7 @@ const loader = new DefaultResourceLoader({
 });
 await loader.reload();
 
-const { session } = await createAgentSession({
+const { session } = await createDirectAgentSession({
   cwd: process.cwd(),
   agentDir: "/custom/agent",
 
@@ -1240,8 +1235,12 @@ createReadTool, createBashTool, createEditTool, createWriteTool
 createGrepTool, createFindTool, createLsTool
 
 // Types
-type CreateAgentSessionOptions
+type CreateAgentSessionOptions       // server-owned default
 type CreateAgentSessionResult
+type CreateServerAgentSessionOptions
+type CreateServerAgentSessionResult
+type CreateDirectAgentSessionOptions
+type CreateDirectAgentSessionResult
 type ExtensionFactory
 type InlineExtension
 type ExtensionAPI
