@@ -29,7 +29,21 @@ describe("production remote v2 agent follow-up", () => {
 		});
 		models.setProvider(parent.provider);
 		models.setProvider(child.provider);
-		child.setResponses([fauxAssistantMessage("child completed"), fauxAssistantMessage("child follow-up completed")]);
+		const childPrompts: string[] = [];
+		child.setResponses([
+			(context) => {
+				childPrompts.push(JSON.stringify(context.messages));
+				return fauxAssistantMessage("child completed");
+			},
+			(context) => {
+				childPrompts.push(JSON.stringify(context.messages));
+				return fauxAssistantMessage("child follow-up completed");
+			},
+			(context) => {
+				childPrompts.push(JSON.stringify(context.messages));
+				return fauxAssistantMessage("child command follow-up completed");
+			},
+		]);
 		const runtime = await createConfiguredCodingAgentDaemonRuntime({
 			agentDir: directory,
 			cwd: directory,
@@ -54,6 +68,10 @@ describe("production remote v2 agent follow-up", () => {
 					model: { provider: "coding-agent-remote-agent-child-faux", id: "child-model" },
 				});
 				await attachment.session.waitAgent(agent.id);
+				await attachment.session.messageAgent(agent.id, "urgent context");
+				await attachment.session.followUpAgent(agent.id, "continue the review");
+				await attachment.session.waitAgent(agent.id);
+				expect(childPrompts.some((prompt) => prompt.includes("urgent context"))).toBe(true);
 				expect(await adapter.execute(`/agent-follow-up ${agent.id} revisit the review`)).toEqual({
 					kind: "status",
 					text: "agent complete",
