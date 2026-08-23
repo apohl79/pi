@@ -297,6 +297,11 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: { capture: "metadata", eventCount: 1, degraded: true, lastCriticalEventSeq: 1 },
 		});
+		const scopedStatus = await client.request({ command: "diagnostics/status", payload: { sessionId: "session-2" } });
+		expect(scopedStatus).toMatchObject({
+			ok: true,
+			result: { capture: "metadata", eventCount: 0, degraded: false, lastCriticalEventSeq: 0 },
+		});
 		expect(timeline).toMatchObject({
 			ok: true,
 			result: { events: [{ kind: "boot", payload: { token: "[REDACTED]" } }] },
