@@ -115,6 +115,8 @@ describe("coding-agent daemon runtime", () => {
 		});
 		try {
 			await runtime.daemon.start();
+			await runtime.cli.runClient({ command: "client" });
+			expect(await readFile(join(directory, "client-diagnostics.jsonl"), "utf8")).toContain("client.connected");
 			await client.connect();
 			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
 			expect(created).toMatchObject({ ok: true, result: { session: { id: expect.any(String) } } });
