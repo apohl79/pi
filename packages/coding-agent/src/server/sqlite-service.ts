@@ -10,7 +10,7 @@ import {
 	type SamplingInputContext,
 	type Session,
 } from "@earendil-works/pi-agent-core";
-import type { Api, Model, Models } from "@earendil-works/pi-ai";
+import { type Api, estimateTextTokens, type Model, type Models } from "@earendil-works/pi-ai";
 import type { SessionMetadataV2 } from "@earendil-works/pi-protocol";
 import type {
 	ForensicRecorder,
@@ -459,7 +459,13 @@ export async function createCodingAgentV2SqliteService(
 						);
 						return resolved === undefined
 							? undefined
-							: { id: resolved.id, source: resolved.source, contentHash: resolved.contentHash };
+							: {
+									id: resolved.id,
+									source: resolved.source,
+									contentHash: resolved.contentHash,
+									byteLength: resolved.byteLength,
+									estimatedTokens: estimateTextTokens(resolved.text),
+								};
 					};
 		const pluginSetHash =
 			options.pluginRegistry === undefined
@@ -646,7 +652,11 @@ function createAgentTools(registry: V2AgentRegistry, sessionId: string, model: M
 				...(request.role === undefined ? {} : { role: request.role }),
 				...(request.forkTurns === undefined ? {} : { forkTurns: request.forkTurns }),
 				model: request.model ?? { provider: model.provider, id: model.id },
-				modelResolution: request.model === undefined ? "inherited" : "explicit",
+				modelResolution:
+					request.model === undefined ||
+					(request.model.provider === model.provider && request.model.id === model.id)
+						? "inherited"
+						: "explicit",
 			}),
 		list: () => registry.list(sessionId),
 		wait: (agentId, timeoutMs) => registry.wait(agentId, timeoutMs),

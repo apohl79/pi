@@ -966,6 +966,12 @@ export class PiServerV2 {
 			throw new Error("agent/spawn model.provider must be a string");
 		if (modelPayload.id !== undefined && typeof modelPayload.id !== "string")
 			throw new Error("agent/spawn model.id must be a string");
+		const inheritedModel = (await (await this.service.openSession(command.sessionId)).snapshot()).model;
+		const sameAsParent =
+			typeof modelPayload.provider === "string" &&
+			typeof modelPayload.id === "string" &&
+			modelPayload.provider === inheritedModel.provider &&
+			modelPayload.id === inheritedModel.id;
 		const agent = await this.agents.spawn({
 			sessionId: command.sessionId,
 			parentPath: typeof payload.parentPath === "string" ? payload.parentPath : "/root",
@@ -977,7 +983,7 @@ export class PiServerV2 {
 				provider: typeof modelPayload.provider === "string" ? modelPayload.provider : "inherit",
 				id: typeof modelPayload.id === "string" ? modelPayload.id : "inherit",
 			},
-			modelResolution: Object.keys(modelPayload).length === 0 ? "inherited" : "explicit",
+			modelResolution: Object.keys(modelPayload).length === 0 || sameAsParent ? "inherited" : "explicit",
 		});
 		await this.sendResponse(state, id, { command: command.command, agent });
 		const runtime = state.sessions.get(command.sessionId);

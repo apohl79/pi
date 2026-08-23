@@ -59,6 +59,7 @@ export const OperationSummarySchema = StrictObject({
 	state: OperationStateSchema,
 	acceptedSeq: NonNegativeIntegerSchema,
 	terminalSeq: Type.Optional(NonNegativeIntegerSchema),
+	model: Type.Optional(ModelRefSchema),
 	compactionPolicy: Type.Optional(CompactionPolicySchema),
 });
 export type OperationSummary = Static<typeof OperationSummarySchema>;
@@ -67,6 +68,7 @@ export const OperationAcceptedSchema = StrictObject({
 	operationId: IdSchema,
 	sessionRevision: NonNegativeIntegerSchema,
 	eventSeq: NonNegativeIntegerSchema,
+	model: Type.Optional(ModelRefSchema),
 	compactionPolicy: Type.Optional(CompactionPolicySchema),
 });
 export type OperationAccepted = Static<typeof OperationAcceptedSchema>;
@@ -179,6 +181,8 @@ export const InstructionProfileSummarySchema = StrictObject({
 	id: IdSchema,
 	source: Type.Union([Type.Literal("text"), Type.Literal("file")]),
 	contentHash: IdSchema,
+	byteLength: Type.Optional(NonNegativeIntegerSchema),
+	estimatedTokens: Type.Optional(NonNegativeIntegerSchema),
 });
 export type InstructionProfileSummary = Static<typeof InstructionProfileSummarySchema>;
 

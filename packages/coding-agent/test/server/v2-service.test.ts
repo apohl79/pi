@@ -729,6 +729,7 @@ describe("coding-agent v2 service adapter", () => {
 		});
 		try {
 			const lifecycle: string[] = [];
+			const diagnostics = new InMemoryForensicRecorder();
 			const extensionHost = new ServerRuntimeExtensionHost({
 				resolveModel: () => ({ id: faux.getModel().id, provider: faux.getModel().provider }),
 			});
@@ -741,12 +742,26 @@ describe("coding-agent v2 service adapter", () => {
 					lifecycle.push(`terminal:${operation.type}:${outcome}`);
 				},
 			});
+			await extensionHost.register({
+				id: "failing-extension",
+				onOperationAccepted: () => {
+					throw new Error("diagnostic-only extension failure");
+				},
+			});
 			const service = createCodingAgentV2Service(models, [
 				{
 					metadata: { id: "adapter-session", createdAt: 1, updatedAt: 1 },
 					harness: created.harness,
 					goals,
 					extensionHost,
+					forensicRecorder: diagnostics,
+					instructionProfile: async () => ({
+						id: "profile-1",
+						source: "text" as const,
+						contentHash: "hash-1",
+						byteLength: 20,
+						estimatedTokens: 5,
+					}),
 				},
 			]);
 			const runtime = await service.openSession("adapter-session");
@@ -756,6 +771,7 @@ describe("coding-agent v2 service adapter", () => {
 				kind: "pending",
 				state: "accepted",
 				acceptedSeq: 2,
+				model: { provider: faux.getModel().provider, id: faux.getModel().id },
 			});
 			await runtime.run("operation-1", {
 				command: "turn/start",
@@ -772,6 +788,27 @@ describe("coding-agent v2 service adapter", () => {
 			expect(usageSnapshot.output).toBeGreaterThan(0);
 			expect(turnSnapshot.transcript.map((item) => item.role)).toEqual(["user", "assistant"]);
 			expect(lifecycle).toEqual(["accepted:turn/start", "terminal:turn/start:completed"]);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(
+				(await diagnostics.read()).filter(
+					(event) => event.kind === "server_extension_hook" && event.payload.hook === "accepted",
+				),
+			).toMatchObject([
+				{ operationId: "operation-1", outcome: "ok", payload: { extensionId: "test-extension", hook: "accepted" } },
+				{
+					operationId: "operation-1",
+					outcome: "error",
+					payload: { extensionId: "failing-extension", hook: "accepted" },
+				},
+			]);
+			expect((await diagnostics.read()).filter((event) => event.kind === "model_instruction_profile")).toMatchObject(
+				[
+					{
+						operationId: "operation-1",
+						payload: { id: "profile-1", contentHash: "hash-1", byteLength: 20, estimatedTokens: 5 },
+					},
+				],
+			);
 			await expect(
 				runtime.run("bad-operation", {
 					command: "session/thinking/set",

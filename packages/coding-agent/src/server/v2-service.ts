@@ -24,7 +24,7 @@ import type {
 	TranscriptItem,
 } from "@earendil-works/pi-protocol";
 import type { ForensicRecorder, V2InputRegistry, V2UsageLedger } from "@earendil-works/pi-server";
-import type { ServerRuntimeExtensionHost } from "./extension-host.ts";
+import type { ServerRuntimeExtensionHookResult, ServerRuntimeExtensionHost } from "./extension-host.ts";
 
 const AGENT_COMPLETION = "agent_completion";
 const AGENT_COMPLETION_CONSUMED = "agent_completion_consumed";
@@ -547,6 +547,56 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		if (delta > 0) await this.definition.goals.recordUsage(delta);
 	}
 
+	private recordExtensionHookResults(
+		operationId: string,
+		hook: "accepted" | "terminal",
+		results: readonly ServerRuntimeExtensionHookResult[] | undefined,
+	): void {
+		if (results === undefined || this.definition.forensicRecorder === undefined) return;
+		for (const result of results) {
+			const reason = result.reason instanceof Error ? result.reason.message : result.reason;
+			void this.definition.forensicRecorder
+				.record({
+					kind: "server_extension_hook",
+					severity: result.status === "fulfilled" ? "info" : "warn",
+					outcome: result.status === "fulfilled" ? "ok" : "error",
+					sessionId: this.definition.metadata.id,
+					operationId,
+					payload: {
+						hook,
+						extensionId: result.extensionId,
+						status: result.status,
+						...(reason === undefined ? {} : { reason: String(reason).slice(0, 512) }),
+					},
+				})
+				.catch(() => undefined);
+		}
+	}
+
+	private async recordInstructionProfile(operationId: string): Promise<void> {
+		if (this.definition.forensicRecorder === undefined || this.definition.instructionProfile === undefined) return;
+		try {
+			const profile = await this.definition.instructionProfile();
+			if (profile === undefined) return;
+			await this.definition.forensicRecorder.record({
+				kind: "model_instruction_profile",
+				severity: "info",
+				outcome: "ok",
+				sessionId: this.definition.metadata.id,
+				operationId,
+				payload: {
+					id: profile.id,
+					source: profile.source,
+					contentHash: profile.contentHash,
+					...(profile.byteLength === undefined ? {} : { byteLength: profile.byteLength }),
+					...(profile.estimatedTokens === undefined ? {} : { estimatedTokens: profile.estimatedTokens }),
+				},
+			});
+		} catch {
+			// Profile diagnostics are metadata-only and must not change operation semantics.
+		}
+	}
+
 	private async compactionPolicySnapshot(): Promise<CompactionPolicy> {
 		const [model, settings, source] = await Promise.all([
 			this.definition.harness.getModel(),
@@ -752,12 +802,14 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			kind: "pending",
 			state: "accepted",
 			acceptedSeq: this.eventSeq,
+			model: { provider: this.model.provider, id: this.model.id },
 			compactionPolicy: policy,
 		};
 		return {
 			operationId: _operationId,
 			sessionRevision: this.revision,
 			eventSeq: this.eventSeq,
+			model: { provider: this.model.provider, id: this.model.id },
 			compactionPolicy: policy,
 		};
 	}
@@ -810,7 +862,16 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				? {}
 				: { compactionPolicy: this.activeOperation.compactionPolicy }),
 		};
-		await extensionHost?.onOperationAccepted({ id: _operationId, type: runCommand, model: extensionOperationModel });
+		this.recordExtensionHookResults(
+			_operationId,
+			"accepted",
+			await extensionHost?.onOperationAccepted({
+				id: _operationId,
+				type: runCommand,
+				model: extensionOperationModel,
+			}),
+		);
+		await this.recordInstructionProfile(_operationId);
 		try {
 			assertPromptCapabilities(await harness.getModel(), promptInput);
 			if (runCommand === "turn/start") {
@@ -947,16 +1008,24 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				state: "failed",
 				terminalSeq: this.eventSeq + 1,
 			};
-			await extensionHost?.onOperationTerminal(
-				{ id: _operationId, type: runCommand, model: extensionOperationModel },
-				"failed",
+			this.recordExtensionHookResults(
+				_operationId,
+				"terminal",
+				await extensionHost?.onOperationTerminal(
+					{ id: _operationId, type: runCommand, model: extensionOperationModel },
+					"failed",
+				),
 			);
 			throw error;
 		}
 		void this.autoName;
-		await extensionHost?.onOperationTerminal(
-			{ id: _operationId, type: runCommand, model: extensionOperationModel },
-			"completed",
+		this.recordExtensionHookResults(
+			_operationId,
+			"terminal",
+			await extensionHost?.onOperationTerminal(
+				{ id: _operationId, type: runCommand, model: extensionOperationModel },
+				"completed",
+			),
 		);
 		this.revision += 1;
 		this.eventSeq += 1;
