@@ -499,6 +499,34 @@ describe("AgentHarness v2 scaffold", () => {
 		await restored.harness.close();
 	});
 
+	it("reconstructs durable cancellation as an aborting operation", async () => {
+		const session = createSession("cancel-recovery");
+		await session.appendTransaction(
+			[operationStarted("cancelled-run")],
+			[
+				{ op: "set", namespace: "op.meta", key: "cancelled-run", value: { kind: "run" } },
+				{
+					op: "set",
+					namespace: "op.state",
+					key: "cancelled-run",
+					value: { kind: "run", status: "cancel_requested" },
+				},
+			],
+		);
+
+		const restored = await AgentHarness.create({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+		});
+		expect(restored.suspended).toMatchObject([{ id: "cancelled-run", reason: "crash" }]);
+		expect(await restored.harness.lanes()).toMatchObject([
+			{ name: "main", operation: { id: "cancelled-run", status: "aborting" } },
+		]);
+		expect((await restored.harness.watch()).snapshot.operation).toMatchObject({ status: "aborting" });
+		await restored.harness.close();
+	});
+
 	it("persists usage adjustments in the durable session ledger", async () => {
 		const session = createSession("usage");
 		const harness = await createHarness(session);

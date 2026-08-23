@@ -1840,6 +1840,18 @@ export class AgentHarness implements AgentLane {
 			: undefined;
 	}
 
+	private async isOperationCancelling(
+		operationId: string,
+		kind: OperationStartedRecord["intent"]["kind"],
+	): Promise<boolean> {
+		const transaction = this.registerSession();
+		if (!transaction) return false;
+		const register = await transaction.getRegister("op.state", operationId);
+		if (!register || typeof register.value !== "object" || register.value === null || Array.isArray(register.value))
+			return false;
+		return register.value.kind === kind && register.value.status === "cancel_requested";
+	}
+
 	private async appendRunAcceptance(record: NewRecord<OperationStartedRecord>): Promise<boolean> {
 		const transaction = this.registerSession();
 		if (transaction && record.intent.kind === "run") {
@@ -2027,6 +2039,9 @@ export class AgentHarness implements AgentLane {
 		return Promise.all(
 			lanes.map(async (lane) => {
 				const operation = (await this.durableSession.findOpenOperations(lane.lane, { limit: 1 }))[0];
+				const cancelling = operation
+					? await this.isOperationCancelling(operation.id, operation.intent.kind)
+					: false;
 				return {
 					name: lane.lane,
 					leafId: lane.leafId,
@@ -2034,9 +2049,11 @@ export class AgentHarness implements AgentLane {
 						? {
 								id: operation.id,
 								kind: operation.intent.kind,
-								status: this.suspendedOperations.some((item) => item.id === operation.id)
-									? "suspended"
-									: "running",
+								status: cancelling
+									? "aborting"
+									: this.suspendedOperations.some((item) => item.id === operation.id)
+										? "suspended"
+										: "running",
 							}
 						: null,
 				};
@@ -2219,6 +2236,7 @@ export class AgentHarness implements AgentLane {
 			queues[record.queue].push({ entryId: target.id, message: durableClone(target.message) });
 		}
 		const operation = open[0];
+		const cancelling = operation ? await this.isOperationCancelling(operation.id, operation.intent.kind) : false;
 		return {
 			lane,
 			transcript,
@@ -2227,7 +2245,11 @@ export class AgentHarness implements AgentLane {
 				? {
 						id: operation.id,
 						kind: operation.intent.kind,
-						status: this.suspendedOperations.some((item) => item.id === operation.id) ? "suspended" : "running",
+						status: cancelling
+							? "aborting"
+							: this.suspendedOperations.some((item) => item.id === operation.id)
+								? "suspended"
+								: "running",
 					}
 				: null,
 			queues,
