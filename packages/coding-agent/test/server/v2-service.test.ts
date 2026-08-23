@@ -36,7 +36,7 @@ describe("coding-agent v2 service adapter", () => {
 		faux.setResponses([fauxAssistantMessage("turn response")]);
 		const session = new Session(new InMemorySessionStorage({ id: "goal-continuation-session", createdAt: 1 }));
 		const goals = new GoalManager(session);
-		await goals.create("Finish the task");
+		await goals.create("Finish the task", 100_000);
 		const env = new NodeExecutionEnv({ cwd: process.cwd() });
 		const created = await createCodingAgentHarness({
 			session,
@@ -73,6 +73,8 @@ describe("coding-agent v2 service adapter", () => {
 			});
 			await new Promise<void>((resolve) => setImmediate(resolve));
 			expect(continuations).toEqual(["Finish the task"]);
+			expect((await runtime.snapshot()).goal).toMatchObject({ status: "active" });
+			expect((await runtime.snapshot()).goal?.tokensUsed).toBeGreaterThan(0);
 		} finally {
 			scheduler.close();
 			await created.harness.close();

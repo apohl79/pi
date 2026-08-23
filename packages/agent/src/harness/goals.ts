@@ -158,6 +158,14 @@ export class GoalManager {
 		return structuredClone(goal);
 	}
 
+	/** Attribute provider usage to the current goal and apply budget limits atomically. */
+	async recordUsage(tokens: number): Promise<GoalSnapshot> {
+		assertNonNegativeInteger(tokens, "tokens");
+		const current = await this.read();
+		if (!current) throw new Error("No active goal");
+		return this.update({ tokensUsed: current.tokensUsed + tokens });
+	}
+
 	async pause(): Promise<GoalSnapshot> {
 		return this.update({ status: "paused" });
 	}

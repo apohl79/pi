@@ -93,30 +93,11 @@ describe("durable GoalManager", () => {
 		scheduler.close();
 	});
 
-	test("allows an unbounded scheduler and ignores a closed pending continuation", async () => {
-		const manager = new GoalManager(new Session(new InMemorySessionStorage({ id: "goal-unbounded", createdAt: 1 })));
-		await manager.create("Continue after idle");
-		let callback!: () => void | Promise<void>;
-		let release!: () => void;
-		let continued = false;
-		const scheduler = new GoalContinuationScheduler({
-			goals: manager,
-			waitForIdle: async (pending) => {
-				callback = pending;
-				await new Promise<void>((resolve) => {
-					release = resolve;
-				});
-			},
-			continueGoal: async () => {
-				continued = true;
-			},
-		});
-		const scheduled = scheduler.schedule();
-		await Promise.resolve();
-		scheduler.close();
-		await callback();
-		release();
-		expect(await scheduled).toBe(false);
-		expect(continued).toBe(false);
+	test("attributes provider tokens and stops at the token budget", async () => {
+		const manager = new GoalManager(new Session(new InMemorySessionStorage({ id: "goal-usage", createdAt: 1 })));
+		await manager.create("Bound the work", 10);
+		const limited = await manager.recordUsage(11);
+		expect(limited).toMatchObject({ tokensUsed: 11, status: "budgetLimited" });
+		await expect(manager.recordUsage(1)).resolves.toMatchObject({ tokensUsed: 12, status: "budgetLimited" });
 	});
 });
