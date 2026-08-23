@@ -421,6 +421,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			payload,
 		};
 		for (const listener of this.eventListeners) listener(mapped);
+		void this.definition.extensionHost?.dispatchRuntimeEvent(mapped);
 	}
 
 	private async generateName(operationId: string): Promise<void> {
@@ -655,6 +656,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			payload,
 		};
 		for (const listener of this.eventListeners) listener(event);
+		void this.definition.extensionHost?.dispatchRuntimeEvent(event);
 	}
 
 	private async recordInstructionProfile(operationId: string): Promise<void> {

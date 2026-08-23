@@ -134,4 +134,33 @@ describe("ServerRuntimeExtensionHost", () => {
 		expect(result.outcomes[0]).toMatchObject({ extensionId: "fails", status: "rejected" });
 		expect(result.outcomes[1]).toEqual({ extensionId: "survives", status: "fulfilled" });
 	});
+
+	it("dispatches declared runtime events without sharing mutable payloads", async () => {
+		const received: string[] = [];
+		const host = new ServerRuntimeExtensionHost({ resolveModel: () => ({ id: "model-a" }) });
+		await host.register({
+			id: "items-only",
+			events: ["item_completed"],
+			onRuntimeEvent: (event) => {
+				received.push(`${event.event}:${String(event.payload.role)}`);
+				event.payload.role = "mutated";
+			},
+		});
+		await host.register({
+			id: "all-events",
+			onRuntimeEvent: (event) => {
+				received.push(event.event);
+			},
+		});
+
+		const event = { sessionId: "s1", event: "item_completed" as const, payload: { role: "assistant" } };
+		const outcomes = await host.dispatchRuntimeEvent(event);
+
+		expect(received).toEqual(["item_completed:assistant", "item_completed"]);
+		expect(event.payload.role).toBe("assistant");
+		expect(outcomes).toEqual([
+			{ extensionId: "items-only", status: "fulfilled" },
+			{ extensionId: "all-events", status: "fulfilled" },
+		]);
+	});
 });
