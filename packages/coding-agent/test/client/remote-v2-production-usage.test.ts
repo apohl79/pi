@@ -61,6 +61,7 @@ describe("production remote v2 usage", () => {
 			await client.connect();
 			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
 			try {
+				if (session.id === undefined) throw new Error("Created remote session has no id");
 				const operationId = await session.submit("measure remote usage");
 				await session.waitForOperation(operationId);
 				const usage = await session.readUsage({ sessionId: session.id });

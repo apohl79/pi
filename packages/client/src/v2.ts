@@ -19,7 +19,8 @@ import {
 	type SessionMetadataV2,
 	type SessionSnapshotV2,
 } from "@earendil-works/pi-protocol";
-import { type ClientDiagnosticSpool, mergeClientDiagnosticBundle } from "./diagnostics.ts";
+import type { ClientDiagnosticSpool } from "./diagnostics.ts";
+import { mergeClientDiagnosticBundle } from "./diagnostics-core.ts";
 import type { ByteTransport, ByteTransportFactory, ByteTransportHandlers } from "./transport.ts";
 import type { ListenerErrorHandler } from "./types.ts";
 

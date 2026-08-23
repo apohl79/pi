@@ -99,6 +99,7 @@ describe("production remote v2 diagnostics", () => {
 			await firstClient.connect();
 			const session = await RemoteV2Session.create(firstClient, { cwd: directory }, { mode: "control" });
 			try {
+				if (session.id === undefined) throw new Error("Created remote session has no id");
 				sessionId = session.id;
 				const operationId = await session.submit("capture provider failure");
 				const terminal = await session.waitForOperation(operationId);
