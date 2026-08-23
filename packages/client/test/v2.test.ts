@@ -89,6 +89,48 @@ describe("PiClientV2", () => {
 		await expect(read).rejects.toThrow("not_found: missing");
 	});
 
+	test("creates a session through the typed v2 helper", async () => {
+		const pair = transportPair();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		const connecting = client.connect();
+		await Promise.resolve();
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
+		await connecting;
+		const created = client.createSession({ name: "demo", cwd: "/workspace" });
+		pair.deliver({
+			type: "response",
+			id: "v2-request-1",
+			ok: true,
+			result: { session: { id: "session-1", name: "demo", cwd: "/workspace" } },
+		});
+		expect(await created).toMatchObject({ id: "session-1", name: "demo", cwd: "/workspace" });
+	});
+
+	test("reads an operation after reconnect", async () => {
+		const pair = transportPair();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		const connecting = client.connect();
+		await Promise.resolve();
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
+		await connecting;
+		const operation = client.readOperation("operation-1");
+		pair.deliver({
+			type: "response",
+			id: "v2-request-1",
+			ok: true,
+			result: {
+				operation: {
+					operationId: "operation-1",
+					sessionId: "session-1",
+					state: "complete",
+					accepted: { operationId: "operation-1", sessionRevision: 2, eventSeq: 4 },
+					terminalSeq: 5,
+				},
+			},
+		});
+		expect(await operation).toMatchObject({ operationId: "operation-1", state: "complete", terminalSeq: 5 });
+	});
+
 	test("keeps session lease transitions and filters session events", async () => {
 		const pair = transportPair();
 		const client = new PiClientV2({ transportFactory: pair.factory });

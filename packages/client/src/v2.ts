@@ -8,6 +8,8 @@ import {
 	type EventEnvelopeV2,
 	encodeClientMessageV2,
 	FrameDecoder,
+	type JsonValue,
+	type OperationRecordV2,
 	PROTOCOL_V2_VERSION,
 	parseServerMessageV2,
 	type ResponseEnvelopeV2,
@@ -30,6 +32,12 @@ export interface PiClientV2Options {
 }
 
 export type V2SessionLeaseMode = "control" | "observer";
+
+export interface CreateSessionV2Options {
+	readonly id?: string;
+	readonly name?: string;
+	readonly cwd?: string;
+}
 
 export interface PiSessionV2Handle {
 	readonly sessionId: string;
@@ -151,6 +159,18 @@ export class PiClientV2 {
 		return result.sessions as SessionMetadataV2[];
 	}
 
+	async createSession(options: CreateSessionV2Options = {}): Promise<SessionSnapshotV2> {
+		const result = commandResult(
+			await this.request({
+				command: "session/create",
+				...(Object.keys(options).length === 0 ? {} : { payload: { ...options } as Record<string, JsonValue> }),
+			}),
+		);
+		if (typeof result.session !== "object" || result.session === null || Array.isArray(result.session))
+			throw new Error("Invalid session/create result");
+		return result.session as SessionSnapshotV2;
+	}
+
 	async attachSession(sessionId: string, mode: "control" | "observer" = "control"): Promise<void> {
 		commandResult(await this.request({ command: "session/attach", sessionId, payload: { mode } }));
 	}
@@ -164,6 +184,13 @@ export class PiClientV2 {
 		const result = commandResult(await this.request({ command: "session/read", sessionId }));
 		if (typeof result.session !== "object" || result.session === null) throw new Error("Invalid session/read result");
 		return result.session as SessionSnapshotV2;
+	}
+
+	async readOperation(operationId: string): Promise<OperationRecordV2> {
+		const result = commandResult(await this.request({ command: "operation/read", operationId }));
+		if (typeof result.operation !== "object" || result.operation === null || Array.isArray(result.operation))
+			throw new Error("Invalid operation/read result");
+		return result.operation as OperationRecordV2;
 	}
 
 	private async send(message: ClientMessageV2): Promise<void> {
