@@ -297,6 +297,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		try {
 			const inbox = agent.inbox.slice();
 			const prompt = [...inbox, text].join("\n\n");
+			const usageBefore = await agent.runtime.snapshot();
 			const operationId = randomUUID();
 			await agent.runtime.accept(operationId);
 			await agent.runtime.run(operationId, {
@@ -304,6 +305,20 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				sessionId: agent.childSessionId,
 				payload: { text: prompt },
 			});
+			const usageAfter = await agent.runtime.snapshot();
+			const usageDelta =
+				usageAfter.usage.input +
+				usageAfter.usage.output +
+				usageAfter.usage.cacheRead +
+				usageAfter.usage.cacheWrite -
+				(usageBefore.usage.input +
+					usageBefore.usage.output +
+					usageBefore.usage.cacheRead +
+					usageBefore.usage.cacheWrite);
+			if (usageDelta > 0) {
+				const parent = await this.service.openSession(agent.parentSessionId);
+				await parent.recordGoalUsage?.(usageDelta);
+			}
 			if (inbox.length > 0) agent.inbox.splice(0, inbox.length);
 			const previousState = agent.state;
 			agent.state = "complete";
