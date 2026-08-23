@@ -1029,6 +1029,29 @@ export class AgentHarness implements AgentLane {
 			const finalMessage = transcriptMessages.at(-1);
 			if (!finalEntryId || !finalMessage || finalMessage.role !== "assistant")
 				throw new Error("Agent loop produced no assistant message");
+			if (finalMessage.stopReason === "deferred" && finalMessage.deferred !== undefined) {
+				const suspended: SuspendedOperation = {
+					lane: this.name,
+					kind: "run",
+					id: runId,
+					startedAt: Date.now(),
+					reason: "deferred",
+					prompt: structuredClone(prompts),
+					deferred: structuredClone(finalMessage.deferred),
+					missing: { tools: [], models: [] },
+				};
+				this.suspendedOperations = [
+					...this.suspendedOperations.filter((candidate) => candidate.id !== runId),
+					suspended,
+				];
+				return ResultValue.ok({
+					runId,
+					kind: "suspended",
+					leafId: (await this.session.getLeafId()) ?? "",
+					finalEntryId,
+					deferred: structuredClone(finalMessage.deferred),
+				});
+			}
 			if (
 				controller.signal.aborted ||
 				finalMessage.stopReason === "aborted" ||

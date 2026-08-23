@@ -146,6 +146,30 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("keeps deferred provider work open for recovery", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "deferred-faux",
+			models: [{ id: "deferred-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage("waiting", {
+				stopReason: "deferred",
+				deferred: { provider: "faux", modelId: "faux-1", api: "faux", id: "response-1" },
+			}),
+		]);
+		const session = createSession("deferred");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+
+		const result = await harness.prompt("wait for me");
+
+		expect(result).toMatchObject({ ok: true, value: { kind: "suspended", deferred: { id: "response-1" } } });
+		expect(await session.findOpenOperations("main")).toHaveLength(1);
+		expect((await harness.lanes())[0]?.operation).toMatchObject({ status: "suspended" });
+		await harness.close();
+	});
+
 	it("runs idle callbacks after the durable lane is idle", async () => {
 		const harness = await createHarness();
 		let callbackCalled = false;
