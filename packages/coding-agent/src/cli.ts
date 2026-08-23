@@ -62,7 +62,9 @@ async function runCli(): Promise<void> {
 		parsedArgs.systemPrompt === undefined &&
 		parsedArgs.appendSystemPrompt === undefined &&
 		parsedArgs.tools === undefined &&
-		parsedArgs.noTools !== true
+		parsedArgs.noTools !== true &&
+		parsedArgs.excludeTools === undefined &&
+		parsedArgs.noBuiltinTools !== true
 			? undefined
 			: {
 					...(parsedArgs.systemPrompt === undefined && parsedArgs.appendSystemPrompt === undefined
@@ -80,6 +82,8 @@ async function runCli(): Promise<void> {
 						: parsedArgs.tools === undefined
 							? {}
 							: { activeToolNames: [...parsedArgs.tools] }),
+					...(parsedArgs.excludeTools === undefined ? {} : { excludedToolNames: [...parsedArgs.excludeTools] }),
+					...(parsedArgs.noBuiltinTools === true ? { disableBuiltinTools: true } : {}),
 				};
 	const runtime = await createConfiguredCodingAgentDaemonRuntime({
 		agentDir,
