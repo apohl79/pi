@@ -26,13 +26,14 @@ const snapshot: ServerSnapshotV2 = {
 	models: [],
 };
 
-function clientFactory() {
+function clientFactory(requests?: Array<{ command: string; payload?: unknown }>) {
 	let handlers: ByteTransportHandlers | undefined;
 	const factory = async (next: ByteTransportHandlers): Promise<ByteTransport> => {
 		handlers = next;
 		return {
 			send: async (chunk) => {
 				const message = parseClientMessageV2(decodeCbor(chunk.subarray(4)));
+				if (message.type === "request") requests?.push(message.request);
 				if (message.type === "hello") {
 					handlers?.onData(
 						encodeServerMessageV2({
@@ -131,6 +132,15 @@ function clientFactory() {
 							},
 						}),
 					);
+				} else if (message.request.command === "blob/put") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: { blob: { digest: "image-digest", mimeType: "image/png", size: 3 } },
+						}),
+					);
 				}
 			},
 			close: () => {},
@@ -198,6 +208,41 @@ describe("experimental CLI runtime", () => {
 		await runtime.runRpc({ messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] });
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(output).toContainEqual({ id: "prompt-1", type: "response", command: "prompt", success: true });
+		runtime.close();
+	});
+
+	test("uploads RPC images to the server blob boundary before prompting", async () => {
+		const requests: Array<{ command: string; payload?: unknown }> = [];
+		const server = clientFactory(requests);
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: () => {},
+			rpcInput: Readable.from([
+				JSON.stringify({
+					id: "image-1",
+					type: "prompt",
+					message: "inspect",
+					images: [{ type: "image", data: "YWJj", mimeType: "image/png" }],
+				}) + "\n",
+			]),
+			rpcOutput: (value) => output.push(value),
+		});
+		await runtime.runRpc({ messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(requests).toContainEqual({
+			command: "blob/put",
+			payload: { data: "YWJj", mimeType: "image/png", encoding: "base64" },
+		});
+		expect(requests.find((request) => request.command === "turn/start")?.payload).toEqual({
+			content: [
+				{ type: "text", text: "inspect" },
+				{ type: "image", digest: "image-digest", mimeType: "image/png" },
+			],
+		});
+		expect(output).toContainEqual({ id: "image-1", type: "response", command: "prompt", success: true });
 		runtime.close();
 	});
 

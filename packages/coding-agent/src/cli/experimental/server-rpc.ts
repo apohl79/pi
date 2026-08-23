@@ -2,7 +2,7 @@ import type { Readable } from "node:stream";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { PiClientV2 } from "@earendil-works/pi-client";
 import type { SessionSnapshotV2, TranscriptItem, UserTranscriptItem } from "@earendil-works/pi-protocol";
-import { RemoteV2Session } from "../../client/remote-v2-session.ts";
+import { type RemoteV2PromptContent, RemoteV2Session } from "../../client/remote-v2-session.ts";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.ts";
 import type { RpcCommand } from "../../modes/rpc/rpc-types.ts";
 import type { Args } from "../args.ts";
@@ -71,19 +71,13 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 		const id = command.id;
 		switch (command.type) {
 			case "prompt":
-				if (command.images?.length)
-					throw new Error("Server RPC image prompts require blob upload and are not enabled");
-				await session.submit(command.message);
+				await session.submit(await promptContent(session, command.message, command.images));
 				return success(id, "prompt");
 			case "steer":
-				if (command.images?.length)
-					throw new Error("Server RPC image steering requires blob upload and is not enabled");
-				await session.submit(command.message);
+				await session.submit(await promptContent(session, command.message, command.images));
 				return success(id, "steer");
 			case "follow_up":
-				if (command.images?.length)
-					throw new Error("Server RPC image follow-up requires blob upload and is not enabled");
-				await session.followUp(command.message);
+				await session.followUp(await promptContent(session, command.message, command.images));
 				return success(id, "follow_up");
 			case "abort":
 				await session.abort();
@@ -131,6 +125,20 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 	}
 
 	void stopReading;
+}
+
+async function promptContent(
+	session: RemoteV2Session,
+	message: string,
+	images: readonly { readonly type: "image"; readonly data: string; readonly mimeType: string }[] | undefined,
+): Promise<string | RemoteV2PromptContent> {
+	if (images === undefined || images.length === 0) return message;
+	const content: Array<RemoteV2PromptContent[number]> = [{ type: "text", text: message }];
+	for (const image of images) {
+		const blob = await session.putBlob(image.data, image.mimeType, "base64");
+		content.push({ type: "image", digest: blob.digest, mimeType: blob.mimeType });
+	}
+	return content;
 }
 
 function subscribeSession(
