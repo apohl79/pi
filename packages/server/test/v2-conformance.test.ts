@@ -10,12 +10,12 @@ import type {
 	SessionSnapshotV2,
 	UsageAggregate,
 } from "@earendil-works/pi-protocol";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { InMemoryV2AgentRegistry } from "../src/agents.ts";
 import { InMemoryV2BlobStore } from "../src/blobs.ts";
 import { InMemoryForensicRecorder } from "../src/diagnostics.ts";
 import { InMemoryV2InputRegistry } from "../src/inputs.ts";
-import { InMemoryV2OperationStore } from "../src/operation-store.ts";
+import { InMemoryV2OperationStore, JsonlV2OperationStore } from "../src/operation-store.ts";
 import { InMemoryV2ProcessRegistry } from "../src/processes.ts";
 import { connectUnixTestClientV2, Deferred } from "../src/testing/index.ts";
 import { createUnixServerV2 } from "../src/transports/unix/preset.ts";
@@ -90,7 +90,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 		this.current = sessionSnapshot(id);
 	}
 
-	snapshot(): SessionSnapshotV2 {
+	async snapshot(): Promise<SessionSnapshotV2> {
 		return structuredClone(this.current);
 	}
 
@@ -414,6 +414,205 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: false,
 			error: { code: "request_failed" },
 		});
+		await client.close();
+	});
+
+	test("accepts goal lifecycle commands through the durable operation path", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const goal = await client.request({ command: "goal/read", sessionId: "session-1" });
+		expect(goal).toMatchObject({ ok: true, result: { command: "goal/read" } });
+
+		const response = await client.request({
+			command: "goal/create",
+			sessionId: "session-1",
+			payload: { objective: "ship the runtime" },
+		});
+		expect(response).toMatchObject({ ok: true, accepted: { sessionRevision: 2, eventSeq: 2 } });
+		expect(service.sessions.get("session-1")?.accepted).toHaveLength(1);
+
+		service.sessions.get("session-1")!.release.resolve(undefined);
+		await service.sessions.get("session-1")!.started.promise;
+		await client.next((message) => message.type === "event" && message.event === "operation_terminal");
+		await client.close();
+	});
+
+	test("restores operation records and event replay after server restart", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
+		directories.push(directory);
+		const store = new JsonlV2OperationStore(join(directory, "operations.jsonl"));
+		const firstService = new TestService();
+		const firstServer = createUnixServerV2(firstService, {
+			path: join(directory, "server.sock"),
+			operationStore: store,
+		});
+		servers.push(firstServer);
+		await firstServer.start();
+		const first = await connectUnixTestClientV2(firstServer.addresses[0]!);
+		await first.hello();
+		await first.request({ command: "session/attach", sessionId: "session-1" });
+		const accepted = await first.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { text: "hello" },
+		});
+		const operationId = (accepted as { accepted: OperationAccepted }).accepted.operationId;
+		firstService.sessions.get("session-1")!.release.resolve(undefined);
+		await firstService.sessions.get("session-1")!.started.promise;
+		await first.next((message) => message.type === "event" && message.event === "operation_terminal");
+		await first.close();
+		await firstServer.close();
+
+		const secondServer = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			operationStore: store,
+		});
+		servers.push(secondServer);
+		await secondServer.start();
+		const second = await connectUnixTestClientV2(secondServer.addresses[0]!);
+		await second.hello({ sessionId: "session-1", eventSeq: 2 });
+		const replay = await second.next((message) => message.type === "event" && message.event === "operation_terminal");
+		expect(replay).toMatchObject({ operationId, payload: { state: "complete" } });
+		await second.request({ command: "session/attach", sessionId: "session-1" });
+		const operation = await second.request({ command: "operation/read", operationId, sessionId: "session-1" });
+		expect(operation).toMatchObject({ ok: true, result: { operation: { operationId, state: "complete" } } });
+		await second.close();
+	});
+
+	test("exposes server-owned process cursors over v2", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
+		directories.push(directory);
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			processes: new InMemoryV2ProcessRegistry({ maxOutputBytes: 5 }),
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const started = await client.request({
+			command: "process/start",
+			sessionId: "session-1",
+			payload: { command: "demo" },
+		});
+		const processId = (started as unknown as { result: { process: { processId: string } } }).result.process.processId;
+		await client.request({ command: "process/write", payload: { processId, input: "abcdef" } });
+		const output = await client.request({ command: "process/read", payload: { processId, cursor: 0 } });
+		expect(output).toMatchObject({ ok: true, result: { output: { output: "bcdef", cursor: 6, truncated: true } } });
+		const terminated = await client.request({ command: "process/terminate", payload: { processId } });
+		expect(terminated).toMatchObject({ ok: true, result: { process: { state: "terminated", exitCode: 143 } } });
+		await client.close();
+	});
+
+	test("transports content-addressed blobs without embedding binary bytes in CBOR", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
+		directories.push(directory);
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			blobs: new InMemoryV2BlobStore(),
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const put = await client.request({
+			command: "blob/put",
+			payload: { data: "aGVsbG8=", encoding: "base64", mimeType: "text/plain" },
+		});
+		const digest = (put as unknown as { result: { blob: { digest: string } } }).result.blob.digest;
+		expect(await client.request({ command: "blob/stat", payload: { digest } })).toMatchObject({
+			ok: true,
+			result: { blob: { digest, mimeType: "text/plain", size: 5 } },
+		});
+		expect(await client.request({ command: "blob/read", payload: { digest } })).toMatchObject({
+			ok: true,
+			result: { digest, encoding: "base64", data: "aGVsbG8=" },
+		});
+		await client.close();
+	});
+
+	test("exposes the server-owned agent graph and lifecycle commands", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
+		directories.push(directory);
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			agents: new InMemoryV2AgentRegistry(),
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const spawned = await client.request({
+			command: "agent/spawn",
+			sessionId: "session-1",
+			payload: { taskName: "research", taskMessage: "inspect auth" },
+		});
+		const agent = (spawned as unknown as { result: { agent: { id: string; path: string } } }).result.agent;
+		expect(agent.path).toBe("/root/research");
+		expect(await client.request({ command: "agent/list", sessionId: "session-1" })).toMatchObject({
+			ok: true,
+			result: { agents: [{ id: agent.id, state: "running" }] },
+		});
+		await client.request({ command: "agent/message", payload: { agentId: agent.id, message: "continue" } });
+		const interrupted = await client.request({ command: "agent/interrupt", payload: { agentId: agent.id } });
+		expect(interrupted).toMatchObject({ ok: true, result: { agent: { id: agent.id, state: "interrupted" } } });
+		await client.close();
+	});
+
+	test("serves versioned plan state through the session snapshot", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
+		directories.push(directory);
+		const server = createUnixServerV2(new TestService(), { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const updated = await client.request({
+			command: "plan/update",
+			sessionId: "session-1",
+			payload: { items: [{ step: "implement", status: "in_progress" }] },
+		});
+		expect(updated).toMatchObject({ ok: true, result: { plan: { version: 1 } } });
+		const read = await client.request({ command: "session/read", sessionId: "session-1" });
+		expect(read).toMatchObject({
+			ok: true,
+			result: { session: { plan: { version: 1, items: [{ step: "implement" }] } } },
+		});
+		await client.close();
+	});
+
+	test("keeps structured input owned by the daemon across snapshot reads", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
+		directories.push(directory);
+		const inputs = new InMemoryV2InputRegistry();
+		const request = await inputs.create("session-1", [
+			{ id: "choice", prompt: "Choose", options: [{ label: "yes" }] },
+		]);
+		const server = createUnixServerV2(new TestService(), { path: join(directory, "server.sock"), inputs });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const session = await client.request({ command: "session/read", sessionId: "session-1" });
+		expect(session).toMatchObject({ result: { session: { queues: { pendingInputRequestId: request.id } } } });
+		const read = await client.request({ command: "input/request/read", payload: { requestId: request.id } });
+		expect(read).toMatchObject({ result: { request: { status: "pending", id: request.id } } });
+		const response = await client.request({
+			command: "input/request/respond",
+			payload: { requestId: request.id, answers: { choice: "yes" } },
+		});
+		expect(response).toMatchObject({ result: { request: { status: "responded" } } });
 		await client.close();
 	});
 });
