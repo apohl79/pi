@@ -5,6 +5,15 @@ import type { Session } from "./session.ts";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
+/** Maximum size of caller-supplied instructions retained in operation intent. */
+export const MAX_DURABLE_COMPACTION_TEXT_LENGTH = 16_384;
+/** Bound replayed compaction payloads before they can enter an LLM context. */
+export const MAX_DURABLE_COMPACTION_TAIL_MESSAGES = 64;
+export const MAX_DURABLE_COMPACTION_TAIL_BYTES = 256 * 1024;
+/** Bound extension-owned JSON payloads retained in the append-only session log. */
+export const MAX_DURABLE_EXTENSION_PAYLOAD_BYTES = 256 * 1024;
+export const MAX_DURABLE_EXTENSION_PAYLOAD_DEPTH = 16;
+
 export type SessionStopReason = Exclude<StopReason, "pending"> | "deferred";
 
 export interface IdGenerator {
