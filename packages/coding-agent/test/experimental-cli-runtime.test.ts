@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -628,6 +628,54 @@ describe("experimental CLI runtime", () => {
 		});
 		expect(JSON.parse(await readFile(outputPath, "utf8")).manifest.unavailable).toBeUndefined();
 		expect(output).toMatchObject([{ command: "diagnostics/export" }]);
+		runtime.close();
+	});
+
+	test("warns when decrypted diagnostics are written to an owner-only destination", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-cli-diagnostics-decrypt-"));
+		const outputPath = join(directory, "bundle.json");
+		await writeFile(outputPath, "old", { mode: 0o600 });
+		await chmod(outputPath, 0o600);
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: clientFactory().create,
+			write: (value) => output.push(value),
+		});
+		await runtime.runDiagnostics({
+			command: "diagnostics",
+			action: "export",
+			output: outputPath,
+			decryptContent: true,
+		});
+		expect(output[0]).toEqual({
+			warning: "Decrypted diagnostic export may contain source code and conversation data; protect the output file.",
+		});
+		expect(JSON.parse(await readFile(outputPath, "utf8"))).toMatchObject({ manifest: { schemaVersion: 1 } });
+		runtime.close();
+	});
+
+	test("rejects decrypted diagnostics on a group/world-accessible destination", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-cli-diagnostics-decrypt-unsafe-"));
+		const outputPath = join(directory, "bundle.json");
+		await writeFile(outputPath, "keep", { mode: 0o644 });
+		await chmod(outputPath, 0o644);
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: clientFactory().create,
+			write: () => {},
+		});
+		await expect(
+			runtime.runDiagnostics({
+				command: "diagnostics",
+				action: "export",
+				output: outputPath,
+				decryptContent: true,
+			}),
+		).rejects.toThrow("group/world-accessible");
+		expect(await readFile(outputPath, "utf8")).toBe("keep");
 		runtime.close();
 	});
 
