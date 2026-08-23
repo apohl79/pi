@@ -493,6 +493,7 @@ export {
 	type ModelInstructionResolverOptions,
 	type ResolvedModelInstructionProfile,
 } from "./server/model-instructions.ts";
+export { ActivatingV2PluginRegistry } from "./server/plugin-registry.ts";
 export {
 	createPluginSamplingInput,
 	type PluginSamplingDiagnostic,

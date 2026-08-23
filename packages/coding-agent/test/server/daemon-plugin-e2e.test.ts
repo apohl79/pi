@@ -22,6 +22,7 @@ describe("coding-agent daemon plugin end-to-end compatibility", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-plugin-e2e-"));
 		directories.push(directory);
 		const pluginRoot = join(directory, "plugin");
+		await mkdir(join(pluginRoot, ".codex-plugin"), { recursive: true });
 		await mkdir(join(pluginRoot, "skills", "review"), { recursive: true });
 		await mkdir(join(pluginRoot, "commands"), { recursive: true });
 		await writeFile(
@@ -45,6 +46,7 @@ describe("coding-agent daemon plugin end-to-end compatibility", () => {
 			},
 			mcpServers: { local: { command: "not-started" } },
 		};
+		await writeFile(join(pluginRoot, ".codex-plugin", "plugin.json"), JSON.stringify(manifest));
 		const observed: Context[] = [];
 		const models = createModels();
 		const faux = fauxProvider({
@@ -94,6 +96,7 @@ describe("coding-agent daemon plugin end-to-end compatibility", () => {
 				ok: true,
 				result: {
 					plugin: {
+						root: expect.stringContaining("plugins-cache"),
 						resources: { skills: ["skills/review"], commands: ["commands/review.md"], apps: 1, hooks: 1 },
 					},
 				},
