@@ -236,6 +236,16 @@ describe("LocalDiagnosticCapsuleStore", () => {
 		expect(await reopened.list()).toEqual([second]);
 		expect(await reopened.decrypt(second)).toEqual(new Uint8Array(Buffer.from("two")));
 	});
+
+	test("rejects malformed capsules at save and restart boundaries", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostic-capsules-invalid-"));
+		const keyPath = join(directory, "keys.json");
+		const store = new LocalDiagnosticCapsuleStore(keyPath);
+		await expect(store.save({} as never)).rejects.toThrow("invalid");
+		await writeFile(`${keyPath}.capsules`, JSON.stringify({ capsules: [{}] }));
+		const reopened = new LocalDiagnosticCapsuleStore(keyPath);
+		await expect(reopened.list()).rejects.toThrow("invalid capsule");
+	});
 });
 
 describe("verifyDiagnosticBundle", () => {

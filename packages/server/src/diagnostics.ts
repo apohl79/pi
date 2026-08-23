@@ -519,6 +519,7 @@ export class LocalDiagnosticCapsuleStore {
 
 	async save(capsule: DiagnosticCapsule): Promise<void> {
 		await this.ensureCapsulesLoaded();
+		assertDiagnosticCapsule(capsule);
 		this.capsules.push(capsule);
 		if (this.capsules.length > this.maxCapsules) this.capsules.splice(0, this.capsules.length - this.maxCapsules);
 		await this.persistCapsules();
@@ -572,7 +573,9 @@ export class LocalDiagnosticCapsuleStore {
 		this.capsulesLoaded = true;
 		try {
 			const file = JSON.parse(await readFile(this.capsulePath, "utf8")) as DiagnosticCapsuleFile;
-			if (Array.isArray(file.capsules)) this.capsules = file.capsules.slice(-this.maxCapsules);
+			if (!Array.isArray(file.capsules) || file.capsules.some((capsule) => !isDiagnosticCapsule(capsule)))
+				throw new Error("Diagnostic capsule store contains an invalid capsule");
+			this.capsules = file.capsules.slice(-this.maxCapsules);
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
@@ -584,6 +587,10 @@ export class LocalDiagnosticCapsuleStore {
 		await writeFile(temporary, `${JSON.stringify({ capsules: this.capsules })}\n`, { mode: 0o600 });
 		await rename(temporary, this.capsulePath);
 	}
+}
+
+function assertDiagnosticCapsule(capsule: unknown): asserts capsule is DiagnosticCapsule {
+	if (!isDiagnosticCapsule(capsule)) throw new TypeError("Diagnostic capsule is invalid");
 }
 
 function capsuleAad(
