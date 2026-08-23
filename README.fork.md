@@ -70,5 +70,8 @@ not confused with visible-turn usage.
   applying them locally.
 - Fork-core changes are recorded with their extension insufficiency and tests
   in [`FORK_DELTA.md`](FORK_DELTA.md).
+- Every workspace package has an explicit stock-compatible, fork-dependent, or
+  fork-core classification in [`PACKAGE_COMPATIBILITY.json`](PACKAGE_COMPATIBILITY.json),
+  including the rationale and compatibility-test surface.
 - MCP, filesystem rollback, realtime voice/audio, and Codex's internal binary
   Rust extension ABI are outside this compatibility boundary.
