@@ -632,8 +632,7 @@ describe("PiServer v2 operation acceptance", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-files-"));
 		directories.push(directory);
 		await writeFile(join(directory, "notes.ts"), "export const answer = 42;");
-		const service = new TestService();
-		const server = createUnixServerV2(service, {
+		const server = createUnixServerV2(new TestService(), {
 			path: join(directory, "server.sock"),
 			files: new LocalV2FileReferenceService({ projectRoot: directory, homeDirectory: directory }),
 		});
@@ -1142,6 +1141,7 @@ describe("PiServer v2 operation acceptance", () => {
 		const doctor = await client.request({ command: "diagnostics/doctor" });
 		expect(status).toMatchObject({ ok: true, result: { capture: "metadata", eventCount: 1 } });
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
+		await client.close();
 	});
 
 	test("reports operational-log degradation without a critical event", async () => {
@@ -1154,7 +1154,8 @@ describe("PiServer v2 operation acceptance", () => {
 			read: async () => [],
 		});
 		await diagnostics.record({ kind: "boot", severity: "info" });
-		const server = createUnixServerV2(new TestService(), {
+		const service = new TestService();
+		const server = createUnixServerV2(service, {
 			path: join(directory, "server.sock"),
 			diagnostics,
 			daemonInstanceId: "daemon-degraded-test",
@@ -1163,11 +1164,25 @@ describe("PiServer v2 operation acceptance", () => {
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const runtime = service.sessions.get("session-1")!;
+		runtime.release.resolve(undefined);
+		const degradedEvent = client.next(
+			(message) => message.type === "event" && message.event === "diagnostics_degraded",
+		);
+		const accepted = await client.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { text: "diagnostic transition" },
+		});
+		expect(await degradedEvent).toMatchObject({ event: "diagnostics_degraded", payload: { degraded: true } });
 		const status = await client.request({ command: "diagnostics/status" });
 		expect(status).toMatchObject({
 			ok: true,
-			result: { capture: "metadata", eventCount: 3, degraded: true, lastCriticalEventSeq: 2 },
+			result: { capture: "metadata", eventCount: expect.any(Number), degraded: true, lastCriticalEventSeq: 2 },
 		});
+		expect((status as { result?: { eventCount?: number } }).result?.eventCount).toBeGreaterThanOrEqual(3);
+		expect(accepted).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
 		await client.close();
 	});
 
