@@ -52,7 +52,10 @@ const DEFAULT_MAX_COMPLETION_MS = 250;
 
 function cleanReference(reference: string): string {
 	const value = reference.trim();
-	return value.startsWith("@") ? value.slice(1) : value;
+	const unmarked = value.startsWith("@") ? value.slice(1) : value;
+	const quote = unmarked[0];
+	if ((quote === '"' || quote === "'") && unmarked.endsWith(quote)) return unmarked.slice(1, -1);
+	return quote === '"' || quote === "'" ? unmarked.slice(1) : unmarked;
 }
 
 function scopeOf(reference: string): FileScope {
