@@ -911,6 +911,7 @@ export class PiServerV2 {
 
 	private async listAgents(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("agent/list requires sessionId");
+		this.requireSessionReference(state, command.sessionId);
 		await this.sendResponse(state, id, {
 			command: command.command,
 			agents: await this.agents.list(command.sessionId),
@@ -924,6 +925,7 @@ export class PiServerV2 {
 			throw new Error("agent/wait timeoutMs must be a number");
 		if (typeof payload.timeoutMs === "number" && (!Number.isSafeInteger(payload.timeoutMs) || payload.timeoutMs < 0))
 			throw new Error("agent/wait timeoutMs must be a non-negative safe integer");
+		this.requireSessionReference(state, (await this.agents.getSnapshot(agentId)).sessionId);
 		await this.sendResponse(state, id, {
 			command: command.command,
 			agent: await this.agents.wait(agentId, typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined),
