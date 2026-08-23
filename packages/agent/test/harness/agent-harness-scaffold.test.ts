@@ -109,6 +109,33 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("delivers follow-up queue input through the provider loop", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-follow-up-faux",
+			models: [{ id: "harness-follow-up-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				return fauxAssistantMessage("initial");
+			},
+			fauxAssistantMessage("follow-up"),
+		]);
+		const session = createSession("follow-up");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		const prompt = harness.prompt("start");
+		for (let attempt = 0; attempt < 100 && (await session.findOpenOperations("main")).length === 0; attempt++)
+			await new Promise((resolve) => setTimeout(resolve, 1));
+		await expect(harness.followUp("continue")).resolves.toMatchObject({ ok: true });
+		await expect(prompt).resolves.toMatchObject({ ok: true, value: { kind: "completed" } });
+		const messages = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		expect(JSON.stringify(messages)).toContain("continue");
+		expect(JSON.stringify(messages)).toContain("follow-up");
+		await harness.close();
+	});
+
 	it("runs idle callbacks after the durable lane is idle", async () => {
 		const harness = await createHarness();
 		let callbackCalled = false;

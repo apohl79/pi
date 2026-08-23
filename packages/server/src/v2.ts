@@ -90,7 +90,7 @@ function modelReferencesResolveToSameCatalogModel(
 
 export interface PiSessionRuntimeV2 {
 	snapshot(): MaybePromise<SessionSnapshotV2>;
-	accept(operationId: string): Promise<OperationAccepted>;
+	accept(operationId: string, command?: CommandV2): Promise<OperationAccepted>;
 	/** Cancel an exact queued steer/follow-up item when the runtime exposes queue control. */
 	cancelQueued?(entryId: string): Promise<void>;
 	/** Mark an accepted operation failed when durable operation acceptance cannot be persisted. */
@@ -1919,7 +1919,7 @@ export class PiServerV2 {
 		}
 		let accepted: OperationAccepted;
 		try {
-			accepted = await runtime.accept(operationId);
+			accepted = await runtime.accept(operationId, resolvedCommand);
 			this.operations.set(operationId, {
 				operationId,
 				sessionId: command.sessionId,
