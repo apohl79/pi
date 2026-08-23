@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModels, fauxProvider } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -29,6 +29,7 @@ async function createRemoteRuntime(directory: string) {
 	});
 	models.setProvider(faux.provider);
 	models.setProvider(child.provider);
+	faux.setResponses([fauxAssistantMessage("steering complete")]);
 	child.setResponses([() => new Promise(() => {})]);
 	return createConfiguredCodingAgentDaemonRuntime({
 		agentDir: directory,
