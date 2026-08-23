@@ -1,4 +1,4 @@
-import type { AgentHarness, AgentMessage, Entry, GoalManager } from "@earendil-works/pi-agent-core";
+import type { AgentHarness, AgentMessage, Entry, GoalManager, LaneRecord } from "@earendil-works/pi-agent-core";
 import type { Model, Models, ThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import type {
 	CommandNameV2,
@@ -96,6 +96,43 @@ function usage(value: Usage | undefined): {
 			cacheWrite: finiteNonNegative(value.cost.cacheWrite),
 			total: finiteNonNegative(value.cost.total),
 		},
+	};
+}
+
+function aggregateUsage(records: readonly LaneRecord[], branchEntryIds: ReadonlySet<string>): {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	costUsd: number;
+} {
+	const add = (left: number, right: number): number => {
+		const sum = left + right;
+		if (!Number.isFinite(sum)) return right < 0 ? -Number.MAX_SAFE_INTEGER : Number.MAX_SAFE_INTEGER;
+		return Math.max(-Number.MAX_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, sum));
+	};
+	const signed = (value: number): number => (Number.isFinite(value) ? value : 0);
+	const totals = records
+		.filter(
+			(record): record is Extract<LaneRecord, { type: "usage" }> =>
+				record.type === "usage" && (record.entryId === undefined || branchEntryIds.has(record.entryId)),
+		)
+		.reduce(
+			(total, record) => ({
+				input: add(total.input, signed(record.usage.input)),
+				output: add(total.output, signed(record.usage.output)),
+				cacheRead: add(total.cacheRead, signed(record.usage.cacheRead)),
+				cacheWrite: add(total.cacheWrite, signed(record.usage.cacheWrite)),
+				costUsd: add(total.costUsd, signed(record.usage.cost.total)),
+			}),
+			{ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 },
+		);
+	return {
+		input: Math.max(0, Math.floor(totals.input)),
+		output: Math.max(0, Math.floor(totals.output)),
+		cacheRead: Math.max(0, Math.floor(totals.cacheRead)),
+		cacheWrite: Math.max(0, Math.floor(totals.cacheWrite)),
+		costUsd: Math.max(0, totals.costUsd),
 	};
 }
 
@@ -301,11 +338,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 
 	async snapshot(): Promise<SessionSnapshotV2> {
 		if (this.disposed) throw new Error("Session runtime is disposed");
-		const [thinkingLevel, persistedName, entries, queueRecords] = await Promise.all([
+		const [thinkingLevel, persistedName, entries, queueRecords, compaction] = await Promise.all([
 			this.definition.harness.getThinkingLevel(),
 			this.definition.harness.session.getName(),
 			this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" }),
 			this.definition.harness.session.findRecords({ order: "oldestFirst" }),
+			this.definition.harness.getCompactionSettings(),
 		]);
 		this.restoreOperationState(entries);
 		const open = await this.definition.harness.session.findOpenOperations("main", { limit: 1 });
@@ -347,6 +385,19 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 					: "suspended";
 		const goal = await this.definition.goals?.read();
 		const sessionName = persistedName ?? this.sessionName;
+		const branchEntryIds = new Set(entries.map((entry) => entry.id));
+		const totals = aggregateUsage(queueRecords, branchEntryIds);
+		const contextWindow = Math.max(1, this.model.contextWindow);
+		const reserveTokens = Math.max(0, compaction.reserveTokens);
+		const latestUsage = queueRecords
+			.filter(
+				(record): record is Extract<LaneRecord, { type: "usage" }> =>
+					record.type === "usage" &&
+					record.cause === "assistant" &&
+					(record.entryId === undefined || branchEntryIds.has(record.entryId)),
+			)
+			.at(-1)?.usage;
+		const currentTokens = Math.min(contextWindow, Math.floor(finiteNonNegative(latestUsage?.totalTokens)));
 		return {
 			id: this.definition.metadata.id,
 			...(sessionName === undefined
@@ -363,14 +414,25 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			queues: { steer: queuedSteer, followUp: queuedFollowUp },
 			...(goal === undefined ? {} : { goal }),
 			agents: [],
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, pricingState: "unknown" },
-			context: { inputTokens: 0, contextWindow: this.model.contextWindow, usedPercentage: 0 },
+			usage: {
+				input: totals.input,
+				output: totals.output,
+				cacheRead: totals.cacheRead,
+				cacheWrite: totals.cacheWrite,
+				...(totals.costUsd > 0 ? { costUsd: totals.costUsd } : {}),
+				pricingState: "known",
+			},
+			context: {
+				inputTokens: currentTokens,
+				contextWindow,
+				usedPercentage: (currentTokens / contextWindow) * 100,
+			},
 			compactionPolicy: {
-				enabled: true,
-				contextWindow: this.model.contextWindow,
-				reserveTokens: 16_384,
-				keepRecentTokens: 20_000,
-				triggerTokens: Math.max(0, this.model.contextWindow - 16_384),
+				enabled: compaction.enabled,
+				contextWindow,
+				reserveTokens,
+				keepRecentTokens: Math.max(0, compaction.keepRecentTokens),
+				triggerTokens: Math.max(0, contextWindow - reserveTokens),
 				source: "global",
 			},
 			pluginSetHash: "plugins-empty",
