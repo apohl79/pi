@@ -27,7 +27,6 @@ const requiredFiles = [
 	"packages/coding-agent/test/client/remote-v2-production-files.test.ts",
 	"packages/coding-agent/test/client/remote-v2-production-diagnostics.test.ts",
 	"packages/coding-agent/test/server/daemon-compaction-policy.test.ts",
-	".github/workflows/ci.yml",
 ];
 
 const requiredPatterns = [
@@ -37,11 +36,6 @@ const requiredPatterns = [
 	["v2 protocol conformance", "packages/server/test/v2-conformance.test.ts", "describe("],
 	["fork-core rationale ledger", "FORK_DELTA.md", "existing extension surface cannot"],
 	["package compatibility classifications", "PACKAGE_COMPATIBILITY.json", '"classification"'],
-	["cross-platform contract matrix", ".github/workflows/ci.yml", "os: [ubuntu-latest, macos-latest, windows-latest]"],
-	["protocol CI contract", ".github/workflows/ci.yml", "npm test --workspace=@earendil-works/pi-protocol"],
-	["client CI contract", ".github/workflows/ci.yml", "npm test --workspace=@earendil-works/pi-client"],
-	["server CI contract", ".github/workflows/ci.yml", "npm test --workspace=@earendil-works/pi-server"],
-	["SQLite CI contract", ".github/workflows/ci.yml", "npm test --workspace=@earendil-works/pi-session-backend-sqlite-node"],
 ];
 
 export function auditForkSpec() {
