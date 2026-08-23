@@ -86,6 +86,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	readonly release = new Deferred<void>();
 	runEntered = false;
 	disposed = false;
+	disposeCount = 0;
 	private current: SessionSnapshotV2;
 
 	constructor(id: string) {
@@ -115,6 +116,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	}
 
 	dispose(): Promise<void> {
+		this.disposeCount += 1;
 		this.disposed = true;
 		return Promise.resolve();
 	}
@@ -482,6 +484,25 @@ describe("PiServer v2 operation acceptance", () => {
 		);
 		expect(terminal).toMatchObject({ type: "event", sessionId: "session-1", payload: { state: "complete" } });
 		await secondClient.close();
+	});
+
+	test("disposes detached runtimes when the server closes", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-shutdown-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const runtime = service.sessions.get("session-1")!;
+
+		await client.close();
+		expect(runtime.disposeCount).toBe(0);
+
+		await server.close();
+		expect(runtime.disposeCount).toBe(1);
 	});
 
 	test("retains a runtime while accepting an operation across detach", async () => {
