@@ -753,6 +753,30 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.close();
 	});
 
+	test("keeps process writes and termination under the session controller", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
+		directories.push(directory);
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			processes: new InMemoryV2ProcessRegistry(),
+		});
+		servers.push(server);
+		await server.start();
+		const controller = await connectUnixTestClientV2(server.addresses[0]!);
+		const observer = await connectUnixTestClientV2(server.addresses[0]!);
+		await controller.hello();
+		await observer.hello();
+		await controller.request({ command: "session/attach", sessionId: "session-1" });
+		await observer.request({ command: "session/attach", sessionId: "session-1", payload: { mode: "observer" } });
+		const started = await controller.request({ command: "process/start", sessionId: "session-1", payload: { command: "demo" } });
+		const processId = (started as unknown as { result: { process: { processId: string } } }).result.process.processId;
+		await expect(observer.request({ command: "process/read", payload: { processId, cursor: 0 } })).resolves.toMatchObject({ ok: true });
+		await expect(observer.request({ command: "process/write", payload: { processId, input: "x" } })).resolves.toMatchObject({ ok: false, error: { code: "request_failed" } });
+		await expect(observer.request({ command: "process/terminate", payload: { processId } })).resolves.toMatchObject({ ok: false, error: { code: "request_failed" } });
+		await controller.close();
+		await observer.close();
+	});
+
 	test("transports content-addressed blobs without embedding binary bytes in CBOR", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
