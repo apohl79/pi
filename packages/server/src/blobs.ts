@@ -19,7 +19,8 @@ export interface V2BlobStore {
 	put(data: Uint8Array, mimeType: string): Promise<V2BlobStat>;
 	read(digest: string): Promise<Uint8Array>;
 	stat(digest: string): Promise<V2BlobStat>;
-	list(): Promise<readonly V2BlobStat[]>;
+	/** Optional inventory support used by diagnostics; protocol blob reads do not require it. */
+	list?(): Promise<readonly V2BlobStat[]>;
 }
 
 function digestOf(data: Uint8Array): string {
