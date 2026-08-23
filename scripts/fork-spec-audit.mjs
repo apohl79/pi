@@ -1,7 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+export function resolveRepositoryRoot(metaUrl) {
+	return fileURLToPath(new URL("..", metaUrl));
+}
+
+const root = resolveRepositoryRoot(import.meta.url);
 
 const requiredFiles = [
 	"FORK_DELTA.md",
