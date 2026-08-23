@@ -47,10 +47,12 @@ describe("production remote v2 diagnostics", () => {
 				const timeline = await session.diagnosticsTimelineEvidence({ sessionId: session.id });
 				const bundle = await session.diagnosticsExport({ sessionId: session.id });
 				const verification = await session.diagnosticsVerify(bundle);
+				const doctor = await session.diagnosticsDoctor();
 				expect(status.eventCount).toBeGreaterThan(0);
 				expect(timeline.events.length).toBeGreaterThan(0);
 				expect(bundle.manifest).toEqual(expect.any(Object));
 				expect(verification).toMatchObject({ valid: true });
+				expect(doctor).toMatchObject({ ok: true, checks: expect.any(Array) });
 			} finally {
 				await session.dispose();
 			}
