@@ -4,6 +4,8 @@ import type { AgentSummary } from "@earendil-works/pi-protocol";
 import type { ForensicRecorder, V2AgentRegistry, V2AgentRequest, V2AgentSnapshot } from "@earendil-works/pi-server";
 import type { CodingAgentV2Runtime, CodingAgentV2Service } from "./v2-service.ts";
 
+const EMPTY_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
+
 const MAX_AGENT_INBOX_MESSAGES = 32;
 const MAX_AGENT_INBOX_CHARACTERS = 16_000;
 const AGENT_REGISTRY_STATE = "agent_registry_state";
@@ -249,8 +251,8 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				const previousState = agent.state;
 				agent.state = "interrupted";
 				this.recordDiagnostic("agent_state_changed", agent, previousState);
-				await this.persist(agent);
 				await this.queueCompletion(agent);
+				await this.persist(agent);
 				this.resolveWaiters(agent);
 			}
 		}
@@ -285,8 +287,8 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				const previousState = agent.state;
 				agent.state = "interrupted";
 				this.recordDiagnostic("agent_state_changed", agent, previousState);
-				await this.persist(agent);
 				await this.queueCompletion(agent);
+				await this.persist(agent);
 			}),
 		);
 		await Promise.allSettled(agents.map((agent) => agent.runtime.dispose()));
@@ -306,15 +308,14 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				payload: { text: prompt },
 			});
 			const usageAfter = await agent.runtime.snapshot();
+			const beforeUsage = usageBefore.usage ?? EMPTY_USAGE;
+			const afterUsage = usageAfter.usage ?? EMPTY_USAGE;
 			const usageDelta =
-				usageAfter.usage.input +
-				usageAfter.usage.output +
-				usageAfter.usage.cacheRead +
-				usageAfter.usage.cacheWrite -
-				(usageBefore.usage.input +
-					usageBefore.usage.output +
-					usageBefore.usage.cacheRead +
-					usageBefore.usage.cacheWrite);
+				afterUsage.input +
+				afterUsage.output +
+				afterUsage.cacheRead +
+				afterUsage.cacheWrite -
+				(beforeUsage.input + beforeUsage.output + beforeUsage.cacheRead + beforeUsage.cacheWrite);
 			if (usageDelta > 0) {
 				const parent = await this.service.openSession(agent.parentSessionId);
 				await parent.recordGoalUsage?.(usageDelta);
@@ -324,18 +325,21 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			agent.state = "complete";
 			this.recordDiagnostic("agent_state_changed", agent, previousState);
 			const next = agent.followUps.shift();
-			await this.persist(agent);
 			if (next !== undefined) {
+				await this.persist(agent);
 				agent.state = "running";
 				await this.persist(agent);
 				void this.run(agent, "turn/start", next);
-			} else await this.queueCompletion(agent);
+			} else {
+				await this.queueCompletion(agent);
+				await this.persist(agent);
+			}
 		} catch {
 			const previousState = agent.state;
 			agent.state = "failed";
 			this.recordDiagnostic("agent_state_changed", agent, previousState);
-			await this.persist(agent);
 			await this.queueCompletion(agent);
+			await this.persist(agent);
 		} finally {
 			if (agent.state !== "running") this.resolveWaiters(agent);
 		}
