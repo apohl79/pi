@@ -25,6 +25,7 @@ import {
 	AgentSummarySchema,
 	CompactionPolicySchema,
 	GoalSnapshotSchema,
+	InstructionProfileSummarySchema,
 	PlanSnapshotSchema,
 	SessionSnapshotV2Schema,
 	UsageAggregateSchema,
@@ -1098,6 +1099,14 @@ export class RemoteV2Session {
 			const compactionPolicy = asRecord(event.payload)?.compactionPolicy;
 			if (isCompactionPolicy(compactionPolicy))
 				this.#snapshot = { ...this.#snapshot, compactionPolicy: structuredClone(compactionPolicy) };
+		} else if (event.event === "model_instruction_profile_changed" && this.#snapshot) {
+			const instructionProfile = asRecord(event.payload)?.instructionProfile;
+			if (instructionProfile === null) {
+				const { instructionProfile: _instructionProfile, ...snapshot } = this.#snapshot;
+				this.#snapshot = snapshot;
+			} else if (isInstructionProfile(instructionProfile)) {
+				this.#snapshot = { ...this.#snapshot, instructionProfile: structuredClone(instructionProfile) };
+			}
 		} else if (event.event === "plan_updated" && this.#snapshot) {
 			const plan = asRecord(event.payload)?.plan;
 			if (plan === null) {
@@ -1188,6 +1197,10 @@ function isGoalSnapshot(value: unknown): value is GoalSnapshot {
 
 function isCompactionPolicy(value: unknown): value is ProtocolSnapshot["compactionPolicy"] {
 	return Check(CompactionPolicySchema, value);
+}
+
+function isInstructionProfile(value: unknown): value is NonNullable<ProtocolSnapshot["instructionProfile"]> {
+	return Check(InstructionProfileSummarySchema, value);
 }
 
 function isSnapshot(value: unknown): value is ProtocolSnapshot {

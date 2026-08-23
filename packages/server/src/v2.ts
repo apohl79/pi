@@ -2010,6 +2010,14 @@ export class PiServerV2 {
 				operationId,
 				"model_compaction_policy_changed",
 			);
+		if (JSON.stringify(before.instructionProfile) !== JSON.stringify(after.instructionProfile))
+			await this.broadcastEvent(
+				sessionId,
+				runtime,
+				{ instructionProfile: after.instructionProfile ?? null },
+				operationId,
+				"model_instruction_profile_changed",
+			);
 	}
 
 	private async readOperation(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
