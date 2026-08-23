@@ -446,7 +446,9 @@ export async function createCodingAgentV2SqliteService(
 							update: async (input) => planRegistry.update(metadata.id, input),
 						},
 					}),
-			...(agentRegistry === undefined ? {} : { agents: createAgentTools(agentRegistry, metadata.id, model) }),
+			...(agentRegistry === undefined
+				? {}
+				: { agents: createAgentTools(agentRegistry, metadata.id, model, options.models.getModels()) }),
 		});
 		const goalContinuation = options.goalContinuation?.({ goals, harness: created.harness, model });
 		const instructionProfile =
@@ -641,7 +643,35 @@ export async function createCodingAgentV2SqliteService(
 	});
 }
 
-function createAgentTools(registry: V2AgentRegistry, sessionId: string, model: Model<Api>): CodingAgentAgentTools {
+function modelIdFamily(id: string): string {
+	return id.replace(/-latest$/, "").replace(/-\d{8}$/, "");
+}
+
+function modelIdsResolveToSameCatalogModel(
+	provider: string,
+	leftId: string,
+	rightId: string,
+	models: readonly Model<Api>[],
+): boolean {
+	if (leftId === rightId) return true;
+	const providerModels = models.filter((candidate) => candidate.provider === provider);
+	const left = providerModels.find((candidate) => candidate.id === leftId);
+	const right = providerModels.find((candidate) => candidate.id === rightId);
+	if (!left || !right || modelIdFamily(left.id) !== modelIdFamily(right.id)) return false;
+	return (
+		left.id.endsWith("-latest") ||
+		right.id.endsWith("-latest") ||
+		!/-\d{8}$/.test(left.id) ||
+		!/-\d{8}$/.test(right.id)
+	);
+}
+
+function createAgentTools(
+	registry: V2AgentRegistry,
+	sessionId: string,
+	model: Model<Api>,
+	models: readonly Model<Api>[],
+): CodingAgentAgentTools {
 	return {
 		spawn: (request) =>
 			registry.spawn({
@@ -654,7 +684,8 @@ function createAgentTools(registry: V2AgentRegistry, sessionId: string, model: M
 				model: request.model ?? { provider: model.provider, id: model.id },
 				modelResolution:
 					request.model === undefined ||
-					(request.model.provider === model.provider && request.model.id === model.id)
+					(request.model.provider === model.provider &&
+						modelIdsResolveToSameCatalogModel(model.provider, request.model.id, model.id, models))
 						? "inherited"
 						: "explicit",
 			}),
