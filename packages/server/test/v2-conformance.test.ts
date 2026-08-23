@@ -23,7 +23,7 @@ import {
 import { LocalV2FileReferenceService } from "../src/files.ts";
 import { BlobV2ImageService } from "../src/images.ts";
 import { InMemoryV2InputRegistry } from "../src/inputs.ts";
-import { InMemoryV2OperationStore } from "../src/operation-store.ts";
+import { InMemoryV2OperationStore, JsonlV2OperationStore } from "../src/operation-store.ts";
 import { InMemoryV2ProcessRegistry, NodeV2ProcessRegistry } from "../src/processes.ts";
 import { connectUnixTestClientV2, Deferred } from "../src/testing/index.ts";
 import { createUnixServerV2 } from "../src/transports/unix/preset.ts";
@@ -761,7 +761,7 @@ describe("PiServer v2 operation acceptance", () => {
 	test("restores operation records and event replay after server restart", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
-		const store = new InMemoryV2OperationStore();
+		const store = new JsonlV2OperationStore(join(directory, "operations.jsonl"));
 		const firstService = new TestService();
 		const firstServer = createUnixServerV2(firstService, {
 			path: join(directory, "server.sock"),
