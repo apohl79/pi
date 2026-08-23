@@ -213,6 +213,33 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("allows structural lifecycle hooks to decline compaction and navigation", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "structural-hook-faux",
+			models: [{ id: "structural-hook-model", contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("history")]);
+		const session = createSession("structural-hooks");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+		});
+		await harness.prompt("create enough durable history");
+		harness.hooks.on("before_compaction", () => ({ decline: true }));
+		harness.hooks.on("before_navigation", () => ({ decline: true }));
+
+		const compactResult = await harness.compact();
+		const navigationResult = await harness.navigateTree(null);
+
+		expect(compactResult).toMatchObject({ ok: true, value: { kind: "declined" } });
+		expect(navigationResult).toMatchObject({ ok: true, value: { kind: "declined" } });
+		await harness.close();
+	});
+
 	it("redacts provider compaction errors before durable persistence", async () => {
 		const models = createModels();
 		const faux = fauxProvider({

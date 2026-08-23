@@ -1105,7 +1105,21 @@ export class AgentHarness implements AgentLane {
 			return ResultValue.err(new NothingToCompact({ lane: this.name, message: "Nothing to compact" }));
 		const runId = this.durableSession.idGenerator.next();
 		const resultEntryId = this.durableSession.idGenerator.next();
-		await this.runLifecycleHook("before_compaction", { operationId: runId, model: this.model });
+		const compactionHook = await this.runLifecycleHook("before_compaction", {
+			operationId: runId,
+			model: this.model,
+		});
+		if (
+			compactionHook !== null &&
+			typeof compactionHook === "object" &&
+			"decline" in compactionHook &&
+			compactionHook.decline === true
+		)
+			return ResultValue.ok({
+				runId,
+				kind: "declined",
+				leafId: (await this.session.getLeafId()) ?? "",
+			});
 		await this.appendOperationStarted({
 			type: "operation_started",
 			id: runId,
@@ -1228,7 +1242,22 @@ export class AgentHarness implements AgentLane {
 		const summarize = _options?.summarize === true;
 		const runId = this.durableSession.idGenerator.next();
 		const summaryEntryId = summarize ? this.durableSession.idGenerator.next() : undefined;
-		await this.runLifecycleHook("before_navigation", { operationId: runId, targetId, summarize });
+		const navigationHook = await this.runLifecycleHook("before_navigation", {
+			operationId: runId,
+			targetId,
+			summarize,
+		});
+		if (
+			navigationHook !== null &&
+			typeof navigationHook === "object" &&
+			"decline" in navigationHook &&
+			navigationHook.decline === true
+		)
+			return ResultValue.ok({
+				runId,
+				kind: "declined",
+				leafId: oldLeafId,
+			});
 		await this.appendOperationStarted({
 			type: "operation_started",
 			id: runId,
