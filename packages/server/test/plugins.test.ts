@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -157,5 +157,19 @@ describe("InMemoryV2PluginRegistry", () => {
 		await expect(new JsonV2PluginRegistry(path).listPlugins()).rejects.toThrow(
 			"Plugin registry plugin record is invalid",
 		);
+	});
+
+	test("does not publish a plugin when atomic replacement fails", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-plugin-registry-failure-"));
+		const path = join(directory, "plugins.json");
+		const registry = new JsonV2PluginRegistry(path);
+		await registry.addMarketplace("local", "/workspace/plugins");
+		await rm(directory, { recursive: true });
+		await writeFile(directory, "not a directory");
+
+		await expect(
+			registry.installPlugin({ name: "reviewer", marketplace: "local", version: "1", manifest: {} }),
+		).rejects.toThrow();
+		expect(await registry.listPlugins()).toEqual([]);
 	});
 });
