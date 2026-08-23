@@ -809,6 +809,32 @@ describe("experimental CLI runtime", () => {
 		runtime.close();
 	});
 
+	test("records interactive render failures in the client diagnostic spool", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-cli-render-failure-"));
+		const spool = new ClientDiagnosticSpool({ path: join(directory, "client.jsonl"), clientInstanceId: "client-1" });
+		const server = clientFactory();
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			diagnosticsSpool: spool,
+			write: () => {},
+			runInteractive: async () => {
+				throw new Error("render failed");
+			},
+		});
+		await expect(
+			runtime.runPi({
+				command: "pi",
+				options: { messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] },
+			}),
+		).rejects.toThrow("render failed");
+		expect(await spool.read()).toMatchObject([
+			{ event: "client.render_failed", severity: "error", fields: { error: "Error" } },
+		]);
+		runtime.close();
+	});
+
 	test("submits interactive initial messages exactly once before attaching the runner", async () => {
 		const requests: Array<{ command: string; payload?: unknown }> = [];
 		const server = clientFactory(requests);
