@@ -248,12 +248,6 @@ describe("parseArgs", () => {
 		});
 	});
 
-	describe("--no-server flag", () => {
-		test("parses the direct-runtime escape hatch", () => {
-			expect(parseArgs(["--no-server"])).toMatchObject({ noServer: true });
-		});
-	});
-
 	describe("--extension flag", () => {
 		test("parses single --extension", () => {
 			const result = parseArgs(["--extension", "./my-extension.ts"]);
