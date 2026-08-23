@@ -178,8 +178,8 @@ describe("production remote v2 diagnostics", () => {
 				const bundle = await session.diagnosticsExport({ sessionId: session.id });
 				expect(bundle.clientDiagnostics).toMatchObject({
 					manifest: { clientInstanceId: "remote-client-evidence" },
+					records: expect.arrayContaining([expect.objectContaining({ event: "client.connected" })]),
 				});
-				expect(bundle.clientDiagnostics).not.toHaveProperty("records");
 				expect((bundle.manifest as { unavailable?: readonly string[] }).unavailable).not.toContain(
 					"client-diagnostic-spool",
 				);

@@ -2,7 +2,7 @@ import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { ClientDiagnosticSpool } from "../src/diagnostics.ts";
+import { ClientDiagnosticSpool, mergeClientDiagnosticBundle } from "../src/diagnostics.ts";
 
 describe("ClientDiagnosticSpool", () => {
 	test("persists owner-only bounded records and resumes its cursor", async () => {
@@ -43,5 +43,30 @@ describe("ClientDiagnosticSpool", () => {
 		await first.append({ event: "three", fields: { value: "third" } });
 		const reopened = new ClientDiagnosticSpool({ path, clientInstanceId: "client-1", maxBytes: 180, maxFiles: 3 });
 		expect((await reopened.read()).map((record) => record.event)).toEqual(["one", "two", "three"]);
+	});
+
+	test("merges matching local records and clears the unavailable marker", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-client-diagnostics-merge-"));
+		const spool = new ClientDiagnosticSpool({
+			path: join(directory, "client.jsonl"),
+			clientInstanceId: "client-merge",
+		});
+		await spool.append({ event: "client.connected" });
+		const bundle = await mergeClientDiagnosticBundle(
+			{
+				manifest: { eventCount: 0, unavailable: ["client-diagnostic-spool"] },
+				clientDiagnostics: {
+					manifest: { clientInstanceId: "client-merge", runtime: "test", platform: "test", arch: "test" },
+					afterSeq: 0,
+				},
+			},
+			spool,
+		);
+
+		expect(bundle.clientDiagnostics).toMatchObject({
+			records: [expect.objectContaining({ event: "client.connected", seq: 1 })],
+			afterSeq: 1,
+		});
+		expect((bundle.manifest as { unavailable?: readonly string[] }).unavailable).toBeUndefined();
 	});
 });
