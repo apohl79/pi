@@ -158,6 +158,12 @@ describe("verifyDiagnosticBundle", () => {
 			eventsSha256: createHash("sha256").update(serialized).digest("hex"),
 		};
 		expect(verifyDiagnosticBundle({ manifest, events })).toEqual({ valid: true });
+		expect(verifyDiagnosticBundle({ manifest, events, integrity: [{ name: "sessions", ok: true }] })).toEqual({
+			valid: true,
+		});
+		expect(verifyDiagnosticBundle({ manifest, events, integrity: [{ name: "sessions", ok: "yes" }] })).toMatchObject({
+			valid: false,
+		});
 		const capsules = [
 			{
 				schemaVersion: 1,

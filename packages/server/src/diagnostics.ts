@@ -123,6 +123,8 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 	const runtimeManifest = candidate.runtimeManifest;
 	if (runtimeManifest !== undefined && !isDiagnosticRuntimeManifest(runtimeManifest))
 		return { valid: false, reason: "Diagnostic bundle contains an invalid runtime manifest" };
+	if (candidate.integrity !== undefined && !isDiagnosticIntegrityReport(candidate.integrity))
+		return { valid: false, reason: "Diagnostic bundle contains an invalid integrity report" };
 	if (candidate.clientDiagnostics !== undefined && !isClientDiagnosticExport(candidate.clientDiagnostics))
 		return { valid: false, reason: "Diagnostic bundle contains invalid client diagnostics" };
 	const fields = manifest as Record<string, unknown>;
@@ -221,6 +223,29 @@ function isClientDiagnosticExport(value: unknown): boolean {
 			(candidate.fields === undefined || (typeof candidate.fields === "object" && candidate.fields !== null))
 		);
 	});
+}
+
+function isDiagnosticIntegrityReport(value: unknown): boolean {
+	return (
+		Array.isArray(value) &&
+		value.every((check) => {
+			if (typeof check !== "object" || check === null || Array.isArray(check)) return false;
+			const candidate = check as Record<string, unknown>;
+			return (
+				typeNonEmpty(candidate.name) &&
+				typeBoolean(candidate.ok) &&
+				(candidate.details === undefined || isDiagnosticValue(candidate.details))
+			);
+		})
+	);
+}
+
+function isDiagnosticValue(value: unknown): boolean {
+	if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+	if (typeof value === "number") return Number.isFinite(value);
+	if (Array.isArray(value)) return value.every(isDiagnosticValue);
+	if (typeof value !== "object") return false;
+	return Object.entries(value).every(([key, nested]) => key.length > 0 && isDiagnosticValue(nested));
 }
 
 function typeNonEmpty(value: unknown): value is string {
