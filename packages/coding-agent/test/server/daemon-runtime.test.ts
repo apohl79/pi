@@ -259,9 +259,15 @@ describe("coding-agent daemon runtime", () => {
 			const bundle = JSON.parse(await readFile(bundlePath, "utf8")) as {
 				events: readonly unknown[];
 				capsules?: readonly unknown[];
+				runtimeManifest?: { runtime?: string; platform?: string; arch?: string };
 			};
 			expect(bundle.events.length).toBeGreaterThan(0);
 			expect(bundle.capsules?.length).toBeGreaterThan(0);
+			expect(bundle.runtimeManifest).toMatchObject({
+				runtime: expect.stringContaining("node "),
+				platform: process.platform,
+				arch: process.arch,
+			});
 			await runtime.cli.runDiagnostics({ command: "diagnostics", action: "verify", bundle: bundlePath });
 			expect(output.at(-1)).toEqual({ valid: true });
 		} finally {
