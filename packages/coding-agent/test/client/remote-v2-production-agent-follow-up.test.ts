@@ -74,8 +74,9 @@ describe("production remote v2 agent follow-up", () => {
 				expect(childPrompts.some((prompt) => prompt.includes("urgent context"))).toBe(true);
 				expect(await adapter.execute(`/agent-follow-up ${agent.id} revisit the review`)).toEqual({
 					kind: "status",
-					text: "agent complete",
+					text: "agent running",
 				});
+				await attachment.session.waitAgent(agent.id);
 			} finally {
 				await adapter.dispose();
 			}
