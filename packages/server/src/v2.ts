@@ -1938,6 +1938,13 @@ export class PiServerV2 {
 				this.operations.set(operationId, runningRecord);
 				await this.operationStore.putOperation(runningRecord);
 				await this.broadcastEvent(sessionId, runtime, { state: "running" }, operationId, "operation_updated");
+				if (
+					command.command === "turn/start" ||
+					command.command === "turn/steer" ||
+					command.command === "turn/followUp" ||
+					command.command === "turn/resume"
+				)
+					await this.broadcastEvent(sessionId, runtime, { command: command.command }, operationId, "turn_started");
 			}
 			await runtime.run(operationId, command);
 			const completedSnapshot = await runtime.snapshot();

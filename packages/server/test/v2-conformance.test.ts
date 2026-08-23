@@ -332,6 +332,8 @@ describe("PiServer v2 operation acceptance", () => {
 			operationId: expect.any(String),
 			payload: { state: "running" },
 		});
+		const started = await client.next((message) => message.type === "event" && message.event === "turn_started");
+		expect(started).toMatchObject({ event: "turn_started", payload: { command: "turn/start" } });
 		service.sessions.get("session-1")!.release.resolve(undefined);
 	});
 
@@ -1423,7 +1425,7 @@ describe("PiServer v2 operation acceptance", () => {
 		const second = await connectUnixTestClientV2(server.addresses[0]!);
 		await second.hello({ sessionId: "session-1", eventSeq: 2 });
 		const replay = await second.next((message) => message.type === "event" && message.event === "operation_terminal");
-		expect(replay).toMatchObject({ type: "event", seq: 5, payload: { state: "complete" } });
+		expect(replay).toMatchObject({ type: "event", seq: 6, payload: { state: "complete" } });
 		await second.close();
 	});
 
