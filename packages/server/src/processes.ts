@@ -142,6 +142,7 @@ interface NodeProcessState extends ProcessState {
 	readonly child: ChildProcess;
 	readonly stdoutDecoder: StringDecoder;
 	readonly stderrDecoder: StringDecoder;
+	terminationTimer?: NodeJS.Timeout;
 	waiters: Array<(snapshot: V2ProcessSnapshot) => void>;
 }
 
@@ -152,6 +153,7 @@ function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLau
 	}
 	const argv = parseArgv(request.command);
 	return spawn(argv[0]!, argv.slice(1), {
+		detached: true,
 		shell: false,
 		cwd: request.cwd,
 		env: { ...process.env, ...request.env },
@@ -290,13 +292,21 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		if (process.state === "running") {
 			process.state = "terminated";
 			process.exitCode = 143;
-			process.child.kill();
+			signalProcessTree(process.child, "SIGTERM");
+			process.terminationTimer = setTimeout(() => {
+				if (process.state === "terminated") signalProcessTree(process.child, "SIGKILL");
+			}, 500);
+			process.terminationTimer.unref();
 		}
 		return this.snapshot(process);
 	}
 
 	private finish(process: NodeProcessState, state: V2ProcessState, exitCode: number): void {
 		if (process.state !== "running" && state !== "terminated") return;
+		if (process.terminationTimer !== undefined) {
+			clearTimeout(process.terminationTimer);
+			process.terminationTimer = undefined;
+		}
 		process.state = state;
 		process.exitCode = process.exitCode ?? exitCode;
 		const snapshot = this.snapshot(process);
@@ -324,6 +334,18 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		if (!process) throw new Error(`Unknown process ${processId}`);
 		return process;
 	}
+}
+
+function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
+	if (process.platform !== "win32" && child.pid !== undefined) {
+		try {
+			process.kill(-child.pid, signal);
+			return;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+		}
+	}
+	child.kill(signal);
 }
 
 function retainUtf8(value: string, maxBytes: number): string {

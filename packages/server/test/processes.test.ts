@@ -51,6 +51,17 @@ describe("InMemoryV2ProcessRegistry", () => {
 		expect(await registry.read(started.processId, 1)).toMatchObject({ output: "z", cursor: 5 });
 	});
 
+	test("terminates a detached Node process through its process group", async () => {
+		const registry = new NodeV2ProcessRegistry();
+		const started = await registry.start({
+			sessionId: "session-terminate",
+			command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("setInterval(() => {}, 1000)")}`,
+		});
+
+		expect((await registry.terminate(started.processId)).state).toBe("terminated");
+		expect(await registry.wait(started.processId)).toMatchObject({ state: "terminated", exitCode: 143 });
+	});
+
 	test("parses quoted argv without shell expansion and rejects shell syntax", async () => {
 		const registry = new NodeV2ProcessRegistry();
 		const started = await registry.start({
