@@ -6,7 +6,7 @@ import { performance } from "node:perf_hooks";
 import { contentText } from "@earendil-works/pi-ai";
 import {
 	type AgentSession,
-	type CreateAgentSessionOptions,
+	type CreateDirectAgentSessionOptions,
 	createAgentSessionFromServices,
 	createAgentSessionServices,
 	ModelRuntime,
@@ -35,7 +35,7 @@ type PiCodingAgentModelSelection = {
 type PiCodingAgentHarnessOptions = {
 	name?: string;
 	model?: PiCodingAgentModelSelection;
-	noTools?: CreateAgentSessionOptions["noTools"];
+	noTools?: CreateDirectAgentSessionOptions["noTools"];
 	transformSystemPrompt?: (defaultPrompt: string) => string;
 };
 
