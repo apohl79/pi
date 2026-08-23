@@ -1524,13 +1524,14 @@ describe("coding-agent daemon runtime", () => {
 			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
 		});
 		let operationId: string;
+		let sessionId: string;
 		let completed = false;
 		try {
 			await first.daemon.start();
 			await firstClient.connect();
 			const created = await firstClient.request({ command: "session/create", payload: { cwd: directory } });
 			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
-			const sessionId = (created.result as { session: { id: string } }).session.id;
+			sessionId = (created.result as { session: { id: string } }).session.id;
 			await firstClient.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
 			const accepted = await firstClient.request({
 				command: "turn/start",
@@ -1570,6 +1571,7 @@ describe("coding-agent daemon runtime", () => {
 		try {
 			await second.daemon.start();
 			await secondClient.connect();
+			await secondClient.request({ command: "session/attach", sessionId, payload: { mode: "observer" } });
 			const restored = await secondClient.request({ command: "operation/read", operationId });
 			expect(restored).toMatchObject({ ok: true, result: { operation: { operationId, state: "complete" } } });
 		} finally {
