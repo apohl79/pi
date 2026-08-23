@@ -4,8 +4,9 @@ import type { PiClientV2, PiSessionV2Handle } from "@earendil-works/pi-client";
 import type { ClientDiagnosticSpool } from "@earendil-works/pi-client/diagnostics";
 import type { CommandV2, JsonValue, ModelMetadata, ModelRef } from "@earendil-works/pi-protocol";
 import { verifyDiagnosticBundle } from "@earendil-works/pi-server";
-import { RemoteV2Session } from "../../client/remote-v2-session.ts";
+import { type RemoteV2PromptPart, RemoteV2Session } from "../../client/remote-v2-session.ts";
 import type { Args } from "../args.ts";
+import { processFileArguments } from "../file-processor.ts";
 import type { ExperimentalCliContext } from "./cli.ts";
 import type { AttachCommand } from "./commands/attach.ts";
 import type { ClientCommand } from "./commands/client.ts";
@@ -65,6 +66,25 @@ function resolveRemoteModel(options: Args, models: readonly ModelMetadata[]): Mo
 	const match = matches[0];
 	if (match === undefined) throw new Error(`Model not found: ${provider}/${id}`);
 	return { provider: match.provider, id: match.id };
+}
+
+async function buildRemotePrompt(
+	session: RemoteV2Session,
+	options: Args,
+): Promise<string | readonly RemoteV2PromptPart[]> {
+	const files = options.fileArgs.length === 0 ? undefined : await processFileArguments(options.fileArgs);
+	const text = `${files?.text ?? ""}${options.messages.join(" ")}`.trim();
+	if (files === undefined || files.images.length === 0) {
+		if (!text) throw new Error("Server-default mode requires a prompt or file argument");
+		return text;
+	}
+	const content: RemoteV2PromptPart[] = [];
+	if (text) content.push({ type: "text", text });
+	for (const image of files.images) {
+		const blob = await session.putBlob(image.data, image.mimeType);
+		content.push({ type: "image", digest: blob.digest, mimeType: image.mimeType });
+	}
+	return content;
 }
 
 export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOptions): ExperimentalCliRuntime {
@@ -189,15 +209,18 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 			const model = resolveRemoteModel(command.options, await client.listModels());
 			if (model !== undefined) await session.setModel(model);
 			if (command.options.thinking !== undefined) await session.setThinking(command.options.thinking);
+			const hasPrompt = command.options.messages.length > 0 || command.options.fileArgs.length > 0;
 			if (!command.options.print && command.options.mode !== "json") {
+				if (hasPrompt) {
+					const operationId = await session.submit(await buildRemotePrompt(session, command.options));
+					await session.waitForOperation(operationId);
+				}
 				if (options.runInteractive === undefined)
 					throw new Error("Server-default interactive runner is unavailable");
 				await options.runInteractive(session, command.options);
 				return;
 			}
-			const prompt = command.options.messages.join(" ").trim();
-			if (!prompt) throw new Error("Server-default print mode requires a prompt");
-			const operationId = await session.submit(prompt);
+			const operationId = await session.submit(await buildRemotePrompt(session, command.options));
 			const snapshot = await session.waitForOperation(operationId);
 			if (command.options.mode === "json") {
 				options.write(snapshot);

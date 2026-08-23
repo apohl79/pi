@@ -101,7 +101,6 @@ export function isServerDefaultCompatible(options: Args): boolean {
 		options.listModels === undefined &&
 		options.offline !== true &&
 		options.projectTrustOverride === undefined &&
-		options.fileArgs.length === 0 &&
 		options.unknownFlags.size === 0 &&
 		options.diagnostics.every((diagnostic) => diagnostic.type !== "error")
 	);
