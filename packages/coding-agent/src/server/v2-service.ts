@@ -889,9 +889,13 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 					activeTimeSeconds: typeof payload.activeTimeSeconds === "number" ? payload.activeTimeSeconds : undefined,
 					tokenBudget: typeof payload.tokenBudget === "number" ? payload.tokenBudget : undefined,
 				});
-			} else if (runCommand === "goal/pause") await this.definition.goals?.pause();
-			else if (runCommand === "goal/resume") await this.definition.goals?.resume();
-			else if (runCommand === "session/model/set") {
+			} else if (runCommand === "goal/pause") {
+				if (!this.definition.goals) throw new Error("Goals are not configured");
+				await this.definition.goals.pause();
+			} else if (runCommand === "goal/resume") {
+				if (!this.definition.goals) throw new Error("Goals are not configured");
+				await this.definition.goals.resume();
+			} else if (runCommand === "session/model/set") {
 				if (typeof payload.provider !== "string" || typeof payload.id !== "string")
 					throw new Error("session/model/set requires provider and id");
 				const model = this.models.getModel(payload.provider, payload.id);
