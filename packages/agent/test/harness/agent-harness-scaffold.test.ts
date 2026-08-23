@@ -208,6 +208,45 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("rejects deferred resume when its provider model is unavailable", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "deferred-missing-model-faux",
+			deferred: { pendingFetches: 0 },
+			models: [{ id: "deferred-missing-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage("waiting", {
+				stopReason: "deferred",
+				deferred: { provider: faux.provider.id, modelId: "deferred-missing-model", api: "faux", id: "response-1" },
+			}),
+		]);
+		const session = createSession("deferred-missing-model");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			streamOptions: { deferred: true },
+		});
+
+		expect(await harness.prompt("defer this")).toMatchObject({ ok: true, value: { kind: "suspended" } });
+		models.deleteProvider(faux.provider.id);
+
+		const resumed = await harness.resume();
+
+		expect(resumed).toMatchObject({
+			ok: false,
+			error: {
+				name: "MissingIdentities",
+				models: [`${faux.provider.id}/${faux.getModel().id}`],
+			},
+		});
+		expect(await session.findOpenOperations("main")).toHaveLength(1);
+		expect(await session.findRecords({ type: "operation_finished" })).toEqual([]);
+		await harness.close();
+	});
+
 	it("cancels a deferred provider handle before terminal abort cleanup", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
