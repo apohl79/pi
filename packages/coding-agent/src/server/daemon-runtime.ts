@@ -1,7 +1,9 @@
+import { join } from "node:path";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import { ServerDaemon, type ServerDaemonOptions } from "@earendil-works/pi-server";
-import type { SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
+import { createNodeSqliteFactory, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import {
 	createExperimentalCliRuntime,
 	type ExperimentalCliRuntime,
@@ -24,6 +26,17 @@ export type CodingAgentDaemonRuntime = {
 	readonly daemon: ServerDaemon;
 	readonly cli: ExperimentalCliRuntime;
 	close(): Promise<void>;
+};
+
+export type ConfiguredCodingAgentDaemonRuntimeOptions = Omit<CodingAgentDaemonRuntimeOptions, "repository" | "env"> & {
+	agentDir: string;
+	cwd: string;
+	databasePath?: string;
+};
+
+export type ConfiguredCodingAgentDaemonRuntime = CodingAgentDaemonRuntime & {
+	repository: SqliteSessionRepository;
+	env: NodeExecutionEnv;
 };
 
 export async function createCodingAgentDaemonRuntime(
@@ -64,4 +77,57 @@ export async function createCodingAgentDaemonRuntime(
 			await daemon.stop();
 		},
 	};
+}
+
+export async function createConfiguredCodingAgentDaemonRuntime(
+	options: ConfiguredCodingAgentDaemonRuntimeOptions,
+): Promise<ConfiguredCodingAgentDaemonRuntime> {
+	const env = new NodeExecutionEnv({ cwd: options.cwd });
+	const repository = new SqliteSessionRepository({
+		env,
+		sqlite: createNodeSqliteFactory(),
+		databasePath: options.databasePath ?? join(options.agentDir, "server.sqlite"),
+	});
+	try {
+		const runtime = await createCodingAgentDaemonRuntime({ ...options, repository, env });
+		return {
+			...runtime,
+			repository,
+			env,
+			close: async () => {
+				const errors: unknown[] = [];
+				try {
+					await runtime.close();
+				} catch (error) {
+					errors.push(error);
+				}
+				try {
+					await repository.close();
+				} catch (error) {
+					errors.push(error);
+				}
+				try {
+					await env.cleanup();
+				} catch (error) {
+					errors.push(error);
+				}
+				if (errors.length === 1) throw errors[0];
+				if (errors.length > 1) throw new AggregateError(errors, "Failed to close configured daemon runtime");
+			},
+		};
+	} catch (error) {
+		const errors: unknown[] = [error];
+		try {
+			await repository.close();
+		} catch (cleanupError) {
+			errors.push(cleanupError);
+		}
+		try {
+			await env.cleanup();
+		} catch (cleanupError) {
+			errors.push(cleanupError);
+		}
+		if (errors.length === 1) throw error;
+		throw new AggregateError(errors, "Failed to create configured daemon runtime");
+	}
 }

@@ -439,7 +439,10 @@ export {
 export {
 	type CodingAgentDaemonRuntime,
 	type CodingAgentDaemonRuntimeOptions,
+	type ConfiguredCodingAgentDaemonRuntime,
+	type ConfiguredCodingAgentDaemonRuntimeOptions,
 	createCodingAgentDaemonRuntime,
+	createConfiguredCodingAgentDaemonRuntime,
 } from "./server/daemon-runtime.ts";
 export {
 	type ServerRuntimeExtension,
