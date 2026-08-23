@@ -578,6 +578,44 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("applies transform_context hooks before provider conversion", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "transform-context-faux",
+			models: [{ id: "transform-context-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("transformed")]);
+		let converted: AgentMessage[] | undefined;
+		const { harness } = await AgentHarness.create({
+			session: createSession("transform-context"),
+			models,
+			model: faux.getModel(),
+			toProviderMessages: (messages) => {
+				converted = messages;
+				return [];
+			},
+		});
+		harness.hooks.on("transform_context", (event) => ({
+			messages: [
+				...(event as { messages: AgentMessage[] }).messages,
+				{ role: "user", content: [{ type: "text", text: "hook context" }], timestamp: 2 },
+			],
+		}));
+
+		await harness.prompt("hello");
+
+		expect(
+			converted?.some(
+				(message) =>
+					message.role === "user" &&
+					Array.isArray(message.content) &&
+					message.content.some((part) => part.type === "text" && part.text === "hook context"),
+			),
+		).toBe(true);
+		await harness.close();
+	});
+
 	it("invokes configured skills and prompt templates through durable prompts", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
