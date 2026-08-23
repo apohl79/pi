@@ -1186,6 +1186,47 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.close();
 	});
 
+	test("broadcasts store integrity transitions to attached sessions", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-diagnostics-integrity-events-"));
+		directories.push(directory);
+		let healthy = true;
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			integrity: async () => [{ name: "sessions", ok: healthy }],
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const healthyEvent = client.next(
+			(message) =>
+				message.type === "event" &&
+				message.event === "store_integrity_changed" &&
+				(message.payload as { healthy?: unknown }).healthy === true,
+		);
+		const firstDoctor = await client.request({ command: "diagnostics/doctor" });
+		expect(firstDoctor).toMatchObject({ ok: true, result: { ok: true } });
+		expect(await healthyEvent).toMatchObject({
+			event: "store_integrity_changed",
+			payload: { healthy: true },
+		});
+		healthy = false;
+		const degradedEvent = client.next(
+			(message) =>
+				message.type === "event" &&
+				message.event === "store_integrity_changed" &&
+				(message.payload as { healthy?: unknown }).healthy === false,
+		);
+		const secondDoctor = await client.request({ command: "diagnostics/doctor" });
+		expect(secondDoctor).toMatchObject({ ok: true, result: { ok: false } });
+		expect(await degradedEvent).toMatchObject({
+			event: "store_integrity_changed",
+			payload: { healthy: false },
+		});
+		await client.close();
+	});
+
 	test("exposes usage ledger aggregates and entries through v2", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-usage-wire-"));
 		directories.push(directory);
