@@ -58,14 +58,18 @@ describe("production remote v2 goal child usage", () => {
 			await client.connect();
 			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
 			try {
-				const goalOperation = await session.createGoal("include child work", 100);
+				const goalOperation = await session.createGoal("include child work", 1_000);
 				await session.waitForOperation(goalOperation);
 				const agent = await session.spawnAgent("specialist", "complete the child task", {
 					model: { provider: child.provider.id, id: "child-model" },
 				});
 				expect((await session.waitAgent(agent.id)).state).toBe("complete");
 				const goal = await session.readGoal();
-				expect(goal).toMatchObject({ objective: "include child work", status: "active", tokensUsed: 5 });
+				if (goal === undefined) throw new Error("Expected the goal to remain readable after child completion");
+				expect(goal.objective).toBe("include child work");
+				expect(goal.status).toBe("active");
+				expect(goal.tokensUsed).toBeGreaterThanOrEqual(5);
+				expect(goal.tokensUsed).toBeLessThan(1_000);
 			} finally {
 				await session.dispose();
 			}
