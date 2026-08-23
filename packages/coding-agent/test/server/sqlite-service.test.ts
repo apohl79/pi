@@ -27,7 +27,10 @@ describe("coding-agent SQLite v2 service", () => {
 		const models = createModels();
 		const faux = fauxProvider({
 			provider: "coding-agent-v2-sqlite-faux",
-			models: [{ id: "coding-agent-v2-sqlite-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			models: [
+				{ id: "coding-agent-v2-sqlite-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+				{ id: "coding-agent-v2-sqlite-small-model", reasoning: false, contextWindow: 16_000, maxTokens: 1_000 },
+			],
 		});
 		models.setProvider(faux.provider);
 		try {
@@ -38,8 +41,12 @@ describe("coding-agent SQLite v2 service", () => {
 				model: faux.getModel(),
 				compaction: (selectedModel) => ({
 					enabled: true,
-					reserveTokens: selectedModel.id === "coding-agent-v2-sqlite-model" ? 123 : 456,
+					reserveTokens: 123,
 					keepRecentTokens: 789,
+					modelOverrides: {
+						[`${selectedModel.provider}/coding-agent-v2-sqlite-model`]: { reserveTokens: 123 },
+						[`${selectedModel.provider}/coding-agent-v2-sqlite-small-model`]: { reserveTokens: 456 },
+					},
 				}),
 				harness: { tools: [], activeToolNames: [] },
 			});
@@ -47,6 +54,16 @@ describe("coding-agent SQLite v2 service", () => {
 			expect(created.sessionId).toBe("sqlite-session");
 			expect((await created.runtime.snapshot()).compactionPolicy).toMatchObject({
 				reserveTokens: 123,
+				keepRecentTokens: 789,
+			});
+			await created.runtime.run("model-switch", {
+				command: "session/model/set",
+				sessionId: "sqlite-session",
+				payload: { provider: faux.getModel().provider, id: "coding-agent-v2-sqlite-small-model" },
+			});
+			expect((await created.runtime.snapshot()).compactionPolicy).toMatchObject({
+				contextWindow: 16_000,
+				reserveTokens: 456,
 				keepRecentTokens: 789,
 			});
 			expect(await service.listSessions()).toMatchObject([{ id: "sqlite-session", sessionName: "SQLite session" }]);
