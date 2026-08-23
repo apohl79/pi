@@ -25,10 +25,11 @@ export class SqliteForensicRecorder implements ForensicRecorder {
 	record(input: ForensicEventInput): Promise<ForensicEvent> {
 		return this.#enqueue(async () => {
 			await this.#ensureLoaded();
-			const event = await this.#memory.record(input);
+			const event = this.#memory.prepare(input);
 			(await this.#database())
 				.prepare("INSERT OR REPLACE INTO v2_diagnostics (seq, value) VALUES (?, ?)")
 				.run(event.seq, JSON.stringify(event));
+			this.#memory.commit(event);
 			return event;
 		});
 	}
