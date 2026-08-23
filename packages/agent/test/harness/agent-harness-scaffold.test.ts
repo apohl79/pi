@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { AgentHarness, HarnessClosed, type HarnessTool, type Resources } from "../../src/harness/agent-harness.ts";
 import {
 	InMemorySessionStorage,
+	type JsonValue,
 	type LaneRecord,
 	type NewRecord,
 	type OperationStartedRecord,
@@ -501,10 +502,36 @@ describe("AgentHarness v2 scaffold", () => {
 
 	it("reconstructs durable cancellation as an aborting operation", async () => {
 		const session = createSession("cancel-recovery");
+		const recalled = { type: "message" as const, id: "recalled", message: userMessage };
 		await session.appendTransaction(
-			[operationStarted("cancelled-run")],
+			[
+				operationStarted("cancelled-run"),
+				{
+					type: "queue_enqueued",
+					id: "queue-recalled",
+					lane: "main",
+					queue: "steer",
+					runId: "cancelled-run",
+					target: recalled,
+				},
+			],
 			[
 				{ op: "set", namespace: "op.meta", key: "cancelled-run", value: { kind: "run" } },
+				{ op: "set", namespace: "pending.entry", key: recalled.id, value: recalled as unknown as JsonValue },
+			],
+		);
+		await session.appendTransaction(
+			[
+				{
+					type: "queue_cancelled",
+					id: "cancel-recalled",
+					lane: "main",
+					runId: "cancelled-run",
+					entryId: recalled.id,
+					disposition: "cancelled",
+				},
+			],
+			[
 				{
 					op: "set",
 					namespace: "op.state",
@@ -520,6 +547,8 @@ describe("AgentHarness v2 scaffold", () => {
 			model: getModel("google", "gemini-2.5-flash"),
 		});
 		expect(restored.suspended).toMatchObject([{ id: "cancelled-run", reason: "crash" }]);
+		expect(restored.suspended[0]?.aborting).toEqual({ steer: [userMessage], followUp: [] });
+		expect(await session.getRegister("pending.entry", recalled.id)).toMatchObject({ value: recalled });
 		expect(await restored.harness.lanes()).toMatchObject([
 			{ name: "main", operation: { id: "cancelled-run", status: "aborting" } },
 		]);
@@ -1031,6 +1060,9 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(records.filter((record) => record.type === "abort_requested")).toHaveLength(1);
 		expect(records.filter((record) => record.type === "operation_finished")).toMatchObject([{ outcome: "aborted" }]);
 		expect(records.filter((record) => record.type === "queue_cancelled")).toHaveLength(2);
+		for (const record of records.filter((candidate) => candidate.type === "queue_cancelled")) {
+			expect(await session.getRegister("pending.entry", record.entryId)).toBeUndefined();
+		}
 		expect(steer.ok && followUp.ok).toBe(true);
 		await harness.close();
 	});

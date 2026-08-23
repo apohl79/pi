@@ -680,6 +680,7 @@ export class AgentHarness implements AgentLane {
 			const operations = await options.session.findOpenOperations(lane.lane);
 			for (const operation of operations) {
 				const intent = operation.intent;
+				const cancelling = await harness.isOperationCancelling(operation.id, intent.kind);
 				suspended.push({
 					lane: operation.lane,
 					kind: intent.kind,
@@ -687,6 +688,7 @@ export class AgentHarness implements AgentLane {
 					startedAt: operation.timestamp,
 					reason: "crash",
 					prompt: intent.kind === "run" ? structuredClone(intent.originalPrompt) : undefined,
+					aborting: cancelling ? await harness.recoveredAbortPayloads(operation.id) : undefined,
 					missing: { tools: [], models: [...missingModels] },
 				});
 			}
@@ -1663,11 +1665,6 @@ export class AgentHarness implements AgentLane {
 						key: openRun.id,
 						value: { kind: "run", status: "cancel_requested" },
 					},
-					...cancellations.map((record) => ({
-						op: "delete" as const,
-						namespace: "pending.entry",
-						key: record.entryId,
-					})),
 				],
 			);
 			return { recalled, requested };
@@ -1850,6 +1847,21 @@ export class AgentHarness implements AgentLane {
 		if (!register || typeof register.value !== "object" || register.value === null || Array.isArray(register.value))
 			return false;
 		return register.value.kind === kind && register.value.status === "cancel_requested";
+	}
+
+	private async recoveredAbortPayloads(runId: string): Promise<{ steer: AgentMessage[]; followUp: AgentMessage[] }> {
+		const [queued, cancelled] = await Promise.all([
+			this.durableSession.findRecords({ type: "queue_enqueued", lane: this.name, order: "oldestFirst" }),
+			this.durableSession.findRecords({ type: "queue_cancelled", lane: this.name, runId }),
+		]);
+		const cancelledIds = new Set(cancelled.map((record) => record.entryId));
+		const result = { steer: [] as AgentMessage[], followUp: [] as AgentMessage[] };
+		for (const record of queued) {
+			if (record.runId !== runId || !cancelledIds.has(record.target.id)) continue;
+			const target = await this.queueTarget(record);
+			if (target.type === "message") result[record.queue].push(durableClone(target.message));
+		}
+		return result;
 	}
 
 	private async appendRunAcceptance(record: NewRecord<OperationStartedRecord>): Promise<boolean> {
@@ -2201,11 +2213,21 @@ export class AgentHarness implements AgentLane {
 		if (existing.length > 0) return existing[0]!;
 		const transaction = this.registerSession();
 		if (transaction) {
+			const cancelled = await this.durableSession.findRecords({
+				type: "queue_cancelled",
+				lane: record.lane,
+				runId: record.runId,
+			});
 			await transaction.appendTransaction(
 				[record],
 				[
 					{ op: "delete", namespace: "op.meta", key: record.runId },
 					{ op: "delete", namespace: "op.state", key: record.runId },
+					...cancelled.map((item) => ({
+						op: "delete" as const,
+						namespace: "pending.entry",
+						key: item.entryId,
+					})),
 				],
 			);
 			return record as OperationFinishedRecord;
