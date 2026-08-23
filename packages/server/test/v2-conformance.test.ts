@@ -99,6 +99,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	fail = false;
 	usageUpdated = false;
 	goalUpdated = false;
+	compactionPolicyUpdated = false;
 	private current: SessionSnapshotV2;
 
 	constructor(id: string) {
@@ -151,6 +152,12 @@ class TestRuntime implements PiSessionRuntimeV2 {
 					createdAt: 1,
 					updatedAt: 1,
 				},
+			};
+		}
+		if (this.compactionPolicyUpdated) {
+			this.current = {
+				...this.current,
+				compactionPolicy: { ...this.current.compactionPolicy, enabled: false, source: "model" },
 			};
 		}
 		this.current = {
@@ -336,6 +343,31 @@ describe("PiServer v2 operation acceptance", () => {
 		service.sessions.get("session-1")!.release.resolve(undefined);
 		const goalEvent = await client.next((message) => message.type === "event" && message.event === "goal_updated");
 		expect(goalEvent).toMatchObject({ event: "goal_updated", payload: { goal: { id: "goal-1", status: "active" } } });
+	});
+
+	test("emits a compaction-policy event when an operation changes the policy", async () => {
+		const service = new TestService();
+		service.sessions.get("session-1")!.compactionPolicyUpdated = true;
+		const server = new PiServerV2(service, { listeners: [], serverId: "compaction-policy-events" });
+		await server.start();
+		servers.push(server);
+		const client = connectInMemoryTestClientV2(server.accept.bind(server));
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const accepted = await client.request({
+			command: "session/compaction/set",
+			sessionId: "session-1",
+			payload: { enabled: false },
+		});
+		expect(accepted).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+		service.sessions.get("session-1")!.release.resolve(undefined);
+		const policyEvent = await client.next(
+			(message) => message.type === "event" && message.event === "model_compaction_policy_changed",
+		);
+		expect(policyEvent).toMatchObject({
+			event: "model_compaction_policy_changed",
+			payload: { compactionPolicy: { enabled: false, source: "model" } },
+		});
 	});
 
 	test("accepts deterministic in-memory v2 handshakes and fragmented requests", async () => {
