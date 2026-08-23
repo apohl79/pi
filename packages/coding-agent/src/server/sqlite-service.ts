@@ -10,7 +10,7 @@ import {
 	type SamplingInputContext,
 	type Session,
 } from "@earendil-works/pi-agent-core";
-import type { Api, Model, Models } from "@earendil-works/pi-ai";
+import { type Api, estimateTextTokens, type Model, type Models } from "@earendil-works/pi-ai";
 import type { SessionMetadataV2 } from "@earendil-works/pi-protocol";
 import type {
 	ForensicRecorder,
@@ -459,7 +459,13 @@ export async function createCodingAgentV2SqliteService(
 						);
 						return resolved === undefined
 							? undefined
-							: { id: resolved.id, source: resolved.source, contentHash: resolved.contentHash };
+							: {
+									id: resolved.id,
+									source: resolved.source,
+									contentHash: resolved.contentHash,
+									byteLength: resolved.byteLength,
+									estimatedTokens: estimateTextTokens(resolved.text),
+								};
 					};
 		const pluginSetHash =
 			options.pluginRegistry === undefined

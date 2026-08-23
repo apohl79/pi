@@ -573,6 +573,30 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		}
 	}
 
+	private async recordInstructionProfile(operationId: string): Promise<void> {
+		if (this.definition.forensicRecorder === undefined || this.definition.instructionProfile === undefined) return;
+		try {
+			const profile = await this.definition.instructionProfile();
+			if (profile === undefined) return;
+			await this.definition.forensicRecorder.record({
+				kind: "model_instruction_profile",
+				severity: "info",
+				outcome: "ok",
+				sessionId: this.definition.metadata.id,
+				operationId,
+				payload: {
+					id: profile.id,
+					source: profile.source,
+					contentHash: profile.contentHash,
+					...(profile.byteLength === undefined ? {} : { byteLength: profile.byteLength }),
+					...(profile.estimatedTokens === undefined ? {} : { estimatedTokens: profile.estimatedTokens }),
+				},
+			});
+		} catch {
+			// Profile diagnostics are metadata-only and must not change operation semantics.
+		}
+	}
+
 	private async compactionPolicySnapshot(): Promise<CompactionPolicy> {
 		const [model, settings, source] = await Promise.all([
 			this.definition.harness.getModel(),
@@ -845,6 +869,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				model: extensionOperationModel,
 			}),
 		);
+		await this.recordInstructionProfile(_operationId);
 		try {
 			assertPromptCapabilities(await harness.getModel(), promptInput);
 			if (runCommand === "turn/start") {

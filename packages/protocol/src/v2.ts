@@ -179,6 +179,8 @@ export const InstructionProfileSummarySchema = StrictObject({
 	id: IdSchema,
 	source: Type.Union([Type.Literal("text"), Type.Literal("file")]),
 	contentHash: IdSchema,
+	byteLength: Type.Optional(NonNegativeIntegerSchema),
+	estimatedTokens: Type.Optional(NonNegativeIntegerSchema),
 });
 export type InstructionProfileSummary = Static<typeof InstructionProfileSummarySchema>;
 

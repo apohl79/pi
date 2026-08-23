@@ -755,6 +755,13 @@ describe("coding-agent v2 service adapter", () => {
 					goals,
 					extensionHost,
 					forensicRecorder: diagnostics,
+					instructionProfile: async () => ({
+						id: "profile-1",
+						source: "text" as const,
+						contentHash: "hash-1",
+						byteLength: 20,
+						estimatedTokens: 5,
+					}),
 				},
 			]);
 			const runtime = await service.openSession("adapter-session");
@@ -793,6 +800,14 @@ describe("coding-agent v2 service adapter", () => {
 					payload: { extensionId: "failing-extension", hook: "accepted" },
 				},
 			]);
+			expect((await diagnostics.read()).filter((event) => event.kind === "model_instruction_profile")).toMatchObject(
+				[
+					{
+						operationId: "operation-1",
+						payload: { id: "profile-1", contentHash: "hash-1", byteLength: 20, estimatedTokens: 5 },
+					},
+				],
+			);
 			await expect(
 				runtime.run("bad-operation", {
 					command: "session/thinking/set",

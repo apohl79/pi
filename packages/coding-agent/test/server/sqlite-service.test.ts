@@ -202,6 +202,8 @@ describe("coding-agent SQLite v2 service", () => {
 			expect((await created.runtime.snapshot()).instructionProfile).toMatchObject({
 				id: "sqlite-profile",
 				source: "text",
+				byteLength: "Use SQLite fixtures.".length,
+				estimatedTokens: 5,
 			});
 			const child = await service.createSession!({
 				id: "sqlite-child-session",
