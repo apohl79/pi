@@ -70,6 +70,25 @@ function memoryTransport() {
 				return;
 			}
 			requests.push(message.request);
+			if (message.request.command === "operation/read") {
+				const response: ServerMessageV2 = {
+					type: "response",
+					id: message.id,
+					ok: true,
+					result: {
+						operation: {
+							operationId: "operation-1",
+							sessionId: "session-1",
+							state: "complete",
+							accepted: { operationId: "operation-1", sessionRevision: 2, eventSeq: 2 },
+							terminalSeq: 3,
+						},
+					},
+				};
+				sent.push(response);
+				handlers?.onData(encodeServerMessageV2(response));
+				return;
+			}
 			const result: JsonValue =
 				message.request.command === "session/read"
 					? ({ session: snapshot() } as JsonValue)
@@ -411,6 +430,19 @@ describe("RemoteV2Session", () => {
 			payload: { state: "complete", snapshot: snapshot({ revision: 3, eventSeq: 3, phase: "idle" }) },
 		});
 		expect(session.state).toMatchObject({ lifecycle: { status: "ready" }, snapshot: { revision: 3 } });
+		await session.dispose();
+	});
+
+	test("reads a server-owned operation record after a missed terminal event", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		expect(await session.readOperation("operation-1")).toMatchObject({
+			operationId: "operation-1",
+			state: "complete",
+			terminalSeq: 3,
+		});
 		await session.dispose();
 	});
 
