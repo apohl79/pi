@@ -26,7 +26,9 @@ configureHttpDispatcher();
 
 async function runCli(): Promise<void> {
 	const args = process.argv.slice(2);
-	const serverDefaultPrint = !args.includes("--no-server") && (args.includes("--print") || args.includes("-p"));
+	const jsonMode = args.some((arg, index) => arg === "--mode" && args[index + 1] === "json");
+	const serverDefaultPrint =
+		!args.includes("--no-server") && (args.includes("--print") || args.includes("-p") || jsonMode);
 	if (!isExperimentalCommand(args) && !serverDefaultPrint) {
 		await main(args);
 		return;
