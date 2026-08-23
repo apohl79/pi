@@ -479,9 +479,27 @@ export {
 	type ServerRuntimeOperation,
 } from "./server/extension-host.ts";
 export {
+	type ModelInstructionProfile,
+	ModelInstructionResolver,
+	type ModelInstructionResolverOptions,
+	type ResolvedModelInstructionProfile,
+} from "./server/model-instructions.ts";
+export {
+	createPluginSamplingInput,
+	type PluginSamplingDiagnostic,
+	type PluginSamplingDiagnosticSink,
+	type PluginSamplingSource,
+} from "./server/plugin-sampling.ts";
+export {
 	type CodingAgentV2SqliteServiceOptions,
 	createCodingAgentV2SqliteService,
 } from "./server/sqlite-service.ts";
+export {
+	type StatuslineExecutor,
+	StatuslineRunner,
+	type StatuslineRunnerOptions,
+	type StatuslineSnapshot,
+} from "./server/statusline.ts";
 export {
 	type CodingAgentV2Runtime,
 	type CodingAgentV2Service,

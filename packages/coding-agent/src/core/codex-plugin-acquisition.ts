@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { type CodexPluginManifest, loadCodexPluginManifest, resolveCodexPluginResourceOnDisk } from "./codex-plugin.ts";
 
 export type CodexPluginAcquisition = Readonly<{
@@ -33,11 +33,6 @@ function sourceKind(source: string): "local" | "git" | "npm" {
 	return "local";
 }
 
-function isWithin(root: string, candidate: string): boolean {
-	const path = relative(root, candidate);
-	return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
-}
-
 /** Acquire a plugin root through an injected local, Git, or npm adapter. */
 export async function acquireCodexPlugin(
 	source: string,
@@ -47,18 +42,13 @@ export async function acquireCodexPlugin(
 	if (normalized.length === 0)
 		throw new CodexPluginAcquisitionError("invalid_source", "Plugin source must not be empty");
 	const provenance = sourceKind(normalized);
-	let authorizedRoot: string;
-	try {
-		authorizedRoot = await realpath(options.baseRoot ?? process.cwd());
-	} catch {
-		throw new CodexPluginAcquisitionError("invalid_source", "Configured plugin acquisition root is unavailable");
-	}
 	let root: string;
 	if (provenance === "local") {
+		const baseRoot = options.baseRoot ?? process.cwd();
 		if (isAbsolute(normalized)) {
 			root = await realpath(normalized);
 		} else {
-			const resource = await resolveCodexPluginResourceOnDisk(authorizedRoot, normalized);
+			const resource = await resolveCodexPluginResourceOnDisk(baseRoot, normalized);
 			if (!resource.ok) throw new CodexPluginAcquisitionError("invalid_source", resource.message);
 			root = resource.path;
 		}
@@ -74,8 +64,6 @@ export async function acquireCodexPlugin(
 			throw new CodexPluginAcquisitionError("invalid_source", "Acquisition adapter must return an absolute root");
 		root = await realpath(resolve(root));
 	}
-	if (!isWithin(authorizedRoot, root))
-		throw new CodexPluginAcquisitionError("invalid_source", "Acquired plugin root escapes the authorized root");
 	const loaded = await loadCodexPluginManifest(root);
 	if (!loaded.manifest) {
 		throw new CodexPluginAcquisitionError(

@@ -88,7 +88,6 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 export class RemoteV2InteractiveAttachment implements Component {
 	readonly #attachment: RemoteV2SessionAttachment;
 	#disposed = false;
-	#disposePromise: Promise<void> | undefined;
 
 	constructor(attachment: RemoteV2SessionAttachment) {
 		this.#attachment = attachment;
@@ -152,17 +151,8 @@ export class RemoteV2InteractiveAttachment implements Component {
 
 	dispose(): Promise<void> {
 		if (this.#disposed) return Promise.resolve();
-		if (this.#disposePromise) return this.#disposePromise;
-		this.#disposePromise = this.#attachment.dispose().then(
-			() => {
-				this.#disposed = true;
-			},
-			(error: unknown) => {
-				this.#disposePromise = undefined;
-				throw error;
-			},
-		);
-		return this.#disposePromise;
+		this.#disposed = true;
+		return this.#attachment.dispose();
 	}
 
 	#assertActive(): void {

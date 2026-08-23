@@ -3,11 +3,15 @@ import type { V2AppRegistry } from "../../apps.ts";
 import type { V2BlobStore } from "../../blobs.ts";
 import type { ForensicRecorder } from "../../diagnostics.ts";
 import type { V2FileReferenceService } from "../../files.ts";
+import type { V2ImageService } from "../../images.ts";
 import type { V2InputRegistry } from "../../inputs.ts";
 import type { V2OperationStore } from "../../operation-store.ts";
 import type { V2PlanRegistry } from "../../plans.ts";
+import type { V2PluginRegistry } from "../../plugins.ts";
 import type { V2ProcessRegistry } from "../../processes.ts";
 import type { PiServerOptions } from "../../types.ts";
+import type { V2UsageLedger } from "../../usage-ledger.ts";
+import type { V2WebService } from "../../web.ts";
 
 export interface UnixListenerOptions {
 	path: string;
@@ -31,4 +35,8 @@ export interface UnixServerOptions extends Omit<PiServerOptions, "listeners">, U
 	plans?: V2PlanRegistry;
 	inputs?: V2InputRegistry;
 	files?: V2FileReferenceService;
+	web?: V2WebService;
+	images?: V2ImageService;
+	plugins?: V2PluginRegistry;
+	usage?: V2UsageLedger;
 }

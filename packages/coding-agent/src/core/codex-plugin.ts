@@ -1,7 +1,5 @@
-import { constants, realpathSync } from "node:fs";
-import { open, realpath, stat } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { MAX_V2_ARRAY_ITEMS, MAX_V2_JSON_DEPTH, MAX_V2_STRING_LENGTH } from "@earendil-works/pi-protocol";
+import { readFile, realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 
 export type CodexPluginJson = null | boolean | number | string | CodexPluginJson[] | { [key: string]: CodexPluginJson };
 
@@ -50,21 +48,6 @@ export type CodexPluginResourceResolution =
 	| { ok: true; path: string }
 	| { ok: false; code: "absolute_path" | "path_escape"; message: string };
 
-function canonicalizeWithMissingSuffix(path: string): string | undefined {
-	const missing: string[] = [];
-	let current = path;
-	while (true) {
-		try {
-			const canonical = realpathSync(current);
-			return join(canonical, ...missing.reverse());
-		} catch {
-			const parent = dirname(current);
-			if (parent === current) return undefined;
-			missing.push(current.slice(parent.length + 1));
-			current = parent;
-		}
-	}
-}
 export type CodexPluginDiskResolution =
 	| { ok: true; path: string }
 	| { ok: false; code: "absolute_path" | "path_escape" | "symlink_escape" | "missing"; message: string };
@@ -77,13 +60,11 @@ export function resolveCodexPluginResource(root: string, resource: string): Code
 	}
 	const pluginRoot = resolve(root);
 	const candidate = resolve(pluginRoot, normalized);
-	const canonicalRoot = canonicalizeWithMissingSuffix(pluginRoot) ?? pluginRoot;
-	const canonicalCandidate = canonicalizeWithMissingSuffix(candidate);
-	const fromRoot = relative(canonicalRoot, canonicalCandidate ?? candidate);
+	const fromRoot = relative(pluginRoot, candidate);
 	if (fromRoot === ".." || fromRoot.startsWith("../") || isAbsolute(fromRoot)) {
 		return { ok: false, code: "path_escape", message: `Plugin resource escapes its root: ${resource}` };
 	}
-	return { ok: true, path: canonicalCandidate ?? candidate };
+	return { ok: true, path: candidate };
 }
 
 /** Resolve an existing resource and reject symlink targets outside the plugin root. */
@@ -106,46 +87,12 @@ export async function resolveCodexPluginResourceOnDisk(
 	}
 }
 
-const MAX_MANIFEST_BYTES = MAX_V2_STRING_LENGTH;
-
-function assertBoundedJson(value: unknown, depth = 0): void {
-	if (depth > MAX_V2_JSON_DEPTH) throw new Error("Manifest nesting exceeds the supported depth");
-	if (typeof value === "string") {
-		if (value.length > MAX_V2_STRING_LENGTH) throw new Error("Manifest string exceeds the supported length");
-	} else if (typeof value === "number") {
-		if (!Number.isFinite(value)) throw new Error("Manifest number is invalid");
-	} else if (Array.isArray(value)) {
-		if (value.length > MAX_V2_ARRAY_ITEMS) throw new Error("Manifest array exceeds the supported size");
-		value.forEach((item) => assertBoundedJson(item, depth + 1));
-	} else if (isRecord(value)) {
-		const entries = Object.entries(value);
-		if (entries.length > MAX_V2_ARRAY_ITEMS) throw new Error("Manifest object exceeds the supported size");
-		for (const [key, child] of entries) {
-			if (key.length > MAX_V2_STRING_LENGTH) throw new Error("Manifest key exceeds the supported length");
-			assertBoundedJson(child, depth + 1);
-		}
-	}
-}
-
-type JsonReadResult = { kind: "ok"; value: unknown } | { kind: "missing" | "malformed" };
-
-async function readJson(path: string): Promise<JsonReadResult> {
+async function readJson(path: string): Promise<unknown | undefined> {
 	try {
-		const metadata = await stat(path);
-		if (!metadata.isFile() || metadata.size > MAX_MANIFEST_BYTES) return { kind: "malformed" };
-		const canonical = await realpath(path);
-		const handle = await open(canonical, constants.O_RDONLY | constants.O_NOFOLLOW);
-		let value: unknown;
-		try {
-			value = JSON.parse(await handle.readFile("utf8")) as unknown;
-		} finally {
-			await handle.close();
-		}
-		assertBoundedJson(value);
-		return { kind: "ok", value };
+		return JSON.parse(await readFile(path, "utf8")) as unknown;
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
-		return { kind: "malformed" };
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
 	}
 }
 
@@ -165,13 +112,7 @@ export async function loadCodexPluginManifest(root: string): Promise<CodexPlugin
 			diagnostics: [{ code: "invalid_manifest", severity: "error", message: manifestPath.message }],
 		};
 	}
-	const parsed = await readJson(manifestPath.path);
-	if (parsed.kind !== "ok")
-		return {
-			root: canonicalRoot,
-			diagnostics: [{ code: "invalid_manifest", severity: "error", message: "Codex plugin manifest is malformed" }],
-		};
-	return { root: canonicalRoot, ...parseCodexPluginManifest(parsed.value) };
+	return { root: canonicalRoot, ...parseCodexPluginManifest(await readJson(manifestPath.path)) };
 }
 
 /** Discover a marketplace manifest at a supported Codex marketplace location. */
@@ -187,17 +128,10 @@ export async function loadCodexMarketplaceManifest(
 				root: canonicalRoot,
 				diagnostics: [{ code: "invalid_manifest", severity: "error", message: candidate.message }],
 			};
-		const parsed = await readJson(candidate.path);
-		if (parsed.kind !== "ok")
-			return {
-				root: canonicalRoot,
-				path: candidate.path,
-				diagnostics: [{ code: "invalid_manifest", severity: "error", message: "Codex marketplace manifest is malformed" }],
-			};
 		return {
 			root: canonicalRoot,
 			path: candidate.path,
-			...parseCodexMarketplaceManifest(parsed.value),
+			...parseCodexMarketplaceManifest(await readJson(candidate.path)),
 		};
 	}
 	return {
@@ -262,19 +196,6 @@ function marketplaceSource(value: unknown): CodexMarketplaceSource | undefined {
 
 export function parseCodexMarketplaceManifest(input: unknown): CodexMarketplaceParseResult {
 	const diagnostics: CodexPluginDiagnostic[] = [];
-	try {
-		assertBoundedJson(input);
-	} catch (error) {
-		return {
-			diagnostics: [
-				{
-					code: "invalid_manifest",
-					severity: "error",
-					message: error instanceof Error ? error.message : "Marketplace manifest exceeds supported bounds",
-				},
-			],
-		};
-	}
 	if (!isRecord(input) || !Array.isArray(input.plugins)) {
 		return {
 			diagnostics: [
@@ -310,19 +231,6 @@ export function parseCodexMarketplaceManifest(input: unknown): CodexMarketplaceP
 
 export function parseCodexPluginManifest(input: unknown): CodexPluginParseResult {
 	const diagnostics: CodexPluginDiagnostic[] = [];
-	try {
-		assertBoundedJson(input);
-	} catch (error) {
-		return {
-			diagnostics: [
-				{
-					code: "invalid_manifest",
-					severity: "error",
-					message: error instanceof Error ? error.message : "Plugin manifest exceeds supported bounds",
-				},
-			],
-		};
-	}
 	if (!isRecord(input)) {
 		return {
 			diagnostics: [{ code: "invalid_manifest", severity: "error", message: "Plugin manifest must be an object" }],

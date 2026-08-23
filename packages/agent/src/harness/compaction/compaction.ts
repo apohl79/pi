@@ -145,6 +145,12 @@ function combineUsage(first: Usage, second: Usage): Usage {
 }
 
 /** Compaction thresholds and retention settings. */
+export interface CompactionSettingsOverride {
+	enabled?: boolean;
+	reserveTokens?: number;
+	keepRecentTokens?: number;
+}
+
 export interface CompactionSettings {
 	/** Enable automatic compaction decisions. */
 	enabled: boolean;
@@ -152,25 +158,8 @@ export interface CompactionSettings {
 	reserveTokens: number;
 	/** Approximate recent-context tokens to keep after compaction. */
 	keepRecentTokens: number;
-}
-
-/** Keep compaction arithmetic bounded and meaningful for every caller, including restored options. */
-export const MAX_COMPACTION_TOKENS = 10_000_000;
-
-export function validateCompactionSettings(settings: CompactionSettings): CompactionSettings {
-	if (typeof settings.enabled !== "boolean") throw new TypeError("Compaction enabled must be a boolean");
-	for (const [name, value] of [
-		["reserveTokens", settings.reserveTokens],
-		["keepRecentTokens", settings.keepRecentTokens],
-	] as const) {
-		if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0 || value > MAX_COMPACTION_TOKENS) {
-			throw new RangeError(`${name} must be an integer between 0 and ${MAX_COMPACTION_TOKENS}`);
-		}
-	}
-	if (settings.reserveTokens + settings.keepRecentTokens > MAX_COMPACTION_TOKENS) {
-		throw new RangeError(`reserveTokens + keepRecentTokens must not exceed ${MAX_COMPACTION_TOKENS}`);
-	}
-	return { ...settings };
+	/** Optional field-level overrides keyed by the canonical provider/model pair. */
+	modelOverrides?: Record<string, CompactionSettingsOverride>;
 }
 
 /** Default compaction settings used by the harness. */
@@ -179,6 +168,21 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	reserveTokens: 16384,
 	keepRecentTokens: 20000,
 };
+
+export function resolveCompactionSettings(
+	settings: CompactionSettings,
+	provider: string,
+	modelId: string,
+): CompactionSettings {
+	const override = settings.modelOverrides?.[`${provider}/${modelId}`];
+	if (!override) return { ...settings };
+	return {
+		enabled: override.enabled ?? settings.enabled,
+		reserveTokens: override.reserveTokens ?? settings.reserveTokens,
+		keepRecentTokens: override.keepRecentTokens ?? settings.keepRecentTokens,
+		modelOverrides: { ...settings.modelOverrides },
+	};
+}
 
 /** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {

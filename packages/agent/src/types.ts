@@ -150,6 +150,13 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model<any>;
 
 	/**
+	 * Produces request-only messages immediately before each provider request.
+	 * Returned messages are converted for that request and are never appended to
+	 * the durable context or emitted as conversation events.
+	 */
+	samplingInput?: SamplingInput;
+
+	/**
 	 * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
 	 *
 	 * Each AgentMessage must be converted to a UserMessage, AssistantMessage, or ToolResultMessage
@@ -291,6 +298,16 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 */
 	afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
 }
+
+export type SamplingInputContext = Readonly<{
+	model: Model<any>;
+	systemPrompt: string;
+	messages: readonly AgentMessage[];
+	tools: readonly AgentTool[];
+	signal?: AbortSignal;
+}>;
+
+export type SamplingInput = (context: SamplingInputContext) => AgentMessage[] | Promise<AgentMessage[]>;
 
 /**
  * Thinking/reasoning level for models that support it.

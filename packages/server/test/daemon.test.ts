@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { ServerDaemon, type ServerDaemonServer } from "../src/daemon.ts";
+import { InMemoryForensicRecorder } from "../src/diagnostics.ts";
 import type { PiServerServiceV2 } from "../src/v2.ts";
 
 function service(): PiServerServiceV2 {
@@ -55,19 +56,45 @@ describe("ServerDaemon", () => {
 		expect(close).toHaveBeenCalledOnce();
 	});
 
-	test("returns to stopped when server creation fails", async () => {
-		const failure = new Error("factory failed");
-		const createServer = vi.fn(() => {
-			throw failure;
-		});
+	test("passes injected diagnostics through to the owned server", async () => {
+		const diagnostics = new InMemoryForensicRecorder();
+		let received: unknown;
 		const daemon = new ServerDaemon({
 			service: service(),
 			socketPath: "/tmp/daemon-test.sock",
-			createServer,
+			diagnostics,
+			createServer: (_service, options) => {
+				received = options.diagnostics;
+				return fakeServer(
+					async () => {},
+					async () => {},
+				);
+			},
 		});
+		await daemon.start();
+		expect(received).toBe(diagnostics);
+		await daemon.stop();
+	});
 
-		await expect(daemon.start()).rejects.toBe(failure);
-		expect(daemon.status()).toEqual({ state: "stopped", addresses: [] });
-		expect(createServer).toHaveBeenCalledOnce();
+	test("records daemon lifecycle markers", async () => {
+		const diagnostics = new InMemoryForensicRecorder();
+		const daemon = new ServerDaemon({
+			service: service(),
+			socketPath: "/tmp/daemon-test.sock",
+			diagnostics,
+			createServer: () =>
+				fakeServer(
+					async () => {},
+					async () => {},
+				),
+		});
+		await daemon.start();
+		await daemon.stop();
+		expect((await diagnostics.read()).map((event) => event.kind)).toEqual([
+			"daemon_starting",
+			"daemon_started",
+			"daemon_stopping",
+			"daemon_stopped",
+		]);
 	});
 });

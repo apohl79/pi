@@ -2,7 +2,17 @@ import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
-import { ServerDaemon, type ServerDaemonOptions } from "@earendil-works/pi-server";
+import {
+	InMemoryForensicRecorder,
+	InMemoryV2PlanRegistry,
+	JsonlForensicRecorder,
+	JsonlV2PlanRegistry,
+	ServerDaemon,
+	type ServerDaemonOptions,
+	type V2ImageService,
+	type V2InputRegistry,
+	type V2WebService,
+} from "@earendil-works/pi-server";
 import { createNodeSqliteFactory, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import {
 	createExperimentalCliRuntime,
@@ -16,10 +26,17 @@ import { type CodingAgentV2SqliteServiceOptions, createCodingAgentV2SqliteServic
 export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOptions, "repository"> & {
 	repository: SqliteSessionRepository;
 	socketPath: string;
+	planStorePath?: string;
+	diagnosticStorePath?: string;
 	serverId?: string;
 	agents?: ServerDaemonOptions["agents"];
+	inputs?: V2InputRegistry;
+	web?: V2WebService;
+	images?: V2ImageService;
+	diagnostics?: ServerDaemonOptions["diagnostics"];
 	createServer?: ServerDaemonOptions["createServer"];
 	write(value: unknown): void;
+	writeText?: (value: string) => void;
 	onAttach?: ExperimentalCliRuntimeOptions["onAttach"];
 };
 
@@ -44,14 +61,38 @@ export type ConfiguredCodingAgentDaemonRuntime = CodingAgentDaemonRuntime & {
 export async function createCodingAgentDaemonRuntime(
 	options: CodingAgentDaemonRuntimeOptions,
 ): Promise<CodingAgentDaemonRuntime> {
-	const service = await createCodingAgentV2SqliteService(options);
+	let createdAgents: ServerDaemonOptions["agents"];
+	const plans =
+		options.plans ??
+		(options.planStorePath === undefined
+			? new InMemoryV2PlanRegistry()
+			: new JsonlV2PlanRegistry(options.planStorePath));
+	const diagnostics =
+		options.diagnostics ??
+		(options.diagnosticStorePath === undefined
+			? new InMemoryForensicRecorder()
+			: new JsonlForensicRecorder(options.diagnosticStorePath));
+	const service = await createCodingAgentV2SqliteService(
+		options.agentRegistry === undefined
+			? {
+					...options,
+					plans,
+					agentRegistry: () => createdAgents,
+				}
+			: { ...options, plans },
+	);
 	const agents = options.agents ?? (service.createSession ? createCodingAgentV2AgentRegistry(service) : undefined);
-	const ownsAgents = options.agents === undefined && agents !== undefined && "dispose" in agents;
+	createdAgents = agents;
 	const daemon = new ServerDaemon({
 		service,
 		socketPath: options.socketPath,
 		...(options.serverId === undefined ? {} : { serverId: options.serverId }),
 		...(agents === undefined ? {} : { agents }),
+		...(options.inputs === undefined ? {} : { inputs: options.inputs }),
+		...(options.web === undefined ? {} : { web: options.web }),
+		...(options.images === undefined ? {} : { images: options.images }),
+		plans,
+		diagnostics,
 		...(options.createServer === undefined ? {} : { createServer: options.createServer }),
 	});
 	const defaultConnect: TransportAddress = { transport: "unix", path: options.socketPath };
@@ -66,11 +107,10 @@ export async function createCodingAgentDaemonRuntime(
 			stop: () => daemon.stop(),
 		},
 		defaultConnect,
-		createClient: (address, auth) => {
-			if (auth !== undefined) throw new Error("Experimental client authentication is not supported by Unix transport yet");
-			return new PiClientV2({ transportFactory: createUnixTransportFactory({ path: address.path }) });
-		},
+		createClient: (address) =>
+			new PiClientV2({ transportFactory: createUnixTransportFactory({ path: address.path }) }),
 		write: options.write,
+		...(options.writeText === undefined ? {} : { writeText: options.writeText }),
 		onAttach: options.onAttach,
 	});
 	return {
@@ -79,21 +119,7 @@ export async function createCodingAgentDaemonRuntime(
 		cli,
 		close: async () => {
 			cli.close();
-			const errors: unknown[] = [];
-			try {
-				await daemon.stop();
-			} catch (error) {
-				errors.push(error);
-			}
-			if (ownsAgents) {
-				try {
-					await (agents as { dispose(): Promise<void> }).dispose();
-				} catch (error) {
-					errors.push(error);
-				}
-			}
-			if (errors.length === 1) throw errors[0];
-			if (errors.length > 1) throw new AggregateError(errors, "Failed to close coding-agent daemon runtime");
+			await daemon.stop();
 		},
 	};
 }
@@ -108,45 +134,26 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 		databasePath: options.databasePath ?? join(options.agentDir, "server.sqlite"),
 	});
 	try {
-		const runtime = await createCodingAgentDaemonRuntime({ ...options, repository, env });
+		const runtime = await createCodingAgentDaemonRuntime({
+			...options,
+			repository,
+			env,
+			planStorePath: options.planStorePath ?? join(options.agentDir, "plans.jsonl"),
+			diagnosticStorePath: options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"),
+		});
 		return {
 			...runtime,
 			repository,
 			env,
 			close: async () => {
-				const errors: unknown[] = [];
-				try {
-					await runtime.close();
-				} catch (error) {
-					errors.push(error);
-				}
-				try {
-					await repository.close();
-				} catch (error) {
-					errors.push(error);
-				}
-				try {
-					await env.cleanup();
-				} catch (error) {
-					errors.push(error);
-				}
-				if (errors.length === 1) throw errors[0];
-				if (errors.length > 1) throw new AggregateError(errors, "Failed to close configured daemon runtime");
+				await runtime.close();
+				await repository.close();
+				await env.cleanup();
 			},
 		};
 	} catch (error) {
-		const errors: unknown[] = [error];
-		try {
-			await repository.close();
-		} catch (cleanupError) {
-			errors.push(cleanupError);
-		}
-		try {
-			await env.cleanup();
-		} catch (cleanupError) {
-			errors.push(cleanupError);
-		}
-		if (errors.length === 1) throw error;
-		throw new AggregateError(errors, "Failed to create configured daemon runtime");
+		await repository.close();
+		await env.cleanup();
+		throw error;
 	}
 }

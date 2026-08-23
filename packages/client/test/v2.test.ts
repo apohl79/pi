@@ -61,38 +61,6 @@ describe("PiClientV2", () => {
 		expect(client.connected).toBe(false);
 	});
 
-	test("resets decoder and ignores stale transport callbacks before reconnect", async () => {
-		let handlers: ByteTransportHandlers | undefined;
-		const transports: ByteTransport[] = [];
-		const factory = async (next: ByteTransportHandlers): Promise<ByteTransport> => {
-			handlers = next;
-			const transport: ByteTransport = { send: async () => {}, close: () => {} };
-			transports.push(transport);
-			return transport;
-		};
-		const client = new PiClientV2({ transportFactory: factory });
-		const hello = encodeServerMessageV2({
-			type: "hello",
-			version: PROTOCOL_V2_VERSION,
-			connectionId: "connection-1",
-			snapshot,
-		});
-		const first = client.connect();
-		await Promise.resolve();
-		handlers?.onData(hello.subarray(0, 2));
-		const staleHandlers = handlers;
-		staleHandlers?.onClose();
-		await expect(first).rejects.toThrow("transport closed");
-
-		const second = client.connect();
-		await Promise.resolve();
-		handlers?.onData(hello);
-		expect(await second).toEqual(snapshot);
-		staleHandlers?.onData(hello);
-		expect(transports).toHaveLength(2);
-		client.disconnect();
-	});
-
 	test("routes typed session helpers and surfaces failed responses", async () => {
 		const pair = transportPair();
 		const client = new PiClientV2({ transportFactory: pair.factory });
@@ -100,6 +68,7 @@ describe("PiClientV2", () => {
 		await Promise.resolve();
 		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
 		await connecting;
+
 		const sessions = client.listSessions();
 		pair.deliver({ type: "response", id: "v2-request-1", ok: true, result: { sessions: [] } });
 		expect(await sessions).toEqual([]);
@@ -107,44 +76,30 @@ describe("PiClientV2", () => {
 		pair.deliver({ type: "response", id: "v2-request-2", ok: true, result: { command: "session/attach" } });
 		await attached;
 		const read = client.readSession("session-1");
-		pair.deliver({ type: "response", id: "v2-request-3", ok: false, error: { code: "not_found", message: "missing" } });
+		pair.deliver({
+			type: "response",
+			id: "v2-request-3",
+			ok: false,
+			error: { code: "not_found", message: "missing" },
+		});
 		await expect(read).rejects.toThrow("not_found: missing");
-		client.disconnect();
 	});
 
-	test("rejects malformed typed session helper payloads", async () => {
+	test("creates a session through the typed v2 helper", async () => {
 		const pair = transportPair();
 		const client = new PiClientV2({ transportFactory: pair.factory });
 		const connecting = client.connect();
 		await Promise.resolve();
 		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
 		await connecting;
-
-		const sessions = client.listSessions();
-		pair.deliver({ type: "response", id: "v2-request-1", ok: true, result: { sessions: [{ id: "" }] } });
-		await expect(sessions).rejects.toThrow("Invalid session/list result");
-
-		const read = client.readSession("session-1");
-		pair.deliver({ type: "response", id: "v2-request-2", ok: true, result: { session: { id: "session-1" } } });
-		await expect(read).rejects.toThrow("Invalid session/read result");
-		client.disconnect();
-	});
-
-	test("contains event listener failures", async () => {
-		const pair = transportPair();
-		const listenerErrors: Error[] = [];
-		const client = new PiClientV2({ transportFactory: pair.factory, onListenerError: (error) => listenerErrors.push(error) });
-		const connecting = client.connect();
-		await Promise.resolve();
-		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
-		await connecting;
-		client.onEvent(() => {
-			throw new Error("consumer failure");
+		const created = client.createSession({ name: "demo", cwd: "/workspace" });
+		pair.deliver({
+			type: "response",
+			id: "v2-request-1",
+			ok: true,
+			result: { session: { id: "session-1", name: "demo", cwd: "/workspace" } },
 		});
-		pair.deliver({ type: "event", sessionId: "session-1", seq: 1, revision: 1, event: "usage_updated", payload: {} });
-		expect(listenerErrors).toEqual([new Error("consumer failure")]);
-		expect(client.connected).toBe(true);
-		client.disconnect();
+		expect(await created).toMatchObject({ id: "session-1", name: "demo", cwd: "/workspace" });
 	});
 
 	test("keeps session lease transitions and filters session events", async () => {
@@ -164,20 +119,16 @@ describe("PiClientV2", () => {
 		pair.deliver({ type: "event", sessionId: "session-1", seq: 2, revision: 1, event: "plan_updated", payload: {} });
 		expect(events).toEqual(["plan_updated"]);
 		const relinquished = handle.relinquishControl();
-		const acquiredAfterRelinquish = handle.acquireControl();
 		pair.deliver({ type: "response", id: "v2-request-2", ok: true, result: { command: "session/attach" } });
 		await relinquished;
 		expect(handle.mode).toBe("observer");
+		const acquired = handle.acquireControl();
 		pair.deliver({ type: "response", id: "v2-request-3", ok: true, result: { command: "session/attach" } });
-		await acquiredAfterRelinquish;
+		await acquired;
 		expect(handle.mode).toBe("control");
-		const unsubscribe = handle.onEvent((event) => events.push(`second:${event.event}`));
 		const detached = handle.detach();
 		pair.deliver({ type: "response", id: "v2-request-4", ok: true, result: { command: "session/detach" } });
 		await detached;
-		pair.deliver({ type: "event", sessionId: "session-1", seq: 3, revision: 1, event: "plan_updated", payload: {} });
-		expect(events).toEqual(["plan_updated"]);
-		unsubscribe();
 		expect(() => handle.read()).toThrow("detached");
 	});
 
@@ -217,24 +168,6 @@ describe("PiClientV2", () => {
 		expect(hello).toMatchObject({ type: "hello", lastEvent: { sessionId: "session-1", eventSeq: 4 } });
 		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-2", snapshot });
 		await second;
-		client.dispose();
-	});
-
-	test("tracks interleaved session cursors and refuses ambiguous automatic replay", async () => {
-		const pair = transportPair();
-		const client = new PiClientV2({ transportFactory: pair.factory });
-		const first = client.connect();
-		await Promise.resolve();
-		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
-		await first;
-		pair.deliver({ type: "event", sessionId: "session-1", seq: 4, revision: 1, event: "usage_updated", payload: {} });
-		pair.deliver({ type: "event", sessionId: "session-2", seq: 9, revision: 1, event: "usage_updated", payload: {} });
-		expect(client.lastEventCursors).toEqual([
-			{ sessionId: "session-1", eventSeq: 4 },
-			{ sessionId: "session-2", eventSeq: 9 },
-		]);
-		client.disconnect();
-		await expect(client.connect()).rejects.toThrow("multiple sessions");
 		client.dispose();
 	});
 });

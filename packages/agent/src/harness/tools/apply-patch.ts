@@ -1,8 +1,6 @@
-import { dirname, relative, sep } from "node:path";
 import { type Static, Type } from "typebox";
 import type { AgentHarnessTool } from "../types.ts";
 import { getOrThrow } from "../types.ts";
-import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToolPath } from "./path-utils.ts";
 import type { ExecutionToolContext } from "./tool-context.ts";
@@ -36,53 +34,11 @@ function parsePatchEnvelope(patch: string): PatchOperation[] {
 	return operations;
 }
 
-function isWithin(root: string, target: string): boolean {
-	const distance = relative(root, target);
-	return distance === "" || (distance !== ".." && !distance.startsWith(`..${sep}`) && !distance.startsWith(sep));
-}
-
 function validatePath(root: string, target: string): void {
-	if (!isWithin(root, target))
+	const normalizedRoot = root.replaceAll("\\", "/").replace(/\/$/, "");
+	const normalizedTarget = target.replaceAll("\\", "/");
+	if (normalizedTarget !== normalizedRoot && !normalizedTarget.startsWith(`${normalizedRoot}/`))
 		throw new Error(`apply_patch path escapes execution root: ${target}`);
-	if (target === root) throw new Error(`apply_patch refuses to mutate execution root: ${target}`);
-}
-
-/**
- * Validate the addressed path and every existing ancestor immediately before mutation.
- * canonicalPath resolves symlinks for the nearest existing ancestor, which also catches
- * symlinked parents of an as-yet non-existent add target.
- */
-async function validateMutationPath(
-	env: ExecutionToolContext["env"],
-	rootPath: string,
-	targetPath: string,
-	signal?: AbortSignal,
-): Promise<void> {
-	const rootAbsolute = getOrThrow(await env.absolutePath(rootPath, signal));
-	validatePath(rootAbsolute, targetPath);
-	const canonicalRoot = getOrThrow(await env.canonicalPath(rootAbsolute, signal));
-	let candidate = targetPath;
-	while (true) {
-		const info = await env.fileInfo(candidate, signal);
-		if (info.ok) {
-			if (candidate !== rootAbsolute && info.value.kind === "symlink") {
-				throw new Error(`apply_patch refuses symlinked path: ${candidate}`);
-			}
-			const canonical = getOrThrow(await env.canonicalPath(candidate, signal));
-			if (!isWithin(canonicalRoot, canonical)) {
-				throw new Error(`apply_patch path escapes execution root through symlink: ${targetPath}`);
-			}
-			if (candidate === rootAbsolute) return;
-			const parent = dirname(candidate);
-			if (parent === candidate) throw new Error(`apply_patch path is not rooted: ${targetPath}`);
-			candidate = parent;
-			continue;
-		}
-		if (info.error.code !== "not_found") throw info.error;
-		const parent = dirname(candidate);
-		if (parent === candidate) throw new Error(`apply_patch path is not rooted: ${targetPath}`);
-		candidate = parent;
-	}
 }
 
 function applyUpdate(original: string, path: string, lines: readonly string[]): string {
@@ -102,10 +58,7 @@ function applyUpdate(original: string, path: string, lines: readonly string[]): 
 			.filter((line) => line.startsWith(" ") || line.startsWith("+"))
 			.map((line) => line.slice(1));
 		if (hunkLines.some((line) => !/^[ +-]/.test(line))) throw new Error(`Invalid hunk line in ${path}`);
-		// Unified diff line numbers are one-based, except the valid `-0,0` header
-		// used for insertion into an empty file (or at the beginning of a file).
-		const explicitStart =
-			match[1] === undefined ? undefined : Number(match[1]) === 0 ? 0 : Number(match[1]) - 1;
+		const explicitStart = match[1] === undefined ? undefined : Number(match[1]) - 1;
 		const offset = explicitStart ?? findSequence(content, oldLines);
 		if (offset < 0 || content.slice(offset, offset + oldLines.length).join("\n") !== oldLines.join("\n"))
 			throw new Error(`Patch hunk did not apply cleanly to ${path}`);
@@ -136,37 +89,28 @@ export function createApplyPatchTool<TContext extends ExecutionToolContext = Exe
 		parameters: applyPatchSchema,
 		async execute(_toolCallId, input, signal, _onUpdate, { env }) {
 			const operations = parsePatchEnvelope(input.patch);
-			const root = getOrThrow(await env.absolutePath(env.cwd, signal));
+			const root = env.cwd;
 			for (const operation of operations) {
 				const absolutePath = await resolveToolPath(env, operation.path, signal);
 				validatePath(root, absolutePath);
 				await withFileMutationQueue(env, absolutePath, async () => {
 					if (signal?.aborted) throw new Error("Operation aborted");
-					await validateMutationPath(env, root, absolutePath, signal);
 					if (operation.kind === "add") {
 						if (operation.lines.some((line) => !line.startsWith("+")))
 							throw new Error(`Added file ${operation.path} contains a non-addition line`);
 						getOrThrow(
-							await env.atomicReplaceFileWithinRoot(
-								root,
+							await env.writeFile(
 								absolutePath,
 								`${operation.lines.map((line) => line.slice(1)).join("\n")}\n`,
 								signal,
 							),
 						);
 					} else if (operation.kind === "delete") {
-						getOrThrow(await env.removeFileWithinRoot(root, absolutePath, signal));
+						getOrThrow(await env.remove(absolutePath, { force: false, abortSignal: signal }));
 					} else {
-						const original = getOrThrow(await env.readTextFileWithinRoot(root, absolutePath, signal));
-						const { bom, text } = stripBom(original);
-						const ending = detectLineEnding(text);
+						const original = getOrThrow(await env.readTextFile(absolutePath, signal));
 						getOrThrow(
-							await env.atomicReplaceFileWithinRoot(
-								root,
-								absolutePath,
-								bom + restoreLineEndings(applyUpdate(normalizeToLF(text), operation.path, operation.lines), ending),
-								signal,
-							),
+							await env.writeFile(absolutePath, applyUpdate(original, operation.path, operation.lines), signal),
 						);
 					}
 				});

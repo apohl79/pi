@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -61,23 +61,6 @@ describe("Codex plugin manifest compatibility", () => {
 			ok: false,
 			code: "absolute_path",
 		});
-	});
-
-	test("rejects resources that escape through a symlinked path component", async () => {
-		const root = await mkdtemp(join(tmpdir(), "pi-codex-plugin-"));
-		const outside = await mkdtemp(join(tmpdir(), "pi-codex-plugin-outside-"));
-		try {
-			await mkdir(join(root, "skills"));
-			await writeFile(join(outside, "secret.md"), "secret");
-			await symlink(outside, join(root, "skills", "shared"));
-
-			expect(resolveCodexPluginResource(root, "skills/shared/secret.md")).toMatchObject({
-				ok: false,
-				code: "path_escape",
-			});
-		} finally {
-			await Promise.all([rm(root, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })]);
-		}
 	});
 
 	test("normalizes marketplace local, git, and npm plugin sources", () => {

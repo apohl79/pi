@@ -36,9 +36,45 @@ function clientFactory() {
 							snapshot,
 						}),
 					);
+				} else if (message.request.command === "session/create") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: { session: { id: "session-1", revision: 1, phase: "idle", transcript: [] } },
+						}),
+					);
+				} else if (message.request.command === "session/read") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: { session: { id: "session-1", revision: 1, phase: "idle", transcript: [] } },
+						}),
+					);
+				} else if (message.request.command === "session/detach") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: { command: "session/detach" },
+						}),
+					);
 				} else if (message.request.command === "session/list") {
 					handlers?.onData(
 						encodeServerMessageV2({ type: "response", id: message.id, ok: true, result: { sessions: [] } }),
+					);
+				} else if (message.request.command === "diagnostics/status") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: { command: "diagnostics/status", eventCount: 2 },
+						}),
 					);
 				} else if (message.request.command === "session/attach") {
 					handlers?.onData(
@@ -47,6 +83,34 @@ function clientFactory() {
 							id: message.id,
 							ok: true,
 							result: { command: "session/attach" },
+						}),
+					);
+				} else if (message.request.command === "turn/start") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							accepted: { operationId: "operation-1", sessionRevision: 2, eventSeq: 2 },
+						}),
+					);
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "event",
+							sessionId: "session-1",
+							seq: 2,
+							revision: 2,
+							operationId: "operation-1",
+							event: "operation_terminal",
+							payload: {
+								state: "complete",
+								snapshot: {
+									id: "session-1",
+									revision: 2,
+									phase: "idle",
+									transcript: [{ role: "assistant", content: [{ type: "text", text: "remote reply" }] }],
+								},
+							},
 						}),
 					);
 				}
@@ -102,35 +166,35 @@ describe("experimental CLI runtime", () => {
 		runtime.close();
 	});
 
-	test("passes parsed auth to client creation", async () => {
+	test("runs diagnostics through the injected client", async () => {
 		const server = clientFactory();
-		const createClient = vi.fn(server.create);
+		const output: unknown[] = [];
 		const runtime = createExperimentalCliRuntime({
 			daemon: daemon(),
 			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
-			createClient,
-			write: () => {},
+			createClient: server.create,
+			write: (value) => output.push(value),
 		});
-		await runtime.runSessions({ command: "sessions", auth: { type: "token", token: "secret-token" } });
-		expect(createClient).toHaveBeenCalledWith(
-			{ transport: "unix", path: "/tmp/pi.sock" },
-			{ type: "token", token: "secret-token" },
-		);
+		await runtime.runDiagnostics({ command: "diagnostics", action: "status" });
+		expect(output).toEqual([{ command: "diagnostics/status", eventCount: 2 }]);
 		runtime.close();
 	});
 
-	test("closes an attached client when the callback fails", async () => {
+	test("runs print mode through a server-owned remote session", async () => {
 		const server = clientFactory();
+		const output: string[] = [];
 		const runtime = createExperimentalCliRuntime({
 			daemon: daemon(),
 			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
 			createClient: server.create,
 			write: () => {},
-			onAttach: async () => {
-				throw new Error("attach failed");
-			},
+			writeText: (value) => output.push(value),
 		});
-		await expect(runtime.runAttach({ command: "attach", sessionId: "session-1" })).rejects.toThrow("attach failed");
+		await runtime.runPi({
+			command: "pi",
+			options: { print: true, messages: ["hello"], fileArgs: [], unknownFlags: new Map(), diagnostics: [] },
+		});
+		expect(output).toEqual(["remote reply"]);
 		runtime.close();
 	});
 

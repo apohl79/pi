@@ -1,9 +1,16 @@
-import { createHash, randomUUID } from "node:crypto";
-import { MAX_V2_ARRAY_ITEMS, MAX_V2_JSON_DEPTH, MAX_V2_STRING_LENGTH } from "@earendil-works/pi-protocol";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 export type V2PluginScope = "user" | "project";
+
+export type V2PluginSamplingEntry = Readonly<{
+	id: string;
+	slot: "contextual_user" | "developer_policy" | "developer_capabilities" | "separate_developer";
+	position: "preamble" | "supplement";
+	text: string;
+	conditionShell?: string;
+}>;
 
 export type V2Marketplace = Readonly<{
 	name: string;
@@ -27,6 +34,7 @@ export type V2Plugin = Readonly<{
 		apps: number;
 		hooks: number;
 	}>;
+	sampling: readonly V2PluginSamplingEntry[];
 }>;
 
 export type V2PluginRegistryState = Readonly<{
@@ -55,41 +63,8 @@ export interface V2PluginRegistry {
 
 function requireName(value: string, field: string): string {
 	const normalized = value.trim();
-	if (normalized.length === 0 || normalized.length > 1024)
-		throw new Error(`${field} must be non-empty and bounded`);
+	if (normalized.length === 0) throw new Error(`${field} must not be empty`);
 	return normalized;
-}
-
-function assertBoundedManifest(value: unknown, depth = 0): asserts value is Record<string, unknown> {
-	if (depth > MAX_V2_JSON_DEPTH || typeof value !== "object" || value === null || Array.isArray(value))
-		throw new Error("Plugin manifest must be a bounded object");
-	const entries = Object.entries(value);
-	if (entries.length > MAX_V2_ARRAY_ITEMS) throw new Error("Plugin manifest has too many properties");
-	for (const [key, child] of entries) {
-		if (key.length > MAX_V2_STRING_LENGTH) throw new Error("Plugin manifest key is too long");
-		if (typeof child === "string") {
-			if (child.length > MAX_V2_STRING_LENGTH) throw new Error("Plugin manifest string is too long");
-		} else if (Array.isArray(child)) {
-			if (child.length > MAX_V2_ARRAY_ITEMS) throw new Error("Plugin manifest array is too large");
-			child.forEach((item) => assertBoundedValue(item, depth + 1));
-		} else if (typeof child === "object" && child !== null) {
-			assertBoundedManifest(child, depth + 1);
-		}
-	}
-}
-
-function assertBoundedValue(value: unknown, depth: number): void {
-	if (depth > MAX_V2_JSON_DEPTH) throw new Error("Plugin manifest is too deeply nested");
-	if (typeof value === "string") {
-		if (value.length > MAX_V2_STRING_LENGTH) throw new Error("Plugin manifest string is too long");
-	} else if (typeof value === "number") {
-		if (!Number.isFinite(value)) throw new Error("Plugin manifest number is invalid");
-	} else if (value !== null && typeof value !== "boolean" && value !== undefined && !Array.isArray(value) && typeof value !== "object") {
-		throw new Error("Plugin manifest value is invalid");
-	} else if (Array.isArray(value)) {
-		if (value.length > MAX_V2_ARRAY_ITEMS) throw new Error("Plugin manifest array is too large");
-		value.forEach((item) => assertBoundedValue(item, depth + 1));
-	} else if (typeof value === "object" && value !== null) assertBoundedManifest(value, depth + 1);
 }
 
 function manifestDigest(manifest: Record<string, unknown>): string {
@@ -100,39 +75,50 @@ function resourceCount(value: unknown): number {
 	return Array.isArray(value) ? value.length : value === undefined ? 0 : 1;
 }
 
-function assertPersistedString(value: unknown, field: string, max = 1024): asserts value is string {
-	if (typeof value !== "string" || value.length === 0 || value.length > max) throw new Error(`Invalid persisted ${field}`);
+const samplingSlots = new Set<V2PluginSamplingEntry["slot"]>([
+	"contextual_user",
+	"developer_policy",
+	"developer_capabilities",
+	"separate_developer",
+]);
+const samplingPositions = new Set<V2PluginSamplingEntry["position"]>(["preamble", "supplement"]);
+
+function samplingEntries(manifest: Record<string, unknown>): readonly V2PluginSamplingEntry[] {
+	const context = manifest.context;
+	if (!context || typeof context !== "object" || Array.isArray(context)) return [];
+	const sampling = (context as Record<string, unknown>).sampling;
+	if (!Array.isArray(sampling)) return [];
+	return sampling
+		.flatMap((value) => {
+			if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+			const entry = value as Record<string, unknown>;
+			if (
+				typeof entry.id !== "string" ||
+				typeof entry.text !== "string" ||
+				!samplingSlots.has(entry.slot as V2PluginSamplingEntry["slot"]) ||
+				!samplingPositions.has(entry.position as V2PluginSamplingEntry["position"])
+			)
+				return [];
+			const text = entry.text.slice(0, 8_000);
+			return [
+				{
+					id: entry.id,
+					slot: entry.slot as V2PluginSamplingEntry["slot"],
+					position: entry.position as V2PluginSamplingEntry["position"],
+					text,
+					...(typeof entry.condition_shell === "string"
+						? { conditionShell: entry.condition_shell }
+						: typeof entry.conditionShell === "string"
+							? { conditionShell: entry.conditionShell }
+							: {}),
+				},
+			];
+		})
+		.slice(0, 32);
 }
 
-function assertPersistedState(state: V2PluginRegistryState): void {
-	if (!Array.isArray(state.marketplaces) || state.marketplaces.length > MAX_V2_ARRAY_ITEMS)
-		throw new Error("Invalid persisted marketplaces");
-	for (const marketplace of state.marketplaces) {
-		if (!marketplace || typeof marketplace !== "object") throw new Error("Invalid persisted marketplace");
-		assertPersistedString(marketplace.name, "marketplace name");
-		assertPersistedString(marketplace.source, "marketplace source");
-		if (!Number.isFinite(marketplace.addedAt) || marketplace.addedAt < 0) throw new Error("Invalid persisted marketplace timestamp");
-	}
-	if (!Array.isArray(state.plugins) || state.plugins.length > MAX_V2_ARRAY_ITEMS) throw new Error("Invalid persisted plugins");
-	for (const plugin of state.plugins) {
-		if (!plugin || typeof plugin !== "object") throw new Error("Invalid persisted plugin");
-		for (const [value, field] of [[plugin.id, "plugin id"], [plugin.name, "plugin name"], [plugin.marketplace, "plugin marketplace"], [plugin.version, "plugin version"], [plugin.manifestDigest, "plugin digest"]] as const)
-			assertPersistedString(value, field, field === "plugin digest" ? 64 : 1024);
-		if (!/^[a-f0-9]{64}$/u.test(plugin.manifestDigest)) throw new Error("Invalid persisted plugin digest");
-		if (plugin.root !== undefined) assertPersistedString(plugin.root, "plugin root");
-		if (typeof plugin.enabled !== "boolean" || (plugin.scope !== "user" && plugin.scope !== "project") || plugin.provenance !== "manifest" && plugin.provenance !== "package")
-			throw new Error("Invalid persisted plugin metadata");
-		if (!plugin.resources || typeof plugin.resources !== "object") throw new Error("Invalid persisted plugin resources");
-		for (const key of ["skills", "commands"] as const) {
-			const values = plugin.resources[key];
-			if (!Array.isArray(values) || values.length > 256 || values.some((value) => typeof value !== "string" || value.length > 1024))
-				throw new Error("Invalid persisted plugin resource list");
-		}
-		for (const key of ["apps", "hooks"] as const) {
-			const value = plugin.resources[key];
-			if (!Number.isSafeInteger(value) || value < 0 || value > MAX_V2_ARRAY_ITEMS) throw new Error("Invalid persisted plugin resource count");
-		}
-	}
+function normalizePlugin(plugin: V2Plugin): V2Plugin {
+	return { ...plugin, sampling: plugin.sampling ?? [] };
 }
 
 export class InMemoryV2PluginRegistry implements V2PluginRegistry {
@@ -142,7 +128,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 	constructor(state?: V2PluginRegistryState) {
 		for (const marketplace of state?.marketplaces ?? [])
 			this.marketplaces.set(marketplace.name, structuredClone(marketplace));
-		for (const plugin of state?.plugins ?? []) this.plugins.set(plugin.id, structuredClone(plugin));
+		for (const plugin of state?.plugins ?? []) this.plugins.set(plugin.id, structuredClone(normalizePlugin(plugin)));
 	}
 
 	toState(): V2PluginRegistryState {
@@ -154,7 +140,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		this.plugins.clear();
 		for (const marketplace of state.marketplaces)
 			this.marketplaces.set(marketplace.name, structuredClone(marketplace));
-		for (const plugin of state.plugins ?? []) this.plugins.set(plugin.id, structuredClone(plugin));
+		for (const plugin of state.plugins ?? []) this.plugins.set(plugin.id, structuredClone(normalizePlugin(plugin)));
 	}
 
 	async listMarketplaces(): Promise<readonly V2Marketplace[]> {
@@ -188,11 +174,11 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 
 	async listPlugins(installedOnly = false): Promise<readonly V2Plugin[]> {
 		void installedOnly;
-		return [...this.plugins.values()].map((plugin) => structuredClone(plugin));
+		return [...this.plugins.values()].map((plugin) => structuredClone(normalizePlugin(plugin)));
 	}
 
 	async readPlugin(id: string): Promise<V2Plugin | undefined> {
-		return this.plugins.has(id) ? structuredClone(this.plugins.get(id)!) : undefined;
+		return this.plugins.has(id) ? structuredClone(normalizePlugin(this.plugins.get(id)!)) : undefined;
 	}
 
 	async installPlugin(input: {
@@ -206,7 +192,6 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		const name = requireName(input.name, "plugin name");
 		const marketplace = requireName(input.marketplace, "marketplace name");
 		const version = requireName(input.version, "plugin version");
-		assertBoundedManifest(input.manifest);
 		if (!this.marketplaces.has(marketplace)) throw new Error(`Unknown marketplace: ${marketplace}`);
 		const id = `${name}@${marketplace}`;
 		if (this.plugins.has(id)) throw new Error(`Plugin already installed: ${id}`);
@@ -223,20 +208,15 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 			provenance: "manifest",
 			resources: {
 				skills: Array.isArray(manifest.skills)
-					? manifest.skills
-						.filter((value): value is string => typeof value === "string")
-						.slice(0, 256)
-						.map((value) => value.slice(0, 1024))
+					? manifest.skills.filter((value): value is string => typeof value === "string")
 					: [],
 				commands: Array.isArray(manifest.commands)
-					? manifest.commands
-						.filter((value): value is string => typeof value === "string")
-						.slice(0, 256)
-						.map((value) => value.slice(0, 1024))
+					? manifest.commands.filter((value): value is string => typeof value === "string")
 					: [],
 				apps: resourceCount(manifest.apps),
 				hooks: resourceCount(manifest.hooks),
 			},
+			sampling: samplingEntries(manifest),
 		};
 		this.plugins.set(id, plugin);
 		return structuredClone(plugin);
@@ -260,7 +240,6 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 	private readonly memory: InMemoryV2PluginRegistry;
 	private readonly filePath: string;
 	private loaded = false;
-	private mutationTail: Promise<void> = Promise.resolve();
 
 	constructor(filePath: string) {
 		this.filePath = filePath;
@@ -269,49 +248,31 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 
 	private async ensureLoaded(): Promise<void> {
 		if (this.loaded) return;
+		this.loaded = true;
 		try {
 			const value: unknown = JSON.parse(await readFile(this.filePath, "utf8"));
 			if (!value || typeof value !== "object" || !Array.isArray((value as { marketplaces?: unknown }).marketplaces))
 				throw new Error("Plugin registry file is invalid");
 			const state = value as V2PluginRegistryState;
-			assertPersistedState(state);
-			this.memory.replace(state);
-			this.loaded = true;
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-				this.loaded = true;
-				return;
+			for (const marketplace of state.marketplaces) {
+				if (!marketplace || typeof marketplace.name !== "string" || typeof marketplace.source !== "string")
+					throw new Error("Plugin registry marketplace record is invalid");
 			}
-			this.loaded = false;
-			throw error;
+			for (const plugin of state.plugins ?? []) {
+				if (!plugin || typeof plugin.id !== "string" || typeof plugin.name !== "string")
+					throw new Error("Plugin registry plugin record is invalid");
+			}
+			this.memory.replace(state);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
 	}
 
 	private async persist(): Promise<void> {
-		await mkdir(dirname(this.filePath), { recursive: true, mode: 0o700 });
-		const temporary = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
+		await mkdir(dirname(this.filePath), { recursive: true });
+		const temporary = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
 		await writeFile(temporary, `${JSON.stringify(this.memory.toState())}\n`, { mode: 0o600 });
 		await rename(temporary, this.filePath);
-	}
-
-	private async mutate<T>(action: () => Promise<T>): Promise<T> {
-		const previous = this.mutationTail;
-		let release!: () => void;
-		this.mutationTail = new Promise<void>((resolve) => (release = resolve));
-		return previous
-			.catch(() => undefined)
-			.then(async () => {
-				const before = this.memory.toState();
-				try {
-					const value = await action();
-					await this.persist();
-					return value;
-				} catch (error) {
-					this.memory.replace(before);
-					throw error;
-				}
-			})
-			.finally(release);
 	}
 
 	async listMarketplaces(): Promise<readonly V2Marketplace[]> {
@@ -321,17 +282,22 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 
 	async addMarketplace(name: string, source: string): Promise<V2Marketplace> {
 		await this.ensureLoaded();
-		return this.mutate(() => this.memory.addMarketplace(name, source));
+		const value = await this.memory.addMarketplace(name, source);
+		await this.persist();
+		return value;
 	}
 
 	async removeMarketplace(name: string): Promise<void> {
 		await this.ensureLoaded();
-		await this.mutate(() => this.memory.removeMarketplace(name));
+		await this.memory.removeMarketplace(name);
+		await this.persist();
 	}
 
 	async upgradeMarketplace(name: string): Promise<V2Marketplace> {
 		await this.ensureLoaded();
-		return this.mutate(() => this.memory.upgradeMarketplace(name));
+		const value = await this.memory.upgradeMarketplace(name);
+		await this.persist();
+		return value;
 	}
 
 	async listPlugins(installedOnly = false): Promise<readonly V2Plugin[]> {
@@ -346,16 +312,21 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 
 	async installPlugin(input: Parameters<V2PluginRegistry["installPlugin"]>[0]): Promise<V2Plugin> {
 		await this.ensureLoaded();
-		return this.mutate(() => this.memory.installPlugin(input));
+		const value = await this.memory.installPlugin(input);
+		await this.persist();
+		return value;
 	}
 
 	async uninstallPlugin(id: string): Promise<void> {
 		await this.ensureLoaded();
-		await this.mutate(() => this.memory.uninstallPlugin(id));
+		await this.memory.uninstallPlugin(id);
+		await this.persist();
 	}
 
 	async setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin> {
 		await this.ensureLoaded();
-		return this.mutate(() => this.memory.setEnabled(id, enabled, scope));
+		const value = await this.memory.setEnabled(id, enabled, scope);
+		await this.persist();
+		return value;
 	}
 }

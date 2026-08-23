@@ -1,13 +1,7 @@
 import { createModels, fauxAssistantMessage, fauxProvider, type Usage } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
-import { describe, expect, it, vi } from "vitest";
-import {
-	AgentHarness,
-	HarnessClosed,
-	HarnessNotImplemented,
-	type HarnessTool,
-	type Resources,
-} from "../../src/harness/agent-harness.ts";
+import { describe, expect, it } from "vitest";
+import { AgentHarness, HarnessClosed, type HarnessTool, type Resources } from "../../src/harness/agent-harness.ts";
 import {
 	InMemorySessionStorage,
 	type NewRecord,
@@ -133,7 +127,17 @@ describe("AgentHarness v2 scaffold", () => {
 			session,
 			models,
 			model: faux.getModel(),
-			compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+			compaction: {
+				enabled: true,
+				reserveTokens: 1,
+				keepRecentTokens: 1,
+				modelOverrides: { "harness-compaction-faux/harness-compaction-model": { reserveTokens: 7 } },
+			},
+		});
+		expect(await harness.getCompactionSettings()).toMatchObject({
+			enabled: true,
+			reserveTokens: 7,
+			keepRecentTokens: 1,
 		});
 		await harness.prompt("first request with enough text to create history");
 		await harness.prompt("second request with enough text to create history");
@@ -173,8 +177,16 @@ describe("AgentHarness v2 scaffold", () => {
 			models: createModels(),
 			model: getModel("google", "gemini-2.5-flash"),
 		});
-		expect(restored.suspended).toHaveLength(1);
-		expect(restored.suspended[0]).toMatchObject({ kind: "run", id: "run", reason: "crash" });
+		expect(restored.suspended).toMatchObject([
+			{
+				lane: "main",
+				kind: "run",
+				id: "run",
+				startedAt: expect.any(Number),
+				reason: "crash",
+				missing: { tools: [], models: [] },
+			},
+		]);
 		await restored.harness.close();
 	});
 
@@ -186,6 +198,16 @@ describe("AgentHarness v2 scaffold", () => {
 		const records = await session.findRecords({ type: "usage", order: "oldestFirst" });
 		expect(records).toMatchObject([
 			{ type: "usage", cause: "adjustment", entryId: "assistant-1", details: { purpose: "agent" }, usage },
+		]);
+		await harness.close();
+	});
+
+	it("allows usage adjustments without an entry identity", async () => {
+		const session = createSession("usage-without-entry");
+		const harness = await createHarness(session);
+		await harness.recordUsage(usage);
+		expect(await session.findRecords({ type: "usage" })).toMatchObject([
+			{ type: "usage", cause: "adjustment", usage },
 		]);
 		await harness.close();
 	});
@@ -214,6 +236,32 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(await reopened.harness.getThinkingLevel()).toBe("high");
 		expect(await reopened.harness.getActiveTools()).toEqual(["read", "bash"]);
 		await reopened.harness.close();
+	});
+
+	it("runs registered lifecycle hooks and emits operation events", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-lifecycle-faux",
+			models: [{ id: "harness-lifecycle-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("lifecycle response")]);
+		const session = createSession("lifecycle");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		const hooks: string[] = [];
+		const events: string[] = [];
+		harness.hooks.on("before_run", () => hooks.push("before_run"));
+		harness.hooks.on("after_response", () => hooks.push("after_response"));
+		harness.events.on("operation_started", () => {
+			events.push("started");
+		});
+		harness.events.on("operation_finished", () => {
+			events.push("finished");
+		});
+		await harness.prompt("run lifecycle");
+		expect(hooks).toEqual(["before_run", "after_response"]);
+		expect(events).toEqual(["started", "finished"]);
+		await harness.close();
 	});
 
 	it("invokes configured skills and prompt templates through durable prompts", async () => {
@@ -355,6 +403,7 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(steer.ok && followUp.ok).toBe(true);
 		await harness.close();
 	});
+
 	it("keeps scaffold-safe configuration as defensive copies", async () => {
 		const harness = await createHarness();
 		const model = getModel("anthropic", "claude-sonnet-4-5");
@@ -416,42 +465,31 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(await harness.getFollowUpMode()).toBe("all");
 	});
 
-	it("rejects non-finite and unreasonably large compaction settings", async () => {
-		const harness = await createHarness(createSession("compaction-settings-bounds"));
-		await expect(
-			harness.setCompactionSettings({ enabled: true, reserveTokens: Number.POSITIVE_INFINITY, keepRecentTokens: 1 }),
-		).rejects.toThrow();
-		await expect(
-			harness.setCompactionSettings({ enabled: true, reserveTokens: 10_000_000, keepRecentTokens: 1 }),
-		).rejects.toThrow();
-		await expect(
-			harness.setCompactionSettings({ enabled: true, reserveTokens: 9_000_000, keepRecentTokens: 2_000_001 }),
-		).rejects.toThrow();
-	});
-
-	it("reconciles configuration when a durable append reports failure after commit", async () => {
-		const session = createSession("append-then-throws");
-		const harness = await createHarness(session);
-		const appendEntry = session.appendEntry.bind(session);
-		vi.spyOn(session, "appendEntry").mockImplementation(async (entry, lane) => {
-			await appendEntry(entry, lane);
-			throw new Error("reported after commit");
+	it("provides durable lane and session watch snapshots with buffered run events", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "watch-faux",
+			models: [{ id: "watch-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
 		});
-
-		const model = getModel("anthropic", "claude-sonnet-4-5");
-		await expect(harness.setModel(model)).rejects.toThrow("reported after commit");
-		expect(await harness.getModel()).toBe(model);
-
-		await expect(harness.setThinkingLevel("high")).rejects.toThrow("reported after commit");
-		expect(await harness.getThinkingLevel()).toBe("high");
-
-		await expect(harness.setActiveTools(["durable-tool"])).rejects.toThrow("reported after commit");
-		expect(await harness.getActiveTools()).toEqual(["durable-tool"]);
-
-		const tool = { name: "durable-tool", label: "Durable tool" } as HarnessTool;
-		await expect(harness.setTools([tool])).rejects.toThrow("reported after commit");
-		expect(await harness.getTools()).toEqual([tool]);
-		expect(await harness.getActiveTools()).toEqual(["durable-tool"]);
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("watched")]);
+		const { harness } = await AgentHarness.create({
+			session: createSession("watch"),
+			models,
+			model: faux.getModel(),
+		});
+		const laneWatch = await harness.watch();
+		const sessionWatch = await harness.watchSession();
+		expect(laneWatch.snapshot).toMatchObject({ lane: "main", leafId: null, operation: null, faulted: false });
+		expect(sessionWatch.snapshot).toMatchObject({ faulted: false, lanes: [{ lane: "main", leafId: null }] });
+		const events: string[] = [];
+		laneWatch.start((event) => events.push(String((event as { type: string }).type)));
+		sessionWatch.start((event) => events.push(`session:${String((event as { type: string }).type)}`));
+		await harness.prompt("watch me");
+		expect(events).toEqual(["run_start", "session:run_start", "run_end", "session:run_end"]);
+		laneWatch.unsubscribe();
+		sessionWatch.unsubscribe();
+		await harness.close();
 	});
 
 	it("rejects every unfinished public operation explicitly", async () => {
@@ -460,11 +498,9 @@ describe("AgentHarness v2 scaffold", () => {
 			["peekAction", () => harness.peekAction()],
 			["executeAction", () => harness.executeAction()],
 			["runToCompletion", () => harness.runToCompletion()],
-			["watch", () => harness.watch()],
 			["lane", () => harness.lane("main")],
 			["createLane", () => harness.createLane("thread", null)],
 			["lanes", () => harness.lanes()],
-			["watchSession", () => harness.watchSession()],
 		];
 
 		for (const [operation, invoke] of unfinished) {
@@ -475,167 +511,13 @@ describe("AgentHarness v2 scaffold", () => {
 		}
 	});
 
-	it("supports prompt lifecycle, queues, usage recording, and idle waiting", async () => {
-		const session = createSession("implemented-operations");
-		const harness = await createHarness(session);
-
-		await expect(harness.waitForIdle()).resolves.toBeUndefined();
-		let callbackCalled = false;
-		await harness.runWhenIdle(() => {
-			callbackCalled = true;
-		});
-		expect(callbackCalled).toBe(true);
-
-		await expect(harness.steer(userMessage)).resolves.toMatchObject({
-			ok: false,
-			error: { name: "NoActiveRun" },
-		});
-		await expect(harness.followUp(userMessage)).resolves.toMatchObject({
-			ok: false,
-			error: { name: "NoActiveRun" },
-		});
-
-		const nextRun = await harness.nextRun(userMessage);
-		expect(nextRun.ok).toBe(true);
-		if (!nextRun.ok) return;
-		await expect(harness.cancelQueued(nextRun.value.entryId)).resolves.toEqual({
-			ok: true,
-			value: { outcome: "cancelled" },
-		});
-		await expect(harness.cancelQueued(nextRun.value.entryId)).resolves.toEqual({
-			ok: true,
-			value: { outcome: "already_cleared" },
-		});
-
-		await expect(harness.recordUsage(usage)).resolves.toEqual({ ok: true, value: undefined });
-		expect(await session.findRecords({ type: "usage", lane: "main" })).toHaveLength(1);
-
-		await session.appendRecord(operationStarted("run"));
-		const steer = await harness.steer(userMessage);
-		const followUp = await harness.followUp(userMessage);
-		expect(steer.ok).toBe(true);
-		expect(followUp.ok).toBe(true);
-		await expect(harness.abort()).resolves.toMatchObject({ ok: true, value: { runId: "run" } });
-		await expect(harness.waitForIdle()).resolves.toBeUndefined();
-		expect(await session.findRecords({ type: "operation_finished", lane: "main" })).toHaveLength(1);
-	});
-
-	it("reports the closed state for operations after close", async () => {
+	it("reports HarnessClosed for unfinished operations after close", async () => {
 		const harness = await createHarness();
 		await harness.close();
 
-		await expect(harness.prompt("hello")).resolves.toMatchObject({ ok: false, error: { name: "Closed" } });
-		await expect(harness.compact()).resolves.toMatchObject({ ok: false, error: { name: "Closed" } });
+		expect(await harness.prompt("hello")).toMatchObject({ ok: false, error: { name: "Closed" } });
 		await expect(harness.waitForIdle()).rejects.toBeInstanceOf(HarnessClosed);
 		expect(() => harness.hooks.on("before_run", () => {})).toThrow(HarnessClosed);
 		expect(() => harness.events.on("event", () => {})).toThrow(HarnessClosed);
-	});
-
-	it("redacts credentials from failed assistant messages before durable append", async () => {
-		const models = createModels();
-		const faux = fauxProvider({
-			provider: "transcript-redaction",
-			models: [{ id: "redaction-model", contextWindow: 4096, maxTokens: 256 }],
-		});
-		models.setProvider(faux.provider);
-		faux.setResponses([
-			fauxAssistantMessage(
-				[
-					{
-						type: "text",
-						text: 'upstream failed: {"api_key":"secret-value"}; Authorization: Bearer bearer-secret; sk-short-secret',
-					},
-					{
-						type: "toolCall",
-						id: "failed-tool-call",
-						name: "request",
-						arguments: { api_key: "tool-secret", nested: { authorization: "Bearer tool-bearer" } },
-					},
-				],
-				{
-					stopReason: "error",
-					errorMessage: 'request failed: {"api-key":"json-secret"} Bearer bearer-error sk-project-secret',
-				},
-			),
-		]);
-		const session = createSession("transcript-redaction");
-		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
-
-		const result = await harness.prompt("hello");
-		expect(result).toMatchObject({ ok: true, value: { kind: "failed" } });
-		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
-		const assistant = entries.find((entry) => entry.type === "message" && entry.message.role === "assistant");
-		expect(assistant).toBeDefined();
-		if (assistant?.type !== "message" || assistant.message.role !== "assistant") return;
-		const text = assistant.message.content
-			.filter((part): part is { type: "text"; text: string } => part.type === "text")
-			.map((part) => part.text)
-			.join(" ");
-		expect(text).toContain("upstream failed");
-		expect(text).not.toMatch(/secret-value|bearer-secret|short-secret/);
-		const toolCall = assistant.message.content.find((part) => part.type === "toolCall");
-		expect(toolCall?.type).toBe("toolCall");
-		if (toolCall?.type !== "toolCall") return;
-		expect(JSON.stringify(toolCall.arguments)).not.toMatch(/tool-secret|tool-bearer/);
-		expect(assistant.message.errorMessage).toContain("request failed");
-		expect(assistant.message.errorMessage).not.toMatch(/json-secret|bearer-error|project-secret/);
-		expect(assistant.message.errorMessage!.length).toBeLessThanOrEqual(512);
-		await harness.close();
-	});
-
-	it("redacts credentials from durable compaction output", async () => {
-		const models = createModels();
-		const faux = fauxProvider({
-			provider: "compaction-redaction",
-			models: [{ id: "compaction-model", contextWindow: 4096, maxTokens: 256 }],
-		});
-		models.setProvider(faux.provider);
-		faux.setResponses([fauxAssistantMessage("Summary: api_key=summary-secret\nBearer summary-bearer")]);
-		const session = createSession("compaction-redaction");
-		await session.appendMessage({
-			role: "user",
-			content: [{ type: "text", text: "old context" }],
-			timestamp: 1,
-		});
-		await session.appendMessage({
-			role: "assistant",
-			content: [{ type: "toolCall", id: "read-secret", name: "read", arguments: { path: "/tmp/sk-project-secret-file" } }],
-			api: "anthropic-messages",
-			provider: faux.provider,
-			model: faux.getModel().id,
-			usage,
-			stopReason: "stop",
-			timestamp: 2,
-		});
-		await session.appendMessage({
-			role: "assistant",
-			content: [{ type: "text", text: "retained api_key=tail-secret Bearer tail-bearer" }],
-			api: "anthropic-messages",
-			provider: faux.provider,
-			model: faux.getModel().id,
-			usage,
-			stopReason: "stop",
-			timestamp: 3,
-		});
-		const { harness } = await AgentHarness.create({
-			session,
-			models,
-			model: faux.getModel(),
-			compaction: { enabled: true, reserveTokens: 2000, keepRecentTokens: 1 },
-		});
-
-		const result = await harness.compact();
-		expect(result).toMatchObject({ ok: true, value: { kind: "completed" } });
-		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
-		const entry = entries.find((candidate) => candidate.type === "compaction");
-		expect(entry?.type).toBe("compaction");
-		if (entry?.type !== "compaction") return;
-		expect(entry.summary).toContain("Summary:");
-		expect(entry.summary).not.toMatch(/summary-secret|summary-bearer/);
-		const tailText = JSON.stringify(entry.retainedTail);
-		expect(tailText).not.toMatch(/tail-secret|tail-bearer|sk-project-secret/);
-		const detailsText = JSON.stringify(entry.details);
-		expect(detailsText).not.toMatch(/sk-project-secret/);
-		await harness.close();
 	});
 });

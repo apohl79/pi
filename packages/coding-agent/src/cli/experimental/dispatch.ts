@@ -1,6 +1,6 @@
 import { type ExperimentalCliContext, experimentalCli } from "./cli.ts";
 
-const EXPERIMENTAL_COMMANDS = new Set(["server", "client", "attach", "sessions"]);
+const EXPERIMENTAL_COMMANDS = new Set(["server", "client", "attach", "sessions", "diagnostics"]);
 
 export function isExperimentalCommand(args: readonly string[]): boolean {
 	return args.length > 0 && EXPERIMENTAL_COMMANDS.has(args[0]!);

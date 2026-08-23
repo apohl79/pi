@@ -43,30 +43,8 @@ function promptHash(prompt: string): string {
 	return createHash("sha256").update(prompt).digest("hex");
 }
 
-const MAX_IMAGE_DIMENSION = 100_000;
-const MAX_IMAGE_COST_USD = 1_000_000;
-
 function assertImageMime(mimeType: string): void {
-	if (
-		mimeType.length === 0 ||
-		mimeType.length > 127 ||
-		!/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/u.test(mimeType) ||
-		!mimeType.toLowerCase().startsWith("image/")
-	)
-		throw new Error(`Unsupported image MIME type: ${mimeType}`);
-}
-
-function assertDimensions(dimensions: Readonly<{ width: number; height: number }> | undefined): void {
-	if (dimensions === undefined) return;
-	for (const [name, value] of Object.entries(dimensions)) {
-		if (!Number.isFinite(value) || value < 0 || value > MAX_IMAGE_DIMENSION)
-			throw new Error(`Image ${name} must be finite, nonnegative, and no larger than ${MAX_IMAGE_DIMENSION}`);
-	}
-}
-
-function assertCost(costUsd: number | undefined): void {
-	if (costUsd !== undefined && (!Number.isFinite(costUsd) || costUsd < 0 || costUsd > MAX_IMAGE_COST_USD))
-		throw new Error(`Image cost must be finite, nonnegative, and no larger than ${MAX_IMAGE_COST_USD}`);
+	if (!mimeType.startsWith("image/")) throw new Error(`Unsupported image MIME type: ${mimeType}`);
 }
 
 export class BlobV2ImageService implements V2ImageService {
@@ -89,7 +67,6 @@ export class BlobV2ImageService implements V2ImageService {
 		if (!mimeType) throw new Error("Image MIME type could not be determined");
 		assertImageMime(mimeType);
 		const blob = await this.blobs.put(result.data, mimeType);
-		assertImageMime(blob.mimeType);
 		return { digest: blob.digest, mimeType: blob.mimeType, size: blob.size, reference: result.file.reference };
 	}
 
@@ -99,8 +76,6 @@ export class BlobV2ImageService implements V2ImageService {
 		if (request.prompt.trim().length === 0) throw new Error("Image prompt must not be empty");
 		const generated = await this.generator.generate(request);
 		assertImageMime(generated.mimeType);
-		assertDimensions(generated.dimensions);
-		assertCost(generated.costUsd);
 		const blob = await this.blobs.put(generated.data, generated.mimeType);
 		return {
 			digest: blob.digest,

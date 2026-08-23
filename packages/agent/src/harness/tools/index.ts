@@ -12,6 +12,7 @@ export {
 	type EditToolDetails,
 	type EditToolInput,
 } from "./edit.ts";
+export { createGoalTools } from "./goals.ts";
 export {
 	createReadTool,
 	type ReadImageProcessor,
