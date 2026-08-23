@@ -165,12 +165,19 @@ describe("verifyDiagnosticBundle", () => {
 				runtimeManifest: { schemaVersion: 1, runtime: "node v22", platform: "linux", arch: "x64" },
 			}),
 		).toEqual({ valid: true });
+		expect(
+			verifyDiagnosticBundle({ manifest: { ...manifest, unavailable: ["client-diagnostic-spool"] }, events }),
+		).toEqual({ valid: true });
 		expect(verifyDiagnosticBundle({ manifest, events, runtimeManifest: { schemaVersion: 1 } })).toMatchObject({
 			valid: false,
 			reason: "Diagnostic bundle contains an invalid runtime manifest",
 		});
 		expect(verifyDiagnosticBundle({ manifest: { ...manifest, lastSeq: 3 }, events })).toMatchObject({ valid: false });
 		expect(verifyDiagnosticBundle({ events })).toMatchObject({ valid: false });
+		expect(verifyDiagnosticBundle({ manifest: { ...manifest, unavailable: [""] }, events })).toEqual({
+			valid: false,
+			reason: "Diagnostic bundle manifest contains invalid unavailable entries",
+		});
 	});
 
 	test("rejects malformed encrypted capsule records during offline verification", () => {

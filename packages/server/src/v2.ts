@@ -926,6 +926,7 @@ export class PiServerV2 {
 			firstSeq: events[0]?.seq ?? 0,
 			lastSeq: events.at(-1)?.seq ?? 0,
 			eventsSha256: createHash("sha256").update(serializedEvents).digest("hex"),
+			unavailable: ["client-diagnostic-spool"],
 		};
 		await this.sendResponse(state, id, {
 			command: command.command,

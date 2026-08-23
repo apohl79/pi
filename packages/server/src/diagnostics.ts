@@ -84,6 +84,15 @@ export interface DiagnosticBundleVerification {
 	reason?: string;
 }
 
+export interface DiagnosticBundleManifest {
+	readonly schemaVersion: 1;
+	readonly eventCount: number;
+	readonly firstSeq: number;
+	readonly lastSeq: number;
+	readonly eventsSha256: string;
+	readonly unavailable?: readonly string[];
+}
+
 export interface DiagnosticRuntimeManifest {
 	readonly schemaVersion: 1;
 	readonly runtime: string;
@@ -114,6 +123,12 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 	if (runtimeManifest !== undefined && !isDiagnosticRuntimeManifest(runtimeManifest))
 		return { valid: false, reason: "Diagnostic bundle contains an invalid runtime manifest" };
 	const fields = manifest as Record<string, unknown>;
+	if (
+		fields.unavailable !== undefined &&
+		(!Array.isArray(fields.unavailable) ||
+			fields.unavailable.some((item) => typeof item !== "string" || item.length === 0))
+	)
+		return { valid: false, reason: "Diagnostic bundle manifest contains invalid unavailable entries" };
 	const serializedEvents = JSON.stringify(events);
 	const digest = createHash("sha256").update(serializedEvents).digest("hex");
 	const firstSeq = events.length === 0 ? 0 : eventSequence(events[0]);
