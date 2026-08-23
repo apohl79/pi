@@ -632,6 +632,43 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("projects server-owned process output and terminal events", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 4,
+			revision: 4,
+			event: "process_output",
+			payload: {
+				process: {
+					processId: "process-1",
+					sessionId: "session-1",
+					command: "echo hi",
+					pty: false,
+					state: "running",
+					output: "hi",
+					cursor: 2,
+					truncated: false,
+				},
+			},
+		});
+		expect(session.state.processes).toMatchObject([{ processId: "process-1", output: "hi", state: "running" }]);
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 5,
+			revision: 5,
+			event: "process_terminal",
+			payload: { process: { ...session.state.processes![0], state: "exited", exitCode: 0 } },
+		});
+		expect(session.state.processes).toMatchObject([{ processId: "process-1", state: "exited", exitCode: 0 }]);
+		await session.dispose();
+	});
+
 	test("applies server name and phase updates without requiring a refresh", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });
