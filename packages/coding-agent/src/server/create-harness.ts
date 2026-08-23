@@ -226,6 +226,8 @@ export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOption
 	viewImage?: (reference: string) => Promise<CodingAgentImageView>;
 	generateImage?: (request: CodingAgentImageGenerationRequest) => Promise<CodingAgentImageGenerationResult>;
 	lifecycleHooks?: readonly CodingAgentLifecycleHook[];
+	/** Resolve server-owned lifecycle hooks at each turn boundary. */
+	lifecycleHooksFactory?: () => Promise<readonly CodingAgentLifecycleHook[]>;
 	lifecycleHookOutcome?: (outcome: CodingAgentLifecycleHookOutcome) => Promise<void>;
 	agents?: CodingAgentAgentTools;
 	plans?: CodingAgentPlanTools;
@@ -543,39 +545,44 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 		systemPrompt,
 	});
 	harness = created.harness;
-	for (const hook of options.lifecycleHooks ?? []) {
+	const executeLifecycleHook = async (hook: CodingAgentLifecycleHook): Promise<void> => {
+		const startedAt = Date.now();
+		const result = await executeShellWithCapture(env, hook.command, {
+			timeout: 5,
+			returnExecutionErrors: true,
+		});
+		const details = result.ok ? result.value : undefined;
+		if (details?.fullOutputPath !== undefined)
+			await env.remove(details.fullOutputPath, { force: true }).catch(() => {});
+		await options
+			.lifecycleHookOutcome?.({
+				id: hook.id,
+				event: hook.event,
+				outcome:
+					result.ok && details !== undefined && details.executionError === undefined && details.exitCode === 0
+						? "ok"
+						: "error",
+				durationMs: Math.max(0, Date.now() - startedAt),
+				outputBytes: details?.truncation.totalBytes ?? 0,
+				truncated: details?.truncated ?? false,
+				...(details?.exitCode === undefined ? {} : { exitCode: details.exitCode }),
+			})
+			.catch(() => {});
+	};
+	const registerLifecycleHook = (hook: CodingAgentLifecycleHook): void => {
 		const lifecycleName = hook.event === "turn/accepted" ? "before_run" : "before_run_end";
-		harness.hooks.on(
-			lifecycleName,
-			async () => {
-				const startedAt = Date.now();
-				const result = await executeShellWithCapture(env, hook.command, {
-					timeout: 5,
-					returnExecutionErrors: true,
-				});
-				const details = result.ok ? result.value : undefined;
-				if (details?.fullOutputPath !== undefined)
-					await env.remove(details.fullOutputPath, { force: true }).catch(() => {});
-				await options
-					.lifecycleHookOutcome?.({
-						id: hook.id,
-						event: hook.event,
-						outcome:
-							result.ok &&
-							details !== undefined &&
-							details.executionError === undefined &&
-							details.exitCode === 0
-								? "ok"
-								: "error",
-						durationMs: Math.max(0, Date.now() - startedAt),
-						outputBytes: details?.truncation.totalBytes ?? 0,
-						truncated: details?.truncated ?? false,
-						...(details?.exitCode === undefined ? {} : { exitCode: details.exitCode }),
-					})
-					.catch(() => {});
-			},
-			{ id: hook.id },
-		);
+		harness.hooks.on(lifecycleName, () => executeLifecycleHook(hook), { id: hook.id });
+	};
+	for (const hook of options.lifecycleHooks ?? []) registerLifecycleHook(hook);
+	if (options.lifecycleHooksFactory !== undefined) {
+		for (const event of ["turn/accepted", "turn/completed"] as const) {
+			const lifecycleName = event === "turn/accepted" ? "before_run" : "before_run_end";
+			harness.hooks.on(lifecycleName, async () => {
+				for (const hook of await options.lifecycleHooksFactory!()) {
+					if (hook.event === event) await executeLifecycleHook(hook);
+				}
+			});
+		}
 	}
 	return created;
 }

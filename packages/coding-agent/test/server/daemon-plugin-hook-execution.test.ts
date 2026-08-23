@@ -66,25 +66,25 @@ describe("production daemon plugin hook execution", () => {
 		try {
 			await runtime.daemon.start();
 			await client.connect();
-			await client.request({
-				command: "marketplace/add",
-				payload: { name: "local", source: "file:///tmp/marketplace" },
-			});
-			await client.request({
-				command: "plugin/install",
-				payload: {
-					name: "hook-plugin",
-					marketplace: "local",
-					version: "1.0.0",
-					manifest: {
-						name: "hook-plugin",
-						version: "1.0.0",
-						hooks: [{ event: "turn/accepted", command: "touch hook-fired" }],
-					},
-				},
-			});
 			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
 			try {
+				await client.request({
+					command: "marketplace/add",
+					payload: { name: "local", source: "file:///tmp/marketplace" },
+				});
+				await client.request({
+					command: "plugin/install",
+					payload: {
+						name: "hook-plugin",
+						marketplace: "local",
+						version: "1.0.0",
+						manifest: {
+							name: "hook-plugin",
+							version: "1.0.0",
+							hooks: [{ event: "turn/accepted", command: "touch hook-fired" }],
+						},
+					},
+				});
 				const sessionId = session.id as string;
 				const operationId = await session.submit("run the hook");
 				const snapshot = await session.waitForOperation(operationId);
