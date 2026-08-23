@@ -33,9 +33,12 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 		...(options.options.name === undefined ? {} : { name: options.options.name }),
 	});
 	const requestedModel = resolveRemoteModel(options.options, await client.listModels());
-	if (requestedModel !== undefined) await session.waitForOperation(await session.setModel(requestedModel));
-	if (options.options.thinking !== undefined)
-		await session.waitForOperation(await session.setThinking(options.options.thinking));
+	const applySessionOptions = async (target: RemoteV2Session): Promise<void> => {
+		if (requestedModel !== undefined) await target.waitForOperation(await target.setModel(requestedModel));
+		if (options.options.thinking !== undefined)
+			await target.waitForOperation(await target.setThinking(options.options.thinking));
+	};
+	await applySessionOptions(session);
 	let previousSnapshot: SessionSnapshotV2 | undefined;
 	let unsubscribe = subscribeSession(
 		session,
@@ -182,6 +185,7 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 					cwd: options.cwd,
 					...(options.options.name === undefined ? {} : { name: options.options.name }),
 				});
+				await applySessionOptions(session);
 				previousSnapshot = undefined;
 				unsubscribe = subscribeSession(
 					session,
