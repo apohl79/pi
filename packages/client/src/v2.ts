@@ -358,8 +358,8 @@ class SessionHandle implements PiSessionV2Handle {
 
 	async detach(): Promise<void> {
 		if (this.detached) return;
-		this.detached = true;
 		commandResult(await this.client.request({ command: "session/detach", sessionId: this.sessionId }));
+		this.detached = true;
 	}
 
 	onEvent(listener: (event: EventEnvelopeV2) => void): () => void {

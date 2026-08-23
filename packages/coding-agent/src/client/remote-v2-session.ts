@@ -905,9 +905,9 @@ export class RemoteV2Session {
 	async detach(): Promise<void> {
 		this.#assertNotDisposed();
 		if (!this.#handle) return;
+		await this.#handle.detach();
 		this.#unsubscribe?.();
 		this.#unsubscribe = undefined;
-		await this.#handle.detach();
 		this.#lifecycle = { status: "detached" };
 		this.#emit();
 	}
