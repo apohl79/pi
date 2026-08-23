@@ -22,6 +22,7 @@ import { InMemoryV2AgentRegistry, type V2AgentRegistry } from "./agents.ts";
 import { InMemoryV2BlobStore, type V2BlobStore } from "./blobs.ts";
 import type { ByteConnection, ByteConnectionHandler } from "./connection.ts";
 import type { ForensicRecorder } from "./diagnostics.ts";
+import { LocalV2FileReferenceService, type V2FileReferenceService } from "./files.ts";
 import { InMemoryV2InputRegistry, type V2InputRegistry } from "./inputs.ts";
 import type { PiServerListener } from "./listener.ts";
 import { InMemoryV2OperationStore, type V2OperationStore } from "./operation-store.ts";
@@ -56,6 +57,7 @@ export interface PiServerV2Options {
 	agents?: V2AgentRegistry;
 	plans?: V2PlanRegistry;
 	inputs?: V2InputRegistry;
+	files?: V2FileReferenceService;
 }
 
 type V2ConnectionState = {
@@ -133,6 +135,12 @@ function safeDiagnosticMessage(error: unknown): string {
 	return message;
 }
 
+function referenceFrom(command: CommandV2, payload: Record<string, unknown>): string {
+	const reference = payload.reference ?? command.operationId;
+	if (typeof reference !== "string" || reference.length === 0) throw new Error("file reference is required");
+	return reference;
+}
+
 export class PiServerV2 {
 	readonly id: string;
 	private readonly listeners: readonly PiServerListener[];
@@ -147,6 +155,7 @@ export class PiServerV2 {
 	private readonly agents: V2AgentRegistry;
 	private readonly plans: V2PlanRegistry;
 	private readonly inputs: V2InputRegistry;
+	private readonly files: V2FileReferenceService;
 	private readonly connections = new Set<V2ConnectionState>();
 	private readonly eventHistory = new Map<string, EventEnvelopeV2[]>();
 	private readonly operations = new Map<string, OperationRecordV2>();
@@ -177,6 +186,8 @@ export class PiServerV2 {
 		this.agents = options.agents ?? new InMemoryV2AgentRegistry();
 		this.plans = options.plans ?? new InMemoryV2PlanRegistry();
 		this.inputs = options.inputs ?? new InMemoryV2InputRegistry();
+		this.files =
+			options.files ?? new LocalV2FileReferenceService({ projectRoot: process.cwd(), allowAbsolute: false });
 	}
 
 	get addresses(): readonly string[] {
@@ -372,6 +383,10 @@ export class PiServerV2 {
 				return void (await this.respondInputRequest(state, id, command));
 			if (command.command === "input/request/cancel")
 				return void (await this.cancelInputRequest(state, id, command));
+			if (command.command === "filesystem/complete") return void (await this.completeFiles(state, id, command));
+			if (command.command === "filesystem/reference/resolve")
+				return void (await this.resolveFile(state, id, command));
+			if (command.command === "filesystem/reference/read") return void (await this.readFile(state, id, command));
 			if (command.command === "session/detach") return void (await this.detach(state, id, command));
 			if (
 				command.command === "turn/start" ||
@@ -720,6 +735,49 @@ export class PiServerV2 {
 		const requestId = requestIdFrom(command, objectPayload(command));
 		this.requireResource(state, this.inputSessions, requestId, "input request");
 		await this.sendResponse(state, id, { command: command.command, request: await this.inputs.cancel(requestId) });
+	}
+
+	private async completeFiles(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("filesystem/complete requires sessionId");
+		this.requireAttached(state, command.sessionId);
+		const payload = objectPayload(command);
+		const prefix = typeof payload.prefix === "string" ? payload.prefix : "";
+		await this.sendResponse(state, id, {
+			command: command.command,
+			items: await this.files.complete(command.sessionId, prefix),
+		});
+	}
+
+	private async resolveFile(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("filesystem/reference/resolve requires sessionId");
+		this.requireAttached(state, command.sessionId);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			file: await this.files.resolve(command.sessionId, referenceFrom(command, objectPayload(command))),
+		});
+	}
+
+	private async readFile(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("filesystem/reference/read requires sessionId");
+		this.requireAttached(state, command.sessionId);
+		const result = await this.files.read(command.sessionId, referenceFrom(command, objectPayload(command)));
+		const response = {
+			command: command.command,
+			file: result.file,
+			encoding: "base64",
+			data: Buffer.from(result.data).toString("base64"),
+		};
+		try {
+			encodeServerMessageV2(
+				{ type: "response", id, ok: true, result: toProtocolJsonValue(response) },
+				{ maxFrameLength: this.maxFrameLength },
+			);
+		} catch {
+			throw new Error("File response exceeds the maximum frame size");
+		}
+		await this.sendResponse(state, id, {
+			...response,
+		});
 	}
 
 	private async detach(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

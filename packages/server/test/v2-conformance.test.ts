@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -14,6 +14,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { InMemoryV2AgentRegistry } from "../src/agents.ts";
 import { InMemoryV2BlobStore } from "../src/blobs.ts";
 import { InMemoryForensicRecorder } from "../src/diagnostics.ts";
+import { LocalV2FileReferenceService } from "../src/files.ts";
 import { InMemoryV2InputRegistry } from "../src/inputs.ts";
 import { InMemoryV2OperationStore, JsonlV2OperationStore } from "../src/operation-store.ts";
 import { InMemoryV2ProcessRegistry } from "../src/processes.ts";
@@ -216,6 +217,48 @@ afterEach(async () => {
 });
 
 describe("PiServer v2 operation acceptance", () => {
+	test("routes host-scoped filesystem completion, resolution, and reads", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-files-"));
+		directories.push(directory);
+		await writeFile(join(directory, "notes.ts"), "export const answer = 42;");
+		const service = new TestService();
+		const server = createUnixServerV2(service, {
+			path: join(directory, "server.sock"),
+			files: new LocalV2FileReferenceService({ projectRoot: directory, homeDirectory: directory }),
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+
+		const complete = await client.request({
+			command: "filesystem/complete",
+			sessionId: "session-1",
+			payload: { prefix: "@project:n" },
+		});
+		expect(complete).toMatchObject({
+			ok: true,
+			result: { items: [{ reference: "project:notes.ts", kind: "file" }] },
+		});
+		const read = await client.request({
+			command: "filesystem/reference/read",
+			sessionId: "session-1",
+			payload: { reference: "notes.ts" },
+		});
+		expect(read).toMatchObject({ ok: true, result: { encoding: "base64", file: { kind: "file" } } });
+		if (
+			!read.ok ||
+			!("result" in read) ||
+			typeof read.result !== "object" ||
+			read.result === null ||
+			Array.isArray(read.result)
+		)
+			throw new Error("Expected a filesystem read result");
+		if (typeof read.result.data !== "string") throw new Error("Expected base64 filesystem data");
+		expect(Buffer.from(read.result.data, "base64").toString("utf8")).toBe("export const answer = 42;");
+	});
+
 	test("acknowledges a turn before starting runtime execution", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
