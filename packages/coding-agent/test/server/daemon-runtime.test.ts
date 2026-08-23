@@ -443,9 +443,11 @@ describe("coding-agent daemon runtime", () => {
 	});
 }`,
 		);
+		await writeFile(join(directory, "AGENTS.md"), "Project instruction from the daemon host.\n");
 		const models = createModels();
 		const diagnostics = new InMemoryForensicRecorder();
 		const observedRequests: string[][] = [];
+		let observedSystemPrompt = "";
 		const faux = fauxProvider({
 			provider: "coding-agent-daemon-pi-extension-faux",
 			models: [{ id: "pi-extension-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
@@ -453,6 +455,7 @@ describe("coding-agent daemon runtime", () => {
 		models.setProvider(faux.provider);
 		faux.setResponses([
 			(context) => {
+				observedSystemPrompt = context.systemPrompt ?? "";
 				observedRequests.push(context.messages.map((message) => JSON.stringify(message)));
 				return fauxAssistantMessage("completed");
 			},
@@ -492,6 +495,7 @@ describe("coding-agent daemon runtime", () => {
 				payload: { text: "work" },
 			});
 			expect(observedRequests[0]?.join("\n")).toContain("discovered reminder");
+			expect(observedSystemPrompt).toContain("Project instruction from the daemon host.");
 		} finally {
 			await runtime.close();
 		}

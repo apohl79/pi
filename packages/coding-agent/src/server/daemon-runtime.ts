@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { PiClientV2 } from "@earendil-works/pi-client";
@@ -309,9 +310,10 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 		}),
 	);
 	let discoveredPiExtensions = options.piExtensions;
+	let resourceLoader: DefaultResourceLoader | undefined;
 	let piExtensionLoadErrors: readonly { path: string; error: string }[] = [];
 	if (discoveredPiExtensions === undefined) {
-		const resourceLoader = new DefaultResourceLoader({
+		resourceLoader = new DefaultResourceLoader({
 			cwd: options.cwd,
 			agentDir: options.agentDir,
 			...(options.extensionPaths === undefined ? {} : { additionalExtensionPaths: [...options.extensionPaths] }),
@@ -528,8 +530,46 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 				}
 				return checks;
 			});
+		const loaderSkills =
+			resourceLoader === undefined
+				? []
+				: await Promise.all(
+						resourceLoader.getSkills().skills.map(async (skill) => ({
+							name: skill.name,
+							description: skill.description,
+							content: await readFile(skill.filePath, "utf8"),
+							filePath: skill.filePath,
+							disableModelInvocation: skill.disableModelInvocation,
+						})),
+					);
 		const runtime = await createCodingAgentDaemonRuntime({
 			...options,
+			harness:
+				resourceLoader === undefined
+					? options.harness
+					: {
+							...options.harness,
+							resources: {
+								...(options.harness?.resources ?? {}),
+								skills: [...loaderSkills, ...(options.harness?.resources?.skills ?? [])],
+								promptTemplates: [
+									...resourceLoader.getPrompts().prompts,
+									...(options.harness?.resources?.promptTemplates ?? []),
+								],
+							},
+							systemPromptOptions: {
+								...(resourceLoader.getSystemPrompt() === undefined
+									? {}
+									: { customPrompt: resourceLoader.getSystemPrompt() }),
+								...(resourceLoader.getAppendSystemPrompt().length === 0
+									? {}
+									: { appendSystemPrompt: resourceLoader.getAppendSystemPrompt().join("\n\n") }),
+								...(resourceLoader.getAgentsFiles().agentsFiles.length === 0
+									? {}
+									: { contextFiles: resourceLoader.getAgentsFiles().agentsFiles }),
+								...(options.harness?.systemPromptOptions ?? {}),
+							},
+						},
 			piExtensions: discoveredPiExtensions,
 			repository,
 			env,
