@@ -1017,8 +1017,10 @@ describe("PiServer v2 operation acceptance", () => {
 	test("exposes server-owned process cursors over v2", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
+		const diagnostics = new InMemoryForensicRecorder();
 		const server = createUnixServerV2(new TestService(), {
 			path: join(directory, "server.sock"),
+			diagnostics,
 			processes: new InMemoryV2ProcessRegistry({ maxOutputBytes: 5 }),
 		});
 		servers.push(server);
@@ -1034,8 +1036,22 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.request({ command: "process/write", payload: { processId, input: "abcdef" } });
 		const output = await client.request({ command: "process/read", payload: { processId, cursor: 0 } });
 		expect(output).toMatchObject({ ok: true, result: { output: { output: "bcdef", cursor: 6, truncated: true } } });
+		await client.request({ command: "process/wait", payload: { processId } });
 		const terminated = await client.request({ command: "process/terminate", payload: { processId } });
 		expect(terminated).toMatchObject({ ok: true, result: { process: { state: "terminated", exitCode: 143 } } });
+		expect((await diagnostics.read()).map((event) => event.kind)).toEqual([
+			"process_started",
+			"process_input_written",
+			"process_output_read",
+			"process_waited",
+			"process_terminated",
+		]);
+		const inputEvent = (await diagnostics.read()).find((event) => event.kind === "process_input_written");
+		expect(inputEvent).toMatchObject({
+			processInstanceId: processId,
+			sessionId: "session-1",
+			payload: { byteLength: 6, cursor: 6 },
+		});
 		await client.close();
 	});
 

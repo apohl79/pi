@@ -547,6 +547,16 @@ export class PiServerV2 {
 			...(env === undefined ? {} : { env }),
 			...(typeof payload.pty === "boolean" ? { pty: payload.pty } : {}),
 		});
+		await this.diagnostics.record({
+			kind: "process_started",
+			severity: "info",
+			outcome: "started",
+			traceId: command.operationId ?? process.processId,
+			spanId: id,
+			processInstanceId: process.processId,
+			sessionId: command.sessionId,
+			payload: { pty: process.pty },
+		});
 		await this.sendResponse(state, id, {
 			command: command.command,
 			process: process as unknown as Record<string, unknown>,
@@ -556,11 +566,23 @@ export class PiServerV2 {
 	private async writeProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const processId = processIdFrom(command, payload);
-		this.requireControl(state, (await this.processes.getSnapshot(processId)).sessionId);
+		const snapshot = await this.processes.getSnapshot(processId);
+		this.requireControl(state, snapshot.sessionId);
 		if (typeof payload.input !== "string") throw new Error("process/write requires input");
+		const output = await this.processes.write(processId, payload.input);
+		await this.diagnostics.record({
+			kind: "process_input_written",
+			severity: "info",
+			outcome: "ok",
+			traceId: command.operationId ?? processId,
+			spanId: id,
+			processInstanceId: processId,
+			sessionId: snapshot.sessionId,
+			payload: { byteLength: Buffer.byteLength(payload.input, "utf8"), cursor: output.cursor },
+		});
 		await this.sendResponse(state, id, {
 			command: command.command,
-			output: await this.processes.write(processId, payload.input),
+			output,
 		});
 	}
 
@@ -568,26 +590,61 @@ export class PiServerV2 {
 		const payload = objectPayload(command);
 		const processId = processIdFrom(command, payload);
 		const cursor = typeof payload.cursor === "number" ? payload.cursor : 0;
+		const output = await this.processes.read(processId, cursor);
+		await this.diagnostics.record({
+			kind: "process_output_read",
+			severity: "debug",
+			outcome: "ok",
+			traceId: command.operationId ?? processId,
+			spanId: id,
+			processInstanceId: processId,
+			payload: { cursor, nextCursor: output.cursor, byteLength: Buffer.byteLength(output.output, "utf8") },
+		});
 		await this.sendResponse(state, id, {
 			command: command.command,
-			output: await this.processes.read(processId, cursor),
+			output,
 		});
 	}
 
 	private async waitProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
+		const processId = processIdFrom(command, payload);
+		const process = await this.processes.wait(processId);
+		await this.diagnostics.record({
+			kind: "process_waited",
+			severity: "info",
+			outcome: "ok",
+			traceId: command.operationId ?? processId,
+			spanId: id,
+			processInstanceId: processId,
+			sessionId: process.sessionId,
+			payload: { state: process.state, exitCode: process.exitCode },
+		});
 		await this.sendResponse(state, id, {
 			command: command.command,
-			process: await this.processes.wait(processIdFrom(command, payload)),
+			process,
 		});
 	}
 
 	private async terminateProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
-		this.requireControl(state, (await this.processes.getSnapshot(processIdFrom(command, payload))).sessionId);
+		const processId = processIdFrom(command, payload);
+		const snapshot = await this.processes.getSnapshot(processId);
+		this.requireControl(state, snapshot.sessionId);
+		const process = await this.processes.terminate(processId);
+		await this.diagnostics.record({
+			kind: "process_terminated",
+			severity: "info",
+			outcome: "ok",
+			traceId: command.operationId ?? processId,
+			spanId: id,
+			processInstanceId: processId,
+			sessionId: snapshot.sessionId,
+			payload: { previousState: snapshot.state, state: process.state, exitCode: process.exitCode },
+		});
 		await this.sendResponse(state, id, {
 			command: command.command,
-			process: await this.processes.terminate(processIdFrom(command, payload)),
+			process,
 		});
 	}
 
