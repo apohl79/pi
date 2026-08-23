@@ -1,7 +1,9 @@
-import { symlink } from "node:fs/promises";
+import { chmod, stat, symlink, unlink } from "node:fs/promises";
+import { join } from "node:path";
 import { applyPatch } from "diff";
 import { describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
+import { createApplyPatchTool } from "../../src/harness/tools/apply-patch.ts";
 import { type BashToolDetails, createBashTool } from "../../src/harness/tools/bash.ts";
 import { createEditTool } from "../../src/harness/tools/edit.ts";
 import { createReadTool } from "../../src/harness/tools/read.ts";
@@ -43,6 +45,23 @@ class SlowReadExecutionEnv extends NodeExecutionEnv {
 	override async readTextFile(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>> {
 		await delay(20);
 		return super.readTextFile(path, abortSignal);
+	}
+}
+
+class SwapAfterValidationEnv extends NodeExecutionEnv {
+	private swapped = false;
+	constructor(cwd: string, private readonly outsidePath: string) {
+		super({ cwd });
+	}
+
+	override async canonicalPath(path: string): Promise<Result<string, FileError>> {
+		const result = await super.canonicalPath(path);
+		if (!this.swapped && path === join(this.cwd, "target.txt") && result.ok) {
+			this.swapped = true;
+			await unlink(path);
+			await symlink(this.outsidePath, path);
+		}
+		return result;
 	}
 }
 
@@ -132,6 +151,167 @@ function createTinyBmp(): Uint8Array {
 }
 
 describe("AgentHarness tools", () => {
+	describe("apply_patch", () => {
+		it("updates and adds files atomically through the mutation queue", async () => {
+			const context = createContext();
+			getOrThrow(await context.env.writeFile("patch.txt", "one\ntwo\n"));
+			const result = await createApplyPatchTool().execute(
+				"patch-1",
+				{
+					patch: "*** Begin Patch\n*** Update File: patch.txt\n@@\n-one\n+ONE\n*** Add File: added.txt\n+created\n*** End Patch",
+				},
+				undefined,
+				undefined,
+				context,
+			);
+
+			expect(textOutput(result)).toContain("Applied patch to 2 file(s)");
+			expect(getOrThrow(await context.env.readTextFile("patch.txt"))).toBe("ONE\ntwo\n");
+			expect(getOrThrow(await context.env.readTextFile("added.txt"))).toBe("created\n");
+		});
+
+		it("preserves existing file mode bits when replacing a file", async () => {
+			const context = createContext();
+			const target = join(context.env.cwd, "script.sh");
+			getOrThrow(await context.env.writeFile(target, "#!/bin/sh\necho before\n"));
+			await chmod(target, 0o6750);
+
+			await createApplyPatchTool().execute(
+				"patch-preserve-mode",
+				{
+					patch: "*** Begin Patch\n*** Update File: script.sh\n@@\n-echo before\n+echo after\n*** End Patch",
+				},
+				undefined,
+				undefined,
+				context,
+			);
+
+			expect((await stat(target)).mode & 0o7777).toBe(0o6750);
+			expect(getOrThrow(await context.env.readTextFile(target))).toBe("#!/bin/sh\necho after\n");
+		});
+
+		it("preserves a POSIX backslash in a filename", async () => {
+			if (process.platform === "win32") return;
+			const context = createContext();
+			await createApplyPatchTool().execute(
+				"patch-backslash-filename",
+				{
+					patch: "*** Begin Patch\n*** Add File: literal\\name.txt\n+created\n*** End Patch",
+				},
+				undefined,
+				undefined,
+				context,
+			);
+
+			expect(getOrThrow(await context.env.readTextFile("literal\\name.txt"))).toBe("created\n");
+		});
+
+		it("allows in-root names beginning with two dots", async () => {
+			const context = createContext();
+			await createApplyPatchTool().execute(
+				"patch-dot-prefix-filename",
+				{
+					patch: "*** Begin Patch\n*** Add File: ..foo.txt\n+created\n*** End Patch",
+				},
+				undefined,
+				undefined,
+				context,
+			);
+
+			expect(getOrThrow(await context.env.readTextFile("..foo.txt"))).toBe("created\n");
+		});
+
+		it("rejects traversal paths before mutation", async () => {
+			const context = createContext();
+			await expect(
+				createApplyPatchTool().execute(
+					"patch-2",
+					{ patch: "*** Begin Patch\n*** Update File: ../escape.txt\n@@\n-old\n+new\n*** End Patch" },
+					undefined,
+					undefined,
+					context,
+				),
+			).rejects.toThrow();
+		});
+
+		it("rejects symlinked files and parents before mutation", async () => {
+			const context = createContext();
+			const outside = createTempDir();
+			getOrThrow(await context.env.writeFile(join(outside, "outside.txt"), "outside\n"));
+			await symlink(join(outside, "outside.txt"), join(context.env.cwd, "linked.txt"));
+			await symlink(outside, join(context.env.cwd, "linked-dir"));
+
+			await expect(
+				createApplyPatchTool().execute(
+					"patch-symlink-file",
+					{ patch: "*** Begin Patch\n*** Update File: linked.txt\n@@\n-outside\n+changed\n*** End Patch" },
+					undefined,
+					undefined,
+					context,
+				),
+			).rejects.toThrow(/symlink/i);
+			await expect(
+				createApplyPatchTool().execute(
+					"patch-symlink-parent",
+					{ patch: "*** Begin Patch\n*** Add File: linked-dir/new.txt\n+escaped\n*** End Patch" },
+					undefined,
+					undefined,
+					context,
+				),
+			).rejects.toThrow(/symlink|escapes/i);
+			expect(getOrThrow(await context.env.readTextFile(join(outside, "outside.txt")))).toBe("outside\n");
+		});
+
+		it("does not read a file after its validated path is swapped to a symlink", async () => {
+			const root = createTempDir();
+			const outside = createTempDir();
+			const outsidePath = join(outside, "outside.txt");
+			const targetPath = join(root, "target.txt");
+			const env = new SwapAfterValidationEnv(root, outsidePath);
+			getOrThrow(await env.writeFile(targetPath, "outside\n"));
+			getOrThrow(await env.writeFile(outsidePath, "outside\n"));
+
+			await expect(
+				createApplyPatchTool().execute(
+					"patch-symlink-race",
+					{ patch: "*** Begin Patch\n*** Update File: target.txt\n@@\n-outside\n+changed\n*** End Patch" },
+					undefined,
+					undefined,
+					{ env },
+				),
+			).rejects.toThrow();
+			expect(getOrThrow(await env.readTextFile(outsidePath))).toBe("outside\n");
+		});
+
+		it("preserves CRLF line endings while applying updates", async () => {
+			const context = createContext();
+			getOrThrow(await context.env.writeFile("crlf.txt", "one\r\ntwo\r\n"));
+			await createApplyPatchTool().execute(
+				"patch-crlf",
+				{ patch: "*** Begin Patch\n*** Update File: crlf.txt\n@@\n-one\n+ONE\n*** End Patch" },
+				undefined,
+				undefined,
+				context,
+			);
+			expect(getOrThrow(await context.env.readTextFile("crlf.txt"))).toBe("ONE\r\ntwo\r\n");
+		});
+
+		it("accepts zero-start unified hunks for insertion at the beginning", async () => {
+			const context = createContext();
+			getOrThrow(await context.env.writeFile("insert.txt", "two\n"));
+			await createApplyPatchTool().execute(
+				"patch-zero-start",
+				{
+					patch: "*** Begin Patch\n*** Update File: insert.txt\n@@ -0,0 +1,1 @@\n+one\n*** End Patch",
+				},
+				undefined,
+				undefined,
+				context,
+			);
+			expect(getOrThrow(await context.env.readTextFile("insert.txt"))).toBe("one\ntwo\n");
+		});
+	});
+
 	describe("read", () => {
 		it("reads text with offsets, limits, and continuation notices", async () => {
 			const context = createContext();

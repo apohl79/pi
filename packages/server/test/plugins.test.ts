@@ -1,0 +1,76 @@
+import { access, mkdtemp, readFile, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, test } from "vitest";
+import { InMemoryV2PluginRegistry, JsonV2PluginRegistry } from "../src/plugins.ts";
+
+describe("InMemoryV2PluginRegistry", () => {
+	test("tracks marketplace and plugin lifecycle with manifest provenance", async () => {
+		const registry = new InMemoryV2PluginRegistry();
+		await registry.addMarketplace("local", "/workspace/plugins");
+		const plugin = await registry.installPlugin({
+			name: "reviewer",
+			marketplace: "local",
+			version: "1.2.0",
+			root: "/workspace/plugins/reviewer",
+			manifest: {
+				name: "reviewer",
+				version: "1.2.0",
+				skills: ["skills/review"],
+				commands: ["commands/review"],
+				apps: [{ id: "tracker" }],
+				hooks: { afterTurn: "hooks/after-turn" },
+			},
+		});
+
+		expect(plugin).toMatchObject({
+			id: "reviewer@local",
+			manifestDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+			enabled: true,
+			resources: { skills: ["skills/review"], commands: ["commands/review"], apps: 1, hooks: 1 },
+		});
+		expect(await registry.setEnabled(plugin.id, false, "project")).toMatchObject({
+			enabled: false,
+			scope: "project",
+		});
+		await registry.uninstallPlugin(plugin.id);
+		await expect(registry.removeMarketplace("local")).resolves.toBeUndefined();
+	});
+
+	test("rejects removing a marketplace with installed plugins", async () => {
+		const registry = new InMemoryV2PluginRegistry();
+		await registry.addMarketplace("local", "/workspace/plugins");
+		await registry.installPlugin({ name: "one", marketplace: "local", version: "1", manifest: {} });
+		await expect(registry.removeMarketplace("local")).rejects.toThrow("installed plugins");
+	});
+
+	test("recovers marketplace and plugin state after reopening", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-plugin-registry-"));
+		const path = join(directory, "state", "plugins.json");
+		const first = new JsonV2PluginRegistry(path);
+		await first.addMarketplace("local", "/workspace/plugins");
+		await first.installPlugin({
+			name: "reviewer",
+			marketplace: "local",
+			version: "1",
+			manifest: { skills: ["review"] },
+		});
+		await first.setEnabled("reviewer@local", false);
+
+		const reopened = new JsonV2PluginRegistry(path);
+		expect(await reopened.listMarketplaces()).toHaveLength(1);
+		expect(await reopened.readPlugin("reviewer@local")).toMatchObject({ enabled: false, version: "1" });
+		const persisted = JSON.parse(await readFile(path, "utf8")) as { plugins: unknown[] };
+		expect(persisted.plugins).toHaveLength(1);
+	});
+
+	test("does not follow a temporary symlink when writing state", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-plugin-registry-link-"));
+		const path = join(directory, "plugins.json");
+		const target = join(directory, "target.json");
+		await symlink(target, path);
+		const registry = new JsonV2PluginRegistry(path);
+		await registry.addMarketplace("local", "/workspace/plugins");
+		await expect(access(target)).rejects.toThrow();
+	});
+});
