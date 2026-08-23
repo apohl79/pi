@@ -355,6 +355,7 @@ export async function createCodingAgentV2SqliteService(
 			);
 			return async (context: SamplingInputContext) => [
 				...(configuredSamplingInput === undefined ? [] : await configuredSamplingInput(context)),
+				...(extensionHost === undefined ? [] : (await extensionHost.collectSamplingInput(context)).messages),
 				...(await pluginSamplingInput(context)),
 			];
 		};

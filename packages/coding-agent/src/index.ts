@@ -491,6 +491,7 @@ export {
 	type ServerRuntimeExtensionContext,
 	ServerRuntimeExtensionHost,
 	type ServerRuntimeExtensionHostOptions,
+	type ServerRuntimeExtensionSamplingResult,
 	type ServerRuntimeExtensionState,
 	type ServerRuntimeModel,
 	type ServerRuntimeOperation,

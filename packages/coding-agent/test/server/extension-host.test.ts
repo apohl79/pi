@@ -89,4 +89,49 @@ describe("ServerRuntimeExtensionHost", () => {
 		expect(results[0]).toMatchObject({ extensionId: "fails", status: "rejected" });
 		expect(results[1]).toEqual({ extensionId: "survives", status: "fulfilled" });
 	});
+
+	it("collects bounded request-only sampling input in registration order", async () => {
+		const host = new ServerRuntimeExtensionHost({
+			resolveModel: () => ({ id: "model-a" }),
+			maxSamplingMessages: 2,
+			maxSamplingCharacters: 10_000,
+		});
+		await host.register({
+			id: "first",
+			contributeSamplingInput: () => [{ role: "user", content: "first", timestamp: 0 }],
+		});
+		await host.register({
+			id: "second",
+			contributeSamplingInput: () => [
+				{ role: "user", content: "second", timestamp: 0 },
+				{ role: "user", content: "ignored", timestamp: 0 },
+			],
+		});
+
+		const result = await host.collectSamplingInput({ model: {} as never, systemPrompt: "", messages: [], tools: [] });
+
+		expect(result.messages).toEqual([
+			{ role: "user", content: "first", timestamp: 0 },
+			{ role: "user", content: "second", timestamp: 0 },
+		]);
+		expect(result.outcomes).toEqual([
+			{ extensionId: "first", status: "fulfilled" },
+			{ extensionId: "second", status: "fulfilled" },
+		]);
+	});
+
+	it("isolates sampling contributor failures", async () => {
+		const host = new ServerRuntimeExtensionHost({ resolveModel: () => ({ id: "model-a" }) });
+		await host.register({ id: "fails", contributeSamplingInput: () => Promise.reject(new Error("sampling failed")) });
+		await host.register({
+			id: "survives",
+			contributeSamplingInput: () => [{ role: "user", content: "kept", timestamp: 0 }],
+		});
+
+		const result = await host.collectSamplingInput({ model: {} as never, systemPrompt: "", messages: [], tools: [] });
+
+		expect(result.messages).toEqual([{ role: "user", content: "kept", timestamp: 0 }]);
+		expect(result.outcomes[0]).toMatchObject({ extensionId: "fails", status: "rejected" });
+		expect(result.outcomes[1]).toEqual({ extensionId: "survives", status: "fulfilled" });
+	});
 });
