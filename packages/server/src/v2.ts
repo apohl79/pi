@@ -914,7 +914,11 @@ export class PiServerV2 {
 	}
 
 	private async diagnosticsExport(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
 		const events = await this.diagnosticEvents();
+		const capsules = await this.diagnosticCapsulesForExport();
+		const decryptedCapsules =
+			payload.decryptContent === true ? await this.diagnosticCapsulesForDecryption(capsules) : undefined;
 		const serializedEvents = JSON.stringify(events);
 		const manifest = {
 			schemaVersion: 1,
@@ -927,13 +931,15 @@ export class PiServerV2 {
 			command: command.command,
 			format: "json",
 			events,
-			capsules: await this.diagnosticCapsulesForExport(),
+			capsules,
 			bundle: {
 				manifest,
 				runtimeManifest: this.runtimeManifest,
 				events,
-				capsules: await this.diagnosticCapsulesForExport(),
+				capsules,
+				...(decryptedCapsules === undefined ? {} : { decryptedCapsules }),
 			},
+			...(decryptedCapsules === undefined ? {} : { decryptedCapsules }),
 		});
 	}
 
@@ -959,6 +965,7 @@ export class PiServerV2 {
 	}
 
 	private async diagnosticsDoctor(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
 		const events = await this.diagnosticEvents();
 		const sequenceOk = events.every((event, index) => index === 0 || event.seq === events[index - 1]!.seq + 1);
 		const checks = [
@@ -970,6 +977,7 @@ export class PiServerV2 {
 			command: command.command,
 			ok: checks.every((check) => check.ok),
 			checks,
+			...(payload.repairSafe === true ? { repairSafe: true, repairs: [] } : {}),
 		});
 	}
 
@@ -1189,6 +1197,19 @@ export class PiServerV2 {
 	private async diagnosticCapsulesForExport(): Promise<readonly DiagnosticCapsule[]> {
 		const persisted = await this.diagnosticContent?.list?.();
 		return persisted === undefined ? [...this.diagnosticCapsules.values()] : persisted;
+	}
+
+	private async diagnosticCapsulesForDecryption(capsules: readonly DiagnosticCapsule[]): Promise<readonly object[]> {
+		if (this.diagnosticContent?.decrypt === undefined)
+			throw new Error("diagnostics/export --decrypt-content is unavailable for this diagnostic store");
+		return Promise.all(
+			capsules.map(async (capsule) => ({
+				eventId: capsule.eventId,
+				kind: capsule.kind,
+				content: Buffer.from(await this.diagnosticContent!.decrypt!(capsule)).toString("base64"),
+				byteLength: capsule.byteLength,
+			})),
+		);
 	}
 
 	private async resolveTurnContent(command: CommandV2): Promise<CommandV2> {
