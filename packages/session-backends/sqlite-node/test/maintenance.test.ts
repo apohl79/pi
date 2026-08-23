@@ -14,8 +14,8 @@ describe("SQLite maintenance", () => {
 		});
 		try {
 			expect(await repository.inspect()).toEqual({
-				appliedMigrations: ["001_initial.sql"],
-				schemaVersion: "001_initial.sql",
+				appliedMigrations: ["001_initial.sql", "002_registers.sql"],
+				schemaVersion: "002_registers.sql",
 				quickCheck: ["ok"],
 				foreignKeyErrors: [],
 				healthy: true,
@@ -36,7 +36,7 @@ describe("SQLite maintenance", () => {
 			const report = await repository.backup("backups/sessions.sqlite");
 			expect(report.destinationPath).toBe(join(root, "backups/sessions.sqlite"));
 			expect(report.inspection.healthy).toBe(true);
-			expect(report.inspection.schemaVersion).toBe("001_initial.sql");
+			expect(report.inspection.schemaVersion).toBe("002_registers.sql");
 		} finally {
 			await repository.close();
 		}
@@ -73,7 +73,7 @@ describe("SQLite maintenance", () => {
 			migrationBackupPath,
 		});
 		try {
-			expect((await repository.inspect()).schemaVersion).toBe("001_initial.sql");
+			expect((await repository.inspect()).schemaVersion).toBe("002_registers.sql");
 		} finally {
 			await repository.close();
 		}
