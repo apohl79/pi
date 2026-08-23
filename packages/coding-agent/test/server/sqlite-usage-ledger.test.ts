@@ -50,4 +50,20 @@ describe("SqliteV2UsageLedger", () => {
 		expect(await restored.read()).toEqual([entry("response-1", 25), entry("response-2", 30)]);
 		await restored.close();
 	});
+
+	test("rejects malformed persisted usage rows", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-usage-invalid-"));
+		directories.push(directory);
+		const path = join(directory, "usage.sqlite");
+		const database = await createNodeSqliteFactory().open(path);
+		database.exec("CREATE TABLE v2_usage (response_id TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)");
+		database
+			.prepare("INSERT INTO v2_usage (response_id, value) VALUES (?, ?)")
+			.run("response-1", JSON.stringify({ ...entry("response-1", 1), input: -1 }));
+		database.close();
+
+		await expect(new SqliteV2UsageLedger(createNodeSqliteFactory(), path).read()).rejects.toThrow(
+			"Usage field is invalid: input",
+		);
+	});
 });
