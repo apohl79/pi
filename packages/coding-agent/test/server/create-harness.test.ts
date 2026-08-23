@@ -14,6 +14,7 @@ import {
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createModels } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
+import { InMemoryV2ProcessRegistry } from "@earendil-works/pi-server";
 import { Type } from "typebox";
 import { describe, expect, test, vi } from "vitest";
 import {
@@ -253,6 +254,41 @@ describe("coding-agent Harness construction", () => {
 			expect(await created.harness.getRetryPolicy()).toEqual({ enabled: true, maxRetries: 2, baseDelayMs: 10 });
 			expect(await created.harness.getSteeringMode()).toBe("all");
 			expect(await created.harness.getFollowUpMode()).toBe("all");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("exposes server-owned exec_command and write_stdin tools when a process registry is configured", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "process-tool-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: "/workspace" });
+		const processes = new InMemoryV2ProcessRegistry();
+		const created = await createCodingAgentHarness({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+			processes,
+		});
+		try {
+			const tools = await created.harness.getTools();
+			const execCommand = tools.find((tool) => tool.name === "exec_command");
+			const writeStdin = tools.find((tool) => tool.name === "write_stdin");
+			if (!execCommand || !writeStdin) throw new Error("Expected process compatibility tools");
+			const started = await execCommand.execute("exec-call", { command: "long-running" });
+			expect(started.details).toMatchObject({ session_id: expect.any(String), state: "running", cursor: 0 });
+			const sessionId = (started.details as { session_id: string }).session_id;
+			const written = await writeStdin.execute("stdin-call", { session_id: sessionId, chars: "input" });
+			expect(written.content).toEqual([{ type: "text", text: "input" }]);
+			expect(written.details).toMatchObject({ session_id: sessionId, state: "running", cursor: 5 });
+			const bounded = await writeStdin.execute("poll-call", {
+				session_id: sessionId,
+				cursor: 0,
+				max_output_tokens: 1,
+			});
+			expect(bounded.content).toEqual([{ type: "text", text: "inpu" }]);
+			expect(bounded.details).toMatchObject({ session_id: sessionId, truncated: true });
 		} finally {
 			await created.harness.close();
 			await env.cleanup();
