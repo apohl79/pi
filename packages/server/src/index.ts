@@ -3,6 +3,7 @@ export * from "./blobs.ts";
 export * from "./agents.ts";
 export * from "./errors.ts";
 export * from "./inputs.ts";
+export * from "./images.ts";
 export * from "./listener.ts";
 export * from "./operation-store.ts";
 export * from "./plans.ts";
