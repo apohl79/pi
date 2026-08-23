@@ -2002,6 +2002,14 @@ export class PiServerV2 {
 			await this.broadcastEvent(sessionId, runtime, { usage: after.usage }, operationId, "usage_updated");
 		if (JSON.stringify(before.goal) !== JSON.stringify(after.goal))
 			await this.broadcastEvent(sessionId, runtime, { goal: after.goal ?? null }, operationId, "goal_updated");
+		if (JSON.stringify(before.compactionPolicy) !== JSON.stringify(after.compactionPolicy))
+			await this.broadcastEvent(
+				sessionId,
+				runtime,
+				{ compactionPolicy: after.compactionPolicy },
+				operationId,
+				"model_compaction_policy_changed",
+			);
 	}
 
 	private async readOperation(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

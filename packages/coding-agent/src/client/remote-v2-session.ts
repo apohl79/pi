@@ -23,6 +23,7 @@ import type {
 } from "@earendil-works/pi-protocol";
 import {
 	AgentSummarySchema,
+	CompactionPolicySchema,
 	GoalSnapshotSchema,
 	PlanSnapshotSchema,
 	SessionSnapshotV2Schema,
@@ -1093,6 +1094,10 @@ export class RemoteV2Session {
 			} else if (isGoalSnapshot(goal)) {
 				this.#snapshot = { ...this.#snapshot, goal: structuredClone(goal) };
 			}
+		} else if (event.event === "model_compaction_policy_changed" && this.#snapshot) {
+			const compactionPolicy = asRecord(event.payload)?.compactionPolicy;
+			if (isCompactionPolicy(compactionPolicy))
+				this.#snapshot = { ...this.#snapshot, compactionPolicy: structuredClone(compactionPolicy) };
 		} else if (event.event === "plan_updated" && this.#snapshot) {
 			const plan = asRecord(event.payload)?.plan;
 			if (plan === null) {
@@ -1179,6 +1184,10 @@ function isUsageAggregate(value: unknown): value is UsageAggregate {
 
 function isGoalSnapshot(value: unknown): value is GoalSnapshot {
 	return Check(GoalSnapshotSchema, value);
+}
+
+function isCompactionPolicy(value: unknown): value is ProtocolSnapshot["compactionPolicy"] {
+	return Check(CompactionPolicySchema, value);
 }
 
 function isSnapshot(value: unknown): value is ProtocolSnapshot {

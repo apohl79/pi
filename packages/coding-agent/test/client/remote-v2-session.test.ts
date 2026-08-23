@@ -669,6 +669,23 @@ describe("RemoteV2Session", () => {
 				},
 			},
 		});
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 6,
+			revision: 6,
+			event: "model_compaction_policy_changed",
+			payload: {
+				compactionPolicy: {
+					enabled: false,
+					contextWindow: 16_000,
+					reserveTokens: 1_000,
+					keepRecentTokens: 2_000,
+					triggerTokens: 15_000,
+					source: "model",
+				},
+			},
+		});
 		expect(session.snapshot).toMatchObject({
 			name: "Renamed",
 			nameSource: "explicit",
@@ -676,6 +693,7 @@ describe("RemoteV2Session", () => {
 			phase: "turn",
 			usage: { output: 2 },
 			goal: { id: "goal-1", status: "active" },
+			compactionPolicy: { enabled: false, source: "model" },
 		});
 		await session.dispose();
 	});
