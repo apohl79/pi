@@ -479,6 +479,7 @@ export class PiServerV2 {
 		await this.service.deleteSession(command.sessionId);
 		const runtime = state.sessions.get(command.sessionId);
 		state.sessions.delete(command.sessionId);
+		this.releaseControlFor(state, command.sessionId);
 		if (runtime && !this.hasRuntimeReference(runtime)) await this.disposeRuntime(runtime);
 		await this.sendResponse(state, id, { command: command.command, sessionId: command.sessionId });
 	}

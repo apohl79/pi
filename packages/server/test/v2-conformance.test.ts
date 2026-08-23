@@ -635,6 +635,14 @@ describe("PiServer v2 operation acceptance", () => {
 		const deleted = await client.request({ command: "session/delete", sessionId: "created-session" });
 		expect(deleted).toMatchObject({ ok: true, result: { command: "session/delete", sessionId: "created-session" } });
 		expect(service.sessions.has("created-session")).toBe(false);
+		const replacement = await client.request({ command: "session/create", payload: { id: "created-session" } });
+		expect(replacement).toMatchObject({ ok: true, result: { session: { id: "created-session" } } });
+		const reacquirer = await connectUnixTestClientV2(server.addresses[0]!);
+		await reacquirer.hello();
+		await expect(
+			reacquirer.request({ command: "session/attach", sessionId: "created-session", payload: { mode: "control" } }),
+		).resolves.toMatchObject({ ok: true, result: { lease: "control" } });
+		await reacquirer.close();
 	});
 
 	test("keeps session deletion under the session controller", async () => {
