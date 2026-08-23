@@ -41,6 +41,7 @@ export type V2ProcessChange = {
 export interface V2ProcessRegistry {
 	onChange?(listener: (change: V2ProcessChange) => void): () => void;
 	start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot>;
+	list(sessionId: string): Promise<readonly V2ProcessSnapshot[]>;
 	getSnapshot(processId: string): Promise<V2ProcessSnapshot>;
 	write(processId: string, input: string, options?: V2ProcessWriteOptions): Promise<V2ProcessOutput>;
 	read(processId: string, cursor: number): Promise<V2ProcessOutput>;
@@ -80,6 +81,14 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 	onChange(listener: (change: V2ProcessChange) => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
+	}
+
+	list(sessionId: string): Promise<readonly V2ProcessSnapshot[]> {
+		return Promise.resolve(
+			[...this.processes.values()]
+				.filter((process) => process.sessionId === sessionId)
+				.map((process) => this.snapshot(process)),
+		);
 	}
 
 	async start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
@@ -283,6 +292,14 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		return () => this.listeners.delete(listener);
 	}
 
+	list(sessionId: string): Promise<readonly V2ProcessSnapshot[]> {
+		return Promise.resolve(
+			[...this.processes.values()]
+				.filter((process) => process.sessionId === sessionId)
+				.map((process) => this.snapshot(process)),
+		);
+	}
+
 	async start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
 		const child = spawnNodeProcess(request, this.ptyLauncher);
 		const state: NodeProcessState = {
@@ -452,6 +469,17 @@ export class JsonlV2ProcessRegistry implements V2ProcessRegistry {
 	onChange(listener: (change: V2ProcessChange) => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
+	}
+
+	async list(sessionId: string): Promise<readonly V2ProcessSnapshot[]> {
+		await this.ready;
+		const live = await this.delegate.list(sessionId);
+		const snapshots = new Map(live.map((snapshot) => [snapshot.processId, snapshot]));
+		for (const snapshot of this.records.values()) {
+			if (snapshot.sessionId === sessionId && !snapshots.has(snapshot.processId))
+				snapshots.set(snapshot.processId, snapshot);
+		}
+		return [...snapshots.values()].map((snapshot) => structuredClone(snapshot));
 	}
 
 	async start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {

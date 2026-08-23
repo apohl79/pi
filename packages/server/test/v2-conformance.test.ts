@@ -1740,6 +1740,8 @@ describe("PiServer v2 operation acceptance", () => {
 			sessionId: "session-1",
 			payload: { command: "demo" },
 		});
+		const listed = await client.request({ command: "process/list", sessionId: "session-1" });
+		expect(listed).toMatchObject({ ok: true, result: { processes: [{ sessionId: "session-1" }] } });
 		expect(
 			await client.request({
 				command: "process/start",
@@ -1809,8 +1811,8 @@ describe("PiServer v2 operation acceptance", () => {
 			"process_terminated",
 			"process_waited",
 		]);
-		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_received")).toHaveLength(10);
-		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_completed")).toHaveLength(10);
+		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_received")).toHaveLength(11);
+		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_completed")).toHaveLength(11);
 		const inputEvent = diagnosticEvents.find((event) => event.kind === "process_input_written");
 		expect(inputEvent).toMatchObject({
 			processInstanceId: processId,
