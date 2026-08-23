@@ -685,7 +685,11 @@ export class PiServerV2 {
 		const snapshot = await this.processes.getSnapshot(processId);
 		this.requireControl(state, snapshot.sessionId);
 		if (typeof payload.input !== "string") throw new Error("process/write requires input");
-		const output = await this.processes.write(processId, payload.input);
+		if (payload.eof !== undefined && typeof payload.eof !== "boolean")
+			throw new Error("process/write eof must be a boolean");
+		const output = await this.processes.write(processId, payload.input, {
+			...(payload.eof === undefined ? {} : { eof: payload.eof }),
+		});
 		await this.diagnostics.record({
 			kind: "process_input_written",
 			severity: "info",
