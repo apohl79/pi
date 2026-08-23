@@ -143,6 +143,37 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>)
 							result: { command: "session/attach" },
 						}),
 					);
+				} else if (message.request.command === "filesystem/reference/resolve") {
+					const reference = (message.request.payload as { reference: string }).reference;
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: {
+								file: { reference, path: reference, kind: "file", size: 12, mimeType: "text/markdown" },
+							},
+						}),
+					);
+				} else if (message.request.command === "filesystem/reference/read") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: {
+								file: {
+									reference: (message.request.payload as { reference: string }).reference,
+									path: (message.request.payload as { reference: string }).reference,
+									kind: "file",
+									size: 12,
+									mimeType: "text/markdown",
+								},
+								encoding: "base64",
+								data: Buffer.from("file context").toString("base64"),
+							},
+						}),
+					);
 				} else if (message.request.command === "turn/start") {
 					handlers?.onData(
 						encodeServerMessageV2({
@@ -641,7 +672,7 @@ describe("experimental CLI runtime", () => {
 	test("routes local file arguments through the remote prompt contract", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-cli-file-"));
 		const file = join(directory, "prompt.md");
-		await writeFile(file, "file context");
+		await writeFile(file, "client file");
 		const requests: Array<{ command: string; payload?: unknown }> = [];
 		const server = clientFactory(requests);
 		const output: string[] = [];
@@ -660,6 +691,7 @@ describe("experimental CLI runtime", () => {
 		expect(requests.find((request) => request.command === "turn/start")?.payload).toEqual({
 			text: `<file name="${file}">\nfile context\n</file>\nanswer`,
 		});
+		expect(requests.filter((request) => request.command === "filesystem/reference/resolve")).toHaveLength(1);
 		runtime.close();
 	});
 
