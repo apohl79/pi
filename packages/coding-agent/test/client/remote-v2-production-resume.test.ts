@@ -73,7 +73,12 @@ describe("production remote v2 resume", () => {
 				await session.waitForOperation(operationId);
 				expect(session.snapshot?.persistence.recoveryState).toBe("recovered");
 				expect(session.snapshot?.transcript).toEqual(
-					expect.arrayContaining([expect.objectContaining({ role: "assistant", text: "resumed remotely" })]),
+					expect.arrayContaining([
+						expect.objectContaining({
+							role: "assistant",
+							content: [expect.objectContaining({ type: "text", text: "resumed remotely" })],
+						}),
+					]),
 				);
 			} finally {
 				await session.dispose();
