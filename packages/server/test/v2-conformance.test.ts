@@ -259,6 +259,17 @@ describe("PiServer v2 operation acceptance", () => {
 			sessionId: "session-1",
 			payload: { token: "secret" },
 		});
+		await diagnostics.record({
+			kind: "other-session",
+			severity: "info",
+			sessionId: "session-2",
+			operationId: "operation-2",
+		});
+		await diagnostics.record({
+			kind: "boot-follow-up",
+			severity: "info",
+			sessionId: "session-1",
+		});
 		const server = createUnixServerV2(new TestService(), {
 			path: join(directory, "server.sock"),
 			diagnostics,
@@ -291,28 +302,48 @@ describe("PiServer v2 operation acceptance", () => {
 		const status = await client.request({ command: "diagnostics/status" });
 		const timeline = await client.request({ command: "diagnostics/timeline", payload: { sessionId: "session-1" } });
 		const exported = await client.request({ command: "diagnostics/export" });
+		const scopedExport = await client.request({
+			command: "diagnostics/export",
+			payload: { sessionId: "session-1" },
+		});
 		const verified = await client.request({ command: "diagnostics/verify" });
 		const doctor = await client.request({ command: "diagnostics/doctor" });
 		expect(status).toMatchObject({
 			ok: true,
-			result: { capture: "metadata", eventCount: 1, degraded: true, lastCriticalEventSeq: 1 },
+			result: { capture: "metadata", eventCount: 3, degraded: true, lastCriticalEventSeq: 1 },
 		});
 		const scopedStatus = await client.request({ command: "diagnostics/status", payload: { sessionId: "session-2" } });
 		expect(scopedStatus).toMatchObject({
 			ok: true,
-			result: { capture: "metadata", eventCount: 0, degraded: false, lastCriticalEventSeq: 0 },
+			result: { capture: "metadata", eventCount: 1, degraded: false, lastCriticalEventSeq: 0 },
 		});
 		expect(timeline).toMatchObject({
 			ok: true,
-			result: { events: [{ kind: "boot", payload: { token: "[REDACTED]" } }] },
+			result: {
+				events: [{ kind: "boot", payload: { token: "[REDACTED]" } }, { kind: "boot-follow-up" }],
+			},
 		});
 		expect(exported).toMatchObject({
 			ok: true,
 			result: {
 				format: "json",
-				events: [{ seq: 1 }],
+				events: [{ seq: 1 }, { seq: 2 }, { seq: 3 }],
 				bundle: { manifest: { unavailable: ["client-diagnostic-spool"] } },
 			},
+		});
+		expect(scopedExport).toMatchObject({
+			ok: true,
+			result: {
+				events: [{ seq: 1 }, { seq: 3 }],
+				bundle: {
+					manifest: { eventCount: 2, firstSeq: 1, lastSeq: 3, scope: { sessionId: "session-1" } },
+				},
+			},
+		});
+		const scopedBundle = (scopedExport as unknown as { result: { bundle: JsonValue } }).result.bundle;
+		expect(await client.request({ command: "diagnostics/verify", payload: { bundle: scopedBundle } })).toMatchObject({
+			ok: true,
+			result: { valid: true },
 		});
 		expect(
 			(exported as unknown as { result: { integrity: Array<{ name: string; ok: boolean }> } }).result.integrity,

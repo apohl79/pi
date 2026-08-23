@@ -945,8 +945,27 @@ export class PiServerV2 {
 
 	private async diagnosticsExport(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
-		const events = await this.diagnosticEvents();
-		const capsules = await this.diagnosticCapsulesForExport();
+		const sessionId = typeof payload.sessionId === "string" ? payload.sessionId : undefined;
+		const operationId = typeof payload.operationId === "string" ? payload.operationId : undefined;
+		const allEvents = await this.diagnosticEvents();
+		const events = allEvents.filter(
+			(event) =>
+				(sessionId === undefined || event.sessionId === sessionId) &&
+				(operationId === undefined || event.operationId === operationId),
+		);
+		const allCapsules = await this.diagnosticCapsulesForExport();
+		const capsuleEventIds = new Set(
+			events.flatMap((event) => {
+				const contentRef = event.payload.contentRef;
+				if (typeof contentRef !== "object" || contentRef === null || Array.isArray(contentRef)) return [];
+				const eventId = (contentRef as Record<string, unknown>).eventId;
+				return typeof eventId === "string" ? [eventId] : [];
+			}),
+		);
+		const capsules =
+			sessionId === undefined && operationId === undefined
+				? allCapsules
+				: allCapsules.filter((capsule) => capsuleEventIds.has(capsule.eventId));
 		const integrity = this.integrity === undefined ? undefined : await this.integrity();
 		const decryptedCapsules =
 			payload.decryptContent === true ? await this.diagnosticCapsulesForDecryption(capsules) : undefined;
@@ -959,6 +978,14 @@ export class PiServerV2 {
 			lastSeq: events.at(-1)?.seq ?? 0,
 			eventsSha256: createHash("sha256").update(serializedEvents).digest("hex"),
 			capsulesSha256: createHash("sha256").update(serializedCapsules).digest("hex"),
+			...(sessionId === undefined && operationId === undefined
+				? {}
+				: {
+						scope: {
+							...(sessionId === undefined ? {} : { sessionId }),
+							...(operationId === undefined ? {} : { operationId }),
+						},
+					}),
 			unavailable: ["client-diagnostic-spool"],
 		};
 		await this.sendResponse(state, id, {
