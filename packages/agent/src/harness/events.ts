@@ -44,13 +44,37 @@ export interface NavigationEndEvent {
 	error?: { code: string; message: string };
 }
 
+export interface ItemCompletedEvent {
+	type: "item_completed";
+	runId: string;
+	role: string;
+}
+
+export interface ToolStartedEvent {
+	type: "tool_started";
+	runId: string;
+	toolCallId: string;
+	toolName: string;
+}
+
+export interface ToolCompletedEvent {
+	type: "tool_completed";
+	runId: string;
+	toolCallId: string;
+	toolName: string;
+	isError: boolean;
+}
+
 export type HarnessEvent =
 	| RunStartEvent
 	| RunEndEvent
 	| CompactionStartEvent
 	| CompactionEndEvent
 	| NavigationStartEvent
-	| NavigationEndEvent;
+	| NavigationEndEvent
+	| ItemCompletedEvent
+	| ToolStartedEvent
+	| ToolCompletedEvent;
 export type HarnessEventType = HarnessEvent["type"];
 export type HarnessEventOfType<TType extends HarnessEventType> = Extract<HarnessEvent, { type: TType }>;
 export type HarnessEventListener<TEvent extends HarnessEvent = HarnessEvent> = (event: TEvent) => void | Promise<void>;

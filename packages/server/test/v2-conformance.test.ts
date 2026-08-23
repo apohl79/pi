@@ -30,7 +30,12 @@ import { InMemoryV2ProcessRegistry, NodeV2ProcessRegistry } from "../src/process
 import { connectInMemoryTestClientV2, connectUnixTestClientV2, Deferred } from "../src/testing/index.ts";
 import { createUnixServerV2 } from "../src/transports/unix/preset.ts";
 import { InMemoryV2UsageLedger } from "../src/usage-ledger.ts";
-import { type PiServerServiceV2, PiServerV2, type PiSessionRuntimeV2 } from "../src/v2.ts";
+import {
+	type PiServerServiceV2,
+	PiServerV2,
+	type PiSessionRuntimeEventV2,
+	type PiSessionRuntimeV2,
+} from "../src/v2.ts";
 import { AdapterV2WebService, type V2WebOperation, type V2WebRequest } from "../src/web.ts";
 
 const runtimes: TestRuntime[] = [];
@@ -113,7 +118,9 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	goalUpdated = false;
 	compactionPolicyUpdated = false;
 	instructionProfileUpdated = false;
+	emitLifecycleEvents = false;
 	private current: SessionSnapshotV2;
+	private readonly eventListeners = new Set<(event: PiSessionRuntimeEventV2) => void>();
 
 	constructor(id: string) {
 		this.current = sessionSnapshot(id);
@@ -138,6 +145,20 @@ class TestRuntime implements PiSessionRuntimeV2 {
 		}
 		await this.release.promise;
 		this.started.resolve(undefined);
+		if (this.emitLifecycleEvents) {
+			this.emit({
+				sessionId: this.current.id,
+				event: "tool_started",
+				operationId,
+				payload: { toolCallId: "tool-1", toolName: "exec_command" },
+			});
+			this.emit({
+				sessionId: this.current.id,
+				event: "tool_completed",
+				operationId,
+				payload: { toolCallId: "tool-1", toolName: "exec_command", isError: false },
+			});
+		}
 		if (command.command === "session/name/set") {
 			const payload = command.payload as { name?: unknown } | undefined;
 			this.current = {
@@ -195,6 +216,15 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	dispose(): Promise<void> {
 		this.disposeCount += 1;
 		return Promise.resolve();
+	}
+
+	onEvent(listener: (event: PiSessionRuntimeEventV2) => void): () => void {
+		this.eventListeners.add(listener);
+		return () => this.eventListeners.delete(listener);
+	}
+
+	emit(event: PiSessionRuntimeEventV2): void {
+		for (const listener of this.eventListeners) listener(event);
 	}
 }
 
@@ -2261,6 +2291,39 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(await interruptEvent).toMatchObject({
 			event: "agent_updated",
 			payload: { agent: { id: agent.id, state: "interrupted" } },
+		});
+		await client.close();
+	});
+
+	test("forwards runtime tool lifecycle events into the v2 event stream", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-runtime-events-"));
+		directories.push(directory);
+		const service = new TestService();
+		service.sessions.get("session-1")!.emitLifecycleEvents = true;
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const started = client.next((message) => message.type === "event" && message.event === "tool_started");
+		const completed = client.next((message) => message.type === "event" && message.event === "tool_completed");
+		const accepted = await client.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { text: "run" },
+		});
+		const operationId = (accepted as { accepted: OperationAccepted }).accepted.operationId;
+		service.sessions.get("session-1")!.release.resolve(undefined);
+		expect(await started).toMatchObject({
+			event: "tool_started",
+			operationId,
+			payload: { toolCallId: "tool-1", toolName: "exec_command" },
+		});
+		expect(await completed).toMatchObject({
+			event: "tool_completed",
+			operationId,
+			payload: { toolCallId: "tool-1", isError: false },
 		});
 		await client.close();
 	});
