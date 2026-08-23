@@ -158,6 +158,9 @@ function memoryTransport() {
 									? ({ output: { output: "hi", cursor: 2, truncated: false } } as JsonValue)
 									: message.request.command === "filesystem/complete"
 										? ({
+												...(message.request.requestId === undefined
+													? {}
+													: { requestId: message.request.requestId }),
 												items: [{ reference: "project:src", path: "/workspace/src", kind: "directory" }],
 											} as JsonValue)
 										: message.request.command === "filesystem/reference/resolve"
@@ -930,9 +933,19 @@ describe("RemoteV2Session", () => {
 		const client = new PiClientV2({ transportFactory: pair.factory });
 		await client.connect();
 		const session = await RemoteV2Session.open(client, "session-1");
-		expect(await session.completeFiles("project:s")).toEqual([
-			{ reference: "project:src", path: "/workspace/src", kind: "directory" },
-		]);
+		expect(
+			await session.completeFiles("project:s", {
+				requestId: "completion-1",
+				cwd: "/workspace",
+				environmentId: "default",
+			}),
+		).toEqual([{ reference: "project:src", path: "/workspace/src", kind: "directory" }]);
+		expect(pair.requests.at(-1)?.requestId).toBe("completion-1");
+		expect(pair.requests.at(-1)?.payload).toEqual({
+			prefix: "project:s",
+			cwd: "/workspace",
+			environmentId: "default",
+		});
 		expect((await session.resolveFile("project:README.md")).mimeType).toBe("text/markdown");
 		expect((await session.readFile("project:README.md")).data).toBe("aGk=");
 		await session.dispose();

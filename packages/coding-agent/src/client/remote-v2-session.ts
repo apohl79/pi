@@ -658,13 +658,23 @@ export class RemoteV2Session {
 		return structuredClone(result.process);
 	}
 
-	async completeFiles(prefix: string): Promise<readonly RemoteV2FileCompletion[]> {
+	async completeFiles(
+		prefix: string,
+		options: { readonly requestId?: string; readonly cwd?: string; readonly environmentId?: string } = {},
+	): Promise<readonly RemoteV2FileCompletion[]> {
 		this.#assertNotDisposed();
 		const result = await this.#direct({
 			command: "filesystem/complete",
 			sessionId: this.#requireHandle().sessionId,
-			payload: { prefix },
+			requestId: options.requestId,
+			payload: {
+				prefix,
+				...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+				...(options.environmentId === undefined ? {} : { environmentId: options.environmentId }),
+			},
 		});
+		if (options.requestId !== undefined && result.requestId !== options.requestId)
+			throw new Error("Invalid filesystem/complete request id");
 		if (!Array.isArray(result.items) || !result.items.every(isFileCompletion))
 			throw new Error("Invalid filesystem/complete response");
 		return result.items.map((item) => structuredClone(item));
