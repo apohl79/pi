@@ -1,7 +1,13 @@
 import type { Readable } from "node:stream";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { PiClientV2 } from "@earendil-works/pi-client";
-import type { SessionSnapshotV2, TranscriptItem, UserTranscriptItem } from "@earendil-works/pi-protocol";
+import type {
+	ModelMetadata,
+	ModelRef,
+	SessionSnapshotV2,
+	TranscriptItem,
+	UserTranscriptItem,
+} from "@earendil-works/pi-protocol";
 import { type RemoteV2PromptContent, RemoteV2Session } from "../../client/remote-v2-session.ts";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.ts";
 import type { RpcCommand } from "../../modes/rpc/rpc-types.ts";
@@ -26,6 +32,10 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 		cwd: options.cwd,
 		...(options.options.name === undefined ? {} : { name: options.options.name }),
 	});
+	const requestedModel = resolveRemoteModel(options.options, await client.listModels());
+	if (requestedModel !== undefined) await session.waitForOperation(await session.setModel(requestedModel));
+	if (options.options.thinking !== undefined)
+		await session.waitForOperation(await session.setThinking(options.options.thinking));
 	let previousSnapshot: SessionSnapshotV2 | undefined;
 	let unsubscribe = subscribeSession(
 		session,
@@ -197,6 +207,21 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 	await inputEnded;
 	await Promise.all(pendingLines);
 	stopReading();
+}
+
+function resolveRemoteModel(options: Args, models: readonly ModelMetadata[]): ModelRef | undefined {
+	if (options.model === undefined && options.provider === undefined) return undefined;
+	const requested = options.model?.trim();
+	const slash = requested?.indexOf("/") ?? -1;
+	const provider = options.provider ?? (slash > 0 ? requested?.slice(0, slash) : undefined);
+	const id = slash > 0 ? requested?.slice(slash + 1) : requested;
+	if (id === undefined || id.length === 0) throw new Error("Server-default model selection requires --model <model>");
+	const matches = models.filter((model) => (provider === undefined || model.provider === provider) && model.id === id);
+	if (matches.length > 1 && provider === undefined)
+		throw new Error(`Model id is ambiguous: ${id}; specify --provider`);
+	const match = matches[0];
+	if (match === undefined) throw new Error(`Model not found: ${provider}/${id}`);
+	return { provider: match.provider, id: match.id };
 }
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
