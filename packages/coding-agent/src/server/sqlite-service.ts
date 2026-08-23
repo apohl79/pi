@@ -62,6 +62,7 @@ function sessionMetadata(metadata: SqliteSessionMetadata): SessionMetadataV2 {
 		id: metadata.id,
 		createdAt: metadata.createdAt,
 		updatedAt: metadata.createdAt,
+		...(metadata.parentSessionId === undefined ? {} : { parentSessionId: metadata.parentSessionId }),
 		...(metadata.name === undefined ? {} : { sessionName: metadata.name }),
 		cwd: metadata.cwd,
 	};
@@ -84,8 +85,22 @@ export async function createCodingAgentV2SqliteService(
 		session: Session<SqliteSessionMetadata>,
 		modelOverride?: Model<Api>,
 	): Promise<CodingAgentV2SessionDefinition> => {
+		const storedModel = metadata.metadata?.codingAgentModel;
+		const storedModelOverride =
+			typeof storedModel === "object" &&
+			storedModel !== null &&
+			!Array.isArray(storedModel) &&
+			typeof (storedModel as { provider?: unknown }).provider === "string" &&
+			typeof (storedModel as { id?: unknown }).id === "string"
+				? options.models.getModel(
+						(storedModel as { provider: string }).provider,
+						(storedModel as { id: string }).id,
+					)
+				: undefined;
 		const model =
-			modelOverride ?? (typeof options.model === "function" ? await options.model(metadata) : options.model);
+			modelOverride ??
+			storedModelOverride ??
+			(typeof options.model === "function" ? await options.model(metadata) : options.model);
 		const env = typeof options.env === "function" ? await options.env(metadata) : options.env;
 		const goals = new GoalManager(session);
 		const compaction = options.compaction?.(model);
@@ -195,9 +210,15 @@ export async function createCodingAgentV2SqliteService(
 		},
 		create: async (payload) => {
 			const cwd = typeof payload.cwd === "string" && payload.cwd.length > 0 ? payload.cwd : process.cwd();
+			const requestedModel =
+				typeof payload.model === "object" && payload.model !== null && !Array.isArray(payload.model)
+					? (payload.model as Record<string, unknown>)
+					: undefined;
 			const session = await options.repository.create({
 				cwd,
 				...(typeof payload.id === "string" ? { id: payload.id } : {}),
+				...(typeof payload.parentSessionId === "string" ? { parentSessionId: payload.parentSessionId } : {}),
+				...(requestedModel === undefined ? {} : { metadata: { codingAgentModel: requestedModel } }),
 			});
 			const metadata = await session.getMetadata();
 			metadataById.set(metadata.id, metadata);
@@ -206,10 +227,6 @@ export async function createCodingAgentV2SqliteService(
 				await session.setName(name);
 				metadata.name = name;
 			}
-			const requestedModel =
-				typeof payload.model === "object" && payload.model !== null && !Array.isArray(payload.model)
-					? (payload.model as Record<string, unknown>)
-					: undefined;
 			const modelOverride =
 				requestedModel &&
 				typeof requestedModel.provider === "string" &&
