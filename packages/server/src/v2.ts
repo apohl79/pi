@@ -652,6 +652,10 @@ export class PiServerV2 {
 		this.requireControl(state, command.sessionId);
 		const payload = objectPayload(command);
 		if (typeof payload.command !== "string") throw new Error("process/start requires command");
+		if (payload.cwd !== undefined && typeof payload.cwd !== "string")
+			throw new Error("process/start cwd must be a string");
+		if (payload.pty !== undefined && typeof payload.pty !== "boolean")
+			throw new Error("process/start pty must be a boolean");
 		let env: Record<string, string> | undefined;
 		if (payload.env !== undefined) {
 			if (typeof payload.env !== "object" || payload.env === null || Array.isArray(payload.env))
@@ -665,9 +669,9 @@ export class PiServerV2 {
 		const process = await this.processes.start({
 			sessionId: command.sessionId,
 			command: payload.command,
-			...(typeof payload.cwd === "string" ? { cwd: payload.cwd } : {}),
+			...(payload.cwd === undefined ? {} : { cwd: payload.cwd }),
 			...(env === undefined ? {} : { env }),
-			...(typeof payload.pty === "boolean" ? { pty: payload.pty } : {}),
+			...(payload.pty === undefined ? {} : { pty: payload.pty }),
 		});
 		await this.recordProtocolDiagnostic({
 			kind: "process_started",

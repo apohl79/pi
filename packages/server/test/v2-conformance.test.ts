@@ -1308,6 +1308,20 @@ describe("PiServer v2 operation acceptance", () => {
 			sessionId: "session-1",
 			payload: { command: "demo" },
 		});
+		expect(
+			await client.request({
+				command: "process/start",
+				sessionId: "session-1",
+				payload: { command: "demo", cwd: 1 },
+			}),
+		).toMatchObject({ ok: false, error: { message: "process/start cwd must be a string" } });
+		expect(
+			await client.request({
+				command: "process/start",
+				sessionId: "session-1",
+				payload: { command: "demo", pty: "true" },
+			}),
+		).toMatchObject({ ok: false, error: { message: "process/start pty must be a boolean" } });
 		const processId = (started as unknown as { result: { process: { processId: string } } }).result.process.processId;
 		await client.request({ command: "process/write", payload: { processId, input: "abcdef" } });
 		const output = await client.request({ command: "process/read", payload: { processId, cursor: 0 } });
@@ -1327,8 +1341,8 @@ describe("PiServer v2 operation acceptance", () => {
 			"process_terminated",
 			"process_waited",
 		]);
-		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_received")).toHaveLength(6);
-		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_completed")).toHaveLength(6);
+		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_received")).toHaveLength(8);
+		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_completed")).toHaveLength(8);
 		const inputEvent = diagnosticEvents.find((event) => event.kind === "process_input_written");
 		expect(inputEvent).toMatchObject({
 			processInstanceId: processId,
