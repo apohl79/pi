@@ -114,7 +114,7 @@ export class ServerDaemon {
 	}
 
 	private async startInternal(): Promise<void> {
-		await this.recordDiagnostic("daemon_starting", { socketPath: this.options.socketPath });
+		await this.recordDiagnostic("daemon_starting", { socketPath: this.options.socketPath }, "started");
 		let server: ServerDaemonServer;
 		try {
 			server = (this.options.createServer ?? defaultCreateServer)(this.options.service, {
@@ -148,29 +148,37 @@ export class ServerDaemon {
 		} catch (error) {
 			await server.close().catch(() => {});
 			this.state = "stopped";
-			await this.recordDiagnostic("daemon_start_failed", {
-				error: error instanceof Error ? error.message : String(error),
-			});
+			await this.recordDiagnostic(
+				"daemon_start_failed",
+				{ error: error instanceof Error ? error.message : String(error) },
+				"error",
+				"error",
+			);
 			throw error;
 		}
 		this.server = server;
 		this.state = "running";
-		await this.recordDiagnostic("daemon_started", { serverId: server.id, addresses: server.addresses });
+		await this.recordDiagnostic("daemon_started", { serverId: server.id, addresses: server.addresses }, "ok");
 	}
 
 	private async stopInternal(server: ServerDaemonServer): Promise<void> {
-		await this.recordDiagnostic("daemon_stopping", { serverId: server.id });
+		await this.recordDiagnostic("daemon_stopping", { serverId: server.id }, "started");
 		try {
 			await server.close();
 		} finally {
 			this.server = undefined;
 			this.state = "stopped";
-			await this.recordDiagnostic("daemon_stopped", { serverId: server.id });
+			await this.recordDiagnostic("daemon_stopped", { serverId: server.id }, "ok");
 		}
 	}
 
-	private async recordDiagnostic(kind: string, payload: Record<string, unknown>): Promise<void> {
-		await this.options.diagnostics?.record({ kind, payload }).catch(() => {});
+	private async recordDiagnostic(
+		kind: string,
+		payload: Record<string, unknown>,
+		outcome: "started" | "ok" | "error",
+		severity: "debug" | "info" | "warn" | "error" = "info",
+	): Promise<void> {
+		await this.options.diagnostics?.record({ kind, payload, outcome, severity }).catch(() => {});
 	}
 }
 

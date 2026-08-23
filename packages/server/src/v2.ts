@@ -1172,6 +1172,10 @@ export class PiServerV2 {
 		);
 		await this.diagnostics?.record({
 			kind: "operation_accepted",
+			severity: "info",
+			outcome: "started",
+			traceId: operationId,
+			spanId: id,
 			sessionId: command.sessionId,
 			operationId,
 			payload: {
@@ -1263,6 +1267,10 @@ export class PiServerV2 {
 			}
 			await this.diagnostics?.record({
 				kind: "operation_terminal",
+				severity: "info",
+				outcome: "ok",
+				traceId: operationId,
+				spanId: operationId,
 				sessionId,
 				operationId,
 				payload: { state: "complete" },
@@ -1291,6 +1299,10 @@ export class PiServerV2 {
 			}
 			await this.diagnostics?.record({
 				kind: "operation_terminal",
+				severity: "error",
+				outcome: "error",
+				traceId: operationId,
+				spanId: operationId,
 				sessionId,
 				operationId,
 				payload: { state: "failed", error: message },

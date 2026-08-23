@@ -562,6 +562,12 @@ describe("PiServer v2 operation acceptance", () => {
 			command: "turn/start",
 			contentRef: { eventId: operationId, kind: "turn/start", truncated: false },
 		});
+		expect(acceptedEvent).toMatchObject({
+			severity: "info",
+			outcome: "started",
+			traceId: operationId,
+			spanId: expect.any(String),
+		});
 		expect(acceptedEvent.payload).not.toHaveProperty("text");
 		const exported = await client.request({ command: "diagnostics/export" });
 		const decrypted = await client.request({ command: "diagnostics/export", payload: { decryptContent: true } });

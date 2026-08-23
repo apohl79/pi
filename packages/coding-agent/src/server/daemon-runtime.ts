@@ -184,13 +184,15 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 	const diagnostics =
 		options.diagnostics ??
 		new JsonlForensicRecorder(options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"));
-	await diagnostics.record({ kind: "daemon_migration_started" });
+	await diagnostics.record({ kind: "daemon_migration_started", outcome: "started" });
 	try {
 		runMigrations(options.cwd, options.agentDir);
-		await diagnostics.record({ kind: "daemon_migration_completed" });
+		await diagnostics.record({ kind: "daemon_migration_completed", outcome: "ok" });
 	} catch (error) {
 		await diagnostics.record({
 			kind: "daemon_migration_failed",
+			severity: "error",
+			outcome: "error",
 			payload: { error: error instanceof Error ? error.name : "unknown" },
 		});
 		throw error;
