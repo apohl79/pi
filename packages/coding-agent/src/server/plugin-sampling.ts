@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import type { AgentMessage, ExecutionEnv, SamplingInputContext } from "@earendil-works/pi-agent-core";
+import {
+	type AgentMessage,
+	type ExecutionEnv,
+	estimateTokens,
+	type SamplingInputContext,
+} from "@earendil-works/pi-agent-core";
 import type { V2PluginSamplingEntry } from "@earendil-works/pi-server";
 
 const CONDITION_TIMEOUT_SECONDS = 5;
@@ -18,6 +23,7 @@ export type PluginSamplingDiagnostic = Readonly<{
 	reason: "included" | "condition_failed" | "condition_error" | "bound_exceeded";
 	durationMs?: number;
 	characters?: number;
+	tokens?: number;
 	contentHash?: string;
 }>;
 
@@ -67,13 +73,19 @@ export function createPluginSamplingInput(
 					});
 					continue;
 				}
-				messages.push({ role: "user", content: entry.text, timestamp: Date.now() });
+				const message = {
+					role: "user" as const,
+					content: entry.text,
+					timestamp: Date.now(),
+				} satisfies AgentMessage;
+				messages.push(message);
 				characters += size;
 				onDiagnostic?.({
 					pluginId: source.pluginId,
 					entryId: entry.id,
 					reason: "included",
 					characters: size,
+					tokens: estimateTokens(message),
 					contentHash: createHash("sha256").update(entry.text).digest("hex"),
 				});
 			}
