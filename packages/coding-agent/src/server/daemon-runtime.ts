@@ -36,6 +36,7 @@ import {
 	type ExperimentalCliRuntimeOptions,
 } from "../cli/experimental/runtime.ts";
 import type { TransportAddress } from "../cli/experimental/transport-address.ts";
+import { runMigrations } from "../migrations.ts";
 import { createCodingAgentV2AgentRegistry } from "./agent-registry.ts";
 import { type CodingAgentV2SqliteServiceOptions, createCodingAgentV2SqliteService } from "./sqlite-service.ts";
 
@@ -176,6 +177,7 @@ export async function createCodingAgentDaemonRuntime(
 export async function createConfiguredCodingAgentDaemonRuntime(
 	options: ConfiguredCodingAgentDaemonRuntimeOptions,
 ): Promise<ConfiguredCodingAgentDaemonRuntime> {
+	runMigrations(options.cwd, options.agentDir);
 	const env = new NodeExecutionEnv({ cwd: options.cwd });
 	const repository = new SqliteSessionRepository({
 		env,

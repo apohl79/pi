@@ -5,7 +5,7 @@
 import chalk from "chalk";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { CONFIG_DIR_NAME, getAgentDir, getBinDir } from "./config.ts";
+import { CONFIG_DIR_NAME, getAgentDir } from "./config.ts";
 import { migrateKeybindingsConfig } from "./core/keybindings.ts";
 import { stripBom } from "./utils/text.ts";
 
@@ -19,8 +19,7 @@ const EXTENSIONS_DOC_URL =
  *
  * @returns Array of provider names that were migrated
  */
-export function migrateAuthToAuthJson(): string[] {
-	const agentDir = getAgentDir();
+export function migrateAuthToAuthJson(agentDir = getAgentDir()): string[] {
 	const authPath = join(agentDir, "auth.json");
 	const oauthPath = join(agentDir, "oauth.json");
 	const settingsPath = join(agentDir, "settings.json");
@@ -82,9 +81,7 @@ export function migrateAuthToAuthJson(): string[] {
  *
  * See: https://github.com/earendil-works/pi-mono/issues/320
  */
-export function migrateSessionsFromAgentRoot(): void {
-	const agentDir = getAgentDir();
-
+export function migrateSessionsFromAgentRoot(agentDir = getAgentDir()): void {
 	// Find all .jsonl files directly in agentDir (not in subdirectories)
 	let files: string[];
 	try {
@@ -155,8 +152,8 @@ function migrateCommandsToPrompts(baseDir: string, label: string): boolean {
 	return false;
 }
 
-function migrateKeybindingsConfigFile(): void {
-	const configPath = join(getAgentDir(), "keybindings.json");
+function migrateKeybindingsConfigFile(agentDir = getAgentDir()): void {
+	const configPath = join(agentDir, "keybindings.json");
 	if (!existsSync(configPath)) return;
 
 	try {
@@ -175,10 +172,9 @@ function migrateKeybindingsConfigFile(): void {
 /**
  * Move fd/rg binaries from tools/ to bin/ if they exist.
  */
-function migrateToolsToBin(): void {
-	const agentDir = getAgentDir();
+function migrateToolsToBin(agentDir = getAgentDir()): void {
 	const toolsDir = join(agentDir, "tools");
-	const binDir = getBinDir();
+	const binDir = join(agentDir, "bin");
 
 	if (!existsSync(toolsDir)) return;
 
@@ -255,8 +251,7 @@ function checkDeprecatedExtensionDirs(baseDir: string, label: string): string[] 
 /**
  * Run extension system migrations (commands→prompts) and collect warnings about deprecated directories.
  */
-function migrateExtensionSystem(cwd: string): string[] {
-	const agentDir = getAgentDir();
+function migrateExtensionSystem(cwd: string, agentDir = getAgentDir()): string[] {
 	const projectDir = join(cwd, CONFIG_DIR_NAME);
 
 	// Migrate commands/ to prompts/
@@ -303,14 +298,17 @@ export async function showDeprecationWarnings(warnings: string[]): Promise<void>
  *
  * @returns Object with migration results and deprecation warnings
  */
-export function runMigrations(cwd: string): {
+export function runMigrations(
+	cwd: string,
+	agentDir = getAgentDir(),
+): {
 	migratedAuthProviders: string[];
 	deprecationWarnings: string[];
 } {
-	const migratedAuthProviders = migrateAuthToAuthJson();
-	migrateSessionsFromAgentRoot();
-	migrateToolsToBin();
-	migrateKeybindingsConfigFile();
-	const deprecationWarnings = migrateExtensionSystem(cwd);
+	const migratedAuthProviders = migrateAuthToAuthJson(agentDir);
+	migrateSessionsFromAgentRoot(agentDir);
+	migrateToolsToBin(agentDir);
+	migrateKeybindingsConfigFile(agentDir);
+	const deprecationWarnings = migrateExtensionSystem(cwd, agentDir);
 	return { migratedAuthProviders, deprecationWarnings };
 }
