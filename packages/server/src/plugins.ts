@@ -65,6 +65,7 @@ export type V2Plugin = Readonly<{
 	appDescriptors?: readonly V2PluginApp[];
 	hookDescriptors?: readonly V2PluginHook[];
 	diagnostics?: readonly V2PluginDiagnostic[];
+	threadContext?: readonly V2PluginSamplingEntry[];
 	sampling: readonly V2PluginSamplingEntry[];
 }>;
 
@@ -166,12 +167,15 @@ const samplingSlots = new Set<V2PluginSamplingEntry["slot"]>([
 ]);
 const samplingPositions = new Set<V2PluginSamplingEntry["position"]>(["preamble", "supplement"]);
 
-function samplingEntries(manifest: Record<string, unknown>): readonly V2PluginSamplingEntry[] {
+function contextEntries(
+	manifest: Record<string, unknown>,
+	key: "sampling" | "thread",
+): readonly V2PluginSamplingEntry[] {
 	const context = manifest.context;
 	if (!context || typeof context !== "object" || Array.isArray(context)) return [];
-	const sampling = (context as Record<string, unknown>).sampling;
-	if (!Array.isArray(sampling)) return [];
-	return sampling
+	const entries = (context as Record<string, unknown>)[key];
+	if (!Array.isArray(entries)) return [];
+	return entries
 		.flatMap((value) => {
 			if (!value || typeof value !== "object" || Array.isArray(value)) return [];
 			const entry = value as Record<string, unknown>;
@@ -206,6 +210,7 @@ function normalizePlugin(plugin: V2Plugin): V2Plugin {
 		appDescriptors: plugin.appDescriptors ?? [],
 		hookDescriptors: plugin.hookDescriptors ?? [],
 		diagnostics: plugin.diagnostics ?? [],
+		threadContext: plugin.threadContext ?? [],
 		sampling: plugin.sampling ?? [],
 	};
 }
@@ -308,7 +313,8 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 			appDescriptors: appDescriptors(id, manifest.apps, true),
 			hookDescriptors: hookDescriptors(id, manifest.hooks, true),
 			diagnostics: manifestDiagnostics(manifest),
-			sampling: samplingEntries(manifest),
+			threadContext: contextEntries(manifest, "thread"),
+			sampling: contextEntries(manifest, "sampling"),
 		};
 		this.plugins.set(id, plugin);
 		return structuredClone(plugin);
