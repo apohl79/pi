@@ -151,6 +151,12 @@ class TestRuntime implements PiSessionRuntimeV2 {
 		if (this.emitLifecycleEvents) {
 			this.emit({
 				sessionId: this.current.id,
+				event: "item_completed",
+				operationId,
+				payload: { role: "assistant" },
+			});
+			this.emit({
+				sessionId: this.current.id,
 				event: "tool_started",
 				operationId,
 				payload: { toolCallId: "tool-1", toolName: "exec_command" },
@@ -2310,6 +2316,7 @@ describe("PiServer v2 operation acceptance", () => {
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
 		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const itemCompleted = client.next((message) => message.type === "event" && message.event === "item_completed");
 		const started = client.next((message) => message.type === "event" && message.event === "tool_started");
 		const completed = client.next((message) => message.type === "event" && message.event === "tool_completed");
 		const accepted = await client.request({
@@ -2319,6 +2326,11 @@ describe("PiServer v2 operation acceptance", () => {
 		});
 		const operationId = (accepted as { accepted: OperationAccepted }).accepted.operationId;
 		service.sessions.get("session-1")!.release.resolve(undefined);
+		expect(await itemCompleted).toMatchObject({
+			event: "item_completed",
+			operationId,
+			payload: { role: "assistant" },
+		});
 		expect(await started).toMatchObject({
 			event: "tool_started",
 			operationId,
