@@ -255,6 +255,25 @@ describe("CodingAgentV2AgentRegistry", () => {
 		).toHaveLength(1);
 	});
 
+	test("does not duplicate a completion already present in the parent journal", async () => {
+		const { registry, runtime } = fixture();
+		runtime.blocked = true;
+		const agent = await registry.spawn({
+			sessionId: "parent-session",
+			parentPath: "root",
+			taskName: "worker",
+			taskMessage: "complete this task",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		await runtime.appendCustomEntry("agent_completion", { version: 1, agentId: agent.id });
+		runtime.release();
+		await registry.wait(agent.id);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(
+			runtime.customEntries.filter((entry) => entry.type === "custom" && entry.customType === "agent_completion"),
+		).toHaveLength(1);
+	});
+
 	test("snapshots bounded parent context into a forked child turn", async () => {
 		const { registry, runtime } = fixture();
 		const agent = await registry.spawn({

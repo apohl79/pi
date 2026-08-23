@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Entry } from "@earendil-works/pi-agent-core";
 import type { AgentSummary } from "@earendil-works/pi-protocol";
 import type { V2AgentRegistry, V2AgentRequest, V2AgentSnapshot } from "@earendil-works/pi-server";
 import type { CodingAgentV2Runtime, CodingAgentV2Service } from "./v2-service.ts";
@@ -33,6 +34,12 @@ function isPersistedAgentState(value: unknown): value is PersistedAgentState {
 		state.followUps.length <= MAX_AGENT_INBOX_MESSAGES &&
 		characters <= MAX_AGENT_INBOX_CHARACTERS
 	);
+}
+
+function isCompletionForAgent(entry: Entry, agentId: string): boolean {
+	if (entry.type !== "custom" || entry.customType !== AGENT_COMPLETION) return false;
+	if (typeof entry.data !== "object" || entry.data === null || Array.isArray(entry.data)) return false;
+	return (entry.data as Record<string, unknown>).agentId === agentId;
 }
 
 interface ChildAgent {
@@ -253,6 +260,10 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		agent.completionQueued = true;
 		const parent = await this.service.openSession(agent.parentSessionId);
 		if (!parent.appendCustomEntry) return;
+		if (parent.readCustomEntries) {
+			const completions = await parent.readCustomEntries(AGENT_COMPLETION);
+			if (completions.some((entry) => isCompletionForAgent(entry, agent.summary.id))) return;
+		}
 		try {
 			await parent.appendCustomEntry(AGENT_COMPLETION, {
 				version: 1,
