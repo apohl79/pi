@@ -1558,6 +1558,20 @@ describe("PiServer v2 operation acceptance", () => {
 				payload: { taskName: "bad-model", taskMessage: "inspect", model: "inherit" },
 			}),
 		).toMatchObject({ ok: false, error: { message: "agent/spawn model must be an object" } });
+		expect(
+			await client.request({
+				command: "agent/spawn",
+				sessionId: "session-1",
+				payload: { taskName: "bad-provider", taskMessage: "inspect", model: { provider: 1 } },
+			}),
+		).toMatchObject({ ok: false, error: { message: "agent/spawn model.provider must be a string" } });
+		expect(
+			await client.request({
+				command: "agent/spawn",
+				sessionId: "session-1",
+				payload: { taskName: "bad-role", taskMessage: "inspect", role: 1 },
+			}),
+		).toMatchObject({ ok: false, error: { message: "agent/spawn role must be a string" } });
 		expect(await client.request({ command: "agent/list", sessionId: "session-1" })).toMatchObject({
 			ok: true,
 			result: { agents: [{ id: agent.id, state: "running" }] },

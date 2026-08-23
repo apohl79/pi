@@ -827,10 +827,16 @@ export class PiServerV2 {
 			(typeof payload.model !== "object" || payload.model === null || Array.isArray(payload.model))
 		)
 			throw new Error("agent/spawn model must be an object");
+		if (payload.role !== undefined && typeof payload.role !== "string")
+			throw new Error("agent/spawn role must be a string");
 		const modelPayload =
 			typeof payload.model === "object" && payload.model !== null && !Array.isArray(payload.model)
 				? (payload.model as Record<string, unknown>)
 				: {};
+		if (modelPayload.provider !== undefined && typeof modelPayload.provider !== "string")
+			throw new Error("agent/spawn model.provider must be a string");
+		if (modelPayload.id !== undefined && typeof modelPayload.id !== "string")
+			throw new Error("agent/spawn model.id must be a string");
 		const agent = await this.agents.spawn({
 			sessionId: command.sessionId,
 			parentPath: typeof payload.parentPath === "string" ? payload.parentPath : "/root",
