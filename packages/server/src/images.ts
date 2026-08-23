@@ -77,6 +77,10 @@ export class BlobV2ImageService implements V2ImageService {
 		void sessionId;
 		if (!this.generator) throw new Error("Image generation service is not configured");
 		if (request.prompt.trim().length === 0) throw new Error("Image prompt must not be empty");
+		if (request.sourceDigest !== undefined) {
+			const source = await this.blobs.stat(request.sourceDigest);
+			assertImageMime(source.mimeType);
+		}
 		const generated = await this.generator.generate(request);
 		assertImageMime(generated.mimeType);
 		const blob = await this.blobs.put(generated.data, generated.mimeType);
