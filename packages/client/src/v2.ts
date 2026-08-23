@@ -7,6 +7,7 @@ import {
 	type EventEnvelopeV2,
 	encodeClientMessageV2,
 	FrameDecoder,
+	type JsonValue,
 	PROTOCOL_V2_VERSION,
 	parseServerMessageV2,
 	type ResponseEnvelopeV2,
@@ -23,6 +24,12 @@ export interface PiClientV2Options {
 }
 
 export type V2SessionLeaseMode = "control" | "observer";
+
+export interface CreateSessionV2Options {
+	readonly id?: string;
+	readonly name?: string;
+	readonly cwd?: string;
+}
 
 export interface PiSessionV2Handle {
 	readonly sessionId: string;
@@ -124,6 +131,18 @@ export class PiClientV2 {
 		const result = commandResult(await this.request({ command: "session/list" }));
 		if (!Array.isArray(result.sessions)) throw new Error("Invalid session/list result");
 		return result.sessions as SessionMetadataV2[];
+	}
+
+	async createSession(options: CreateSessionV2Options = {}): Promise<SessionSnapshotV2> {
+		const result = commandResult(
+			await this.request({
+				command: "session/create",
+				...(Object.keys(options).length === 0 ? {} : { payload: { ...options } as Record<string, JsonValue> }),
+			}),
+		);
+		if (typeof result.session !== "object" || result.session === null || Array.isArray(result.session))
+			throw new Error("Invalid session/create result");
+		return result.session as SessionSnapshotV2;
 	}
 
 	async attachSession(sessionId: string, mode: "control" | "observer" = "control"): Promise<void> {
