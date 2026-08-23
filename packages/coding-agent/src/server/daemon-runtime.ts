@@ -47,6 +47,7 @@ import { DefaultResourceLoader } from "../core/resource-loader.ts";
 import { runMigrations } from "../migrations.ts";
 import { type CodingAgentV2AgentRegistryOptions, createCodingAgentV2AgentRegistry } from "./agent-registry.ts";
 import { createCodingAgentNativePtyLauncher } from "./native-pty.ts";
+import { inspectPiExtensionServerCompatibility } from "./pi-extension-adapter.ts";
 import {
 	AcquiringV2PluginRegistry,
 	ActivatingV2PluginRegistry,
@@ -293,11 +294,15 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 	options: ConfiguredCodingAgentDaemonRuntimeOptions,
 ): Promise<ConfiguredCodingAgentDaemonRuntime> {
 	let discoveredPiExtensions = options.piExtensions;
+	let piExtensionLoadErrors: readonly { path: string; error: string }[] = [];
 	if (discoveredPiExtensions === undefined) {
 		const resourceLoader = new DefaultResourceLoader({ cwd: options.cwd, agentDir: options.agentDir });
 		await resourceLoader.reload();
-		discoveredPiExtensions = resourceLoader.getExtensions().extensions;
+		const extensionsResult = resourceLoader.getExtensions();
+		discoveredPiExtensions = extensionsResult.extensions;
+		piExtensionLoadErrors = extensionsResult.errors;
 	}
+	const piExtensionCompatibility = (discoveredPiExtensions ?? []).map(inspectPiExtensionServerCompatibility);
 	const primaryDiagnostics =
 		options.diagnostics ??
 		new SqliteForensicRecorder(
@@ -311,6 +316,21 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			...(options.diagnosticLogMaxFiles === undefined ? {} : { maxFiles: options.diagnosticLogMaxFiles }),
 		}),
 	);
+	for (const report of piExtensionCompatibility) {
+		if (report.unsupported.length === 0) continue;
+		await diagnostics.record({
+			kind: "pi_extension_compatibility",
+			severity: "warn",
+			payload: { extensionPath: report.extensionPath, unsupported: [...report.unsupported] },
+		});
+	}
+	for (const error of piExtensionLoadErrors) {
+		await diagnostics.record({
+			kind: "pi_extension_load",
+			severity: "warn",
+			payload: { extensionPath: error.path, error: error.error.slice(0, 500) },
+		});
+	}
 	const migrationSpool =
 		options.diagnostics === undefined
 			? new JsonlForensicRecorder(options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"))

@@ -436,6 +436,7 @@ describe("coding-agent daemon runtime", () => {
 		await writeFile(
 			join(directory, "extensions", "sampling.ts"),
 			`export default function(pi) {
+	pi.registerCommand("local-only", { description: "local only", handler: async () => {} });
 	pi.registerSamplingInput({
 		id: "discovered-reminder",
 		contribute: () => ({ role: "user", content: "discovered reminder", timestamp: 0 }),
@@ -443,6 +444,7 @@ describe("coding-agent daemon runtime", () => {
 }`,
 		);
 		const models = createModels();
+		const diagnostics = new InMemoryForensicRecorder();
 		const observedRequests: string[][] = [];
 		const faux = fauxProvider({
 			provider: "coding-agent-daemon-pi-extension-faux",
@@ -464,11 +466,19 @@ describe("coding-agent daemon runtime", () => {
 			cwd: directory,
 			models,
 			model: faux.getModel(),
+			diagnostics,
 			socketPath: join(directory, "server.sock"),
 			harness: { tools: [], activeToolNames: [] },
 			write: () => {},
 		});
 		try {
+			expect(await diagnostics.read()).toEqual([
+				expect.objectContaining({
+					kind: "pi_extension_compatibility",
+					severity: "warn",
+					payload: expect.objectContaining({ unsupported: ["commands"] }),
+				}),
+			]);
 			const created = await runtime.service.createSession!({ id: "pi-extension-session", cwd: directory });
 			await created.runtime.run("pi-extension-turn", {
 				command: "turn/start",
