@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { type SessionMutation, SessionState } from "../state.ts";
 import {
 	type BranchBounds,
@@ -19,6 +20,12 @@ import {
 import { encodeHeader, encodeMutation, metadataFromHeader, parseHeader, parseMutation } from "./codec.ts";
 import { fileResult, invalidFile, JsonlDecodeError } from "./errors.ts";
 import type { JsonlSessionMetadata, JsonlSessionRepoFileSystem, JsonlV4Header } from "./types.ts";
+
+const ROOT_FINGERPRINT_LINES = 8;
+
+function rootFingerprint(lines: readonly string[]): string {
+	return createHash("sha256").update(JSON.stringify(lines.slice(0, ROOT_FINGERPRINT_LINES))).digest("hex");
+}
 
 /**
  * Build a complete sibling temporary file, then atomically rename it over the destination.
@@ -46,10 +53,19 @@ async function publishFileAtomically(
 }
 
 export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
+	/** Serialize mutations across independently loaded storage instances in this process. */
+	private static readonly mutationTails = new Map<string, Promise<void>>();
 	private readonly fs: JsonlSessionRepoFileSystem;
 	private readonly metadata: JsonlSessionMetadata;
-	private readonly state = new SessionState();
+	private state = new SessionState();
 	private tail: Promise<void> = Promise.resolve();
+	/** Number of complete physical lines already projected into `state` (header included). */
+	private persistedLineCount = 0;
+	private persistedSize = 0;
+	private persistedModifiedAt = 0;
+	private persistedIdentity: string | undefined;
+	/** A bounded prefix fingerprint catches replacement even when file metadata is unchanged. */
+	private persistedRootLines: string[] = [];
 
 	constructor(fs: JsonlSessionRepoFileSystem, metadata: JsonlSessionMetadata) {
 		this.fs = fs;
@@ -63,10 +79,22 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 	): Promise<JsonlSessionStorage> {
 		fileResult(await fs.writeFile(path, encodeHeader(header)), `Failed to initialize session ${path}`);
 		const fileInfo = fileResult(await fs.fileInfo(path), `Failed to read session metadata ${path}`);
-		return new JsonlSessionStorage(fs, metadataFromHeader(header, path, fileInfo.mtimeMs));
+		const storage = new JsonlSessionStorage(fs, metadataFromHeader(header, path, fileInfo.mtimeMs));
+		storage.persistedLineCount = 1;
+		storage.persistedSize = new TextEncoder().encode(encodeHeader(header)).byteLength;
+		storage.persistedModifiedAt = fileInfo.mtimeMs;
+		storage.persistedIdentity = fileInfo.identity;
+		storage.persistedRootLines = [encodeHeader(header).trimEnd()];
+		return storage;
 	}
 
 	static async load(fs: JsonlSessionRepoFileSystem, path: string): Promise<JsonlSessionStorage> {
+		// Recovery may replace/truncate the file. Serialize the entire load, including
+		// torn-tail repair, with appends from every storage instance in this process.
+		return JsonlSessionStorage.withMutationLock(path, () => JsonlSessionStorage.loadUnlocked(fs, path));
+	}
+
+	private static async loadUnlocked(fs: JsonlSessionRepoFileSystem, path: string): Promise<JsonlSessionStorage> {
 		const content = fileResult(await fs.readTextFile(path), `Failed to read session ${path}`);
 		const physicalLines = content.split("\n");
 		if (physicalLines.at(-1) === "") physicalLines.pop();
@@ -88,6 +116,12 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 					await publishFileAtomically(fs, path, async (tempPath) => {
 						fileResult(await fs.writeFile(tempPath, validPrefix), `Failed to stage torn-tail repair ${path}`);
 					});
+					storage.persistedLineCount = index;
+					storage.persistedSize = new TextEncoder().encode(validPrefix).byteLength;
+					const repairedInfo = fileResult(await fs.fileInfo(path), `Failed to read session metadata ${path}`);
+					storage.persistedModifiedAt = repairedInfo.mtimeMs;
+					storage.persistedIdentity = repairedInfo.identity;
+					storage.persistedRootLines = physicalLines.slice(0, ROOT_FINGERPRINT_LINES);
 					return storage;
 				}
 				throw invalidFile(path, index + 1, mutationResult.error);
@@ -104,6 +138,11 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		if (!content.endsWith("\n")) {
 			fileResult(await fs.appendFile(path, "\n"), `Failed to repair unterminated session tail ${path}`);
 		}
+		storage.persistedLineCount = physicalLines.length;
+		storage.persistedSize = fileInfo.size + (content.endsWith("\n") ? 0 : 1);
+		storage.persistedModifiedAt = fileInfo.mtimeMs;
+		storage.persistedIdentity = fileInfo.identity;
+		storage.persistedRootLines = physicalLines.slice(0, ROOT_FINGERPRINT_LINES);
 		return storage;
 	}
 
@@ -290,7 +329,27 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 	}
 
 	private enqueue<T>(operation: () => Promise<T>): Promise<T> {
-		const result = this.tail.then(operation);
+		const result = this.tail.then(async () => {
+			const key = this.metadata.path;
+			const predecessor = JsonlSessionStorage.mutationTails.get(key) ?? Promise.resolve();
+			let release!: () => void;
+			const lock = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const chain = predecessor.then(() => lock);
+			JsonlSessionStorage.mutationTails.set(key, chain);
+			await predecessor;
+			try {
+				// Another instance may have appended since this instance was loaded. Refresh only
+				// when file metadata changed; the common single-writer path no longer reparses the
+				// complete history for every append. External suffixes are projected incrementally.
+				await this.refreshFromDisk(key);
+				return await operation();
+			} finally {
+				release();
+				if (JsonlSessionStorage.mutationTails.get(key) === chain) JsonlSessionStorage.mutationTails.delete(key);
+			}
+		});
 		this.tail = result.then(
 			() => undefined,
 			() => undefined,
@@ -298,11 +357,122 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		return result;
 	}
 
+	private static async withMutationLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+		const predecessor = JsonlSessionStorage.mutationTails.get(key) ?? Promise.resolve();
+		let release!: () => void;
+		const lock = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const chain = predecessor.then(() => lock);
+		JsonlSessionStorage.mutationTails.set(key, chain);
+		await predecessor;
+		try {
+			return await operation();
+		} finally {
+			release();
+			if (JsonlSessionStorage.mutationTails.get(key) === chain) JsonlSessionStorage.mutationTails.delete(key);
+		}
+	}
+
 	private async appendMutation(mutation: SessionMutation): Promise<void> {
-		fileResult(
-			await this.fs.appendFile(this.metadata.path, encodeMutation(mutation)),
-			`Failed to append session ${this.metadata.path}`,
+		const encoded = encodeMutation(mutation);
+		try {
+			fileResult(
+				await this.fs.appendFile(this.metadata.path, encoded),
+				`Failed to append session ${this.metadata.path}`,
+			);
+			this.persistedLineCount += 1;
+			this.persistedSize += new TextEncoder().encode(encoded).byteLength;
+			if (this.persistedRootLines.length < ROOT_FINGERPRINT_LINES) {
+				this.persistedRootLines.push(encoded.trimEnd());
+			}
+			// Metadata refresh is only an optimization for detecting external writers;
+			// never turn a successful append into an error if that optional read fails.
+			try {
+				const fileInfo = await this.fs.fileInfo(this.metadata.path);
+				if (fileInfo.ok) {
+					this.persistedModifiedAt = fileInfo.value.mtimeMs;
+					this.persistedIdentity = fileInfo.value.identity;
+				}
+			} catch {
+				// The append already committed; retain the locally projected metadata.
+			}
+		} catch (error) {
+			// An append may be durable even when the backend reports a transport
+			// error. Refresh local state so callers can detect the committed record
+			// and safely retry idempotent operations.
+			try {
+				const fresh = await JsonlSessionStorage.loadUnlocked(this.fs, this.metadata.path);
+				this.state = fresh.state;
+				// The append can be durable even when the backend reports a transport
+				// error. Keep the incremental refresh cursor in sync with the canonical
+				// reload, otherwise the next mutation replays the committed suffix.
+				this.persistedLineCount = fresh.persistedLineCount;
+				this.persistedSize = fresh.persistedSize;
+				this.persistedModifiedAt = fresh.persistedModifiedAt;
+				this.persistedIdentity = fresh.persistedIdentity;
+				this.persistedRootLines = fresh.persistedRootLines;
+			} catch {
+				// Preserve the original append error when the recovery read fails.
+			}
+			throw error;
+		}
+	}
+
+	private async refreshFromDisk(path: string): Promise<void> {
+		const fileInfo = fileResult(await this.fs.fileInfo(path), `Failed to read session metadata ${path}`);
+		const rootLines = fileResult(
+			await this.fs.readTextLines(path, { maxLines: ROOT_FINGERPRINT_LINES }),
+			`Failed to read session root ${path}`,
 		);
+		const rootUnchanged = rootFingerprint(rootLines) === rootFingerprint(this.persistedRootLines);
+		if (
+			rootUnchanged &&
+			fileInfo.size === this.persistedSize &&
+			fileInfo.mtimeMs === this.persistedModifiedAt &&
+			(fileInfo.identity === undefined || this.persistedIdentity === undefined || fileInfo.identity === this.persistedIdentity)
+		) return;
+		const content = fileResult(await this.fs.readTextFile(path), `Failed to read session ${path}`);
+		const physicalLines = content.split("\n");
+		if (physicalLines.at(-1) === "") physicalLines.pop();
+		// A replacement/truncation (fork publication or recovery) cannot be safely
+		// applied as a suffix; use the canonical loader in that uncommon case.
+		if (physicalLines.length < this.persistedLineCount || !rootUnchanged) {
+			const fresh = await JsonlSessionStorage.loadUnlocked(this.fs, path);
+			this.state = fresh.state;
+			this.persistedLineCount = fresh.persistedLineCount;
+			this.persistedSize = fresh.persistedSize;
+			this.persistedModifiedAt = fresh.persistedModifiedAt;
+			this.persistedIdentity = fresh.persistedIdentity;
+			this.persistedRootLines = fresh.persistedRootLines;
+			return;
+		}
+		const suffix: SessionMutation[] = [];
+		for (let index = this.persistedLineCount; index < physicalLines.length; index++) {
+			const mutationResult = parseMutation(physicalLines[index]!);
+			if (!mutationResult.ok) {
+				const fresh = await JsonlSessionStorage.loadUnlocked(this.fs, path);
+				this.state = fresh.state;
+				this.persistedLineCount = fresh.persistedLineCount;
+				this.persistedSize = fresh.persistedSize;
+				this.persistedModifiedAt = fresh.persistedModifiedAt;
+				this.persistedIdentity = fresh.persistedIdentity;
+				this.persistedRootLines = fresh.persistedRootLines;
+				return;
+			}
+			suffix.push(mutationResult.value);
+		}
+		// Apply the external suffix to a staged projection. SessionState mutates
+		// its collections in place, so retaining the original reference would not
+		// roll back mutations that precede a later validation failure.
+		const stagedState = this.state.clone();
+		for (const mutation of suffix) stagedState.applyMutation(mutation);
+		this.state = stagedState;
+		this.persistedLineCount = physicalLines.length;
+		this.persistedSize = fileInfo.size;
+		this.persistedModifiedAt = fileInfo.mtimeMs;
+		this.persistedIdentity = fileInfo.identity;
+		this.persistedRootLines = physicalLines.slice(0, ROOT_FINGERPRINT_LINES);
 	}
 
 	private async appendMutationBatch(mutations: readonly SessionMutation[]): Promise<void> {
