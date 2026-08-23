@@ -15,6 +15,21 @@ describe("InMemoryV2ProcessRegistry", () => {
 		expect(await registry.wait(started.processId)).toMatchObject({ state: "terminated" });
 	});
 
+	test("resolves in-memory waiters only after a terminal transition", async () => {
+		const registry = new InMemoryV2ProcessRegistry();
+		const started = await registry.start({ sessionId: "session-wait", command: "demo" });
+		let settled = false;
+		const waiting = registry.wait(started.processId).then((snapshot) => {
+			settled = true;
+			return snapshot;
+		});
+
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		await registry.terminate(started.processId);
+		expect(await waiting).toMatchObject({ state: "terminated", exitCode: 143 });
+	});
+
 	test("closes in-memory stdin when EOF is requested", async () => {
 		const registry = new InMemoryV2ProcessRegistry();
 		const started = await registry.start({ sessionId: "session-eof", command: "demo" });

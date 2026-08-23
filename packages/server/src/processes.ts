@@ -59,6 +59,7 @@ interface ProcessState {
 	output: string;
 	totalBytes: number;
 	inputClosed?: boolean;
+	waiters: Array<(snapshot: V2ProcessSnapshot) => void>;
 }
 
 export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
@@ -78,6 +79,7 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 			state: "running",
 			output: "",
 			totalBytes: 0,
+			waiters: [],
 		};
 		this.processes.set(process.processId, process);
 		return this.snapshot(process);
@@ -110,7 +112,9 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 	}
 
 	async wait(processId: string): Promise<V2ProcessSnapshot> {
-		return this.snapshot(this.get(processId));
+		const process = this.get(processId);
+		if (process.state !== "running") return this.snapshot(process);
+		return new Promise((resolve) => process.waiters.push(resolve));
 	}
 
 	async terminate(processId: string): Promise<V2ProcessSnapshot> {
@@ -118,6 +122,7 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 		if (process.state === "running") {
 			process.state = "terminated";
 			process.exitCode = 143;
+			this.resolveWaiters(process);
 		}
 		return this.snapshot(process);
 	}
@@ -128,6 +133,7 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 			if (process.state !== "running") continue;
 			process.state = "lost";
 			count += 1;
+			this.resolveWaiters(process);
 		}
 		return Promise.resolve(count);
 	}
@@ -135,6 +141,12 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 	private append(process: ProcessState, value: string): void {
 		process.totalBytes += Buffer.byteLength(value, "utf8");
 		process.output = retainUtf8(`${process.output}${value}`, this.maxOutputBytes);
+	}
+
+	private resolveWaiters(process: ProcessState): void {
+		const snapshot = this.snapshot(process);
+		for (const resolve of process.waiters) resolve(snapshot);
+		process.waiters = [];
 	}
 
 	private snapshot(process: ProcessState): V2ProcessSnapshot {
