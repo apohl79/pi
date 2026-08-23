@@ -6,7 +6,14 @@ import { GoalContinuationScheduler } from "@earendil-works/pi-agent-core";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
-import { AdapterV2WebService, InMemoryV2AppRegistry, InMemoryV2PluginRegistry } from "@earendil-works/pi-server";
+import {
+	AdapterV2WebService,
+	InMemoryForensicRecorder,
+	InMemoryV2AppRegistry,
+	InMemoryV2PluginRegistry,
+	InMemoryV2ProcessRegistry,
+	JsonlV2ProcessRegistry,
+} from "@earendil-works/pi-server";
 import { afterEach, describe, expect, test } from "vitest";
 import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemon-runtime.ts";
 import { createRuntimeManifest } from "../../src/server/runtime-manifest.ts";
@@ -841,6 +848,61 @@ describe("coding-agent daemon runtime", () => {
 			});
 		} finally {
 			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("recovers persisted process metadata before a reconstructed daemon serves", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-process-recovery-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-process-recovery-faux",
+			models: [
+				{
+					id: "coding-agent-daemon-process-recovery-model",
+					reasoning: false,
+					contextWindow: 32_000,
+					maxTokens: 1_000,
+				},
+			],
+		});
+		models.setProvider(faux.provider);
+		const journalPath = join(directory, "processes.jsonl");
+		const markerPath = join(directory, "daemon-state.json");
+		const prior = new JsonlV2ProcessRegistry(journalPath, new InMemoryV2ProcessRegistry());
+		const started = await prior.start({ sessionId: "session-recovery", command: "demo" });
+		await writeFile(
+			markerPath,
+			JSON.stringify({ schemaVersion: 1, daemonInstanceId: "previous", state: "running", timestamp: 1 }),
+		);
+		const recovered = new JsonlV2ProcessRegistry(journalPath, new InMemoryV2ProcessRegistry());
+		const diagnostics = new InMemoryForensicRecorder();
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			lifecycleMarkerPath: markerPath,
+			processes: recovered,
+			diagnostics,
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+			createServer: (_service, options) => ({
+				id: "daemon-process-recovery",
+				addresses: [`unix://${options.path}`],
+				start: async () => {},
+				close: async () => {},
+			}),
+		});
+		try {
+			await runtime.daemon.start();
+			expect(await recovered.getSnapshot(started.processId)).toMatchObject({ state: "lost", command: "demo" });
+			expect((await diagnostics.read()).find((event) => event.kind === "daemon_unclean_shutdown")).toMatchObject({
+				payload: { previousDaemonInstanceId: "previous", lostProcesses: 1 },
+			});
+		} finally {
 			await runtime.close();
 		}
 	});

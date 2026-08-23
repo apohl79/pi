@@ -44,6 +44,26 @@ describe("ServerDaemon", () => {
 		expect(close).toHaveBeenCalledOnce();
 	});
 
+	test("marks owned processes lost before clean shutdown", async () => {
+		const processes = new InMemoryV2ProcessRegistry();
+		const process = await processes.start({ sessionId: "session-clean-stop", command: "demo" });
+		const daemon = new ServerDaemon({
+			service: service(),
+			socketPath: "/tmp/daemon-test.sock",
+			processes,
+			createServer: () =>
+				fakeServer(
+					async () => {},
+					async () => {},
+				),
+		});
+
+		await daemon.start();
+		await daemon.stop();
+
+		expect(await processes.getSnapshot(process.processId)).toMatchObject({ state: "lost" });
+	});
+
 	test("returns to stopped after a failed start and closes the failed server", async () => {
 		const close = vi.fn(async () => {});
 		const daemon = new ServerDaemon({

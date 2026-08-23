@@ -1,5 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 export type V2ProcessState = "running" | "exited" | "terminated" | "lost";
@@ -363,6 +365,134 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		const process = this.processes.get(processId);
 		if (!process) throw new Error(`Unknown process ${processId}`);
 		return process;
+	}
+}
+
+/**
+ * Persists process snapshots so a newly constructed daemon can classify the
+ * previous generation's running processes as lost before accepting clients.
+ * Live process ownership remains in the delegate; the journal is recovery
+ * metadata, not a claim that an OS process can be reattached.
+ */
+export class JsonlV2ProcessRegistry implements V2ProcessRegistry {
+	private readonly path: string;
+	private readonly delegate: V2ProcessRegistry;
+	private readonly records = new Map<string, V2ProcessSnapshot>();
+	private readonly ready: Promise<void>;
+
+	constructor(path: string, delegate: V2ProcessRegistry = new NodeV2ProcessRegistry()) {
+		if (path.length === 0) throw new TypeError("Process journal path must not be empty");
+		this.path = path;
+		this.delegate = delegate;
+		this.ready = this.load();
+	}
+
+	async start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
+		await this.ready;
+		const snapshot = await this.delegate.start(request);
+		await this.persist(snapshot);
+		return snapshot;
+	}
+
+	async getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
+		await this.ready;
+		const persisted = this.records.get(processId);
+		try {
+			const snapshot = await this.delegate.getSnapshot(processId);
+			await this.persist(snapshot);
+			return snapshot;
+		} catch (error) {
+			if (persisted !== undefined) return persisted;
+			throw error;
+		}
+	}
+
+	async write(processId: string, input: string): Promise<V2ProcessOutput> {
+		await this.ready;
+		const output = await this.delegate.write(processId, input);
+		await this.persist(await this.delegate.getSnapshot(processId));
+		return output;
+	}
+
+	async read(processId: string, cursor: number): Promise<V2ProcessOutput> {
+		await this.ready;
+		try {
+			return await this.delegate.read(processId, cursor);
+		} catch (error) {
+			const snapshot = this.records.get(processId);
+			if (snapshot === undefined) throw error;
+			if (!Number.isInteger(cursor) || cursor < 0) throw new Error("Process cursor must be a non-negative integer");
+			const baseCursor = snapshot.cursor - Buffer.byteLength(snapshot.output, "utf8");
+			return {
+				output: readUtf8FromCursor(snapshot.output, Math.max(0, cursor - baseCursor)),
+				cursor: snapshot.cursor,
+				truncated: cursor < baseCursor,
+			};
+		}
+	}
+
+	async wait(processId: string): Promise<V2ProcessSnapshot> {
+		await this.ready;
+		try {
+			const snapshot = await this.delegate.wait(processId);
+			await this.persist(snapshot);
+			return snapshot;
+		} catch (error) {
+			const snapshot = this.records.get(processId);
+			if (snapshot !== undefined) return snapshot;
+			throw error;
+		}
+	}
+
+	async terminate(processId: string): Promise<V2ProcessSnapshot> {
+		await this.ready;
+		try {
+			const snapshot = await this.delegate.terminate(processId);
+			await this.persist(snapshot);
+			return snapshot;
+		} catch (error) {
+			const snapshot = this.records.get(processId);
+			if (snapshot !== undefined) return snapshot;
+			throw error;
+		}
+	}
+
+	async markLost(): Promise<number> {
+		await this.ready;
+		let count = 0;
+		for (const [processId, snapshot] of this.records) {
+			if (snapshot.state !== "running") continue;
+			count += 1;
+			const lost = { ...snapshot, state: "lost" as const };
+			this.records.set(processId, lost);
+			await this.append(lost);
+		}
+		await this.delegate.markLost();
+		return count;
+	}
+
+	private async load(): Promise<void> {
+		try {
+			const content = await readFile(this.path, "utf8");
+			for (const line of content.split("\n")) {
+				if (line.length === 0) continue;
+				const value = JSON.parse(line) as V2ProcessSnapshot;
+				if (typeof value.processId === "string" && typeof value.state === "string")
+					this.records.set(value.processId, value);
+			}
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
+
+	private async persist(snapshot: V2ProcessSnapshot): Promise<void> {
+		this.records.set(snapshot.processId, snapshot);
+		await this.append(snapshot);
+	}
+
+	private async append(snapshot: V2ProcessSnapshot): Promise<void> {
+		await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+		await appendFile(this.path, `${JSON.stringify(snapshot)}\n`, { mode: 0o600 });
 	}
 }
 
