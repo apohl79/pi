@@ -1,5 +1,5 @@
 import type { EventEnvelopeV2, OperationRecordV2 } from "@earendil-works/pi-protocol";
-import type { V2OperationStore } from "@earendil-works/pi-server";
+import { type V2OperationStore, validateV2EventEnvelope, validateV2OperationRecord } from "@earendil-works/pi-server";
 import type { SqliteDatabase, SqliteDatabaseFactory } from "@earendil-works/pi-session-backend-sqlite-node";
 
 interface OperationRow {
@@ -28,11 +28,19 @@ export class SqliteV2OperationStore implements V2OperationStore {
 		const operations = database
 			.prepare("SELECT operation_id, value FROM v2_operations ORDER BY operation_id")
 			.all<OperationRow>()
-			.map((row) => parseJson<OperationRecordV2>(row.value, "operation record"));
+			.map((row) => {
+				const value = parseJson(row.value, "operation record");
+				validateV2OperationRecord(value);
+				return value;
+			});
 		const events = database
 			.prepare("SELECT value FROM v2_events ORDER BY rowid")
 			.all<EventRow>()
-			.map((row) => parseJson<EventEnvelopeV2>(row.value, "event record"));
+			.map((row) => {
+				const value = parseJson(row.value, "event record");
+				validateV2EventEnvelope(value);
+				return value;
+			});
 		return { operations, events };
 	}
 
@@ -87,9 +95,9 @@ export class SqliteV2OperationStore implements V2OperationStore {
 	}
 }
 
-function parseJson<T>(value: string, label: string): T {
+function parseJson(value: string, label: string): unknown {
 	try {
-		return JSON.parse(value) as T;
+		return JSON.parse(value);
 	} catch (error) {
 		throw new Error(`Invalid SQLite ${label}`, { cause: error });
 	}

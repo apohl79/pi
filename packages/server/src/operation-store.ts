@@ -37,7 +37,7 @@ function isNonNegativeInteger(value: unknown): value is number {
 	return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
-function validateOperation(value: unknown): asserts value is OperationRecordV2 {
+export function validateV2OperationRecord(value: unknown): asserts value is OperationRecordV2 {
 	if (typeof value !== "object" || value === null || Array.isArray(value))
 		throw new Error("Invalid operation store operation");
 	const operation = value as Record<string, unknown>;
@@ -60,7 +60,7 @@ function validateOperation(value: unknown): asserts value is OperationRecordV2 {
 		throw new Error("Invalid operation store error");
 }
 
-function validateEvent(value: unknown): asserts value is EventEnvelopeV2 {
+export function validateV2EventEnvelope(value: unknown): asserts value is EventEnvelopeV2 {
 	if (typeof value !== "object" || value === null || Array.isArray(value))
 		throw new Error("Invalid operation store event");
 	const event = value as Record<string, unknown>;
@@ -81,8 +81,8 @@ function parseStoreRecord(value: unknown): StoreRecord {
 	if (record.kind !== "operation" && record.kind !== "event") throw new Error("Invalid operation store record kind");
 	if (typeof record.value !== "object" || record.value === null || Array.isArray(record.value))
 		throw new Error("Invalid operation store record value");
-	if (record.kind === "operation") validateOperation(record.value);
-	else validateEvent(record.value);
+	if (record.kind === "operation") validateV2OperationRecord(record.value);
+	else validateV2EventEnvelope(record.value);
 	return record as StoreRecord;
 }
 
