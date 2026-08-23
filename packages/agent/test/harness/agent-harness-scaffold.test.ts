@@ -605,7 +605,7 @@ describe("AgentHarness v2 scaffold", () => {
 			provider: "harness-model-switch-faux",
 			models: [
 				{ id: "large-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
-				{ id: "small-model", reasoning: false, contextWindow: 100, maxTokens: 1_000 },
+				{ id: "small-model", reasoning: false, contextWindow: 10, maxTokens: 1_000 },
 			],
 		});
 		models.setProvider(faux.provider);
@@ -625,6 +625,10 @@ describe("AgentHarness v2 scaffold", () => {
 			model: largeModel,
 			compaction: { enabled: true, reserveTokens: 99, keepRecentTokens: 1 },
 		});
+		const compactionReasons: string[] = [];
+		harness.events.on("compaction_start", (event) => {
+			compactionReasons.push((event as { reason: string }).reason);
+		});
 		await harness.prompt("history that should exceed the smaller model threshold");
 		faux.setResponses([fauxAssistantMessage("switch summary"), fauxAssistantMessage("small response")]);
 		await harness.setModel(smallModel);
@@ -632,6 +636,7 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(entries.some((entry) => entry.type === "compaction" && entry.summary.includes("switch summary"))).toBe(
 			true,
 		);
+		expect(compactionReasons).toContain("overflow");
 		const result = await harness.prompt("continue on the small model");
 		expect(result).toMatchObject({ ok: true, value: { kind: "completed" } });
 		await harness.close();

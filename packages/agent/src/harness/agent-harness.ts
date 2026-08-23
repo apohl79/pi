@@ -825,8 +825,9 @@ export class AgentHarness implements AgentLane {
 			stats.totalTokens +
 			prompts.reduce((total, message) => total + estimateTokens(message), 0) +
 			(await this.estimateProviderRequestOverhead([...preflightContext, ...prompts], samplingInput));
-		if (shouldCompact(contextTokens, this.model.contextWindow ?? 128_000, compactionSettings)) {
-			await this.compact({ reason: "threshold" });
+		const contextWindow = this.model.contextWindow ?? 128_000;
+		if (shouldCompact(contextTokens, contextWindow, compactionSettings)) {
+			await this.compact({ reason: contextTokens > contextWindow ? "overflow" : "threshold" });
 		}
 		const runId = this.durableSession.idGenerator.next();
 		let systemPrompt =
@@ -2296,8 +2297,10 @@ export class AgentHarness implements AgentLane {
 			buildSessionContext(entries).messages,
 			samplingInput,
 		);
-		if (shouldCompact(stats.totalTokens + requestOverhead, model.contextWindow ?? 128_000, settings))
-			await this.compact();
+		const contextWindow = model.contextWindow ?? 128_000;
+		const contextTokens = stats.totalTokens + requestOverhead;
+		if (shouldCompact(contextTokens, contextWindow, settings))
+			await this.compact({ reason: contextTokens > contextWindow ? "overflow" : "threshold" });
 	}
 	async getThinkingLevel(): Promise<ThinkingLevel> {
 		return this.thinkingLevel;
