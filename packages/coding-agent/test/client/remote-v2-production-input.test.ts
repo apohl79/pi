@@ -63,18 +63,20 @@ describe("production remote v2 input", () => {
 			const attachment = await new RemoteV2SessionSelector(client).attachView(sessionId, { mode: "control" });
 			const adapter = new RemoteV2InteractiveAttachment(attachment);
 			try {
-				const started = await adapter.submit("ask me");
-				await attachment.session.waitForOperation(started);
-				const requestId = attachment.session.snapshot?.queues.pendingInputRequestId;
-				expect(requestId).toEqual(expect.any(String));
-				if (!requestId) throw new Error("Remote input request was not created");
+				await adapter.submit("ask me");
+				const requestId = await waitForPendingInput(attachment.session);
 				expect(await adapter.execute(`/input ${requestId} {"choice":"Yes"}`)).toEqual({
 					kind: "status",
 					text: "input answered",
 				});
 				await waitForIdle(attachment);
 				expect(attachment.session.snapshot?.transcript).toEqual(
-					expect.arrayContaining([expect.objectContaining({ role: "assistant", text: "input handled" })]),
+					expect.arrayContaining([
+						expect.objectContaining({
+							role: "assistant",
+							content: expect.arrayContaining([expect.objectContaining({ text: "input handled" })]),
+						}),
+					]),
 				);
 			} finally {
 				await adapter.dispose();
@@ -131,7 +133,12 @@ describe("production remote v2 input", () => {
 				});
 				expect(session.snapshot?.phase).toBe("idle");
 				expect(session.snapshot?.transcript).toEqual(
-					expect.arrayContaining([expect.objectContaining({ role: "assistant", text: "auto resolved" })]),
+					expect.arrayContaining([
+						expect.objectContaining({
+							role: "assistant",
+							content: expect.arrayContaining([expect.objectContaining({ text: "auto resolved" })]),
+						}),
+					]),
 				);
 			} finally {
 				await session.dispose();

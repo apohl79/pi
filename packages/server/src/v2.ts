@@ -178,7 +178,7 @@ function agentIdFrom(command: CommandV2, payload: Record<string, unknown>): stri
 }
 
 function requestIdFrom(command: CommandV2, payload: Record<string, unknown>): string {
-	const requestId = payload.requestId ?? command.operationId;
+	const requestId = payload.requestId ?? command.requestId ?? command.operationId;
 	if (typeof requestId !== "string" || requestId.length === 0) throw new Error("requestId is required");
 	return requestId;
 }
@@ -1101,6 +1101,7 @@ export class PiServerV2 {
 		const pendingInputRequestId = await this.inputs.pendingForSession(sessionId);
 		return {
 			...snapshot,
+			...(pendingInputRequestId === undefined ? {} : { phase: "awaitingInput" as const }),
 			...(agents.length === 0 ? {} : { agents: [...agents] }),
 			...(plan === undefined ? {} : { plan }),
 			queues: {
