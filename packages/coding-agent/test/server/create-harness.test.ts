@@ -613,6 +613,32 @@ describe("coding-agent Harness construction", () => {
 		}
 	});
 
+	test("filters server-owned active tools after assembly", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "filtered-tools-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: "/workspace" });
+		const created = await createCodingAgentHarness({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+			excludedToolNames: ["read"],
+		});
+		try {
+			expect(await created.harness.getActiveTools()).toEqual([
+				"apply_patch",
+				"bash",
+				"edit",
+				"write",
+				"grep",
+				"find",
+				"ls",
+			]);
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("sets the optional session file in the default bash tool environment", async () => {
 		const session = new Session(new InMemorySessionStorage({ id: "session-file-harness", createdAt: 1 }));
 		const env = new CapturingExecutionEnv({

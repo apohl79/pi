@@ -288,6 +288,10 @@ export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOption
 	/** Resolve server-owned lifecycle hooks at each turn boundary. */
 	lifecycleHooksFactory?: () => Promise<readonly CodingAgentLifecycleHook[]>;
 	lifecycleHookOutcome?: (outcome: CodingAgentLifecycleHookOutcome) => Promise<void>;
+	/** Exclude named tools after the complete server-owned tool set is assembled. */
+	excludedToolNames?: readonly string[];
+	/** Exclude Pi's eight default coding tools while retaining server-provided tools. */
+	disableBuiltinTools?: boolean;
 	agents?: CodingAgentAgentTools;
 	plans?: CodingAgentPlanTools;
 }
@@ -358,6 +362,8 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 		tools: providedTools,
 		activeToolNames: providedActiveToolNames,
 		systemPrompt: providedSystemPrompt,
+		excludedToolNames,
+		disableBuiltinTools,
 		...harnessOptions
 	} = options;
 	let harness: AgentHarness | undefined;
@@ -596,7 +602,11 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 			});
 		}
 	}
-	const activeToolNames = [...(providedActiveToolNames ?? tools.map((tool) => tool.name))];
+	const builtinToolNames = new Set(["apply_patch", "read", "bash", "edit", "write", "grep", "find", "ls"]);
+	const excludedToolSet = new Set(excludedToolNames ?? []);
+	const activeToolNames = [...(providedActiveToolNames ?? tools.map((tool) => tool.name))].filter(
+		(name) => !excludedToolSet.has(name) && !(disableBuiltinTools === true && builtinToolNames.has(name)),
+	);
 	const systemPrompt =
 		providedSystemPrompt ??
 		(async () => {
