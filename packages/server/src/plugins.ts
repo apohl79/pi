@@ -27,6 +27,13 @@ export type V2PluginAppAuthStart = Readonly<{
 	authorizationUrl?: string;
 }>;
 
+export type V2PluginHook = Readonly<{
+	id: string;
+	event: string;
+	command?: string;
+	enabled: boolean;
+}>;
+
 export type V2Marketplace = Readonly<{
 	name: string;
 	source: string;
@@ -50,6 +57,7 @@ export type V2Plugin = Readonly<{
 		hooks: number;
 	}>;
 	appDescriptors?: readonly V2PluginApp[];
+	hookDescriptors?: readonly V2PluginHook[];
 	sampling: readonly V2PluginSamplingEntry[];
 }>;
 
@@ -114,6 +122,23 @@ function appDescriptors(pluginId: string, value: unknown, enabled: boolean): rea
 	});
 }
 
+function hookDescriptors(pluginId: string, value: unknown, enabled: boolean): readonly V2PluginHook[] {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((raw, index) => {
+		if (!raw || typeof raw !== "object" || Array.isArray(raw) || typeof raw.event !== "string") return [];
+		const event = raw.event.trim();
+		if (event.length === 0) return [];
+		return [
+			{
+				id: `${pluginId}:hook-${index}`,
+				event,
+				enabled,
+				...(typeof raw.command === "string" && raw.command.trim().length > 0 ? { command: raw.command } : {}),
+			},
+		];
+	});
+}
+
 const samplingSlots = new Set<V2PluginSamplingEntry["slot"]>([
 	"contextual_user",
 	"developer_policy",
@@ -157,7 +182,12 @@ function samplingEntries(manifest: Record<string, unknown>): readonly V2PluginSa
 }
 
 function normalizePlugin(plugin: V2Plugin): V2Plugin {
-	return { ...plugin, appDescriptors: plugin.appDescriptors ?? [], sampling: plugin.sampling ?? [] };
+	return {
+		...plugin,
+		appDescriptors: plugin.appDescriptors ?? [],
+		hookDescriptors: plugin.hookDescriptors ?? [],
+		sampling: plugin.sampling ?? [],
+	};
 }
 
 export class InMemoryV2PluginRegistry implements V2PluginRegistry {
@@ -256,6 +286,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 				hooks: resourceCount(manifest.hooks),
 			},
 			appDescriptors: appDescriptors(id, manifest.apps, true),
+			hookDescriptors: hookDescriptors(id, manifest.hooks, true),
 			sampling: samplingEntries(manifest),
 		};
 		this.plugins.set(id, plugin);
@@ -273,6 +304,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 			...existing,
 			enabled,
 			appDescriptors: (existing.appDescriptors ?? []).map((app) => ({ ...app, enabled })),
+			hookDescriptors: (existing.hookDescriptors ?? []).map((hook) => ({ ...hook, enabled })),
 			...(scope === undefined ? {} : { scope }),
 		};
 		this.plugins.set(id, updated);
