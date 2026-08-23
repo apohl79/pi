@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { AgentHarness, HarnessClosed, type HarnessTool, type Resources } from "../../src/harness/agent-harness.ts";
 import {
 	InMemorySessionStorage,
+	type JsonValue,
 	type LaneRecord,
 	type NewRecord,
 	type OperationStartedRecord,
@@ -142,6 +143,34 @@ describe("AgentHarness v2 scaffold", () => {
 		const messages = await session.findEntriesOnBranch({ order: "oldestFirst" });
 		expect(JSON.stringify(messages)).toContain("continue");
 		expect(JSON.stringify(messages)).toContain("follow-up");
+		await harness.close();
+	});
+
+	it("keeps deferred provider work open for recovery", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "deferred-faux",
+			models: [{ id: "deferred-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage("waiting", {
+				stopReason: "deferred",
+				deferred: { provider: "faux", modelId: "faux-1", api: "faux", id: "response-1" },
+			}),
+		]);
+		const session = createSession("deferred");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+
+		const result = await harness.prompt("wait for me");
+
+		expect(result).toMatchObject({ ok: true, value: { kind: "suspended", deferred: { id: "response-1" } } });
+		const started = (await session.findRecords({ type: "operation_started" }))[0]!;
+		expect(await session.getRegister("op.state", started.id)).toMatchObject({
+			value: { kind: "run", status: "running", phase: "deferred", deferred: { id: "response-1" } },
+		});
+		expect(await session.findOpenOperations("main")).toHaveLength(1);
+		expect((await harness.lanes())[0]?.operation).toMatchObject({ status: "suspended" });
 		await harness.close();
 	});
 
@@ -496,6 +525,62 @@ describe("AgentHarness v2 scaffold", () => {
 				missing: { tools: [], models: [] },
 			},
 		]);
+		await restored.harness.close();
+	});
+
+	it("reconstructs durable cancellation as an aborting operation", async () => {
+		const session = createSession("cancel-recovery");
+		const recalled = { type: "message" as const, id: "recalled", message: userMessage };
+		await session.appendTransaction(
+			[
+				operationStarted("cancelled-run"),
+				{
+					type: "queue_enqueued",
+					id: "queue-recalled",
+					lane: "main",
+					queue: "steer",
+					runId: "cancelled-run",
+					target: recalled,
+				},
+			],
+			[
+				{ op: "set", namespace: "op.meta", key: "cancelled-run", value: { kind: "run" } },
+				{ op: "set", namespace: "pending.entry", key: recalled.id, value: recalled as unknown as JsonValue },
+			],
+		);
+		await session.appendTransaction(
+			[
+				{
+					type: "queue_cancelled",
+					id: "cancel-recalled",
+					lane: "main",
+					runId: "cancelled-run",
+					entryId: recalled.id,
+					disposition: "cancelled",
+				},
+			],
+			[
+				{
+					op: "set",
+					namespace: "op.state",
+					key: "cancelled-run",
+					value: { kind: "run", status: "cancel_requested" },
+				},
+			],
+		);
+
+		const restored = await AgentHarness.create({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+		});
+		expect(restored.suspended).toMatchObject([{ id: "cancelled-run", reason: "crash" }]);
+		expect(restored.suspended[0]?.aborting).toEqual({ steer: [userMessage], followUp: [] });
+		expect(await session.getRegister("pending.entry", recalled.id)).toMatchObject({ value: recalled });
+		expect(await restored.harness.lanes()).toMatchObject([
+			{ name: "main", operation: { id: "cancelled-run", status: "aborting" } },
+		]);
+		expect((await restored.harness.watch()).snapshot.operation).toMatchObject({ status: "aborting" });
 		await restored.harness.close();
 	});
 
@@ -1003,6 +1088,9 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(records.filter((record) => record.type === "abort_requested")).toHaveLength(1);
 		expect(records.filter((record) => record.type === "operation_finished")).toMatchObject([{ outcome: "aborted" }]);
 		expect(records.filter((record) => record.type === "queue_cancelled")).toHaveLength(2);
+		for (const record of records.filter((candidate) => candidate.type === "queue_cancelled")) {
+			expect(await session.getRegister("pending.entry", record.entryId)).toBeUndefined();
+		}
 		expect(steer.ok && followUp.ok).toBe(true);
 		await harness.close();
 	});
@@ -1175,14 +1263,19 @@ describe("AgentHarness v2 scaffold", () => {
 		});
 		models.setProvider(faux.provider);
 		faux.setResponses([fauxAssistantMessage("manual response")]);
+		const session = createSession("manual");
 		const { harness } = await AgentHarness.create({
 			models,
 			model: faux.getModel(),
-			session: createSession("manual"),
+			session,
 			drive: "manual",
 		});
 		const run = harness.prompt("manual prompt");
 		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		const started = (await session.findRecords({ type: "operation_started" }))[0]!;
+		expect(await session.getRegister("op.state", started.id)).toMatchObject({
+			value: { kind: "run", status: "running", phase: "assistant_request", attempt: 1 },
+		});
 		expect(await harness.peekAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 1 });
 		expect(await harness.executeAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 1 });
 		expect(await run).toMatchObject({ ok: true, value: { kind: "completed" } });
