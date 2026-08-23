@@ -9,6 +9,7 @@ export interface RemoteV2SessionViewOptions {
 	readonly maxAgentItems?: number;
 	readonly maxPlanItems?: number;
 	readonly maxGoalCharacters?: number;
+	readonly onUpdated?: () => void;
 }
 
 export interface RemoteV2StatuslinePayloadOptions {
@@ -136,9 +137,11 @@ export class RemoteV2StatuslineComponent implements Component {
 
 /** Renderable TUI projection of one server-authoritative v2 session. */
 export class RemoteV2SessionView implements Component {
-	readonly #options: Required<RemoteV2SessionViewOptions>;
+	readonly #options: Required<Omit<RemoteV2SessionViewOptions, "onUpdated">>;
 	#state: RemoteV2SessionState;
 	readonly #unsubscribe: () => void;
+	readonly #onUpdated?: () => void;
+	readonly #durationTimer?: ReturnType<typeof setInterval>;
 
 	constructor(session: RemoteV2Session, options: RemoteV2SessionViewOptions = {}) {
 		this.#options = {
@@ -149,9 +152,22 @@ export class RemoteV2SessionView implements Component {
 			maxGoalCharacters: options.maxGoalCharacters ?? 240,
 		};
 		this.#state = session.state;
+		this.#onUpdated = options.onUpdated;
 		this.#unsubscribe = session.subscribe((state) => {
 			this.#state = state;
+			this.#onUpdated?.();
 		});
+		if (this.#onUpdated) {
+			this.#durationTimer = setInterval(() => {
+				if (
+					this.#state.snapshot?.agents.some(
+						(agent) =>
+							(agent.state === "running" || agent.state === "awaitingInput") && agent.startedAt !== undefined,
+					)
+				)
+					this.#onUpdated?.();
+			}, 1_000);
+		}
 	}
 
 	render(width: number): string[] {
@@ -161,6 +177,7 @@ export class RemoteV2SessionView implements Component {
 	invalidate(): void {}
 
 	dispose(): void {
+		if (this.#durationTimer) clearInterval(this.#durationTimer);
 		this.#unsubscribe();
 	}
 }

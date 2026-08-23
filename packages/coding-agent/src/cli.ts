@@ -72,7 +72,8 @@ async function runCli(): Promise<void> {
 		write: (value) => console.log(JSON.stringify(value)),
 		writeText: (value) => process.stdout.write(`${value}\n`),
 		runInteractive: async (session, options) => {
-			const view = new RemoteV2SessionView(session);
+			let tui: ReturnType<typeof createInteractiveTui>;
+			const view = new RemoteV2SessionView(session, { onUpdated: () => tui?.requestRender() });
 			let statusline: RemoteV2StatuslineComponent;
 			const attachment = new RemoteV2InteractiveAttachment({
 				session,
@@ -82,7 +83,6 @@ async function runCli(): Promise<void> {
 				},
 				dispose: async () => view.dispose(),
 			});
-			let tui: ReturnType<typeof createInteractiveTui>;
 			statusline = new RemoteV2StatuslineComponent(
 				session,
 				new StatuslineRunner(),

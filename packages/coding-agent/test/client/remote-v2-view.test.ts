@@ -1,9 +1,10 @@
 import type { SessionSnapshotV2 } from "@earendil-works/pi-protocol";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { RemoteV2SessionState } from "../../src/client/remote-v2-session.ts";
 import {
 	createRemoteV2StatuslinePayload,
 	formatRemoteV2Session,
+	RemoteV2SessionView,
 	type RemoteV2SessionViewOptions,
 	RemoteV2StatuslineComponent,
 	RemoteV2StatuslineController,
@@ -63,6 +64,43 @@ describe("formatRemoteV2Session", () => {
 
 	test("renders detached state without fabricating a snapshot", () => {
 		expect(formatRemoteV2Session({ lifecycle: { status: "detached" } }, options)).toBe("Session detached");
+	});
+
+	test("refreshes live child duration while an agent is running", () => {
+		vi.useFakeTimers();
+		try {
+			const updates: number[] = [];
+			const source = {
+				state: {
+					lifecycle: { status: "ready" as const },
+					snapshot: {
+						...snapshot,
+						agents: [
+							{
+								id: "agent-1",
+								path: "/root/worker",
+								taskName: "worker",
+								state: "running" as const,
+								model: snapshot.model,
+								startedAt: Date.now() - 1_000,
+							},
+						],
+					},
+				},
+				subscribe: (listener: (state: RemoteV2SessionState) => void) => {
+					void listener;
+					return () => {};
+				},
+			};
+			const view = new RemoteV2SessionView(source as never, { onUpdated: () => updates.push(Date.now()) });
+			vi.advanceTimersByTime(2_000);
+			expect(updates).toHaveLength(2);
+			view.dispose();
+			vi.advanceTimersByTime(1_000);
+			expect(updates).toHaveLength(2);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	test("renders bounded active-agent summaries", () => {
