@@ -102,11 +102,37 @@ function memoryTransport() {
 									} as JsonValue)
 								: message.request.command === "process/read" || message.request.command === "process/write"
 									? ({ output: { output: "hi", cursor: 2, truncated: false } } as JsonValue)
-									: message.request.command === "plan/update"
+									: message.request.command === "filesystem/complete"
 										? ({
-												plan: { version: 1, items: [{ step: "Inspect", status: "in_progress" }] },
+												items: [{ reference: "project:src", path: "/workspace/src", kind: "directory" }],
 											} as JsonValue)
-										: { command: message.request.command };
+										: message.request.command === "filesystem/reference/resolve"
+											? ({
+													file: {
+														reference: "project:README.md",
+														path: "/workspace/README.md",
+														kind: "file",
+														size: 2,
+														mimeType: "text/markdown",
+													},
+												} as JsonValue)
+											: message.request.command === "filesystem/reference/read"
+												? ({
+														file: {
+															reference: "project:README.md",
+															path: "/workspace/README.md",
+															kind: "file",
+															size: 2,
+															mimeType: "text/markdown",
+														},
+														encoding: "base64",
+														data: "aGk=",
+													} as JsonValue)
+												: message.request.command === "plan/update"
+													? ({
+															plan: { version: 1, items: [{ step: "Inspect", status: "in_progress" }] },
+														} as JsonValue)
+													: { command: message.request.command };
 			const response: ServerMessageV2 =
 				message.request.command.startsWith("turn/") ||
 				message.request.command.startsWith("session/model") ||
@@ -288,6 +314,19 @@ describe("RemoteV2Session", () => {
 		expect(await session.readProcess(process.processId, 2)).toMatchObject({ output: "hi", cursor: 2 });
 		expect(await session.waitProcess(process.processId)).toMatchObject({ state: "running" });
 		expect(await session.terminateProcess(process.processId)).toMatchObject({ state: "running" });
+		await session.dispose();
+	});
+
+	test("uses execution-host filesystem completion and references", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		expect(await session.completeFiles("project:s")).toEqual([
+			{ reference: "project:src", path: "/workspace/src", kind: "directory" },
+		]);
+		expect((await session.resolveFile("project:README.md")).mimeType).toBe("text/markdown");
+		expect((await session.readFile("project:README.md")).data).toBe("aGk=");
 		await session.dispose();
 	});
 
