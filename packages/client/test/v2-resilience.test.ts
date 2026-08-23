@@ -25,7 +25,7 @@ function transportFixture() {
 		transports,
 		factory: async (next: ByteTransportHandlers): Promise<ByteTransport> => {
 			handlers.push(next);
-			const transport: ByteTransport = { send: async () => {}, close: () => {} };
+			const transport: ByteTransport = { send: async () => {}, close: vi.fn() };
 			transports.push(transport);
 			return transport;
 		},
@@ -107,6 +107,45 @@ describe("PiClientV2 resilience", () => {
 
 		expect(await disconnected).toEqual(new Error("PiClientV2 transport closed"));
 		expect(close).toHaveBeenCalledOnce();
+		expect(client.connected).toBe(false);
+	});
+
+	test("closes the transport after a handshake error and permits reconnect", async () => {
+		const fixture = transportFixture();
+		const client = new PiClientV2({ transportFactory: fixture.factory });
+		const first = client.connect();
+		await Promise.resolve();
+		fixture.deliver(0, { type: "hello_error", error: { code: "version", message: "Unsupported protocol" } });
+
+		expect(await first.catch((error: unknown) => error)).toEqual(new Error("Unsupported protocol"));
+		expect(fixture.transports[0]?.close).toHaveBeenCalledOnce();
+		expect(client.connected).toBe(false);
+
+		const second = client.connect();
+		await Promise.resolve();
+		fixture.deliver(1, { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-2", snapshot });
+		expect(await second).toEqual(snapshot);
+		client.disconnect();
+	});
+
+	test("rejects non-handshake messages before the server hello", async () => {
+		const fixture = transportFixture();
+		const client = new PiClientV2({ transportFactory: fixture.factory });
+		const connecting = client.connect();
+		await Promise.resolve();
+		fixture.deliver(0, {
+			type: "event",
+			sessionId: "session-1",
+			seq: 1,
+			revision: 1,
+			event: "usage_updated",
+			payload: {},
+		});
+
+		expect(await connecting.catch((error: unknown) => error)).toEqual(
+			new Error("PiClientV2 expected server hello before other messages"),
+		);
+		expect(fixture.transports[0]?.close).toHaveBeenCalledOnce();
 		expect(client.connected).toBe(false);
 	});
 });
