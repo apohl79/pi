@@ -96,5 +96,27 @@ describe("ServerDaemon", () => {
 			"daemon_stopping",
 			"daemon_stopped",
 		]);
+		expect(new Set((await diagnostics.read()).map((event) => event.daemonInstanceId)).size).toBe(1);
+	});
+
+	test("assigns a fresh daemon instance identity for each start", async () => {
+		const diagnostics = new InMemoryForensicRecorder();
+		const daemon = new ServerDaemon({
+			service: service(),
+			socketPath: "/tmp/daemon-test.sock",
+			diagnostics,
+			createServer: () =>
+				fakeServer(
+					async () => {},
+					async () => {},
+				),
+		});
+		await daemon.start();
+		await daemon.stop();
+		await daemon.start();
+		await daemon.stop();
+		const identities = new Set((await diagnostics.read()).map((event) => event.daemonInstanceId));
+		expect(identities).toHaveLength(2);
+		expect([...identities].every((identity) => typeof identity === "string" && identity.length > 0)).toBe(true);
 	});
 });
