@@ -755,6 +755,23 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.close();
 	});
 
+	test("rejects malformed base64 blob payloads", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-blob-invalid-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const response = await client.request({
+			command: "blob/put",
+			payload: { data: "not-base64!", encoding: "base64", mimeType: "text/plain" },
+		});
+		expect(response).toMatchObject({ ok: false, error: { code: "request_failed" } });
+		await client.close();
+	});
+
 	test("delegates session creation and deletion through the v2 service boundary", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-session-"));
 		directories.push(directory);
