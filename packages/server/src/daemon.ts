@@ -1,5 +1,5 @@
 import type { V2AgentRegistry } from "./agents.ts";
-import type { ForensicRecorder } from "./diagnostics.ts";
+import type { DiagnosticContentStore, ForensicRecorder } from "./diagnostics.ts";
 import type { V2InputRegistry } from "./inputs.ts";
 import type { V2PlanRegistry } from "./plans.ts";
 import { createUnixServerV2 } from "./transports/unix/preset.ts";
@@ -29,6 +29,7 @@ export interface ServerDaemonOptions {
 	readonly inputs?: V2InputRegistry;
 	readonly plans?: V2PlanRegistry;
 	readonly diagnostics?: ForensicRecorder;
+	readonly diagnosticContent?: DiagnosticContentStore;
 	readonly createServer?: (service: PiServerServiceV2, options: UnixServerOptions) => ServerDaemonServer;
 }
 
@@ -88,6 +89,7 @@ export class ServerDaemon {
 	}
 
 	private async startInternal(): Promise<void> {
+		await this.recordDiagnostic("daemon_starting", { socketPath: this.options.socketPath });
 		const server = (this.options.createServer ?? defaultCreateServer)(this.options.service, {
 			path: this.options.socketPath,
 			...(this.options.serverId === undefined ? {} : { serverId: this.options.serverId }),
@@ -95,25 +97,36 @@ export class ServerDaemon {
 			...(this.options.inputs === undefined ? {} : { inputs: this.options.inputs }),
 			...(this.options.plans === undefined ? {} : { plans: this.options.plans }),
 			...(this.options.diagnostics === undefined ? {} : { diagnostics: this.options.diagnostics }),
+			...(this.options.diagnosticContent === undefined ? {} : { diagnosticContent: this.options.diagnosticContent }),
 		});
 		try {
 			await server.start();
 		} catch (error) {
 			await server.close().catch(() => {});
 			this.state = "stopped";
+			await this.recordDiagnostic("daemon_start_failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
 			throw error;
 		}
 		this.server = server;
 		this.state = "running";
+		await this.recordDiagnostic("daemon_started", { serverId: server.id, addresses: server.addresses });
 	}
 
 	private async stopInternal(server: ServerDaemonServer): Promise<void> {
+		await this.recordDiagnostic("daemon_stopping", { serverId: server.id });
 		try {
 			await server.close();
 		} finally {
 			this.server = undefined;
 			this.state = "stopped";
+			await this.recordDiagnostic("daemon_stopped", { serverId: server.id });
 		}
+	}
+
+	private async recordDiagnostic(kind: string, payload: Record<string, unknown>): Promise<void> {
+		await this.options.diagnostics?.record({ kind, payload }).catch(() => {});
 	}
 }
 
