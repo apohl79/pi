@@ -43,4 +43,21 @@ describe("ServerRuntimeExtensionHost", () => {
 			"server runtime extensions cannot register client commands",
 		);
 	});
+
+	it("uses the operation's frozen model when supplied", async () => {
+		const models: string[] = [];
+		const host = new ServerRuntimeExtensionHost({ resolveModel: () => ({ id: "current-model" }) });
+		await host.register({
+			id: "frozen-model",
+			onOperationAccepted: ({ model }) => {
+				models.push(`accepted:${model.id}`);
+			},
+			onOperationTerminal: ({ model }) => {
+				models.push(`terminal:${model.id}`);
+			},
+		});
+		await host.onOperationAccepted({ id: "op-1", type: "turn/start", model: { id: "accepted-model" } });
+		await host.onOperationTerminal({ id: "op-1", type: "turn/start", model: { id: "accepted-model" } }, "completed");
+		expect(models).toEqual(["accepted:accepted-model", "terminal:accepted-model"]);
+	});
 });
