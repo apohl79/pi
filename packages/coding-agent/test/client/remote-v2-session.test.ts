@@ -690,6 +690,14 @@ describe("RemoteV2Session", () => {
 		await client.connect();
 		const session = await RemoteV2Session.open(client, "session-1");
 		expect(await session.diagnosticsStatus()).toMatchObject({ capture: "metadata", degraded: false });
+		expect(await session.diagnosticsStatus({ sessionId: "session-1" })).toMatchObject({
+			capture: "metadata",
+			degraded: false,
+		});
+		expect(pair.requests.at(-1)).toMatchObject({
+			command: "diagnostics/status",
+			payload: { sessionId: "session-1" },
+		});
 		expect(await session.diagnosticsTimeline({ afterSeq: 2 })).toEqual([
 			{ seq: 3, kind: "operation", outcome: "ok" },
 		]);
