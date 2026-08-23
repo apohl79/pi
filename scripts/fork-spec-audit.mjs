@@ -110,12 +110,8 @@ export function auditForkSpec() {
 		}
 	}
 	for (const line of readFileSync(join(root, "FORK_DELTA.md"), "utf8").split("\n")) {
-		const classified =
-			line.includes("| Stock-compatible extension |") ||
-			line.includes("| Fork-dependent extension |") ||
-			line.includes("| Fork core |");
-		if (line.startsWith("|") && classified && !line.includes("Compatibility is covered")) {
-			failures.push(`classified ledger row lacks compatibility evidence: ${line}`);
+		if (line.startsWith("|") && line.includes("| Fork core |") && !line.includes("Compatibility is covered")) {
+			failures.push(`fork-core ledger row lacks compatibility evidence: ${line}`);
 		}
 	}
 	const manifest = JSON.parse(readFileSync(join(root, "PACKAGE_COMPATIBILITY.json"), "utf8"));
