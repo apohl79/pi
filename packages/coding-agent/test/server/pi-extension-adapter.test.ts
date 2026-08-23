@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { Extension } from "../../src/core/extensions/types.ts";
-import type { ServerRuntimeExtension } from "../../src/server/extension-host.ts";
+import { type ServerRuntimeExtension, ServerRuntimeExtensionHost } from "../../src/server/extension-host.ts";
 import {
 	adaptPiExtensionSampling,
 	inspectPiExtensionServerCompatibility,
@@ -73,6 +73,19 @@ describe("adaptPiExtensionSampling", () => {
 		await expect(faulty!.contributeSamplingInput!(context)).rejects.toThrow("broken");
 		expect(await healthy!.contributeSamplingInput!(context)).toEqual([
 			{ role: "user", content: "healthy", timestamp: 0 },
+		]);
+
+		const host = new ServerRuntimeExtensionHost({ resolveModel: () => ({ id: "model" }) });
+		for (const adapted of adaptPiExtensionSampling(extension)) await host.register(adapted);
+		const collected = await host.collectSamplingInput(context);
+		expect(collected.messages).toEqual([{ role: "user", content: "healthy", timestamp: 0 }]);
+		expect(collected.outcomes).toEqual([
+			{
+				extensionId: "pi:/project/extensions/faulty.ts:sampling:faulty",
+				status: "rejected",
+				reason: expect.any(Error),
+			},
+			{ extensionId: "pi:/project/extensions/faulty.ts:sampling:healthy", status: "fulfilled" },
 		]);
 	});
 
