@@ -463,7 +463,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 					});
 				}
 				try {
-					const inspection = await repository.inspect();
+					const inspection = await repository.verifyReopen();
 					checks.push({
 						name: "sqlite",
 						ok: inspection.healthy,
@@ -471,6 +471,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 							schemaVersion: inspection.schemaVersion,
 							quickCheck: inspection.quickCheck,
 							foreignKeyErrors: inspection.foreignKeyErrors.length,
+							reopened: true,
 						},
 					});
 				} catch (error) {
