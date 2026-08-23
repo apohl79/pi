@@ -1287,17 +1287,18 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.request({ command: "process/write", payload: { processId, input: "abcdef" } });
 		const output = await client.request({ command: "process/read", payload: { processId, cursor: 0 } });
 		expect(output).toMatchObject({ ok: true, result: { output: { output: "bcdef", cursor: 6, truncated: true } } });
-		await client.request({ command: "process/wait", payload: { processId } });
 		const terminated = await client.request({ command: "process/terminate", payload: { processId } });
 		expect(terminated).toMatchObject({ ok: true, result: { process: { state: "terminated", exitCode: 143 } } });
+		const waited = await client.request({ command: "process/wait", payload: { processId } });
+		expect(waited).toMatchObject({ ok: true, result: { process: { state: "terminated", exitCode: 143 } } });
 		const diagnosticEvents = await diagnostics.read();
 		expect(new Set(diagnosticEvents.map((event) => event.daemonInstanceId))).toEqual(new Set(["daemon-v2-test"]));
 		expect(diagnosticEvents.map((event) => event.kind).filter((kind) => kind.startsWith("process_"))).toEqual([
 			"process_started",
 			"process_input_written",
 			"process_output_read",
-			"process_waited",
 			"process_terminated",
+			"process_waited",
 		]);
 		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_received")).toHaveLength(5);
 		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_completed")).toHaveLength(5);
