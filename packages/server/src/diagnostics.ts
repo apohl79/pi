@@ -90,6 +90,7 @@ export interface DiagnosticBundleManifest {
 	readonly firstSeq: number;
 	readonly lastSeq: number;
 	readonly eventsSha256: string;
+	readonly capsulesSha256?: string;
 	readonly unavailable?: readonly string[];
 }
 
@@ -133,6 +134,8 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 		return { valid: false, reason: "Diagnostic bundle manifest contains invalid unavailable entries" };
 	const serializedEvents = JSON.stringify(events);
 	const digest = createHash("sha256").update(serializedEvents).digest("hex");
+	const serializedCapsules = JSON.stringify(capsules ?? []);
+	const capsulesDigest = createHash("sha256").update(serializedCapsules).digest("hex");
 	const firstSeq = events.length === 0 ? 0 : eventSequence(events[0]);
 	const lastSeq = events.length === 0 ? 0 : eventSequence(events[events.length - 1]);
 	const contiguous = events.every((event, index) => {
@@ -145,6 +148,7 @@ export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerifica
 		fields.firstSeq === firstSeq &&
 		fields.lastSeq === lastSeq &&
 		fields.eventsSha256 === digest &&
+		(fields.capsulesSha256 === undefined || fields.capsulesSha256 === capsulesDigest) &&
 		contiguous;
 	return valid ? { valid: true } : { valid: false, reason: "Diagnostic bundle manifest does not match its events" };
 }

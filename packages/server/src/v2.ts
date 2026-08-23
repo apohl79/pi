@@ -947,12 +947,14 @@ export class PiServerV2 {
 		const decryptedCapsules =
 			payload.decryptContent === true ? await this.diagnosticCapsulesForDecryption(capsules) : undefined;
 		const serializedEvents = JSON.stringify(events);
+		const serializedCapsules = JSON.stringify(capsules);
 		const manifest = {
 			schemaVersion: 1,
 			eventCount: events.length,
 			firstSeq: events[0]?.seq ?? 0,
 			lastSeq: events.at(-1)?.seq ?? 0,
 			eventsSha256: createHash("sha256").update(serializedEvents).digest("hex"),
+			capsulesSha256: createHash("sha256").update(serializedCapsules).digest("hex"),
 			unavailable: ["client-diagnostic-spool"],
 		};
 		await this.sendResponse(state, id, {
