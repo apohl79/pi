@@ -19,6 +19,7 @@ import {
 	type DiagnosticIntegrityCheck,
 	InMemoryForensicRecorder,
 	LocalDiagnosticCapsuleStore,
+	TeeForensicRecorder,
 } from "../src/diagnostics.ts";
 import { LocalV2FileReferenceService } from "../src/files.ts";
 import { BlobV2ImageService } from "../src/images.ts";
@@ -546,6 +547,32 @@ describe("PiServer v2 operation acceptance", () => {
 		const doctor = await client.request({ command: "diagnostics/doctor" });
 		expect(status).toMatchObject({ ok: true, result: { capture: "metadata", eventCount: 1 } });
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
+	});
+
+	test("reports operational-log degradation without a critical event", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-diagnostics-degraded-"));
+		directories.push(directory);
+		const diagnostics = new TeeForensicRecorder(new InMemoryForensicRecorder(), {
+			record: async () => {
+				throw new Error("operational log unavailable");
+			},
+			read: async () => [],
+		});
+		await diagnostics.record({ kind: "boot", severity: "info" });
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			diagnostics,
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const status = await client.request({ command: "diagnostics/status" });
+		expect(status).toMatchObject({
+			ok: true,
+			result: { capture: "metadata", eventCount: 2, degraded: true, lastCriticalEventSeq: 0 },
+		});
+		await client.close();
 	});
 
 	test("exposes usage ledger aggregates and entries through v2", async () => {

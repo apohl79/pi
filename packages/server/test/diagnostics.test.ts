@@ -98,6 +98,7 @@ describe("JsonlForensicRecorder", () => {
 		const recorder = new TeeForensicRecorder(primary, secondary);
 		await expect(recorder.record({ kind: "accepted" })).resolves.toMatchObject({ kind: "accepted", seq: 1 });
 		expect(recorder.getOperationalLogFailureCount()).toBe(1);
+		expect(recorder.isDegraded()).toBe(true);
 		expect(await recorder.read()).toHaveLength(1);
 	});
 

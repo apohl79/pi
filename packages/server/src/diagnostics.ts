@@ -41,6 +41,8 @@ export interface ForensicEvent extends ForensicEventInput {
 export interface ForensicRecorder {
 	record(event: ForensicEventInput): Promise<ForensicEvent>;
 	read(afterSeq?: number): Promise<ForensicEvent[]>;
+	/** Reports non-critical sink failures that make operational evidence incomplete. */
+	isDegraded?(): boolean;
 }
 
 export interface DiagnosticIntegrityCheck {
@@ -787,6 +789,10 @@ export class TeeForensicRecorder implements ForensicRecorder {
 
 	getOperationalLogFailureCount(): number {
 		return this.secondaryFailures;
+	}
+
+	isDegraded(): boolean {
+		return this.secondaryFailures > 0;
 	}
 }
 

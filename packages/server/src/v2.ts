@@ -1107,7 +1107,7 @@ export class PiServerV2 {
 		await this.sendResponse(state, id, {
 			command: command.command,
 			capture: "metadata",
-			degraded: critical.length > 0,
+			degraded: critical.length > 0 || this.diagnostics.isDegraded?.() === true,
 			lastCriticalEventSeq: critical.at(-1)?.seq ?? 0,
 			eventCount: scopedEvents.length,
 		});
