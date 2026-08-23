@@ -46,11 +46,15 @@ describe("LocalV2FileReferenceService", () => {
 		const outside = await mkdtemp(join(tmpdir(), "pi-files-outside-"));
 		directories.push(root, outside);
 		await writeFile(join(outside, "secret.txt"), "secret");
+		await mkdir(join(outside, "private"));
+		await writeFile(join(outside, "private", "nested-secret.txt"), "secret");
 		await symlink(join(outside, "secret.txt"), join(root, "link.txt"));
+		await symlink(join(outside, "private"), join(root, "linkdir"));
 		const service = new LocalV2FileReferenceService({ projectRoot: root, homeDirectory: root });
 
 		await expect(service.resolve("session-1", "../secret.txt")).rejects.toThrow("escapes");
 		await expect(service.resolve("session-1", "link.txt")).rejects.toThrow("escapes");
+		expect(await service.complete("session-1", "linkdir/")).toEqual([]);
 		await expect(service.resolve("session-1", "@local:secret.txt")).rejects.toThrow("uploaded as blobs");
 		await expect(service.complete("session-1", "@local:")).rejects.toThrow("uploaded as blobs");
 	});

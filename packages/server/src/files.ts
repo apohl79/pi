@@ -132,17 +132,27 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 		const directory = await this.directoryForCompletion(candidate);
 		const prefixName = candidate === directory ? "" : candidate.slice(directory.length + 1);
 		const entries = await readdir(directory, { withFileTypes: true });
-		return entries
-			.filter((entry) => entry.name.startsWith(prefixName))
-			.map((entry) => {
-				const path = resolve(directory, entry.name);
-				return {
-					reference: referenceFor(scope, base, path),
-					path,
-					kind: entry.isDirectory() ? "directory" : "file",
-				} satisfies V2FileCompletion;
-			})
-			.filter((entry) => this.allowedLexically(entry.path, scope === "absolute"))
+		const completions = await Promise.all(
+			entries
+				.filter((entry) => entry.name.startsWith(prefixName))
+				.map(async (entry): Promise<V2FileCompletion | undefined> => {
+					const path = resolve(directory, entry.name);
+					if (!this.allowedLexically(path, scope === "absolute")) return undefined;
+					try {
+						const resolved = await realpath(path);
+						if (!(await this.allowed(resolved, scope === "absolute"))) return undefined;
+						return {
+							reference: referenceFor(scope, base, path),
+							path,
+							kind: entry.isDirectory() ? "directory" : "file",
+						} satisfies V2FileCompletion;
+					} catch {
+						return undefined;
+					}
+				}),
+		);
+		return completions
+			.filter((entry): entry is V2FileCompletion => entry !== undefined)
 			.sort(
 				(left, right) =>
 					Number(right.kind === "directory") - Number(left.kind === "directory") ||
