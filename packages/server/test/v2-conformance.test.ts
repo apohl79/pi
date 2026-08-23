@@ -666,6 +666,34 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(tamperedVerification).toMatchObject({ ok: true, result: { valid: false } });
 	});
 
+	test("reports integrity-provider failures through doctor", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-diagnostics-integrity-failure-"));
+		directories.push(directory);
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			integrity: async () => {
+				throw new Error("integrity store unavailable");
+			},
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const response = await client.request({ command: "diagnostics/doctor" });
+		expect(response).toMatchObject({
+			ok: true,
+			result: {
+				ok: false,
+				checks: [
+					{ name: "recorder", ok: true },
+					{ name: "sequence", ok: true },
+					{ name: "integrity", ok: false, details: { error: "Error" } },
+				],
+			},
+		});
+		await client.close();
+	});
+
 	test("enables metadata diagnostics when no recorder is injected", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-diagnostics-default-"));
 		directories.push(directory);
