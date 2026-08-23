@@ -24,6 +24,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/release-control",
 	"/resume",
 	"/rollback",
+	"/statusline",
 	"/take-control",
 	"/thinking",
 ] as const;
@@ -50,6 +51,7 @@ export type RemoteV2Command =
 	| { readonly name: "release-control" }
 	| { readonly name: "resume" }
 	| { readonly name: "rollback"; readonly turns: number }
+	| { readonly name: "statusline"; readonly command?: string }
 	| { readonly name: "take-control" }
 	| { readonly name: "thinking"; readonly level: ThinkingLevel };
 
@@ -181,6 +183,11 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		}
 		return { name: "rollback", turns };
 	}
+	if (name === "/statusline") {
+		if (arguments_.length === 0) throw new Error("/statusline requires a command or off");
+		const command = arguments_.join(" ").trim();
+		return { name: "statusline", ...(command === "off" ? {} : { command }) };
+	}
 	if (name === "/thinking") {
 		if (arguments_.length !== 1 || !isThinkingLevel(arguments_[0]))
 			throw new Error("/thinking requires a valid level");
@@ -292,6 +299,13 @@ export class RemoteV2InteractiveAttachment implements Component {
 				return operation(await this.session.resume());
 			case "rollback":
 				return operation(await this.session.rollback(command.turns));
+			case "statusline":
+				if (!this.#attachment.setStatusline) throw new Error("Remote statusline is unavailable");
+				await this.#attachment.setStatusline(command.command);
+				return {
+					kind: "status",
+					text: command.command === undefined ? "statusline disabled" : "statusline updated",
+				};
 			case "take-control":
 				await this.session.acquireControl();
 				return { kind: "control", mode: "control" };

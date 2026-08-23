@@ -58,6 +58,7 @@ export class RemoteV2StatuslineController {
 	readonly #unsubscribe: () => void;
 	readonly #onUpdated?: () => void;
 	#snapshot: StatuslineSnapshot = { pending: false };
+	#command: string | readonly string[] | undefined;
 
 	constructor(
 		source: RemoteV2StatuslineSource,
@@ -81,9 +82,14 @@ export class RemoteV2StatuslineController {
 	async refresh(state = this.#source.state): Promise<StatuslineSnapshot> {
 		const payload = createRemoteV2StatuslinePayload(state, this.#options);
 		if (payload === undefined) return this.snapshot;
-		this.#snapshot = await this.#runner.update(payload);
+		this.#snapshot = await this.#runner.update(payload, this.#command);
 		this.#onUpdated?.();
 		return this.snapshot;
+	}
+
+	setCommand(command: string | undefined): Promise<StatuslineSnapshot> {
+		this.#command = command;
+		return this.refresh();
 	}
 
 	async dispose(): Promise<void> {
@@ -108,6 +114,10 @@ export class RemoteV2StatuslineComponent implements Component {
 			onUpdated();
 		});
 		this.#snapshot = this.#controller.snapshot;
+	}
+
+	setCommand(command: string | undefined): Promise<StatuslineSnapshot> {
+		return this.#controller.setCommand(command);
 	}
 
 	render(width: number): string[] {

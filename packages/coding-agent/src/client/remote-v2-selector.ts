@@ -14,6 +14,7 @@ export interface RemoteV2SessionEntry extends SessionMetadataV2 {
 export interface RemoteV2SessionAttachment {
 	readonly session: RemoteV2Session;
 	readonly view: RemoteV2SessionView;
+	readonly setStatusline?: (command: string | undefined) => void | Promise<void>;
 	dispose(): Promise<void>;
 }
 
