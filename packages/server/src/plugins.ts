@@ -34,6 +34,12 @@ export type V2PluginHook = Readonly<{
 	enabled: boolean;
 }>;
 
+export type V2PluginDiagnostic = Readonly<{
+	code: "unsupported_mcp_resource";
+	severity: "warning";
+	message: string;
+}>;
+
 export type V2Marketplace = Readonly<{
 	name: string;
 	source: string;
@@ -58,6 +64,7 @@ export type V2Plugin = Readonly<{
 	}>;
 	appDescriptors?: readonly V2PluginApp[];
 	hookDescriptors?: readonly V2PluginHook[];
+	diagnostics?: readonly V2PluginDiagnostic[];
 	sampling: readonly V2PluginSamplingEntry[];
 }>;
 
@@ -139,6 +146,18 @@ function hookDescriptors(pluginId: string, value: unknown, enabled: boolean): re
 	});
 }
 
+function manifestDiagnostics(manifest: Record<string, unknown>): readonly V2PluginDiagnostic[] {
+	return manifest.mcpServers === undefined
+		? []
+		: [
+				{
+					code: "unsupported_mcp_resource",
+					severity: "warning",
+					message: "MCP resources are not started by Pi; supported plugin resources may still activate",
+				},
+			];
+}
+
 const samplingSlots = new Set<V2PluginSamplingEntry["slot"]>([
 	"contextual_user",
 	"developer_policy",
@@ -186,6 +205,7 @@ function normalizePlugin(plugin: V2Plugin): V2Plugin {
 		...plugin,
 		appDescriptors: plugin.appDescriptors ?? [],
 		hookDescriptors: plugin.hookDescriptors ?? [],
+		diagnostics: plugin.diagnostics ?? [],
 		sampling: plugin.sampling ?? [],
 	};
 }
@@ -287,6 +307,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 			},
 			appDescriptors: appDescriptors(id, manifest.apps, true),
 			hookDescriptors: hookDescriptors(id, manifest.hooks, true),
+			diagnostics: manifestDiagnostics(manifest),
 			sampling: samplingEntries(manifest),
 		};
 		this.plugins.set(id, plugin);
