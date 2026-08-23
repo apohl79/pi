@@ -6,10 +6,12 @@ import {
 	ClientMessageV2Decoder,
 	EventEnvelopeV2Schema,
 	EventNameV2Schema,
+	encodeCbor,
 	encodeClientMessageV2,
 	encodeServerMessageV2,
 	isClientMessageV2,
 	isServerMessageV2,
+	OperationAcceptedSchema,
 	PROTOCOL_V2_VERSION,
 	type SessionSnapshotV2,
 	SessionSnapshotV2Schema,
@@ -186,6 +188,37 @@ describe("protocol v2 contract", () => {
 
 		expect(isClientMessageV2(request)).toBe(true);
 		expect(isServerMessageV2(response)).toBe(true);
+	});
+
+	test("round-trips accepted compaction policy and rejects malformed policy values", () => {
+		const accepted = {
+			operationId: "operation-policy",
+			sessionRevision: 3,
+			eventSeq: 4,
+			compactionPolicy: {
+				enabled: true,
+				contextWindow: 32_000,
+				reserveTokens: 123,
+				keepRecentTokens: 456,
+				triggerTokens: 31_877,
+				source: "mixed",
+			},
+		} as const;
+
+		expect(Check(OperationAcceptedSchema, accepted)).toBe(true);
+		expect(decodeCbor(encodeCbor(accepted))).toEqual(accepted);
+		expect(
+			Check(OperationAcceptedSchema, {
+				...accepted,
+				compactionPolicy: { ...accepted.compactionPolicy, reserveTokens: -1 },
+			}),
+		).toBe(false);
+		expect(
+			Check(OperationAcceptedSchema, {
+				...accepted,
+				compactionPolicy: { ...accepted.compactionPolicy, source: "invalid" },
+			}),
+		).toBe(false);
 	});
 
 	test("freezes every command and authoritative event name in the v2 contract", () => {
