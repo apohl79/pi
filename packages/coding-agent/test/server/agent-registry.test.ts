@@ -14,6 +14,7 @@ class FixtureRuntime implements CodingAgentV2Runtime {
 	async run(_operationId: string, command: CommandV2): Promise<void> {
 		this.commands.push(command);
 	}
+	async abort(_operationId: string): Promise<void> {}
 	async dispose(): Promise<void> {}
 }
 
@@ -38,9 +39,14 @@ describe("CodingAgentV2AgentRegistry", () => {
 			taskMessage: "inspect the repository",
 			model: { provider: "faux", id: "model" },
 		});
+		await expect(registry.followUp(agent.id, "premature follow-up")).rejects.toThrow("active agent");
+		expect(await registry.list("parent-session")).toEqual([agent]);
+		expect(await registry.list("child-session")).toEqual([]);
 		expect((await registry.wait(agent.id)).state).toBe("complete");
 		expect(runtime.commands[0]?.command).toBe("turn/start");
-		await registry.followUp(agent.id, "continue with the tests");
+		const followUp = registry.followUp(agent.id, "continue with the tests");
+		await expect(registry.followUp(agent.id, "duplicate follow-up")).rejects.toThrow("active agent");
+		await followUp;
 		expect((await registry.wait(agent.id)).state).toBe("complete");
 		expect(runtime.commands[1]?.command).toBe("turn/followUp");
 		// A completed child is stable until a follow-up is requested.
@@ -59,5 +65,17 @@ describe("CodingAgentV2AgentRegistry", () => {
 				model: { provider: "faux", id: "model" },
 			}),
 		).rejects.toThrow("maximum depth");
+	});
+
+	test("bounds retained child messages", async () => {
+		const { registry } = fixture();
+		const agent = await registry.spawn({
+			sessionId: "parent",
+			parentPath: "root",
+			taskName: "worker",
+			taskMessage: "work",
+			model: { provider: "faux", id: "model" },
+		});
+		await expect(registry.message(agent.id, "x".repeat(64 * 1024 + 1))).rejects.toThrow("maximum length");
 	});
 });

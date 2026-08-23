@@ -5,32 +5,63 @@ import type { CodingAgentV2Runtime, CodingAgentV2Service } from "./v2-service.ts
 
 interface ChildAgent {
 	readonly summary: AgentSummary;
+	readonly parentSessionId: string;
 	readonly sessionId: string;
 	readonly runtime: CodingAgentV2Runtime;
 	state: AgentSummary["state"];
 	messages: string[];
 	waiters: Array<() => void>;
+	activeOperationId?: string;
+	activeOperationAccepted: boolean;
+	abortRequested: boolean;
 }
 
 export interface CodingAgentV2AgentRegistryOptions {
 	readonly maxDepth?: number;
 	readonly maxActive?: number;
+	readonly maxMessageLength?: number;
+	readonly maxMessages?: number;
+}
+
+const DEFAULT_MAX_MESSAGE_LENGTH = 64 * 1024;
+const DEFAULT_MAX_MESSAGES = 1024;
+
+function validatePositiveLimit(name: string, value: number): number {
+	if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive safe integer`);
+	return value;
 }
 
 /** Executes server-owned child agents through the durable coding-agent service. */
 export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private readonly maxDepth: number;
 	private readonly maxActive: number;
+	private readonly maxMessageLength: number;
+	private readonly maxMessages: number;
 	private readonly agents = new Map<string, ChildAgent>();
 	private readonly service: CodingAgentV2Service;
+	private spawnTail: Promise<void> = Promise.resolve();
 
 	constructor(service: CodingAgentV2Service, options: CodingAgentV2AgentRegistryOptions = {}) {
 		this.service = service;
 		this.maxDepth = options.maxDepth ?? 1;
 		this.maxActive = options.maxActive ?? 8;
+		this.maxMessageLength = validatePositiveLimit("maxMessageLength", options.maxMessageLength ?? DEFAULT_MAX_MESSAGE_LENGTH);
+		this.maxMessages = validatePositiveLimit("maxMessages", options.maxMessages ?? DEFAULT_MAX_MESSAGES);
 	}
 
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
+		const previous = this.spawnTail;
+		let release!: () => void;
+		this.spawnTail = new Promise<void>((resolve) => (release = resolve));
+		try {
+			await previous;
+			return await this.spawnUnlocked(request);
+		} finally {
+			release();
+		}
+	}
+
+	private async spawnUnlocked(request: V2AgentRequest): Promise<AgentSummary> {
 		this.validateRequest(request);
 		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
 		if (!this.service.createSession) throw new Error("Coding-agent service does not support child sessions");
@@ -51,11 +82,14 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		};
 		const agent: ChildAgent = {
 			summary,
+			parentSessionId: request.sessionId,
 			sessionId: created.sessionId,
 			runtime: created.runtime,
 			state: "running",
 			messages: [request.taskMessage],
 			waiters: [],
+			activeOperationAccepted: false,
+			abortRequested: false,
 		};
 		this.agents.set(summary.id, agent);
 		void this.run(agent, "turn/start", request.taskMessage);
@@ -64,7 +98,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 
 	async list(sessionId: string): Promise<readonly AgentSummary[]> {
 		return [...this.agents.values()]
-			.filter((agent) => agent.sessionId === sessionId)
+			.filter((agent) => agent.parentSessionId === sessionId)
 			.map((agent) => this.snapshot(agent));
 	}
 
@@ -87,32 +121,29 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	async message(agentId: string, message: string): Promise<void> {
-		if (message.trim().length === 0) throw new Error("Agent message must not be empty");
-		this.get(agentId).messages.push(message);
+		const agent = this.get(agentId);
+		this.validateMessage(message);
+		this.appendMessage(agent, message);
 	}
 
 	async followUp(agentId: string, message: string): Promise<AgentSummary> {
-		if (message.trim().length === 0) throw new Error("Agent message must not be empty");
 		const agent = this.get(agentId);
-		await this.message(agentId, message);
-		if (agent.state === "complete" || agent.state === "interrupted" || agent.state === "failed") {
-			agent.state = "running";
-			void this.run(agent, "turn/followUp", message);
-		}
+		this.validateMessage(message);
+		if (agent.state === "running" || agent.state === "awaitingInput" || agent.activeOperationId !== undefined)
+			throw new Error(`Cannot follow up active agent ${agentId}`);
+		agent.state = "running";
+		this.appendMessage(agent, message);
+		void this.run(agent, "turn/followUp", message);
 		return this.snapshot(agent);
 	}
 
 	async interrupt(agentId: string): Promise<AgentSummary> {
 		const agent = this.get(agentId);
 		if (agent.state === "running" || agent.state === "awaitingInput") {
+			agent.abortRequested = true;
 			try {
-				const operationId = randomUUID();
-				await agent.runtime.accept(operationId);
-				await agent.runtime.run(operationId, {
-					command: "turn/abort",
-					sessionId: agent.sessionId,
-					payload: {},
-				});
+				const operationId = agent.activeOperationId;
+				if (operationId !== undefined && agent.activeOperationAccepted) await agent.runtime.abort(operationId);
 			} finally {
 				agent.state = "interrupted";
 				this.resolveWaiters(agent);
@@ -124,16 +155,26 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private async run(agent: ChildAgent, command: "turn/start" | "turn/followUp", text: string): Promise<void> {
 		try {
 			const operationId = randomUUID();
+			agent.activeOperationId = operationId;
+			agent.activeOperationAccepted = false;
 			await agent.runtime.accept(operationId);
+			agent.activeOperationAccepted = true;
+			if (agent.abortRequested || agent.state === "interrupted") {
+				await agent.runtime.abort(operationId);
+				return;
+			}
 			await agent.runtime.run(operationId, {
 				command,
 				sessionId: agent.sessionId,
 				payload: { text },
 			});
-			agent.state = "complete";
+			if (agent.state !== "interrupted") agent.state = "complete";
 		} catch {
-			agent.state = "failed";
+			if (agent.state !== "interrupted") agent.state = "failed";
 		} finally {
+			agent.activeOperationId = undefined;
+			agent.activeOperationAccepted = false;
+			agent.abortRequested = false;
 			this.resolveWaiters(agent);
 		}
 	}
@@ -143,11 +184,21 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		if (depth >= this.maxDepth) throw new Error(`Agent maximum depth ${this.maxDepth} exceeded`);
 		if (!/^[A-Za-z0-9._-]+$/.test(request.taskName))
 			throw new Error("Agent taskName contains unsupported characters");
-		if (request.taskMessage.trim().length === 0) throw new Error("Agent taskMessage must not be empty");
+		this.validateMessage(request.taskMessage, "Agent taskMessage");
+	}
+
+	private validateMessage(message: string, label = "Agent message"): void {
+		if (message.trim().length === 0) throw new Error(`${label} must not be empty`);
+		if (message.length > this.maxMessageLength) throw new Error(`${label} exceeds maximum length ${this.maxMessageLength}`);
+	}
+
+	private appendMessage(agent: ChildAgent, message: string): void {
+		if (agent.messages.length >= this.maxMessages) agent.messages.shift();
+		agent.messages.push(message);
 	}
 
 	private activeCount(): number {
-		return [...this.agents.values()].filter((agent) => agent.state === "running").length;
+		return [...this.agents.values()].filter((agent) => agent.state === "running" || agent.state === "awaitingInput").length;
 	}
 
 	private resolveWaiters(agent: ChildAgent): void {
