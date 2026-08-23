@@ -292,6 +292,12 @@ function requireBoundedNonEmptyString(command: CommandV2, value: unknown, field:
 	return value;
 }
 
+function sessionNameValue(command: CommandV2, value: unknown): string {
+	const sanitized = redactText(requireBoundedNonEmptyString(command, value, "name")).slice(0, 256).trim();
+	if (sanitized.length === 0) throw new Error(`${command.command} requires a non-empty name after sanitization`);
+	return sanitized;
+}
+
 function commandPayload(command: CommandV2): Record<string, unknown> {
 	return typeof command.payload === "object" && command.payload !== null && !Array.isArray(command.payload)
 		? (command.payload as Record<string, unknown>)
@@ -596,20 +602,21 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		} else if (runCommand === "session/name/set") {
 			if (payload.name !== null && typeof payload.name !== "string")
 				throw new Error("session/name/set requires name or null");
-			this.sessionName = payload.name === null ? undefined : payload.name;
+			const nextName = payload.name === null ? undefined : sessionNameValue(command, payload.name);
+			await harness.session.setName(nextName);
+			this.sessionName = nextName;
 			this.nameSource = payload.name === null ? undefined : "explicit";
 			this.nameRevision += 1;
-			await harness.session.setName(this.sessionName);
 		} else if (runCommand === "session/name/generate") {
 			const generated =
 				typeof payload.name === "string" && payload.name.trim().length > 0
-					? payload.name.trim()
+					? sessionNameValue(command, payload.name)
 					: "Untitled session";
 			if (this.nameSource !== "explicit") {
+				await harness.session.setName(generated);
 				this.sessionName = generated;
 				this.nameSource = "generated";
 				this.nameRevision += 1;
-				await harness.session.setName(this.sessionName);
 			}
 		} else if (runCommand === "session/name/auto/set") {
 			if (typeof payload.enabled !== "boolean") throw new Error("session/name/auto/set requires enabled");

@@ -83,6 +83,7 @@ describe("coding-agent v2 service adapter", () => {
 			});
 			expect((await runtime.snapshot()).name).toBe("Explicit adapter");
 			expect((await runtime.snapshot()).nameSource).toBe("explicit");
+			expect(await session.getName()).toBe("Explicit adapter");
 			expect(
 				(await session.findEntriesOnBranch({ order: "oldestFirst" })).filter((entry) => entry.type === "message"),
 			).toHaveLength(2);
