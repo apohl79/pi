@@ -25,6 +25,7 @@
 			"@earendil-works/pi-protocol": ["./packages/protocol/src/index.ts"],
 			"@earendil-works/pi-protocol/*": ["./packages/protocol/src/*"],
 			"@earendil-works/pi-client": ["./packages/client/src/index.ts"],
+			"@earendil-works/pi-codex-plugin-compat": ["./packages/codex-plugin-compat/src/index.ts"],
 			"@earendil-works/pi-client/unix": ["./packages/client/src/unix.ts"],
 			"@earendil-works/pi-client/diagnostics": ["./packages/client/src/diagnostics.ts"],
 			"@earendil-works/pi-client/*": ["./packages/client/src/*"],
