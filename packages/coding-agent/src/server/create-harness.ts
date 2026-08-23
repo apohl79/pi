@@ -78,6 +78,13 @@ export interface CodingAgentAgentTools {
 	interrupt(agentId: string): Promise<unknown>;
 }
 
+export interface CodingAgentPlanTools {
+	update(input: {
+		items: readonly { step: string; status: "pending" | "in_progress" | "completed" }[];
+		version?: number;
+	}): Promise<unknown>;
+}
+
 const requestUserInputSchema = Type.Object({
 	questions: Type.Array(
 		Type.Object({
@@ -126,6 +133,16 @@ const messageAgentSchema = Type.Object({
 });
 const followUpAgentSchema = messageAgentSchema;
 const interruptAgentSchema = Type.Object({ agentId: Type.String({ minLength: 1 }) });
+const updatePlanSchema = Type.Object({
+	items: Type.Array(
+		Type.Object({
+			step: Type.String({ minLength: 1 }),
+			status: Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed")]),
+		}),
+		{ minItems: 1, maxItems: 64 },
+	),
+	version: Type.Optional(Type.Integer({ minimum: 1 })),
+});
 
 export interface CodingAgentHarnessTool extends HarnessTool {
 	promptSnippet?: string;
@@ -162,6 +179,7 @@ export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOption
 	web?: (request: CodingAgentWebRequest) => Promise<readonly CodingAgentWebResult[]>;
 	viewImage?: (reference: string) => Promise<CodingAgentImageView>;
 	agents?: CodingAgentAgentTools;
+	plans?: CodingAgentPlanTools;
 }
 
 export interface BuildCodingAgentHarnessSystemPromptOptions {
@@ -399,6 +417,21 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 					}),
 				},
 			);
+		}
+		if (options.plans) {
+			const plans = options.plans;
+			tools.push({
+				name: "update_plan",
+				label: "update_plan",
+				description: "Replace the server-owned ordered plan for the current task.",
+				parameters: updatePlanSchema,
+				execute: async (_id, input) => ({
+					content: [
+						{ type: "text", text: JSON.stringify(await plans.update(input as Static<typeof updatePlanSchema>)) },
+					],
+					details: {},
+				}),
+			});
 		}
 	}
 	const activeToolNames = [...(providedActiveToolNames ?? tools.map((tool) => tool.name))];

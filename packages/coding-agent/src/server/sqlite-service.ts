@@ -1,4 +1,5 @@
 import {
+	type CompactionSettings,
 	type ExecutionEnv,
 	GoalManager,
 	type SamplingInput,
@@ -11,6 +12,7 @@ import type {
 	V2AgentRegistry,
 	V2ImageService,
 	V2InputRegistry,
+	V2PlanRegistry,
 	V2PluginRegistry,
 	V2WebService,
 } from "@earendil-works/pi-server";
@@ -33,10 +35,12 @@ export interface CodingAgentV2SqliteServiceOptions {
 	models: Models;
 	env: ExecutionEnv | ((metadata: SqliteSessionMetadata) => ExecutionEnv | Promise<ExecutionEnv>);
 	model: Model<Api> | ((metadata: SqliteSessionMetadata) => Model<Api> | Promise<Model<Api>>);
+	compaction?: (model: Model<Api>) => CompactionSettings | undefined;
 	pluginRegistry?: V2PluginRegistry;
 	inputs?: V2InputRegistry;
 	web?: V2WebService;
 	images?: V2ImageService;
+	plans?: V2PlanRegistry;
 	agentRegistry?: V2AgentRegistry | (() => V2AgentRegistry | undefined);
 	harness?: Omit<CreateCodingAgentHarnessOptions, "session" | "models" | "model" | "env" | "sessionFile">;
 }
@@ -64,9 +68,11 @@ export async function createCodingAgentV2SqliteService(
 			modelOverride ?? (typeof options.model === "function" ? await options.model(metadata) : options.model);
 		const env = typeof options.env === "function" ? await options.env(metadata) : options.env;
 		const goals = new GoalManager(session);
+		const compaction = options.compaction?.(model);
 		const inputRegistry = options.inputs;
 		const webService = options.web;
 		const imageService = options.images;
+		const planRegistry = options.plans;
 		const agentRegistry =
 			typeof options.agentRegistry === "function" ? options.agentRegistry() : options.agentRegistry;
 		const samplingInputFactory = async (): Promise<SamplingInput> => {
@@ -95,6 +101,7 @@ export async function createCodingAgentV2SqliteService(
 			models: options.models,
 			model,
 			env,
+			...(compaction === undefined ? {} : { compaction }),
 			goals,
 			samplingInputFactory,
 			sessionFile: metadata.path,
@@ -131,6 +138,13 @@ export async function createCodingAgentV2SqliteService(
 			...(imageService === undefined
 				? {}
 				: { viewImage: async (reference) => imageService.view(metadata.id, reference) }),
+			...(planRegistry === undefined
+				? {}
+				: {
+						plans: {
+							update: async (input) => planRegistry.update(metadata.id, input),
+						},
+					}),
 			...(agentRegistry === undefined ? {} : { agents: createAgentTools(agentRegistry, metadata.id, model) }),
 		});
 		return {
