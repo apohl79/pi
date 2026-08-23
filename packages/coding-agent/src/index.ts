@@ -497,6 +497,7 @@ export {
 	createCodingAgentV2SqliteService,
 } from "./server/sqlite-service.ts";
 export {
+	type StatuslineCommand,
 	type StatuslineExecutor,
 	StatuslineRunner,
 	type StatuslineRunnerOptions,

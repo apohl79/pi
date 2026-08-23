@@ -4,8 +4,10 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+export type StatuslineCommand = string | readonly string[];
+
 export interface StatuslineSnapshot {
-	readonly command?: string;
+	readonly command?: StatuslineCommand;
 	readonly payloadHash?: string;
 	readonly pending: boolean;
 	readonly output?: string;
@@ -13,7 +15,7 @@ export interface StatuslineSnapshot {
 }
 
 export interface StatuslineRunnerOptions {
-	readonly command?: string;
+	readonly command?: StatuslineCommand;
 	readonly timeoutMs?: number;
 	readonly maxOutputBytes?: number;
 	readonly maxErrorBytes?: number;
@@ -21,7 +23,7 @@ export interface StatuslineRunnerOptions {
 }
 
 export type StatuslineExecutor = (
-	command: string,
+	command: StatuslineCommand,
 	payload: string,
 	signal: AbortSignal,
 ) => Promise<{ readonly stdout: string; readonly stderr: string; readonly exitCode: number }>;
@@ -29,7 +31,7 @@ export type StatuslineExecutor = (
 const defaultCommand = join(homedir(), ".claude", "statusline.sh");
 
 function defaultExecutor(
-	command: string,
+	command: StatuslineCommand,
 	payload: string,
 	signal: AbortSignal,
 ): Promise<{
@@ -38,7 +40,10 @@ function defaultExecutor(
 	readonly exitCode: number;
 }> {
 	return new Promise((resolve, reject) => {
-		const child = spawn(command, { shell: true, stdio: ["pipe", "pipe", "pipe"] });
+		const child =
+			typeof command === "string"
+				? spawn(command, { shell: true, stdio: ["pipe", "pipe", "pipe"] })
+				: spawn(command[0] ?? "", command.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
 		let stdout = "";
 		let stderr = "";
 		child.stdout?.on("data", (chunk: Buffer) => {
@@ -63,7 +68,8 @@ export class StatuslineRunner {
 	private readonly maxOutputBytes: number;
 	private readonly maxErrorBytes: number;
 	private readonly execute: StatuslineExecutor;
-	private command: string | undefined;
+	private command: StatuslineCommand | undefined;
+	private commandKey: string | undefined;
 	private payloadHash: string | undefined;
 	private snapshotValue: StatuslineSnapshot = { pending: false };
 	private inFlight: Promise<StatuslineSnapshot> | undefined;
@@ -72,6 +78,7 @@ export class StatuslineRunner {
 	constructor(options: StatuslineRunnerOptions = {}) {
 		const configured = options.command ?? (existsSync(defaultCommand) ? defaultCommand : undefined);
 		this.command = configured;
+		this.commandKey = JSON.stringify(configured);
 		this.timeoutMs = options.timeoutMs ?? 2_000;
 		this.maxOutputBytes = options.maxOutputBytes ?? 64 * 1024;
 		this.maxErrorBytes = options.maxErrorBytes ?? 1_024;
@@ -85,9 +92,11 @@ export class StatuslineRunner {
 
 	async update(payload: unknown, command = this.command): Promise<StatuslineSnapshot> {
 		const payloadHash = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
-		if (command === this.command && payloadHash === this.payloadHash) return this.inFlight ?? this.snapshot;
+		const commandKey = JSON.stringify(command);
+		if (commandKey === this.commandKey && payloadHash === this.payloadHash) return this.inFlight ?? this.snapshot;
 		this.abortController?.abort();
 		this.command = command;
+		this.commandKey = commandKey;
 		this.payloadHash = payloadHash;
 		if (!command) {
 			this.snapshotValue = { pending: false, payloadHash };
@@ -111,10 +120,11 @@ export class StatuslineRunner {
 		await this.inFlight?.catch(() => undefined);
 		this.snapshotValue = { pending: false };
 		this.payloadHash = undefined;
+		this.commandKey = undefined;
 	}
 
 	private async executeWithTimeout(
-		command: string,
+		command: StatuslineCommand,
 		payload: string,
 		controller: AbortController,
 	): Promise<StatuslineSnapshot> {
@@ -129,7 +139,11 @@ export class StatuslineRunner {
 					}, this.timeoutMs);
 				}),
 			]);
-			const stdout = result.stdout.slice(0, this.maxOutputBytes);
+			const stdout =
+				result.stdout
+					.split(/\r?\n/)
+					.find((line) => line.trim().length > 0)
+					?.slice(0, this.maxOutputBytes) ?? "";
 			const stderr = result.stderr.slice(0, this.maxErrorBytes);
 			this.snapshotValue =
 				result.exitCode === 0
