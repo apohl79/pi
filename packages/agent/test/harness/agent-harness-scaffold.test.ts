@@ -998,6 +998,20 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("serializes abort queue drain against cancellation", async () => {
+		const session = createSession("abort-queue-race");
+		const harness = await createHarness(session);
+		await session.appendRecord(operationStarted("run-abort-race"));
+		const queued = await harness.steer("cancel or recall");
+		expect(queued).toMatchObject({ ok: true, value: { entryId: expect.any(String) } });
+		if (!queued.ok) throw new Error("queue admission failed");
+
+		const [, cancellation] = await Promise.all([harness.abort(), harness.cancelQueued(queued.value.entryId)]);
+		expect(cancellation.ok).toBe(true);
+		expect(await session.findRecords({ type: "queue_cancelled" })).toHaveLength(1);
+		await harness.close();
+	});
+
 	it("signals active runs so abort owns the terminal outcome", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
