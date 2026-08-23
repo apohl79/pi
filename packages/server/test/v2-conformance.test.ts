@@ -1304,6 +1304,8 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.request({ command: "process/write", payload: { processId, input: "abcdef" } });
 		const output = await client.request({ command: "process/read", payload: { processId, cursor: 0 } });
 		expect(output).toMatchObject({ ok: true, result: { output: { output: "bcdef", cursor: 6, truncated: true } } });
+		const malformedCursor = await client.request({ command: "process/read", payload: { processId, cursor: "0" } });
+		expect(malformedCursor).toMatchObject({ ok: false, error: { message: "process/read cursor must be a number" } });
 		const terminated = await client.request({ command: "process/terminate", payload: { processId } });
 		expect(terminated).toMatchObject({ ok: true, result: { process: { state: "terminated", exitCode: 143 } } });
 		const waited = await client.request({ command: "process/wait", payload: { processId } });
@@ -1317,8 +1319,8 @@ describe("PiServer v2 operation acceptance", () => {
 			"process_terminated",
 			"process_waited",
 		]);
-		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_received")).toHaveLength(5);
-		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_completed")).toHaveLength(5);
+		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_received")).toHaveLength(6);
+		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_completed")).toHaveLength(6);
 		const inputEvent = diagnosticEvents.find((event) => event.kind === "process_input_written");
 		expect(inputEvent).toMatchObject({
 			processInstanceId: processId,

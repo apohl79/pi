@@ -716,6 +716,8 @@ export class PiServerV2 {
 	private async readProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const processId = processIdFrom(command, payload);
+		if (payload.cursor !== undefined && typeof payload.cursor !== "number")
+			throw new Error("process/read cursor must be a number");
 		const cursor = typeof payload.cursor === "number" ? payload.cursor : 0;
 		const output = await this.processes.read(processId, cursor);
 		await this.diagnostics.record({
