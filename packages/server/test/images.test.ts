@@ -108,4 +108,18 @@ describe("BlobV2ImageService", () => {
 			"Generated image cost must be a non-negative finite number",
 		);
 	});
+
+	test("rejects empty generation provenance before storing the blob", async () => {
+		const blobs = new InMemoryV2BlobStore();
+		const service = new BlobV2ImageService(new LocalV2FileReferenceService({ projectRoot: "." }), blobs, {
+			generate: async () => ({
+				data: new Uint8Array([1]),
+				mimeType: "image/png",
+				provider: " ",
+				model: "image-fast",
+			}),
+		});
+
+		await expect(service.generate("session-1", { prompt: "tree" })).rejects.toThrow("provider");
+	});
 });

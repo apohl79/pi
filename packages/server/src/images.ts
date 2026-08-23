@@ -60,6 +60,10 @@ function assertImageDimensions(dimensions: Readonly<{ width: number; height: num
 		throw new Error("Generated image dimensions must be positive safe integers");
 }
 
+function assertProvenance(value: string, field: string): void {
+	if (value.trim().length === 0) throw new Error(`Generated image ${field} must not be empty`);
+}
+
 export class BlobV2ImageService implements V2ImageService {
 	private readonly files: V2FileReferenceService;
 	private readonly blobs: V2BlobStore;
@@ -93,6 +97,9 @@ export class BlobV2ImageService implements V2ImageService {
 		}
 		const generated = await this.generator.generate(request);
 		assertImageMime(generated.mimeType);
+		assertProvenance(generated.provider, "provider");
+		assertProvenance(generated.model, "model");
+		if (generated.sourceOperationId !== undefined) assertProvenance(generated.sourceOperationId, "sourceOperationId");
 		if (generated.dimensions !== undefined) assertImageDimensions(generated.dimensions);
 		if (generated.costUsd !== undefined && (!Number.isFinite(generated.costUsd) || generated.costUsd < 0))
 			throw new Error("Generated image cost must be a non-negative finite number");
