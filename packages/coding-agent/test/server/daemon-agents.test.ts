@@ -10,11 +10,21 @@ import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemo
 
 const directories: string[] = [];
 
+interface ChildControl {
+	readonly onFirstStart?: () => void;
+	readonly waitBeforeFirstResponse?: Promise<void>;
+}
+
 afterEach(async () => {
 	await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-async function createAgentRuntime(directory: string, childCompletes = true, childPrompts?: string[]) {
+async function createAgentRuntime(
+	directory: string,
+	childCompletes = true,
+	childPrompts?: string[],
+	childControl?: ChildControl,
+) {
 	const models = createModels();
 	const parent = fauxProvider({
 		provider: "coding-agent-daemon-parent-faux",
@@ -31,8 +41,12 @@ async function createAgentRuntime(directory: string, childCompletes = true, chil
 		childCompletes
 			? [
 					(context) => {
+						childControl?.onFirstStart?.();
 						childPrompts?.push(JSON.stringify(context.messages));
-						return fauxAssistantMessage("child completed");
+						return (
+							childControl?.waitBeforeFirstResponse?.then(() => fauxAssistantMessage("child completed")) ??
+							fauxAssistantMessage("child completed")
+						);
 					},
 					(context) => {
 						childPrompts?.push(JSON.stringify(context.messages));
@@ -50,6 +64,14 @@ async function createAgentRuntime(directory: string, childCompletes = true, chil
 		harness: { tools: [], activeToolNames: [] },
 		write: () => {},
 	});
+}
+
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+	let resolvePromise!: () => void;
+	const promise = new Promise<void>((resolve) => {
+		resolvePromise = resolve;
+	});
+	return { promise, resolve: resolvePromise };
 }
 
 describe("coding-agent daemon child agents", () => {
@@ -207,6 +229,49 @@ describe("coding-agent daemon child agents", () => {
 			await client.request({ command: "agent/wait", payload: { agentId } });
 			expect(childPrompts.some((prompt) => prompt.includes("urgent context"))).toBe(true);
 		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("queues a server message for an active child follow-up", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-agents-active-message-"));
+		directories.push(directory);
+		const childPrompts: string[] = [];
+		const firstStarted = createDeferred();
+		const releaseFirst = createDeferred();
+		const runtime = await createAgentRuntime(directory, true, childPrompts, {
+			onFirstStart: firstStarted.resolve,
+			waitBeforeFirstResponse: releaseFirst.promise,
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			const sessionId = (created as unknown as { result: { session: { id: string } } }).result.session.id;
+			await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			const spawned = await client.request({
+				command: "agent/spawn",
+				sessionId,
+				payload: {
+					taskName: "active-messaged",
+					taskMessage: "complete the first task",
+					model: { provider: "coding-agent-daemon-child-faux", id: "child-model" },
+				},
+			});
+			const agentId = (spawned as unknown as { result: { agent: { id: string } } }).result.agent.id;
+			await firstStarted.promise;
+			await client.request({ command: "agent/message", payload: { agentId, message: "active urgent context" } });
+			await client.request({ command: "agent/followUp", payload: { agentId, message: "continue the active task" } });
+			releaseFirst.resolve();
+			await client.request({ command: "agent/wait", payload: { agentId } });
+			await client.request({ command: "agent/wait", payload: { agentId } });
+			expect(childPrompts).toEqual(expect.arrayContaining([expect.stringContaining("active urgent context")]));
+		} finally {
+			releaseFirst.resolve();
 			client.dispose();
 			await runtime.close();
 		}

@@ -147,7 +147,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		for (const agent of agents) this.resolveWaiters(agent);
 	}
 
-	private async run(agent: ChildAgent, command: "turn/start" | "turn/followUp", text: string): Promise<void> {
+	private async run(agent: ChildAgent, command: "turn/start", text: string): Promise<void> {
 		try {
 			const inbox = agent.inbox.slice();
 			const prompt = [...inbox, text].join("\n\n");
@@ -163,7 +163,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			const next = agent.followUps.shift();
 			if (next !== undefined) {
 				agent.state = "running";
-				void this.run(agent, "turn/followUp", next);
+				void this.run(agent, "turn/start", next);
 			}
 		} catch {
 			agent.state = "failed";
