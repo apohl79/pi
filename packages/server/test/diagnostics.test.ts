@@ -96,12 +96,20 @@ describe("JsonlForensicRecorder", () => {
 			read: async () => [],
 		};
 		const recorder = new TeeForensicRecorder(primary, secondary);
-		await expect(recorder.record({ kind: "accepted" })).resolves.toMatchObject({ kind: "accepted", seq: 1 });
+		await expect(
+			recorder.record({ kind: "accepted", daemonInstanceId: "daemon-1", sessionId: "session-1" }),
+		).resolves.toMatchObject({ kind: "accepted", seq: 1 });
 		expect(recorder.getOperationalLogFailureCount()).toBe(1);
 		expect(recorder.isDegraded()).toBe(true);
 		expect(await recorder.read()).toMatchObject([
 			{ kind: "accepted" },
-			{ kind: "diagnostics_degraded", severity: "error", payload: { sink: "operational-log" } },
+			{
+				kind: "diagnostics_degraded",
+				severity: "error",
+				daemonInstanceId: "daemon-1",
+				sessionId: "session-1",
+				payload: { sink: "operational-log" },
+			},
 		]);
 	});
 
