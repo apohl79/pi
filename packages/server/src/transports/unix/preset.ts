@@ -44,6 +44,7 @@ export function createUnixServerV2(service: PiServerServiceV2, options: UnixServ
 		diagnostics: options.diagnostics,
 		diagnosticContent: options.diagnosticContent,
 		integrity: options.integrity,
+		repairSafe: options.repairSafe,
 		runtimeManifest: options.runtimeManifest,
 		operationStore: options.operationStore,
 		processes: options.processes,

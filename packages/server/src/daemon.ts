@@ -7,6 +7,7 @@ import type { V2BlobStore } from "./blobs.ts";
 import type {
 	DiagnosticContentStore,
 	DiagnosticIntegrityProvider,
+	DiagnosticRepairProvider,
 	DiagnosticRuntimeManifest,
 	ForensicRecorder,
 } from "./diagnostics.ts";
@@ -56,6 +57,7 @@ export interface ServerDaemonOptions {
 	readonly diagnostics?: ForensicRecorder;
 	readonly diagnosticContent?: DiagnosticContentStore;
 	readonly integrity?: DiagnosticIntegrityProvider;
+	readonly repairSafe?: DiagnosticRepairProvider;
 	readonly runtimeManifest?: DiagnosticRuntimeManifest;
 	readonly usage?: V2UsageLedger;
 	/** Optional durable marker used to distinguish clean and unclean daemon generations. */
@@ -162,6 +164,7 @@ export class ServerDaemon {
 					? {}
 					: { diagnosticContent: this.options.diagnosticContent }),
 				...(this.options.integrity === undefined ? {} : { integrity: this.options.integrity }),
+				...(this.options.repairSafe === undefined ? {} : { repairSafe: this.options.repairSafe }),
 				...(this.options.runtimeManifest === undefined ? {} : { runtimeManifest: this.options.runtimeManifest }),
 				...(this.options.usage === undefined ? {} : { usage: this.options.usage }),
 			});

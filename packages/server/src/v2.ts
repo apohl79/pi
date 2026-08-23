@@ -26,6 +26,8 @@ import {
 	type DiagnosticContentStore,
 	type DiagnosticIntegrityCheck,
 	type DiagnosticIntegrityProvider,
+	type DiagnosticRepairProvider,
+	type DiagnosticRepairResult,
 	type DiagnosticRuntimeManifest,
 	type DiagnosticValue,
 	type ForensicRecorder,
@@ -94,6 +96,7 @@ export interface PiServerV2Options {
 	diagnostics?: ForensicRecorder;
 	diagnosticContent?: DiagnosticContentStore;
 	integrity?: DiagnosticIntegrityProvider;
+	repairSafe?: DiagnosticRepairProvider;
 	runtimeManifest?: DiagnosticRuntimeManifest;
 	operationStore?: V2OperationStore;
 	processes?: V2ProcessRegistry;
@@ -210,6 +213,7 @@ export class PiServerV2 {
 	private readonly diagnostics: ForensicRecorder;
 	private readonly diagnosticContent: DiagnosticContentStore | undefined;
 	private readonly integrity: DiagnosticIntegrityProvider | undefined;
+	private readonly repairSafe: DiagnosticRepairProvider | undefined;
 	private readonly runtimeManifest: DiagnosticRuntimeManifest;
 	private readonly diagnosticCapsules = new Map<string, DiagnosticCapsule>();
 	private readonly operationStore: V2OperationStore;
@@ -262,6 +266,7 @@ export class PiServerV2 {
 					};
 		this.diagnosticContent = options.diagnosticContent;
 		this.integrity = options.integrity;
+		this.repairSafe = options.repairSafe;
 		this.runtimeManifest = options.runtimeManifest ?? {
 			schemaVersion: 1,
 			runtime: `node ${process.version}`,
@@ -1483,11 +1488,19 @@ export class PiServerV2 {
 			}
 		}
 		const checks = [{ name: "recorder", ok: true }, { name: "sequence", ok: sequenceOk }, ...integrityChecks];
+		let repairs: readonly DiagnosticRepairResult[] = [];
+		if (payload.repairSafe === true && this.repairSafe !== undefined) {
+			try {
+				repairs = await this.repairSafe();
+			} catch (error) {
+				repairs = [{ name: "repair", ok: false, details: { error: error instanceof Error ? error.name : "unknown" } }];
+			}
+		}
 		await this.sendResponse(state, id, {
 			command: command.command,
 			ok: checks.every((check) => check.ok),
 			checks,
-			...(payload.repairSafe === true ? { repairSafe: true, repairs: [] } : {}),
+			...(payload.repairSafe === true ? { repairSafe: true, repairs } : {}),
 		});
 	}
 

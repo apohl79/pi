@@ -4,6 +4,7 @@ import type { V2BlobStore } from "../../blobs.ts";
 import type {
 	DiagnosticContentStore,
 	DiagnosticIntegrityProvider,
+	DiagnosticRepairProvider,
 	DiagnosticRuntimeManifest,
 	ForensicRecorder,
 } from "../../diagnostics.ts";
@@ -35,6 +36,7 @@ export interface UnixServerOptions extends Omit<PiServerOptions, "listeners">, U
 	diagnostics?: ForensicRecorder;
 	diagnosticContent?: DiagnosticContentStore;
 	integrity?: DiagnosticIntegrityProvider;
+	repairSafe?: DiagnosticRepairProvider;
 	runtimeManifest?: DiagnosticRuntimeManifest;
 	operationStore?: V2OperationStore;
 	processes?: V2ProcessRegistry;

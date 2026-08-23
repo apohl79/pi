@@ -81,6 +81,15 @@ export interface DiagnosticIntegrityCheck {
 
 export type DiagnosticIntegrityProvider = () => Promise<readonly DiagnosticIntegrityCheck[]>;
 
+export interface DiagnosticRepairResult {
+	readonly name: string;
+	readonly ok: boolean;
+	readonly details?: Record<string, DiagnosticValue>;
+}
+
+/** Executes only explicitly safe repairs of derived indexes or caches. */
+export type DiagnosticRepairProvider = () => Promise<readonly DiagnosticRepairResult[]>;
+
 export interface DiagnosticCapsule {
 	schemaVersion: 1;
 	eventId: string;
