@@ -182,7 +182,8 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>)
 				} else if (
 					message.request.command === "session/steering-mode/set" ||
 					message.request.command === "session/follow-up-mode/set" ||
-					message.request.command === "session/compaction/set"
+					message.request.command === "session/compaction/set" ||
+					message.request.command === "session/retry/set"
 				) {
 					handlers?.onData(
 						encodeServerMessageV2({
@@ -496,6 +497,29 @@ describe("experimental CLI runtime", () => {
 			payload: { enabled: false },
 		});
 		expect(output).toContainEqual(expect.objectContaining({ id: "compact-mode", success: true }));
+		runtime.close();
+	});
+
+	test("maps RPC auto-retry changes to the server-owned policy", async () => {
+		const requests: Array<{ command: string; payload?: unknown }> = [];
+		const server = clientFactory(requests);
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: () => {},
+			rpcInput: Readable.from(['{"id":"retry-mode","type":"set_auto_retry","enabled":true}\n']),
+			rpcOutput: (value) => output.push(value),
+		});
+		await runtime.runRpc({ messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(requests).toContainEqual({
+			command: "session/retry/set",
+			sessionId: "session-1",
+			payload: { enabled: true },
+		});
+		expect(output).toContainEqual(expect.objectContaining({ id: "retry-mode", success: true }));
 		runtime.close();
 	});
 

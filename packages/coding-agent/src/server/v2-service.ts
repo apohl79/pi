@@ -394,6 +394,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			thinkingLevel,
 			steeringMode,
 			followUpMode,
+			retryPolicy,
 			compactionSource,
 			stats,
 			compaction,
@@ -405,6 +406,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.definition.harness.getThinkingLevel(),
 			this.definition.harness.getSteeringMode(),
 			this.definition.harness.getFollowUpMode(),
+			this.definition.harness.getRetryPolicy(),
 			this.definition.harness.getCompactionPolicySource(),
 			this.definition.harness.session.getStats(),
 			this.definition.harness.getCompactionSettings(),
@@ -464,6 +466,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			},
 			steeringMode,
 			followUpMode,
+			autoRetryEnabled: retryPolicy.enabled,
 			...(goal === undefined ? {} : { goal }),
 			...(plan === undefined ? {} : { plan }),
 			agents: agents === undefined ? [] : [...agents],
@@ -578,6 +581,10 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				if (typeof payload.enabled !== "boolean") throw new Error("session/compaction/set requires enabled");
 				const settings = await harness.getCompactionSettings();
 				await harness.setCompactionSettings({ ...settings, enabled: payload.enabled });
+			} else if (runCommand === "session/retry/set") {
+				if (typeof payload.enabled !== "boolean") throw new Error("session/retry/set requires enabled");
+				const policy = await harness.getRetryPolicy();
+				await harness.setRetryPolicy({ ...policy, enabled: payload.enabled });
 			} else if (runCommand === "goal/create") {
 				if (!this.definition.goals || typeof payload.objective !== "string")
 					throw new Error("goal/create requires an objective");
