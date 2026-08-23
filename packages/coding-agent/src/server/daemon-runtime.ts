@@ -4,7 +4,6 @@ import { PiClientV2 } from "@earendil-works/pi-client";
 import { ClientDiagnosticSpool } from "@earendil-works/pi-client/diagnostics";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import {
-	createNativeV2PtyLauncher,
 	type DiagnosticIntegrityCheck,
 	FileV2BlobStore,
 	type ForensicRecorder,
@@ -46,6 +45,7 @@ import { acquireCodexMarketplacePlugin, type CodexPluginAcquisitionOptions } fro
 import { CodexPluginActivationStore } from "../core/codex-plugin-activation.ts";
 import { runMigrations } from "../migrations.ts";
 import { type CodingAgentV2AgentRegistryOptions, createCodingAgentV2AgentRegistry } from "./agent-registry.ts";
+import { createCodingAgentNativePtyLauncher } from "./native-pty.ts";
 import {
 	AcquiringV2PluginRegistry,
 	ActivatingV2PluginRegistry,
@@ -152,7 +152,8 @@ export async function createCodingAgentDaemonRuntime(
 				);
 	const diagnosticContent =
 		options.diagnosticKeyPath === undefined ? undefined : new LocalDiagnosticCapsuleStore(options.diagnosticKeyPath);
-	const processes = options.processes ?? new NodeV2ProcessRegistry({ ptyLauncher: createNativeV2PtyLauncher() });
+	const processes =
+		options.processes ?? new NodeV2ProcessRegistry({ ptyLauncher: createCodingAgentNativePtyLauncher() });
 	const inputs =
 		options.inputs ??
 		(options.inputStorePath === undefined
@@ -516,7 +517,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 				options.processes ??
 				new JsonlV2ProcessRegistry(
 					join(options.agentDir, "processes.jsonl"),
-					new NodeV2ProcessRegistry({ ptyLauncher: createNativeV2PtyLauncher() }),
+					new NodeV2ProcessRegistry({ ptyLauncher: createCodingAgentNativePtyLauncher() }),
 				),
 		});
 		return {
