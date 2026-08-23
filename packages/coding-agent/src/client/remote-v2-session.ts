@@ -1,9 +1,4 @@
-import type {
-	CreateSessionV2Options,
-	PiClientV2,
-	PiSessionV2Handle,
-	V2SessionLeaseMode,
-} from "@earendil-works/pi-client";
+import type { PiClientV2, PiSessionV2Handle, V2SessionLeaseMode } from "@earendil-works/pi-client";
 import type {
 	CommandV2,
 	JsonValue,
@@ -65,15 +60,6 @@ export class RemoteV2Session {
 		}
 	}
 
-	static async create(
-		client: PiClientV2,
-		options: CreateSessionV2Options = {},
-		sessionOptions: RemoteV2SessionOptions = {},
-	): Promise<RemoteV2Session> {
-		const created = await client.createSession(options);
-		return RemoteV2Session.open(client, created.id, sessionOptions);
-	}
-
 	get id(): string | undefined {
 		return this.#handle?.sessionId;
 	}
@@ -125,25 +111,6 @@ export class RemoteV2Session {
 		if (this.phase !== "idle" && this.phase !== "turn")
 			throw new Error(`Session cannot accept input during ${this.phase ?? "unknown"} phase`);
 		return this.#accept(command, { text: normalized });
-	}
-
-	async waitForOperation(operationId: string): Promise<ProtocolSnapshot> {
-		this.#assertNotDisposed();
-		if (this.#lifecycle.status === "ready" && this.#lastEvent?.operationId === operationId && this.#snapshot)
-			return structuredClone(this.#snapshot);
-		return new Promise<ProtocolSnapshot>((resolve) => {
-			let unsubscribe = () => {};
-			unsubscribe = this.subscribe((state) => {
-				if (
-					state.lifecycle.status !== "ready" ||
-					state.lastEvent?.operationId !== operationId ||
-					state.snapshot === undefined
-				)
-					return;
-				unsubscribe();
-				resolve(structuredClone(state.snapshot));
-			});
-		});
 	}
 
 	async followUp(text: string): Promise<string> {
@@ -231,12 +198,7 @@ export class RemoteV2Session {
 		return request.then((response) => {
 			if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
 			if (!("accepted" in response)) throw new Error("Expected an accepted operation response");
-			const terminalAlreadyObserved =
-				this.#lastEvent?.event === "operation_terminal" &&
-				this.#lastEvent.operationId === response.accepted.operationId;
-			this.#lifecycle = terminalAlreadyObserved
-				? { status: "ready" }
-				: { status: "busy", operationId: response.accepted.operationId, command };
+			this.#lifecycle = { status: "busy", operationId: response.accepted.operationId, command };
 			this.#emit();
 			return response.accepted.operationId;
 		});
