@@ -7,6 +7,12 @@ import type {
 	V2SessionLeaseMode,
 } from "@earendil-works/pi-client";
 import type {
+	V2FileCompletion,
+	V2FileRead,
+	V2FileReference,
+	V2LocalFileReference,
+} from "@earendil-works/pi-file-references";
+import type {
 	AgentSummary,
 	CommandV2,
 	GoalSnapshot,
@@ -83,30 +89,9 @@ export interface RemoteV2ProcessSnapshot extends RemoteV2ProcessOutput {
 	readonly exitCode?: number;
 }
 
-export interface RemoteV2FileReference {
-	readonly reference: string;
-	readonly path: string;
-	readonly kind: "file" | "directory";
-	readonly size?: number;
-	readonly mimeType?: string;
-}
-
-export interface RemoteV2FileCompletion {
-	readonly reference: string;
-	readonly display: string;
-	readonly hostScope: "server";
-	readonly path: string;
-	readonly canonicalPath: string;
-	readonly kind: "file" | "directory";
-	readonly size?: number;
-	readonly mimeType?: string;
-}
-
-export interface RemoteV2FileRead {
-	readonly file: RemoteV2FileReference;
-	readonly encoding: "base64";
-	readonly data: string;
-}
+export type RemoteV2FileReference = V2FileReference;
+export type RemoteV2FileCompletion = V2FileCompletion;
+export type RemoteV2FileRead = V2FileRead;
 
 export interface RemoteV2BlobStat {
 	readonly digest: string;
@@ -120,14 +105,7 @@ export interface RemoteV2BlobRead {
 	readonly data: string;
 }
 
-export interface RemoteV2LocalFileReference {
-	readonly reference: string;
-	readonly path: string;
-	readonly kind: "file";
-	readonly size: number;
-	readonly mimeType: string;
-	readonly blobDigest: string;
-}
+export type RemoteV2LocalFileReference = V2LocalFileReference;
 
 const DEFAULT_MAX_LOCAL_UPLOAD_BYTES = 8 * 1024 * 1024;
 

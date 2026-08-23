@@ -19,6 +19,21 @@ export interface V2FileCompletion {
 	readonly mimeType?: string;
 }
 
+export interface V2FileRead {
+	readonly file: V2FileReference;
+	readonly encoding: "base64";
+	readonly data: string;
+}
+
+export interface V2LocalFileReference {
+	readonly reference: string;
+	readonly path: string;
+	readonly kind: "file";
+	readonly size: number;
+	readonly mimeType: string;
+	readonly blobDigest: string;
+}
+
 export interface V2FileReferenceService {
 	complete(
 		sessionId: string,
