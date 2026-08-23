@@ -242,6 +242,54 @@ function deepFreeze<T>(value: T): T {
 	return Object.freeze(value);
 }
 
+function validateCompactionPolicies(config: ModelsJson): string | undefined {
+	for (const [providerId, provider] of Object.entries(config.providers)) {
+		const models = new Map((provider.models ?? []).map((model) => [model.id, model]));
+		for (const [modelId, override] of Object.entries(provider.modelOverrides ?? {})) {
+			const model = models.get(modelId);
+			const compaction = { ...model?.compaction, ...override.compaction };
+			if (Object.keys(compaction).length === 0) continue;
+			const path = `providers.${providerId}.modelOverrides.${modelId}.compaction`;
+			for (const [field, value] of Object.entries(compaction)) {
+				if (typeof value === "number" && (!Number.isSafeInteger(value) || value < 0))
+					return `Invalid ${path}.${field}: expected a non-negative safe integer`;
+			}
+			const contextWindow = override.contextWindow ?? model?.contextWindow;
+			if (contextWindow === undefined) continue;
+			if (compaction.reserveTokens !== undefined && compaction.reserveTokens >= contextWindow)
+				return `Invalid ${path}.reserveTokens: must be smaller than contextWindow ${contextWindow}`;
+			if (
+				compaction.keepRecentTokens !== undefined &&
+				compaction.reserveTokens !== undefined &&
+				compaction.keepRecentTokens >= contextWindow - compaction.reserveTokens
+			)
+				return `Invalid ${path}.keepRecentTokens: must be smaller than the compaction trigger window`;
+		}
+		for (const model of provider.models ?? []) {
+			if (model.compaction === undefined || provider.modelOverrides?.[model.id]?.compaction !== undefined) continue;
+			const path = `providers.${providerId}.models.${model.id}.compaction`;
+			for (const [field, value] of Object.entries(model.compaction)) {
+				if (typeof value === "number" && (!Number.isSafeInteger(value) || value < 0))
+					return `Invalid ${path}.${field}: expected a non-negative safe integer`;
+			}
+			if (
+				model.contextWindow !== undefined &&
+				model.compaction.reserveTokens !== undefined &&
+				model.compaction.reserveTokens >= model.contextWindow
+			)
+				return `Invalid ${path}.reserveTokens: must be smaller than contextWindow ${model.contextWindow}`;
+			if (
+				model.contextWindow !== undefined &&
+				model.compaction.keepRecentTokens !== undefined &&
+				model.compaction.reserveTokens !== undefined &&
+				model.compaction.keepRecentTokens >= model.contextWindow - model.compaction.reserveTokens
+			)
+				return `Invalid ${path}.keepRecentTokens: must be smaller than the compaction trigger window`;
+		}
+	}
+	return undefined;
+}
+
 /** One immutable load of models.json. */
 export class ModelConfig {
 	private readonly providers: ReadonlyMap<string, ModelsJsonProvider>;
@@ -286,6 +334,8 @@ export class ModelConfig {
 		}
 
 		const config = parsed as ModelsJson;
+		const compactionError = validateCompactionPolicies(config);
+		if (compactionError !== undefined) return new ModelConfig(new Map(), compactionError);
 		const providers = new Map<string, ModelsJsonProvider>();
 		for (const [providerId, provider] of Object.entries(config.providers)) {
 			providers.set(providerId, deepFreeze(structuredClone(provider)));
