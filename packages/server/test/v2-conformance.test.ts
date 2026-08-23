@@ -113,11 +113,20 @@ class TestRuntime implements PiSessionRuntimeV2 {
 		return accepted;
 	}
 
-	async run(operationId: string, _command: CommandV2): Promise<void> {
-		this.commands.push(structuredClone(_command));
+	async run(operationId: string, command: CommandV2): Promise<void> {
+		this.commands.push(structuredClone(command));
 		if (this.fail) throw new Error("runtime failed");
 		await this.release.promise;
 		this.started.resolve(undefined);
+		if (command.command === "session/name/set") {
+			const payload = command.payload as { name?: unknown } | undefined;
+			this.current = {
+				...this.current,
+				name: typeof payload?.name === "string" ? payload.name : undefined,
+				nameSource: typeof payload?.name === "string" ? "explicit" : undefined,
+				nameRevision: this.current.nameRevision + 1,
+			};
+		}
 		this.current = {
 			...this.current,
 			revision: 3,
@@ -230,6 +239,32 @@ describe("PiServer v2 operation acceptance", () => {
 			expect(response).toMatchObject({ ok: false, error: { code: "request_failed", message } });
 		}
 		await client.close();
+	});
+
+	test("emits a session-name event when an operation changes the durable name", async () => {
+		const service = new TestService();
+		const server = new PiServerV2(service, { listeners: [], serverId: "session-name-events" });
+		await server.start();
+		servers.push(server);
+		const client = connectInMemoryTestClientV2(server.accept.bind(server));
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const accepted = await client.request({
+			command: "session/name/set",
+			sessionId: "session-1",
+			payload: { name: "Renamed session" },
+		});
+		expect(accepted).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+		service.sessions.get("session-1")!.release.resolve(undefined);
+		const nameEvent = await client.next(
+			(message) => message.type === "event" && message.event === "session_name_updated",
+		);
+		expect(nameEvent).toMatchObject({
+			type: "event",
+			event: "session_name_updated",
+			operationId: expect.any(String),
+			payload: { name: "Renamed session", nameSource: "explicit", nameRevision: 2 },
+		});
 	});
 
 	test("accepts deterministic in-memory v2 handshakes and fragmented requests", async () => {

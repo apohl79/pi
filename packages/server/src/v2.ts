@@ -1895,7 +1895,25 @@ export class PiServerV2 {
 		command: CommandV2,
 	): Promise<void> {
 		try {
+			const beforeSnapshot = await runtime.snapshot();
 			await runtime.run(operationId, command);
+			const completedSnapshot = await runtime.snapshot();
+			if (
+				beforeSnapshot.nameRevision !== completedSnapshot.nameRevision ||
+				beforeSnapshot.name !== completedSnapshot.name ||
+				beforeSnapshot.nameSource !== completedSnapshot.nameSource
+			)
+				await this.broadcastEvent(
+					sessionId,
+					runtime,
+					{
+						name: completedSnapshot.name ?? null,
+						nameSource: completedSnapshot.nameSource ?? null,
+						nameRevision: completedSnapshot.nameRevision,
+					},
+					operationId,
+					"session_name_updated",
+				);
 			const record = this.operations.get(operationId);
 			if (record) {
 				const updated = { ...record, state: "complete" as const };
