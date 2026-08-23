@@ -23,6 +23,22 @@ describe("InMemoryV2InputRegistry", () => {
 		expect(await registry.read(request.id)).toMatchObject({ status: "expired", answers: {} });
 	});
 
+	test("rejects unsafe or overflowing deadlines", async () => {
+		const registry = new InMemoryV2InputRegistry();
+		await expect(
+			registry.create("session-1", [{ id: "confirm", prompt: "Continue?" }], Number.MAX_SAFE_INTEGER + 1),
+		).rejects.toThrow("autoResolutionMs");
+		expect(() =>
+			registry.restore({
+				id: "request-unsafe-deadline",
+				sessionId: "session-1",
+				questions: [{ id: "confirm", prompt: "Continue?" }],
+				status: "pending",
+				deadlineAt: Number.MAX_SAFE_INTEGER + 1,
+			}),
+		).toThrow("deadlineAt");
+	});
+
 	test("waits for a response and resolves waiters exactly once", async () => {
 		const registry = new InMemoryV2InputRegistry();
 		const request = await registry.create("session-1", [{ id: "name", prompt: "Your name?" }]);
