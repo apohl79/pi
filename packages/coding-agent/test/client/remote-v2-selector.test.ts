@@ -73,7 +73,9 @@ function attachmentClient(current: SessionSnapshotV2): PiClientV2 {
 			const result: JsonValue =
 				message.request.command === "session/read"
 					? ({ session: current } as JsonValue)
-					: { command: message.request.command };
+					: message.request.command === "process/list"
+						? ({ processes: [] } as JsonValue)
+						: { command: message.request.command };
 			handlers?.onData(encodeServerMessageV2({ type: "response", id: message.id, ok: true, result }));
 		},
 		close: () => {},
