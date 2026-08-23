@@ -15,7 +15,11 @@ import { afterEach, describe, expect, test } from "vitest";
 import { InMemoryV2AgentRegistry } from "../src/agents.ts";
 import { InMemoryV2AppRegistry } from "../src/apps.ts";
 import { InMemoryV2BlobStore } from "../src/blobs.ts";
-import { InMemoryForensicRecorder } from "../src/diagnostics.ts";
+import {
+	type DiagnosticIntegrityCheck,
+	InMemoryForensicRecorder,
+	LocalDiagnosticCapsuleStore,
+} from "../src/diagnostics.ts";
 import { LocalV2FileReferenceService } from "../src/files.ts";
 import { BlobV2ImageService } from "../src/images.ts";
 import { InMemoryV2InputRegistry } from "../src/inputs.ts";
@@ -244,6 +248,17 @@ describe("PiServer v2 operation acceptance", () => {
 		const server = createUnixServerV2(new TestService(), {
 			path: join(directory, "server.sock"),
 			diagnostics,
+			integrity: async (): Promise<readonly DiagnosticIntegrityCheck[]> => [
+				{ name: "sessions", ok: true, details: { count: 1 } },
+				{ name: "operations", ok: true, details: { operations: 2, events: 3 } },
+				{ name: "plugins", ok: true, details: { count: 4 } },
+				{ name: "blobs", ok: true, details: { metadataFiles: 5 } },
+				{
+					name: "usage",
+					ok: true,
+					details: { responses: 6, input: 7, output: 8, costUsd: 0.5, pricingState: "known" },
+				},
+			],
 			runtimeManifest: {
 				schemaVersion: 1,
 				runtime: "node test",
@@ -273,6 +288,23 @@ describe("PiServer v2 operation acceptance", () => {
 		});
 		expect(verified).toMatchObject({ ok: true, result: { valid: true, gaps: [] } });
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
+		const doctorChecks = (
+			doctor as unknown as { result: { checks: Array<{ name: string; details?: Record<string, JsonValue> }> } }
+		).result.checks;
+		expect(doctorChecks.map((check) => check.name)).toEqual([
+			"recorder",
+			"sequence",
+			"sessions",
+			"operations",
+			"plugins",
+			"blobs",
+			"usage",
+		]);
+		expect(doctorChecks.find((check) => check.name === "sessions")?.details).toEqual({ count: 1 });
+		expect(doctorChecks.find((check) => check.name === "usage")?.details).toMatchObject({
+			responses: 6,
+			pricingState: "known",
+		});
 		const bundle = (exported as unknown as { result: { bundle: JsonValue } }).result.bundle;
 		const bundleVerified = await client.request({ command: "diagnostics/verify", payload: { bundle } });
 		expect(bundleVerified).toMatchObject({ ok: true, result: { valid: true } });
@@ -481,7 +513,12 @@ describe("PiServer v2 operation acceptance", () => {
 		directories.push(directory);
 		const service = new TestService();
 		const diagnostics = new InMemoryForensicRecorder();
-		const server = createUnixServerV2(service, { path: join(directory, "server.sock"), diagnostics });
+		const diagnosticContent = new LocalDiagnosticCapsuleStore(join(directory, "diagnostic-keys.json"));
+		const server = createUnixServerV2(service, {
+			path: join(directory, "server.sock"),
+			diagnostics,
+			diagnosticContent,
+		});
 		servers.push(server);
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
@@ -520,6 +557,17 @@ describe("PiServer v2 operation acceptance", () => {
 			"operation_accepted",
 			"operation_terminal",
 		]);
+		const acceptedEvent = (await diagnostics.read())[0]!;
+		expect(acceptedEvent.payload).toMatchObject({
+			command: "turn/start",
+			contentRef: { eventId: operationId, kind: "turn/start", truncated: false },
+		});
+		expect(acceptedEvent.payload).not.toHaveProperty("text");
+		const exported = await client.request({ command: "diagnostics/export" });
+		expect(exported).toMatchObject({
+			ok: true,
+			result: { capsules: [{ eventId: operationId, kind: "turn/start" }] },
+		});
 		await client.close();
 	});
 

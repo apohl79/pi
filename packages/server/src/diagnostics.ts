@@ -22,6 +22,14 @@ export interface ForensicRecorder {
 	read(afterSeq?: number): Promise<ForensicEvent[]>;
 }
 
+export interface DiagnosticIntegrityCheck {
+	readonly name: string;
+	readonly ok: boolean;
+	readonly details?: Record<string, DiagnosticValue>;
+}
+
+export type DiagnosticIntegrityProvider = () => Promise<readonly DiagnosticIntegrityCheck[]>;
+
 export interface DiagnosticCapsule {
 	schemaVersion: 1;
 	eventId: string;

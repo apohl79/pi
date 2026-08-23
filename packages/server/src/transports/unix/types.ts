@@ -1,7 +1,12 @@
 import type { V2AgentRegistry } from "../../agents.ts";
 import type { V2AppRegistry } from "../../apps.ts";
 import type { V2BlobStore } from "../../blobs.ts";
-import type { DiagnosticContentStore, DiagnosticRuntimeManifest, ForensicRecorder } from "../../diagnostics.ts";
+import type {
+	DiagnosticContentStore,
+	DiagnosticIntegrityProvider,
+	DiagnosticRuntimeManifest,
+	ForensicRecorder,
+} from "../../diagnostics.ts";
 import type { V2FileReferenceService } from "../../files.ts";
 import type { V2ImageService } from "../../images.ts";
 import type { V2InputRegistry } from "../../inputs.ts";
@@ -28,6 +33,7 @@ export interface UnixListenerOptions {
 export interface UnixServerOptions extends Omit<PiServerOptions, "listeners">, UnixListenerOptions {
 	diagnostics?: ForensicRecorder;
 	diagnosticContent?: DiagnosticContentStore;
+	integrity?: DiagnosticIntegrityProvider;
 	runtimeManifest?: DiagnosticRuntimeManifest;
 	operationStore?: V2OperationStore;
 	processes?: V2ProcessRegistry;

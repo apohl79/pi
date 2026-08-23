@@ -23,6 +23,7 @@ import type { ByteConnection, ByteConnectionHandler } from "./connection.ts";
 import {
 	type DiagnosticCapsule,
 	type DiagnosticContentStore,
+	type DiagnosticIntegrityProvider,
 	type DiagnosticRuntimeManifest,
 	type ForensicRecorder,
 	InMemoryForensicRecorder,
@@ -74,6 +75,7 @@ export interface PiServerV2Options {
 	onError?: (error: Error) => void;
 	diagnostics?: ForensicRecorder;
 	diagnosticContent?: DiagnosticContentStore;
+	integrity?: DiagnosticIntegrityProvider;
 	runtimeManifest?: DiagnosticRuntimeManifest;
 	operationStore?: V2OperationStore;
 	processes?: V2ProcessRegistry;
@@ -141,6 +143,7 @@ export class PiServerV2 {
 	private readonly onError: ((error: Error) => void) | undefined;
 	private readonly diagnostics: ForensicRecorder;
 	private readonly diagnosticContent: DiagnosticContentStore | undefined;
+	private readonly integrity: DiagnosticIntegrityProvider | undefined;
 	private readonly runtimeManifest: DiagnosticRuntimeManifest;
 	private readonly diagnosticCapsules = new Map<string, DiagnosticCapsule>();
 	private readonly operationStore: V2OperationStore;
@@ -175,6 +178,7 @@ export class PiServerV2 {
 		this.onError = options.onError;
 		this.diagnostics = options.diagnostics ?? new InMemoryForensicRecorder();
 		this.diagnosticContent = options.diagnosticContent;
+		this.integrity = options.integrity;
 		this.runtimeManifest = options.runtimeManifest ?? {
 			schemaVersion: 1,
 			runtime: `node ${process.version}`,
@@ -957,13 +961,15 @@ export class PiServerV2 {
 	private async diagnosticsDoctor(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const events = await this.diagnosticEvents();
 		const sequenceOk = events.every((event, index) => index === 0 || event.seq === events[index - 1]!.seq + 1);
+		const checks = [
+			{ name: "recorder", ok: true },
+			{ name: "sequence", ok: sequenceOk },
+			...(this.integrity === undefined ? [] : await this.integrity()),
+		];
 		await this.sendResponse(state, id, {
 			command: command.command,
-			ok: sequenceOk,
-			checks: [
-				{ name: "recorder", ok: true },
-				{ name: "sequence", ok: sequenceOk },
-			],
+			ok: checks.every((check) => check.ok),
+			checks,
 		});
 	}
 
