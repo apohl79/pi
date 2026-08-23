@@ -113,6 +113,13 @@ function manifestDigest(manifest: Record<string, unknown>): string {
 	return createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
 }
 
+function validateManifestIdentity(manifest: Record<string, unknown>, name: string, version: string): void {
+	if (manifest.name !== undefined && manifest.name !== name)
+		throw new Error("Plugin manifest name does not match install metadata");
+	if (manifest.version !== undefined && manifest.version !== version)
+		throw new Error("Plugin manifest version does not match install metadata");
+}
+
 export function hashV2PluginSet(plugins: readonly V2Plugin[]): string {
 	const active = plugins
 		.filter((plugin) => plugin.enabled)
@@ -366,6 +373,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		if (this.plugins.has(id)) throw new Error(`Plugin already installed: ${id}`);
 		const manifest = input.manifest;
 		if (manifest === undefined) throw new Error("Plugin manifest is required by this registry");
+		validateManifestIdentity(manifest, name, version);
 		const plugin: V2Plugin = {
 			id,
 			name,
@@ -413,6 +421,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		const normalizedVersion = requireName(version, "plugin version");
 		const existing = this.plugins.get(normalizedId);
 		if (!existing) throw new Error(`Unknown plugin: ${normalizedId}`);
+		if (manifest !== undefined) validateManifestIdentity(manifest, existing.name, normalizedVersion);
 		const updated =
 			manifest === undefined
 				? { ...existing, version: normalizedVersion }
