@@ -5,7 +5,6 @@ import { parseTransportAddress, type TransportAddress } from "./transport-addres
 
 export const authTokenOption = stringOption("--auth-token");
 export const authTokenFileOption = stringOption("--auth-token-file");
-export { stringOption };
 
 export function transportOption(name: "--listen" | "--connect"): CommandOption<TransportAddress> {
 	return valueOption(name, (value) => {
