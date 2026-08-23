@@ -230,6 +230,40 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		});
 	}
 
+	appendRecords<TRecord extends LaneRecord>(newRecords: readonly NewRecord<TRecord>[]): Promise<TRecord[]> {
+		return this.enqueue(async () => {
+			if (newRecords.length === 0) return [];
+			const ids = new Set<string>();
+			const records: TRecord[] = [];
+			let nextSequence = this.state.nextSequence;
+			const openLanes = new Set<string>();
+			for (const newRecord of newRecords) {
+				this.state.requireLane(newRecord.lane);
+				this.state.validateUnusedId(newRecord.id);
+				if (ids.has(newRecord.id)) throw new SessionError("already_exists", `ID already exists: ${newRecord.id}`);
+				ids.add(newRecord.id);
+				const currentOpenOperationId = this.state.findOpenOperations(newRecord.lane, { limit: 1 })[0]?.id;
+				if (
+					newRecord.type === "operation_started" &&
+					(currentOpenOperationId !== undefined || openLanes.has(newRecord.lane))
+				) {
+					throw new SessionError("storage", `Lane ${newRecord.lane} already has an open operation`);
+				}
+				if (newRecord.type === "operation_started") openLanes.add(newRecord.lane);
+				const record = {
+					...structuredClone(newRecord),
+					seq: nextSequence++,
+					timestamp: Date.now(),
+				} as unknown as TRecord;
+				records.push(record);
+			}
+			const mutations = records.map((record) => ({ kind: "record", record }) satisfies SessionMutation);
+			await this.appendMutationBatch(mutations);
+			for (const mutation of mutations) this.applyMutation(mutation);
+			return structuredClone(records);
+		});
+	}
+
 	async getEntry(id: string): Promise<Entry | undefined> {
 		const entry = this.state.getEntry(id);
 		return entry === undefined ? undefined : structuredClone(entry);
@@ -439,6 +473,13 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		this.persistedModifiedAt = fileInfo.mtimeMs;
 		this.persistedIdentity = fileInfo.identity;
 		this.persistedRootLines = physicalLines.slice(0, ROOT_FINGERPRINT_LINES);
+	}
+
+	private async appendMutationBatch(mutations: readonly SessionMutation[]): Promise<void> {
+		fileResult(
+			await this.fs.appendFile(this.metadata.path, mutations.map((mutation) => encodeMutation(mutation)).join("")),
+			`Failed to append session ${this.metadata.path}`,
+		);
 	}
 
 	private applyMutation(mutation: SessionMutation): void {

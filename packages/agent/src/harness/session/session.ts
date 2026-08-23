@@ -208,6 +208,16 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> implem
 		return this.commitRecord(record);
 	}
 
+	async appendRecords<TNewRecord extends NewRecord>(
+		records: readonly TNewRecord[],
+	): Promise<(TNewRecord & Pick<RecordBase, "seq" | "timestamp">)[]> {
+		if (records.length === 0) return [];
+		for (const record of records) assertJsonSerializable(record);
+		return this.storage.appendRecords(records as readonly NewRecord<LaneRecord>[]) as unknown as Promise<
+			(TNewRecord & Pick<RecordBase, "seq" | "timestamp">)[]
+		>;
+	}
+
 	async findRecords<K extends LaneRecord["type"]>(
 		query: RecordQuery & { type: K },
 	): Promise<Extract<LaneRecord, { type: K }>[]>;

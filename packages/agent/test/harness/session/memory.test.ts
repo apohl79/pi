@@ -23,6 +23,75 @@ describe("InMemorySessionRepo conformance", () => {
 });
 
 describe("Session with in-memory storage", () => {
+	it("publishes record batches all-or-none", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "batch", createdAt: 1 }));
+		await expect(
+			session.appendRecords([
+				{
+					type: "usage",
+					id: "usage-1",
+					lane: "main",
+					usage: {
+						input: 1,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 1,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					cause: "adjustment",
+				},
+				{
+					type: "usage",
+					id: "usage-1",
+					lane: "main",
+					usage: {
+						input: 2,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 2,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					cause: "adjustment",
+				},
+			]),
+		).rejects.toThrow("already exists");
+		expect(await session.findRecords({ type: "usage" })).toEqual([]);
+
+		const committed = await session.appendRecords([
+			{
+				type: "usage",
+				id: "usage-1",
+				lane: "main",
+				usage: {
+					input: 1,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 1,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				cause: "adjustment",
+			},
+			{
+				type: "usage",
+				id: "usage-2",
+				lane: "main",
+				usage: {
+					input: 2,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 2,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				cause: "adjustment",
+			},
+		]);
+		expect(committed.map((record) => record.id)).toEqual(["usage-1", "usage-2"]);
+	});
+
 	it("uses one injectable id generator across lane views", async () => {
 		let nextId = 0;
 		const session = new Session(new InMemorySessionStorage({ id: "session", createdAt: 1 }), {

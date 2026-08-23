@@ -494,32 +494,40 @@ class SqliteSessionStorage implements SessionStorage<SqliteSessionMetadata> {
 
 	async appendRecord<TRecord extends LaneRecord>(record: NewRecord<TRecord>): Promise<TRecord>;
 	async appendRecord(record: NewRecord): Promise<LaneRecord> {
+		return this.appendRecords([record]).then((records) => records[0]!);
+	}
+
+	async appendRecords<TRecord extends LaneRecord>(records: readonly NewRecord<TRecord>[]): Promise<TRecord[]> {
 		return this.enqueueWrite(() => {
-			if (!readLane(this.db, this.metadata.id, record.lane)) {
-				throw new SessionError("invalid_lane", `Lane not found: ${record.lane}`);
+			const committed: LaneRecord[] = [];
+			for (const record of records) {
+				if (!readLane(this.db, this.metadata.id, record.lane)) {
+					throw new SessionError("invalid_lane", `Lane not found: ${record.lane}`);
+				}
+				assertUnusedId(this.db, this.metadata.id, record.id);
+				const seq = getNextSequence(this.db, this.metadata.id);
+				const materialized: LaneRecord = { ...record, seq, timestamp: Date.now() };
+				if (record.type === "operation_started") {
+					startLaneOperation(this.db, this.metadata.id, record.lane, record.id);
+				}
+				appendRecordRow(this.db, this.metadata.id, {
+					seq,
+					id: record.id,
+					lane: record.lane,
+					runId: recordRunId(record),
+					type: record.type,
+					opKind: recordOpKind(record),
+					timestamp: materialized.timestamp,
+					payload: JSON.stringify(record),
+				});
+				if (record.type === "operation_finished") {
+					finishLaneOperation(this.db, this.metadata.id, record.lane, record.runId);
+				}
+				if (record.type === "usage") addUsageToStats(this.db, this.metadata.id, record.usage);
+				advanceSequence(this.db, this.metadata.id, seq);
+				committed.push(materialized);
 			}
-			assertUnusedId(this.db, this.metadata.id, record.id);
-			const seq = getNextSequence(this.db, this.metadata.id);
-			const committed: LaneRecord = { ...record, seq, timestamp: Date.now() };
-			if (record.type === "operation_started") {
-				startLaneOperation(this.db, this.metadata.id, record.lane, record.id);
-			}
-			appendRecordRow(this.db, this.metadata.id, {
-				seq,
-				id: record.id,
-				lane: record.lane,
-				runId: recordRunId(record),
-				type: record.type,
-				opKind: recordOpKind(record),
-				timestamp: committed.timestamp,
-				payload: JSON.stringify(record),
-			});
-			if (record.type === "operation_finished") {
-				finishLaneOperation(this.db, this.metadata.id, record.lane, record.runId);
-			}
-			if (record.type === "usage") addUsageToStats(this.db, this.metadata.id, record.usage);
-			advanceSequence(this.db, this.metadata.id, seq);
-			return structuredClone(committed);
+			return structuredClone(committed) as TRecord[];
 		});
 	}
 
