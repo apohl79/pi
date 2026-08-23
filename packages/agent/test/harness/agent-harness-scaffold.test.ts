@@ -925,6 +925,7 @@ describe("AgentHarness v2 scaffold", () => {
 		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
 		const hooks: string[] = [];
 		const events: string[] = [];
+		const passiveEvents: string[] = [];
 		harness.hooks.on("before_run", () => hooks.push("before_run"));
 		harness.hooks.on("after_response", () => hooks.push("after_response"));
 		harness.events.on("operation_started", () => {
@@ -933,9 +934,16 @@ describe("AgentHarness v2 scaffold", () => {
 		harness.events.on("operation_finished", () => {
 			events.push("finished");
 		});
+		harness.events.on("run_start", () => {
+			passiveEvents.push("run_start");
+		});
+		harness.events.on("run_end", () => {
+			passiveEvents.push("run_end");
+		});
 		await harness.prompt("run lifecycle");
 		expect(hooks).toEqual(["before_run", "after_response"]);
 		expect(events).toEqual(["started", "finished"]);
+		expect(passiveEvents).toEqual(["run_start", "run_end"]);
 		await harness.close();
 	});
 

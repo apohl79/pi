@@ -862,7 +862,7 @@ export class AgentHarness implements AgentLane {
 		};
 		const initialMessagesPersisted = await this.appendRunAcceptance(started);
 		this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
-		this.watchBus.emit({ type: "run_start", lane: this.name, runId });
+		this.emitPassiveEvent({ type: "run_start", lane: this.name, runId });
 		const controller = new AbortController();
 		this.activeRun = { id: runId, controller };
 		await this.setOperationPhase(runId, "executing");
@@ -1108,7 +1108,7 @@ export class AgentHarness implements AgentLane {
 					});
 					await this.runLifecycleHook("before_run_end", { operationId: runId, outcome: "aborted" });
 					this.lifecycle.emit("operation_finished", { operationId: runId, outcome: "aborted" });
-					this.watchBus.emit({
+					this.emitPassiveEvent({
 						type: "run_end",
 						lane: this.name,
 						runId,
@@ -1137,7 +1137,7 @@ export class AgentHarness implements AgentLane {
 				});
 				await this.runLifecycleHook("before_run_end", { operationId: runId, outcome: "failed" });
 				this.lifecycle.emit("operation_finished", { operationId: runId, outcome: "failed" });
-				this.watchBus.emit({
+				this.emitPassiveEvent({
 					type: "run_end",
 					lane: this.name,
 					runId,
@@ -1212,7 +1212,7 @@ export class AgentHarness implements AgentLane {
 					runId,
 					outcome: "aborted",
 				});
-				this.watchBus.emit({
+				this.emitPassiveEvent({
 					type: "run_end",
 					lane: this.name,
 					runId,
@@ -1236,7 +1236,7 @@ export class AgentHarness implements AgentLane {
 				outcome: "failed",
 				error: { code: "run_failed", message },
 			});
-			this.watchBus.emit({
+			this.emitPassiveEvent({
 				type: "run_end",
 				lane: this.name,
 				runId,
@@ -1827,7 +1827,7 @@ export class AgentHarness implements AgentLane {
 			outcome: "aborted",
 		};
 		await this.appendOperationFinished(finished);
-		this.watchBus.emit({
+		this.emitPassiveEvent({
 			type: "run_end",
 			lane: this.name,
 			runId: openRun.id,
