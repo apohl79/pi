@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
@@ -24,6 +24,7 @@ describe("production daemon unsafe-tool recovery", () => {
 		});
 		models.setProvider(faux.provider);
 		const socketPath = join(directory, "server.sock");
+		const output: unknown[] = [];
 		const createRuntime = () =>
 			createConfiguredCodingAgentDaemonRuntime({
 				agentDir: directory,
@@ -32,7 +33,7 @@ describe("production daemon unsafe-tool recovery", () => {
 				model: faux.getModel(),
 				socketPath,
 				harness: { tools: [], activeToolNames: [] },
-				write: () => {},
+				write: (value: unknown) => output.push(value),
 			});
 		const first = await createRuntime();
 		let sessionId = "";
@@ -83,6 +84,15 @@ describe("production daemon unsafe-tool recovery", () => {
 				result: { session: { phase: "idle", persistence: { recoveryState: "needsResolution" } } },
 			});
 			expect(faux.state.callCount).toBe(0);
+			const bundlePath = join(directory, "unsafe-tool-recovery-bundle.json");
+			await second.cli.runDiagnostics({ command: "diagnostics", action: "export", sessionId, output: bundlePath });
+			const bundle = JSON.parse(await readFile(bundlePath, "utf8")) as { events: readonly unknown[] };
+			const serialized = JSON.stringify(bundle);
+			expect(bundle.events.length).toBeGreaterThan(0);
+			expect(serialized).toContain("needsResolution");
+			expect(serialized).toContain("sessionSnapshots");
+			await second.cli.runDiagnostics({ command: "diagnostics", action: "verify", bundle: bundlePath });
+			expect(output.at(-1)).toEqual({ valid: true });
 		} finally {
 			client.dispose();
 			await second.close();

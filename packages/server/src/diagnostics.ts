@@ -103,6 +103,8 @@ export interface DiagnosticBundleScope {
 
 export interface DiagnosticBundleProjections {
 	readonly sessions: readonly DiagnosticValue[];
+	/** Server-authoritative snapshot for a session-scoped export, when it can be reconstructed. */
+	readonly sessionSnapshots?: readonly DiagnosticValue[];
 	readonly operations: readonly DiagnosticValue[];
 	/** Canonical operation lifecycle events, when exported by a server that supports the projection. */
 	readonly operationEvents?: readonly DiagnosticValue[];
@@ -212,6 +214,8 @@ function isDiagnosticProjections(value: unknown): value is DiagnosticBundleProje
 	return (
 		Array.isArray(projections.sessions) &&
 		projections.sessions.every(isDiagnosticValue) &&
+		(projections.sessionSnapshots === undefined ||
+			(Array.isArray(projections.sessionSnapshots) && projections.sessionSnapshots.every(isDiagnosticValue))) &&
 		Array.isArray(projections.operations) &&
 		projections.operations.every(isDiagnosticValue) &&
 		(projections.operationEvents === undefined ||
@@ -227,6 +231,12 @@ function projectionsMatchScope(projections: DiagnosticBundleProjections, scope: 
 	if (
 		scope.sessionId !== undefined &&
 		!projections.sessions.every((session) => scopedRecordMatches(session, "id", scope.sessionId!))
+	)
+		return false;
+	if (
+		scope.sessionId !== undefined &&
+		projections.sessionSnapshots !== undefined &&
+		!projections.sessionSnapshots.every((snapshot) => scopedRecordMatches(snapshot, "id", scope.sessionId!))
 	)
 		return false;
 	if (
