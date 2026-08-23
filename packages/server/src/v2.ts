@@ -239,6 +239,7 @@ export class PiServerV2 {
 	private readonly operations = new Map<string, OperationRecordV2>();
 	private readonly pendingRecoveryReports = new Map<string, OperationRecordV2[]>();
 	private readonly pendingRequests = new Map<string, CommandV2>();
+	private readonly completionControllers = new Map<string, AbortController>();
 	private readonly disposedRuntimes = new WeakSet<PiSessionRuntimeV2>();
 	private closing = false;
 	private started = false;
@@ -381,6 +382,8 @@ export class PiServerV2 {
 		this.unsubscribeProcessChanges?.();
 		await Promise.all(this.listeners.map((listener) => listener.close()));
 		await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state)));
+		for (const controller of this.completionControllers.values()) controller.abort();
+		this.completionControllers.clear();
 		await Promise.all(Array.from(this.runtimes, (runtime) => this.disposeRuntime(runtime)));
 		this.runtimes.clear();
 		await this.agents.dispose?.();
@@ -1187,11 +1190,20 @@ export class PiServerV2 {
 		if (payload.prefix !== undefined && typeof payload.prefix !== "string")
 			throw new Error("filesystem/complete prefix must be a string");
 		const prefix = payload.prefix === undefined ? "" : payload.prefix;
-		await this.sendResponse(state, id, {
-			command: command.command,
-			...(command.requestId === undefined ? {} : { requestId: command.requestId }),
-			items: await this.files.complete(command.sessionId, prefix),
-		});
+		const previous = this.completionControllers.get(command.sessionId);
+		previous?.abort();
+		const controller = new AbortController();
+		this.completionControllers.set(command.sessionId, controller);
+		try {
+			await this.sendResponse(state, id, {
+				command: command.command,
+				...(command.requestId === undefined ? {} : { requestId: command.requestId }),
+				items: await this.files.complete(command.sessionId, prefix, { signal: controller.signal }),
+			});
+		} finally {
+			if (this.completionControllers.get(command.sessionId) === controller)
+				this.completionControllers.delete(command.sessionId);
+		}
 	}
 
 	private async resolveFile(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

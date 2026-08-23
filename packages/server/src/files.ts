@@ -19,7 +19,11 @@ export interface V2FileCompletion {
 }
 
 export interface V2FileReferenceService {
-	complete(sessionId: string, prefix: string): Promise<readonly V2FileCompletion[]>;
+	complete(
+		sessionId: string,
+		prefix: string,
+		options?: { readonly signal?: AbortSignal },
+	): Promise<readonly V2FileCompletion[]>;
 	resolve(sessionId: string, reference: string): Promise<V2FileReference>;
 	read(sessionId: string, reference: string): Promise<{ readonly file: V2FileReference; readonly data: Uint8Array }>;
 }
@@ -31,12 +35,14 @@ export interface V2FileReferenceOptions {
 	readonly allowAbsolute?: boolean;
 	readonly maxReadBytes?: number;
 	readonly maxCompletions?: number;
+	readonly maxCompletionMs?: number;
 }
 
 type FileScope = "project" | "relative" | "server" | "local" | "home" | "absolute";
 
 const DEFAULT_MAX_READ_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_COMPLETIONS = 256;
+const DEFAULT_MAX_COMPLETION_MS = 250;
 
 function cleanReference(reference: string): string {
 	const value = reference.trim();
@@ -108,6 +114,7 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 	private readonly allowAbsolute: boolean;
 	private readonly maxReadBytes: number;
 	private readonly maxCompletions: number;
+	private readonly maxCompletionMs: number;
 
 	constructor(options: V2FileReferenceOptions) {
 		this.projectRoot = resolve(options.projectRoot);
@@ -116,14 +123,36 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 		this.allowAbsolute = options.allowAbsolute ?? true;
 		this.maxReadBytes = options.maxReadBytes ?? DEFAULT_MAX_READ_BYTES;
 		this.maxCompletions = options.maxCompletions ?? DEFAULT_MAX_COMPLETIONS;
+		this.maxCompletionMs = options.maxCompletionMs ?? DEFAULT_MAX_COMPLETION_MS;
 		if (!Number.isSafeInteger(this.maxReadBytes) || this.maxReadBytes < 0)
 			throw new TypeError("maxReadBytes must be a non-negative safe integer");
 		if (!Number.isSafeInteger(this.maxCompletions) || this.maxCompletions <= 0)
 			throw new TypeError("maxCompletions must be a positive safe integer");
+		if (!Number.isSafeInteger(this.maxCompletionMs) || this.maxCompletionMs <= 0)
+			throw new TypeError("maxCompletionMs must be a positive safe integer");
 	}
 
-	async complete(sessionId: string, prefix: string): Promise<readonly V2FileCompletion[]> {
+	async complete(
+		sessionId: string,
+		prefix: string,
+		options: { readonly signal?: AbortSignal } = {},
+	): Promise<readonly V2FileCompletion[]> {
 		void sessionId;
+		const timeout = new AbortController();
+		const timeoutId = setTimeout(() => timeout.abort(), this.maxCompletionMs);
+		const onAbort = () => timeout.abort();
+		if (options.signal?.aborted) timeout.abort();
+		options.signal?.addEventListener("abort", onAbort, { once: true });
+		try {
+			return await this.completeWithSignal(prefix, timeout.signal);
+		} finally {
+			clearTimeout(timeoutId);
+			options.signal?.removeEventListener("abort", onAbort);
+		}
+	}
+
+	private async completeWithSignal(prefix: string, signal: AbortSignal): Promise<readonly V2FileCompletion[]> {
+		if (signal.aborted) throw new Error("filesystem completion cancelled");
 		const clean = cleanReference(prefix);
 		const scope = scopeOf(clean);
 		if (scope === "local") throw new Error("Client-local file references must be uploaded as blobs");
@@ -139,12 +168,14 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 		const candidate = isAbsolute(logical) ? logical : resolve(base, logical);
 		const absoluteServerPath = scope === "server" && isAbsolute(logical);
 		const directory = await this.directoryForCompletion(candidate);
+		if (signal.aborted) throw new Error("filesystem completion cancelled");
 		const prefixName = candidate === directory ? "" : candidate.slice(directory.length + 1);
 		const entries = await readdir(directory, { withFileTypes: true });
 		const completions = await Promise.all(
 			entries
 				.filter((entry) => entry.name.startsWith(prefixName))
 				.map(async (entry): Promise<V2FileCompletion | undefined> => {
+					if (signal.aborted) throw new Error("filesystem completion cancelled");
 					const path = resolve(directory, entry.name);
 					if (!this.allowedLexically(path, scope === "absolute" || absoluteServerPath)) return undefined;
 					try {
@@ -160,6 +191,7 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 					}
 				}),
 		);
+		if (signal.aborted) throw new Error("filesystem completion cancelled");
 		return completions
 			.filter((entry): entry is V2FileCompletion => entry !== undefined)
 			.sort(

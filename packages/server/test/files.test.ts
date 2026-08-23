@@ -100,4 +100,18 @@ describe("LocalV2FileReferenceService", () => {
 		const service = new LocalV2FileReferenceService({ projectRoot: root, maxReadBytes: 3 });
 		await expect(service.read("session-1", "large.txt")).rejects.toThrow("maximum size of 3 bytes");
 	});
+
+	test("cancels completion through its signal and validates the time bound", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-files-completion-cancel-"));
+		directories.push(root);
+		const controller = new AbortController();
+		controller.abort();
+		const service = new LocalV2FileReferenceService({ projectRoot: root, maxCompletionMs: 25 });
+		await expect(service.complete("session-1", "@server:", { signal: controller.signal })).rejects.toThrow(
+			"completion cancelled",
+		);
+		expect(() => new LocalV2FileReferenceService({ projectRoot: root, maxCompletionMs: 0 })).toThrow(
+			"maxCompletionMs",
+		);
+	});
 });
