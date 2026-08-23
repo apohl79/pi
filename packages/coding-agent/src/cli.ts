@@ -66,7 +66,12 @@ async function runCli(): Promise<void> {
 		parsedArgs.excludeTools === undefined &&
 		parsedArgs.noBuiltinTools !== true &&
 		parsedArgs.extensions === undefined &&
-		parsedArgs.noExtensions !== true
+		parsedArgs.noExtensions !== true &&
+		parsedArgs.skills === undefined &&
+		parsedArgs.promptTemplates === undefined &&
+		parsedArgs.noSkills !== true &&
+		parsedArgs.noPromptTemplates !== true &&
+		parsedArgs.noContextFiles !== true
 			? undefined
 			: {
 					...(parsedArgs.systemPrompt === undefined && parsedArgs.appendSystemPrompt === undefined
@@ -104,7 +109,12 @@ async function runCli(): Promise<void> {
 		fastModelResolver: (selectedModel) => modelRuntime.getModelRole(selectedModel.provider, "fast"),
 		harness: harnessOptions,
 		extensionPaths: parsedArgs.extensions,
+		skillPaths: parsedArgs.skills,
+		promptTemplatePaths: parsedArgs.promptTemplates,
 		noExtensions: parsedArgs.noExtensions,
+		noSkills: parsedArgs.noSkills,
+		noPromptTemplates: parsedArgs.noPromptTemplates,
+		noContextFiles: parsedArgs.noContextFiles,
 		socketPath: join(agentDir, "pi.sock"),
 		write: (value) => console.log(JSON.stringify(value)),
 		writeText: (value) => process.stdout.write(`${value}\n`),

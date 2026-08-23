@@ -123,7 +123,12 @@ export type ConfiguredCodingAgentDaemonRuntimeOptions = Omit<CodingAgentDaemonRu
 	cwd: string;
 	databasePath?: string;
 	extensionPaths?: readonly string[];
+	skillPaths?: readonly string[];
+	promptTemplatePaths?: readonly string[];
 	noExtensions?: boolean;
+	noSkills?: boolean;
+	noPromptTemplates?: boolean;
+	noContextFiles?: boolean;
 };
 
 export type ConfiguredCodingAgentDaemonRuntime = CodingAgentDaemonRuntime & {
@@ -317,7 +322,14 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			cwd: options.cwd,
 			agentDir: options.agentDir,
 			...(options.extensionPaths === undefined ? {} : { additionalExtensionPaths: [...options.extensionPaths] }),
+			...(options.skillPaths === undefined ? {} : { additionalSkillPaths: [...options.skillPaths] }),
+			...(options.promptTemplatePaths === undefined
+				? {}
+				: { additionalPromptTemplatePaths: [...options.promptTemplatePaths] }),
 			...(options.noExtensions === undefined ? {} : { noExtensions: options.noExtensions }),
+			...(options.noSkills === undefined ? {} : { noSkills: options.noSkills }),
+			...(options.noPromptTemplates === undefined ? {} : { noPromptTemplates: options.noPromptTemplates }),
+			...(options.noContextFiles === undefined ? {} : { noContextFiles: options.noContextFiles }),
 		});
 		try {
 			await resourceLoader.reload();

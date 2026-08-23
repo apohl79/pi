@@ -32,6 +32,11 @@ describe("parseArgs", () => {
 			expect(isServerDefaultCompatible(parseArgs(["--no-builtin-tools"]))).toBe(true);
 			expect(isServerDefaultCompatible(parseArgs(["--extension", "./extension.ts"]))).toBe(true);
 			expect(isServerDefaultCompatible(parseArgs(["--no-extensions"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--skill", "./skills/review"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--prompt-template", "./prompts"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--no-skills"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--no-prompt-templates"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--no-context-files"]))).toBe(true);
 			expect(isServerDefaultCompatible(parseArgs(["--provider", "faux"]))).toBe(true);
 		});
 
