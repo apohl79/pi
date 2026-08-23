@@ -61,4 +61,71 @@ describe("production remote v2 diagnostics", () => {
 			await runtime.close();
 		}
 	});
+
+	test("retains a provider failure in the bundle after daemon recreation", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-remote-diagnostics-provider-failure-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-remote-diagnostics-provider-failure-faux",
+			models: [
+				{
+					id: "remote-diagnostics-provider-failure-model",
+					reasoning: false,
+					contextWindow: 32_000,
+					maxTokens: 1_000,
+				},
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "provider failure" })]);
+		const socketPath = join(directory, "server.sock");
+		const createRuntime = () =>
+			createConfiguredCodingAgentDaemonRuntime({
+				agentDir: directory,
+				cwd: directory,
+				models,
+				model: faux.getModel(),
+				socketPath,
+				harness: { tools: [], activeToolNames: [] },
+				write: () => {},
+			});
+		const firstRuntime = await createRuntime();
+		const firstClient = new PiClientV2({ transportFactory: createUnixTransportFactory({ path: socketPath }) });
+		let sessionId = "";
+		try {
+			await firstRuntime.daemon.start();
+			await firstClient.connect();
+			const session = await RemoteV2Session.create(firstClient, { cwd: directory }, { mode: "control" });
+			try {
+				sessionId = session.id;
+				const operationId = await session.submit("capture provider failure");
+				const terminal = await session.waitForOperation(operationId);
+				expect(terminal.phase).toBe("failed");
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			firstClient.dispose();
+			await firstRuntime.close();
+		}
+
+		const secondRuntime = await createRuntime();
+		const secondClient = new PiClientV2({ transportFactory: createUnixTransportFactory({ path: socketPath }) });
+		try {
+			await secondRuntime.daemon.start();
+			await secondClient.connect();
+			const session = await RemoteV2Session.open(secondClient, sessionId, { mode: "observer" });
+			try {
+				const bundle = await session.diagnosticsExport({ sessionId });
+				expect(JSON.stringify(bundle)).toContain("provider failure");
+				expect(await session.diagnosticsVerify(bundle)).toMatchObject({ valid: true });
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			secondClient.dispose();
+			await secondRuntime.close();
+		}
+	});
 });
