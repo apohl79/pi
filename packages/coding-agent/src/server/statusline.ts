@@ -28,12 +28,20 @@ export type StatuslineExecutor = (
 	signal: AbortSignal,
 ) => Promise<{ readonly stdout: string; readonly stderr: string; readonly exitCode: number }>;
 
+function truncateUtf8(value: string, maxBytes: number): string {
+	let truncated = Buffer.from(value, "utf8").subarray(0, maxBytes).toString("utf8");
+	while (Buffer.byteLength(truncated, "utf8") > maxBytes) truncated = truncated.slice(0, -1);
+	return truncated;
+}
+
 const defaultCommand = join(homedir(), ".claude", "statusline.sh");
 
 function defaultExecutor(
 	command: StatuslineCommand,
 	payload: string,
 	signal: AbortSignal,
+	maxOutputBytes: number,
+	maxErrorBytes: number,
 ): Promise<{
 	readonly stdout: string;
 	readonly stderr: string;
@@ -47,10 +55,10 @@ function defaultExecutor(
 		let stdout = "";
 		let stderr = "";
 		child.stdout?.on("data", (chunk: Buffer) => {
-			stdout += chunk.toString("utf8");
+			stdout = truncateUtf8(stdout + chunk.toString("utf8"), maxOutputBytes);
 		});
 		child.stderr?.on("data", (chunk: Buffer) => {
-			stderr += chunk.toString("utf8");
+			stderr = truncateUtf8(stderr + chunk.toString("utf8"), maxErrorBytes);
 		});
 		child.once("error", reject);
 		child.once("close", (exitCode) => resolve({ stdout, stderr, exitCode: exitCode ?? 1 }));
@@ -82,7 +90,10 @@ export class StatuslineRunner {
 		this.timeoutMs = options.timeoutMs ?? 2_000;
 		this.maxOutputBytes = options.maxOutputBytes ?? 64 * 1024;
 		this.maxErrorBytes = options.maxErrorBytes ?? 1_024;
-		this.execute = options.execute ?? defaultExecutor;
+		this.execute =
+			options.execute ??
+			((command, payload, signal) =>
+				defaultExecutor(command, payload, signal, this.maxOutputBytes, this.maxErrorBytes));
 		if (!Number.isInteger(this.timeoutMs) || this.timeoutMs <= 0) throw new Error("timeoutMs must be positive");
 	}
 
@@ -139,12 +150,11 @@ export class StatuslineRunner {
 					}, this.timeoutMs);
 				}),
 			]);
-			const stdout =
-				result.stdout
-					.split(/\r?\n/)
-					.find((line) => line.trim().length > 0)
-					?.slice(0, this.maxOutputBytes) ?? "";
-			const stderr = result.stderr.slice(0, this.maxErrorBytes);
+			const stdout = truncateUtf8(
+				result.stdout.split(/\r?\n/).find((line) => line.trim().length > 0) ?? "",
+				this.maxOutputBytes,
+			);
+			const stderr = truncateUtf8(result.stderr, this.maxErrorBytes);
 			this.snapshotValue =
 				result.exitCode === 0
 					? { command, payloadHash: this.payloadHash, pending: false, output: stdout }
