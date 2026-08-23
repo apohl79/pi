@@ -20,6 +20,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/name-auto",
 	"/plan",
 	"/plan-clear",
+	"/plugins",
 	"/release-control",
 	"/resume",
 	"/rollback",
@@ -45,6 +46,7 @@ export type RemoteV2Command =
 	| { readonly name: "name-auto"; readonly enabled: boolean }
 	| { readonly name: "plan"; readonly items: readonly PlanItem[] }
 	| { readonly name: "plan-clear" }
+	| { readonly name: "plugins" }
 	| { readonly name: "release-control" }
 	| { readonly name: "resume" }
 	| { readonly name: "rollback"; readonly turns: number }
@@ -168,6 +170,10 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		if (arguments_.length > 0) throw new Error("/plan-clear does not accept arguments");
 		return { name: "plan-clear" };
 	}
+	if (name === "/plugins") {
+		if (arguments_.length > 0) throw new Error("/plugins does not accept arguments");
+		return { name: "plugins" };
+	}
 	if (name === "/rollback") {
 		const turns = arguments_.length === 0 ? 1 : Number(arguments_[0]);
 		if (arguments_.length > 1 || !Number.isInteger(turns) || turns < 1) {
@@ -269,6 +275,16 @@ export class RemoteV2InteractiveAttachment implements Component {
 			case "plan-clear":
 				await this.session.clearPlan();
 				return { kind: "status", text: "plan cleared" };
+			case "plugins": {
+				const plugins = await this.session.listPlugins(true);
+				const summary = plugins
+					.map((plugin) => {
+						const id = typeof plugin.id === "string" ? plugin.id : "unknown";
+						return plugin.enabled === true ? id : `${id} (disabled)`;
+					})
+					.join(", ");
+				return { kind: "status", text: summary || "no installed plugins" };
+			}
 			case "release-control":
 				await this.session.relinquishControl();
 				return { kind: "control", mode: "observer" };

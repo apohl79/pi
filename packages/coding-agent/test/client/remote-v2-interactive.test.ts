@@ -101,7 +101,9 @@ function clientWithRequests(): { client: PiClientV2; commands: string[] } {
 								? { session: snapshot() }
 								: message.request.command === "plan/update"
 									? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
-									: { command: message.request.command }) as JsonValue,
+									: message.request.command === "plugin/list"
+										? { plugins: [{ id: "demo", enabled: true }] }
+										: { command: message.request.command }) as JsonValue,
 					};
 			handlers?.onData(encodeServerMessageV2(response));
 		},
@@ -161,6 +163,8 @@ describe("remote v2 interactive command boundary", () => {
 			items: [{ step: "ship", status: "pending" }],
 		});
 		expect(parseRemoteV2Command("/plan-clear")).toEqual({ name: "plan-clear" });
+		expect(parseRemoteV2Command("/plugins")).toEqual({ name: "plugins" });
+		expect(() => parseRemoteV2Command("/plugins demo")).toThrow("does not accept arguments");
 		expect(() => parseRemoteV2Command("/rollback 0")).toThrow("positive integer");
 		expect(() => parseRemoteV2Command("/agent-interrupt")).toThrow("requires <agent-id>");
 		expect(() => parseRemoteV2Command('/input request-1 {"choice":true}')).toThrow("only strings");
@@ -209,6 +213,7 @@ describe("remote v2 interactive command boundary", () => {
 			text: "plan updated",
 		});
 		expect(await adapter.execute("/plan-clear")).toEqual({ kind: "status", text: "plan cleared" });
+		expect(await adapter.execute("/plugins")).toEqual({ kind: "status", text: "demo" });
 		expect(await adapter.execute("/detach")).toEqual({ kind: "detached" });
 		expect(commands).toEqual([
 			"session/attach",
@@ -226,6 +231,7 @@ describe("remote v2 interactive command boundary", () => {
 			"input/request/cancel",
 			"plan/update",
 			"plan/clear",
+			"plugin/list",
 			"session/detach",
 		]);
 		await adapter.dispose();
