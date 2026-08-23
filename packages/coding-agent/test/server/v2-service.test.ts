@@ -40,6 +40,9 @@ describe("coding-agent v2 service adapter", () => {
 				payload: { text: "hello" },
 			});
 			await runtime.accept("operation-2");
+			const usageSnapshot = (await runtime.snapshot()).usage;
+			expect(usageSnapshot.input).toBeGreaterThan(0);
+			expect(usageSnapshot.output).toBeGreaterThan(0);
 			await runtime.run("operation-2", {
 				command: "goal/create",
 				sessionId: "adapter-session",
@@ -80,6 +83,7 @@ describe("coding-agent v2 service adapter", () => {
 			});
 			expect((await runtime.snapshot()).name).toBe("Explicit adapter");
 			expect((await runtime.snapshot()).nameSource).toBe("explicit");
+			expect(await session.getName()).toBe("Explicit adapter");
 			expect(
 				(await session.findEntriesOnBranch({ order: "oldestFirst" })).filter((entry) => entry.type === "message"),
 			).toHaveLength(2);

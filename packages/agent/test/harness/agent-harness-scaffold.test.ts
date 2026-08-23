@@ -251,6 +251,72 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("navigates the durable tree and persists an optional branch summary", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-navigation-faux",
+			models: [{ id: "harness-navigation-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage("first response"),
+			fauxAssistantMessage("second response"),
+			fauxAssistantMessage("branch summary"),
+		]);
+		const session = createSession("navigation");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		await harness.prompt("first");
+		const firstUser = (await session.findEntriesOnBranch({ order: "oldestFirst" })).find(
+			(entry) => entry.type === "message" && entry.message.role === "user",
+		);
+		if (!firstUser) throw new Error("Expected first user entry");
+		await harness.prompt("second");
+
+		const result = await harness.navigateTree(firstUser.id, { summarize: true, label: "first branch" });
+
+		expect(result).toMatchObject({ ok: true, value: { kind: "completed", newLeafId: expect.any(String) } });
+		expect(await session.getLeafId()).toBe((result as { ok: true; value: { newLeafId: string } }).value.newLeafId);
+		expect(await session.getLabel(firstUser.id)).toBe("first branch");
+		expect((await session.findEntriesOnBranch({ order: "oldestFirst" })).at(-1)).toMatchObject({
+			type: "branch_summary",
+			fromId: expect.any(String),
+			summary: expect.stringContaining("branch summary"),
+		});
+		expect((await session.findRecords({ type: "operation_finished" })).at(-1)?.outcome).toBe("completed");
+		await harness.close();
+	});
+
+	it("resumes a suspended run without leaving two open operations", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-resume-faux",
+			models: [{ id: "harness-resume-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("resumed response")]);
+		const session = createSession("resume");
+		await session.appendRecord({
+			type: "operation_started",
+			id: "crashed-run",
+			lane: "main",
+			sourceLeafId: null,
+			intent: { kind: "run", originalPrompt: [userMessage], initialMessages: [] },
+		});
+		const { harness, suspended } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		expect(suspended).toMatchObject([{ id: "crashed-run", kind: "run", reason: "crash" }]);
+
+		const result = await harness.resume();
+
+		expect(result).toMatchObject({ ok: true, value: { operation: "run", kind: "completed" } });
+		expect(await session.findOpenOperations("main")).toEqual([]);
+		expect(
+			(await session.findRecords({ type: "operation_finished", order: "oldestFirst" })).map(
+				(record) => record.runId,
+			),
+		).toEqual(["crashed-run", expect.any(String)]);
+		await harness.close();
+	});
+
 	it("persists queued steering, follow-up, next-run input, and cancellation", async () => {
 		const session = createSession("queues");
 		const harness = await createHarness(session);
@@ -391,8 +457,6 @@ describe("AgentHarness v2 scaffold", () => {
 	it("rejects every unfinished public operation explicitly", async () => {
 		const harness = await createHarness();
 		const unfinished: [string, () => unknown | Promise<unknown>][] = [
-			["navigateTree", () => harness.navigateTree(null)],
-			["resume", () => harness.resume()],
 			["peekAction", () => harness.peekAction()],
 			["executeAction", () => harness.executeAction()],
 			["runToCompletion", () => harness.runToCompletion()],
@@ -409,8 +473,6 @@ describe("AgentHarness v2 scaffold", () => {
 				operation,
 			});
 		}
-		expect(() => harness.hooks.on("before_run", () => {})).toThrow(HarnessNotImplemented);
-		expect(() => harness.events.on("event", () => {})).toThrow(HarnessNotImplemented);
 	});
 
 	it("supports prompt lifecycle, queues, usage recording, and idle waiting", async () => {
