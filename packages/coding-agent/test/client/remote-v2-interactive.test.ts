@@ -131,6 +131,11 @@ describe("remote v2 interactive command boundary", () => {
 			name: "agent-interrupt",
 			agentId: "agent-1",
 		});
+		expect(parseRemoteV2Command("/agent-message agent-1 inspect the logs")).toEqual({
+			name: "agent-message",
+			agentId: "agent-1",
+			text: "inspect the logs",
+		});
 		expect(parseRemoteV2Command("/compact")).toEqual({ name: "compact" });
 		expect(parseRemoteV2Command("/compact preserve the API contract")).toEqual({
 			name: "compact",
@@ -176,6 +181,10 @@ describe("remote v2 interactive command boundary", () => {
 			kind: "status",
 			text: "agent interrupted",
 		});
+		expect(await adapter.execute("/agent-message agent-1 inspect the logs")).toEqual({
+			kind: "status",
+			text: "agent message sent",
+		});
 		expect(await adapter.execute("/compact preserve context")).toEqual({
 			kind: "operation",
 			operationId: "operation-1",
@@ -207,6 +216,7 @@ describe("remote v2 interactive command boundary", () => {
 			"turn/followUp",
 			"agent/followUp",
 			"agent/interrupt",
+			"agent/message",
 			"turn/compact",
 			"session/attach",
 			"session/attach",

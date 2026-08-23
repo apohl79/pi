@@ -6,6 +6,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/abort",
 	"/agent-follow-up",
 	"/agent-interrupt",
+	"/agent-message",
 	"/compact",
 	"/detach",
 	"/follow-up",
@@ -30,6 +31,7 @@ export type RemoteV2Command =
 	| { readonly name: "abort" }
 	| { readonly name: "agent-follow-up"; readonly agentId: string; readonly text: string }
 	| { readonly name: "agent-interrupt"; readonly agentId: string }
+	| { readonly name: "agent-message"; readonly agentId: string; readonly text: string }
 	| { readonly name: "compact"; readonly instructions?: string }
 	| { readonly name: "detach" }
 	| { readonly name: "follow-up"; readonly text: string }
@@ -81,6 +83,11 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 	if (name === "/agent-interrupt") {
 		if (arguments_.length !== 1) throw new Error("/agent-interrupt requires <agent-id>");
 		return { name: "agent-interrupt", agentId: arguments_[0] };
+	}
+	if (name === "/agent-message") {
+		const text = arguments_.slice(1).join(" ").trim();
+		if (arguments_.length < 2 || !text) throw new Error("/agent-message requires <agent-id> <text>");
+		return { name: "agent-message", agentId: arguments_[0], text };
 	}
 	if (name === "/compact") {
 		const instructions = arguments_.join(" ").trim();
@@ -216,6 +223,9 @@ export class RemoteV2InteractiveAttachment implements Component {
 				const agent = await this.session.interruptAgent(command.agentId);
 				return { kind: "status", text: `agent ${agent.state}` };
 			}
+			case "agent-message":
+				await this.session.messageAgent(command.agentId, command.text);
+				return { kind: "status", text: "agent message sent" };
 			case "compact":
 				return operation(await this.session.compact(command.instructions));
 			case "detach":
