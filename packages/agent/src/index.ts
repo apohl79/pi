@@ -73,6 +73,7 @@ export {
 	serializeConversation,
 	shouldCompact,
 } from "./harness/compaction/compaction.ts";
+export * from "./harness/goals.ts";
 export * from "./harness/messages.ts";
 export * from "./harness/prompt-templates.ts";
 // Harness
