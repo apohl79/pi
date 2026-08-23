@@ -457,6 +457,7 @@ export class AgentHarness implements AgentLane {
 	private compactionSettings: CompactionSettings;
 	private steeringMode: QueueMode;
 	private followUpMode: QueueMode;
+	private suspendedOperations: SuspendedOperation[] = [];
 	private closed = false;
 	private activeOperation:
 		| {
@@ -547,6 +548,7 @@ export class AgentHarness implements AgentLane {
 				});
 			}
 		}
+		harness.suspendedOperations = structuredClone(suspended);
 		return { harness, suspended };
 	}
 
@@ -1394,7 +1396,132 @@ export class AgentHarness implements AgentLane {
 		});
 	}
 	async resume(): Promise<ResumeResult> {
-		return this.unavailable("resume");
+		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		const recovered = await this.withLifecycleLock(async () => {
+			if (this.closed) return { error: new Closed({ message: "AgentHarness is closed" }) } as const;
+			if (this.activeOperation) {
+				return {
+					error: new LaneBusy({
+						lane: "main",
+						operationId: this.activeOperation.id,
+						operationKind: this.activeOperation.kind,
+						message: "Lane is busy",
+					}),
+				} as const;
+			}
+			const lanes = await this.durableSession.getLanes();
+			const openByLane = await Promise.all(
+				lanes.map(async (lane) => ({ lane: lane.lane, operations: await this.durableSession.findOpenOperations(lane.lane) })),
+			);
+			const open = openByLane.flatMap((entry) => entry.operations);
+			const duplicateLane = openByLane.find((entry) => entry.operations.length > 1);
+			if (duplicateLane) {
+				const operation = duplicateLane.operations[0]!;
+				return {
+					error: new LaneBusy({
+						lane: duplicateLane.lane,
+						operationId: operation.id,
+						operationKind: operation.intent.kind,
+						message: "Multiple open operations require recovery before resume",
+					}),
+				} as const;
+			}
+			if (open.length > 1) {
+				const operation = open[0]!;
+				return {
+					error: new LaneBusy({
+						lane: operation.lane,
+						operationId: operation.id,
+						operationKind: operation.intent.kind,
+						message: "Open operations in multiple lanes require recovery before resume",
+					}),
+				} as const;
+			}
+			const operation = open[0];
+			if (!operation) return { error: new NothingToResume({ lane: "main", message: "Nothing to resume" }) } as const;
+			if (operation.lane !== "main") {
+				return {
+					error: new LaneBusy({
+						lane: operation.lane,
+						operationId: operation.id,
+						operationKind: operation.intent.kind,
+						message: "Suspended operation requires a lane-specific harness",
+					}),
+				} as const;
+			}
+			const suspended = this.suspendedOperations.find(
+				(candidate) =>
+					candidate.id === operation.id &&
+					candidate.lane === operation.lane &&
+					candidate.kind === operation.intent.kind &&
+					candidate.startedAt === operation.timestamp,
+			);
+			if (!suspended) return { error: new NothingToResume({ lane: operation.lane, message: "Nothing to resume" }) } as const;
+			if (suspended.missing.models.length > 0 || suspended.missing.tools.length > 0) {
+				return {
+					error: new MissingIdentities({
+						lane: operation.lane,
+						tools: [...suspended.missing.tools],
+						models: [...suspended.missing.models],
+						message: "Resume requires missing tools or models",
+					}),
+				} as const;
+			}
+			const terminal = await this.durableSession.findRecords({ type: "operation_finished", runId: operation.id, limit: 1 });
+			if (terminal.length === 0)
+				await this.durableSession.appendRecord({
+					type: "operation_finished",
+					id: this.durableSession.idGenerator.next(),
+					lane: operation.lane,
+					runId: operation.id,
+					outcome: "failed",
+					error: { code: "recovered_by_resume", message: "Suspended operation was reopened by resume" },
+				});
+			return { operation } as const;
+		});
+		if ("error" in recovered) return ResultValue.err(recovered.error);
+		const { operation } = recovered;
+		if (operation.intent.kind === "run") {
+			const result = await this.prompt(operation.intent.originalPrompt);
+			if (!result.ok)
+				return ResultValue.ok({
+					operation: "run",
+					runId: operation.id,
+					kind: "failed",
+					leafId: (await this.durableSession.getLeafId()) ?? "",
+					error: { code: result.error.name, message: result.error.message },
+				});
+			const { runId, ...outcome } = result.value;
+			return ResultValue.ok({ operation: "run", runId, ...outcome });
+		}
+		if (operation.intent.kind === "compaction") {
+			const result = await this.compact({ customInstructions: operation.intent.customInstructions });
+			if (!result.ok)
+				return ResultValue.ok({
+					operation: "compaction",
+					runId: operation.id,
+					kind: "failed",
+					leafId: (await this.durableSession.getLeafId()) ?? "",
+					error: { code: result.error.name, message: result.error.message },
+				});
+			const { runId, ...outcome } = result.value;
+			return ResultValue.ok({ operation: "compaction", runId, ...outcome });
+		}
+		const result = await this.navigateTree(operation.intent.targetId, {
+			summarize: operation.intent.summarize,
+			customInstructions: operation.intent.customInstructions,
+			label: operation.intent.label,
+		});
+		if (!result.ok)
+			return ResultValue.ok({
+				operation: "navigation",
+				runId: operation.id,
+				kind: "failed",
+				leafId: await this.durableSession.getLeafId(),
+				error: { code: result.error.name, message: result.error.message },
+			});
+		const { runId, ...outcome } = result.value;
+		return ResultValue.ok({ operation: "navigation", runId, ...outcome });
 	}
 	async abort(): Promise<AbortResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
