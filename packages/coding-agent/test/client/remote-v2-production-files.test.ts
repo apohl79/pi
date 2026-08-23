@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
@@ -58,6 +58,50 @@ describe("production remote v2 filesystem references", () => {
 					reference: `@local:${localPath}`,
 					kind: "file",
 					size: Buffer.byteLength("client content"),
+				});
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("resolves an absolute @server reference outside the project root", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-remote-files-server-scope-"));
+		const outsideDirectory = await mkdtemp(join(tmpdir(), "pi-remote-files-server-target-"));
+		directories.push(directory, outsideDirectory);
+		const outsidePath = join(outsideDirectory, "outside.txt");
+		await writeFile(outsidePath, "execution host content", "utf8");
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-remote-files-server-faux",
+			models: [{ id: "remote-files-server-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const socketPath = join(directory, "server.sock");
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath,
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({ transportFactory: createUnixTransportFactory({ path: socketPath }) });
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
+			try {
+				const completion = await session.completeFiles(`@server:${outsidePath}`);
+				expect(completion).toEqual([expect.objectContaining({ reference: `server:${outsidePath}`, kind: "file" })]);
+				const resolved = await session.resolveFile(`@server:${outsidePath}`);
+				expect(resolved.path).toBe(await realpath(outsidePath));
+				expect(await session.readFile(`@server:${outsidePath}`)).toMatchObject({
+					data: Buffer.from("execution host content").toString("base64"),
 				});
 			} finally {
 				await session.dispose();
