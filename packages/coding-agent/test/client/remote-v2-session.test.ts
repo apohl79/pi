@@ -325,6 +325,27 @@ function memoryTransport() {
 																																						"ok",
 																																				},
 																																			],
+																																			operations: [
+																																				{
+																																					operationId:
+																																						"operation-1",
+																																					state: "complete",
+																																				},
+																																			],
+																																			operationEvents:
+																																				[
+																																					{
+																																						event: "operation_terminal",
+																																						operationId:
+																																							"operation-1",
+																																					},
+																																				],
+																																			usage: {
+																																				aggregate: {
+																																					responses: 1,
+																																				},
+																																				entries: [],
+																																			},
 																																		} as JsonValue)
 																																	: message.request
 																																				.command ===
@@ -701,6 +722,14 @@ describe("RemoteV2Session", () => {
 		expect(await session.diagnosticsTimeline({ afterSeq: 2 })).toEqual([
 			{ seq: 3, kind: "operation", outcome: "ok" },
 		]);
+		expect(await session.diagnosticsTimelineEvidence({ sessionId: "session-1", operationId: "operation-1" })).toEqual(
+			{
+				events: [{ seq: 3, kind: "operation", outcome: "ok" }],
+				operations: [{ operationId: "operation-1", state: "complete" }],
+				operationEvents: [{ event: "operation_terminal", operationId: "operation-1" }],
+				usage: { aggregate: { responses: 1 }, entries: [] },
+			},
+		);
 		expect((await session.diagnosticsExport()).manifest).toMatchObject({ eventCount: 3 });
 		expect(
 			(
