@@ -54,6 +54,15 @@ const requiredPatterns = [
 	["rollback evidence", "packages/coding-agent/test/server/daemon-rollback-invariants.test.ts", "rollback"],
 	["statusline evidence", "packages/coding-agent/test/client/remote-v2-production-statusline.test.ts", "statusline"],
 	["usage evidence", "packages/coding-agent/test/client/remote-v2-production-usage.test.ts", "cost"],
+	["detach and PTY reattach evidence", "packages/coding-agent/test/client/remote-v2-production-pty-reattach.test.ts", "reattach"],
+	["goal and input continuation evidence", "packages/coding-agent/test/client/remote-v2-production-scenario-goal-agent-input.test.ts", "pendingInputRequestId"],
+	["causal diagnostics evidence", "packages/coding-agent/test/client/remote-v2-production-diagnostics.test.ts", "causal bundle"],
+	["daemon restart evidence", "packages/coding-agent/test/server/daemon-agent-restart.test.ts", "rehydrates"],
+	["disk-full admission evidence", "packages/coding-agent/test/server/daemon-disk-full.test.ts", "disk-full"],
+	["legacy migration evidence", "packages/coding-agent/test/server/daemon-migration.test.ts", "legacy"],
+	["MCP exclusion evidence", "packages/coding-agent/test/client/remote-v2-production-plugins.test.ts", "unsupported MCP"],
+	["rollback projection evidence", "packages/coding-agent/test/client/remote-v2-production-rollback.test.ts", "reconstructs"],
+	["terminal snapshot evidence", "packages/tui/test/editor.test.ts", "undo snapshots"],
 ];
 
 export function auditForkSpec() {
