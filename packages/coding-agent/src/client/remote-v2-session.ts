@@ -888,7 +888,12 @@ export class RemoteV2Session {
 		const bundle = asRecord(result.bundle);
 		if (bundle === undefined || asRecord(bundle.manifest) === undefined)
 			throw new Error("Invalid diagnostics/export response");
-		return structuredClone(await this.#client.mergeDiagnosticBundle(bundle));
+		const merge = (
+			this.#client as unknown as {
+				mergeDiagnosticBundle?: (value: unknown) => Promise<Record<string, unknown>>;
+			}
+		).mergeDiagnosticBundle;
+		return structuredClone(merge === undefined ? bundle : await merge.call(this.#client, bundle));
 	}
 
 	async diagnosticsVerify(bundle?: Record<string, unknown>): Promise<Record<string, unknown>> {
