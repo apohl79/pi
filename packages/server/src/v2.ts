@@ -1399,6 +1399,8 @@ export class PiServerV2 {
 
 	private async diagnosticsDoctor(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
+		if (payload.repairSafe !== undefined && typeof payload.repairSafe !== "boolean")
+			throw new Error("diagnostics/doctor repairSafe must be a boolean");
 		const events = await this.diagnosticEvents();
 		const sequenceOk = events.every((event, index) => index === 0 || event.seq === events[index - 1]!.seq + 1);
 		const checks = [
@@ -1449,6 +1451,8 @@ export class PiServerV2 {
 
 	private async listPlugins(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
+		if (payload.installedOnly !== undefined && typeof payload.installedOnly !== "boolean")
+			throw new Error("plugin/list installedOnly must be a boolean");
 		await this.sendResponse(state, id, {
 			command: command.command,
 			plugins: await this.plugins.listPlugins(payload.installedOnly === true),
@@ -1473,6 +1477,10 @@ export class PiServerV2 {
 				(typeof payload.manifest !== "object" || payload.manifest === null || Array.isArray(payload.manifest)))
 		)
 			throw new Error("plugin/install requires name, marketplace, and version");
+		if (payload.root !== undefined && typeof payload.root !== "string")
+			throw new Error("plugin/install root must be a string");
+		if (payload.scope !== undefined && payload.scope !== "user" && payload.scope !== "project")
+			throw new Error("plugin/install scope is invalid");
 		await this.sendResponse(state, id, {
 			command: command.command,
 			plugin: await this.plugins.installPlugin({
@@ -1502,6 +1510,8 @@ export class PiServerV2 {
 			(typeof payload.manifest !== "object" || payload.manifest === null || Array.isArray(payload.manifest))
 		)
 			throw new Error("plugin/upgrade manifest must be an object");
+		if (payload.root !== undefined && typeof payload.root !== "string")
+			throw new Error("plugin/upgrade root must be a string");
 		await this.sendResponse(state, id, {
 			command: command.command,
 			plugin: await this.plugins.upgradePlugin(
@@ -1521,6 +1531,8 @@ export class PiServerV2 {
 	): Promise<void> {
 		const payload = objectPayload(command);
 		if (typeof payload.id !== "string") throw new Error(`${command.command} requires id`);
+		if (payload.scope !== undefined && payload.scope !== "user" && payload.scope !== "project")
+			throw new Error(`${command.command} scope is invalid`);
 		await this.sendResponse(state, id, {
 			command: command.command,
 			plugin: await this.plugins.setEnabled(

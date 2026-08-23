@@ -204,6 +204,34 @@ afterEach(async () => {
 });
 
 describe("PiServer v2 operation acceptance", () => {
+	test("rejects malformed optional plugin and diagnostic flags", async () => {
+		const server = new PiServerV2(new TestService(), { listeners: [], serverId: "strict-options-server" });
+		await server.start();
+		servers.push(server);
+		const client = connectInMemoryTestClientV2(server.accept.bind(server));
+		await client.hello();
+		for (const [command, payload, message] of [
+			["diagnostics/doctor", { repairSafe: 1 }, "diagnostics/doctor repairSafe must be a boolean"],
+			["plugin/list", { installedOnly: "yes" }, "plugin/list installedOnly must be a boolean"],
+			[
+				"plugin/install",
+				{ name: "plugin", marketplace: "market", version: "1", root: 1 },
+				"plugin/install root must be a string",
+			],
+			[
+				"plugin/install",
+				{ name: "plugin", marketplace: "market", version: "1", scope: "workspace" },
+				"plugin/install scope is invalid",
+			],
+			["plugin/upgrade", { id: "plugin@market", version: "2", root: 1 }, "plugin/upgrade root must be a string"],
+			["plugin/enable", { id: "plugin@market", scope: "workspace" }, "plugin/enable scope is invalid"],
+		] as const) {
+			const response = await client.request({ command, payload });
+			expect(response).toMatchObject({ ok: false, error: { code: "request_failed", message } });
+		}
+		await client.close();
+	});
+
 	test("accepts deterministic in-memory v2 handshakes and fragmented requests", async () => {
 		const service = new TestService();
 		const server = new PiServerV2(service, { listeners: [], serverId: "memory-server" });
