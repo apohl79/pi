@@ -854,7 +854,14 @@ describe("coding-agent daemon runtime", () => {
 			harness: { tools: [], activeToolNames: [] },
 			web: new AdapterV2WebService({
 				execute: async () => [
-					{ id: "result-1", title: "Configured", source: "faux", retrievedAt: 1, extract: "ok" },
+					{
+						id: "result-1",
+						title: "Configured",
+						source: "faux",
+						retrievedAt: 1,
+						url: "https://example.test",
+						extract: "ok",
+					},
 				],
 			}),
 			write: () => {},

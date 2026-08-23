@@ -42,6 +42,7 @@ async function createWebRuntime(directory: string) {
 					title: request.query ?? request.operation,
 					source: "configured-web-adapter",
 					retrievedAt: 1,
+					url: "https://example.test/configured",
 					extract: "configured web extract",
 				},
 			],

@@ -169,7 +169,13 @@ function memoryTransport() {
 															: message.request.command === "web"
 																? ({
 																		results: [
-																			{ id: "web-1", title: "Pi", source: "faux", retrievedAt: 1 },
+																			{
+																				id: "web-1",
+																				title: "Pi",
+																				source: "faux",
+																				retrievedAt: 1,
+																				url: "https://example.test",
+																			},
 																		],
 																	} as JsonValue)
 																: message.request.command === "image/view"
@@ -608,7 +614,7 @@ describe("RemoteV2Session", () => {
 		await client.connect();
 		const session = await RemoteV2Session.open(client, "session-1");
 		expect(await session.webRequest("search_query", { query: "pi" })).toEqual([
-			{ id: "web-1", title: "Pi", source: "faux", retrievedAt: 1 },
+			{ id: "web-1", title: "Pi", source: "faux", retrievedAt: 1, url: "https://example.test" },
 		]);
 		expect((await session.viewImage("project:image.png")).mimeType).toBe("image/png");
 		expect((await session.generateImage("draw a terminal")).provider).toBe("faux");

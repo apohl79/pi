@@ -131,7 +131,7 @@ export interface RemoteV2AppAuthOptions extends Record<string, unknown> {
 
 export interface RemoteV2WebResult {
 	readonly id: string;
-	readonly url?: string;
+	readonly url: string;
 	readonly title: string;
 	readonly source: string;
 	readonly retrievedAt: number;
@@ -1058,7 +1058,7 @@ function isWebResult(value: unknown): value is RemoteV2WebResult {
 		typeof record.title === "string" &&
 		typeof record.source === "string" &&
 		typeof record.retrievedAt === "number" &&
-		(record.url === undefined || typeof record.url === "string") &&
+		typeof record.url === "string" &&
 		(record.extract === undefined || typeof record.extract === "string") &&
 		(record.mimeType === undefined || typeof record.mimeType === "string") &&
 		(record.blobDigest === undefined || typeof record.blobDigest === "string")
