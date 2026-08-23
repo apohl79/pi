@@ -1070,6 +1070,10 @@ function records(value: unknown, command: string): readonly Record<string, unkno
 	return value.map((entry) => structuredClone(asRecord(entry)!));
 }
 
+function isSafeNonNegativeInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 function isSnapshot(value: unknown): value is ProtocolSnapshot {
 	return Check(SessionSnapshotV2Schema, value);
 }
@@ -1102,7 +1106,7 @@ function isProcessSnapshot(value: unknown): value is RemoteV2ProcessSnapshot {
 		typeof record.command === "string" &&
 		typeof record.pty === "boolean" &&
 		["running", "exited", "terminated", "lost"].includes(record.state as string) &&
-		(record.exitCode === undefined || (Number.isSafeInteger(record.exitCode) && record.exitCode >= 0))
+		(record.exitCode === undefined || isSafeNonNegativeInteger(record.exitCode))
 	);
 }
 
@@ -1112,7 +1116,7 @@ function isFileReference(value: unknown): value is RemoteV2FileReference {
 		typeof record?.reference === "string" &&
 		typeof record.path === "string" &&
 		(record.kind === "file" || record.kind === "directory") &&
-		(record.size === undefined || (Number.isSafeInteger(record.size) && record.size >= 0)) &&
+		(record.size === undefined || isSafeNonNegativeInteger(record.size)) &&
 		(record.mimeType === undefined || typeof record.mimeType === "string")
 	);
 }
@@ -1129,10 +1133,7 @@ function isFileCompletion(value: unknown): value is RemoteV2FileCompletion {
 function isBlobStat(value: unknown): value is RemoteV2BlobStat {
 	const record = asRecord(value);
 	return (
-		typeof record?.digest === "string" &&
-		typeof record.mimeType === "string" &&
-		Number.isSafeInteger(record.size) &&
-		record.size >= 0
+		typeof record?.digest === "string" && typeof record.mimeType === "string" && isSafeNonNegativeInteger(record.size)
 	);
 }
 
@@ -1142,8 +1143,7 @@ function isWebResult(value: unknown): value is RemoteV2WebResult {
 		typeof record?.id === "string" &&
 		typeof record.title === "string" &&
 		typeof record.source === "string" &&
-		Number.isSafeInteger(record.retrievedAt) &&
-		record.retrievedAt >= 0 &&
+		isSafeNonNegativeInteger(record.retrievedAt) &&
 		typeof record.url === "string" &&
 		(record.extract === undefined || typeof record.extract === "string") &&
 		(record.mimeType === undefined || typeof record.mimeType === "string") &&
@@ -1156,8 +1156,7 @@ function isImageView(value: unknown): value is RemoteV2ImageView {
 	return (
 		typeof record?.digest === "string" &&
 		typeof record.mimeType === "string" &&
-		Number.isSafeInteger(record.size) &&
-		record.size >= 0 &&
+		isSafeNonNegativeInteger(record.size) &&
 		typeof record.reference === "string"
 	);
 }
@@ -1172,9 +1171,6 @@ function isGeneratedImage(value: unknown): value is RemoteV2GeneratedImage {
 		typeof record.promptHash === "string" &&
 		(record.costUsd === undefined || typeof record.costUsd === "number") &&
 		(dimensions === undefined ||
-			(Number.isSafeInteger(dimensions.width) &&
-				dimensions.width >= 0 &&
-				Number.isSafeInteger(dimensions.height) &&
-				dimensions.height >= 0))
+			(isSafeNonNegativeInteger(dimensions.width) && isSafeNonNegativeInteger(dimensions.height)))
 	);
 }
