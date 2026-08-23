@@ -99,8 +99,9 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
 		if (this.disposed) throw new Error("Coding-agent child registry is disposed");
-		this.validateRequest(request);
-		const parentPath = request.parentPath.replace(/\/$/, "");
+		const parentPath = await this.resolveParentPath(request);
+		const normalizedRequest = { ...request, parentPath };
+		this.validateRequest(normalizedRequest);
 		await this.hydrate(request.sessionId);
 		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
 		if (this.activeCountForParent(parentPath) >= this.maxActivePerParent)
@@ -382,6 +383,27 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			await this.hydrate(metadata.parentSessionId);
 			if (this.agents.has(agentId)) return;
 		}
+	}
+
+	private async resolveParentPath(request: V2AgentRequest): Promise<string> {
+		const requestedPath = request.parentPath.replace(/\/$/, "");
+		const findOwner = () => [...this.agents.values()].find((agent) => agent.childSessionId === request.sessionId);
+		const loadedOwner = findOwner();
+		if (loadedOwner) return loadedOwner.summary.path;
+
+		await this.hydrate(request.sessionId);
+		const hydratedOwner = findOwner();
+		if (hydratedOwner) return hydratedOwner.summary.path;
+
+		// A fresh registry may not have loaded the parent session yet. Hydrate every
+		// known parent once so nested child requests recover their canonical path.
+		for (const metadata of await this.service.listSessions()) {
+			if (metadata.parentSessionId === undefined) continue;
+			await this.hydrate(metadata.parentSessionId);
+			const owner = findOwner();
+			if (owner) return owner.summary.path;
+		}
+		return requestedPath;
 	}
 
 	private async hydrate(parentSessionId: string): Promise<void> {
