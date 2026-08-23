@@ -173,6 +173,19 @@ describe("protocol v2 contract", () => {
 		expect(snapshot.eventSeq).toBeGreaterThan(snapshot.revision);
 	});
 
+	test("accepts bounded child usage and rejects malformed usage fields", () => {
+		const agent = {
+			id: "agent-1",
+			path: "/root/worker",
+			taskName: "worker",
+			state: "running",
+			model: { provider: "test", id: "small" },
+			usage: { input: 12, output: 4, cacheRead: 2, cacheWrite: 0, costUsd: 0.12, pricingState: "known" },
+		} as const;
+		expect(Check(SessionSnapshotV2Schema, { ...snapshot, agents: [agent] })).toBe(true);
+		expect(Check(SessionSnapshotV2Schema, { ...snapshot, agents: [{ ...agent, usage: { input: -1 } }] })).toBe(false);
+	});
+
 	test("accepts an operation request and durable acceptance response", () => {
 		const request = {
 			type: "request",
