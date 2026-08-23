@@ -1608,6 +1608,13 @@ describe("PiServer v2 operation acceptance", () => {
 			payload: { items: [{ step: "implement", status: "in_progress" }] },
 		});
 		expect(updated).toMatchObject({ ok: true, result: { plan: { version: 1 } } });
+		expect(
+			await client.request({
+				command: "plan/update",
+				sessionId: "session-1",
+				payload: { items: [{ step: "bad", status: "pending" }], version: "1" },
+			}),
+		).toMatchObject({ ok: false, error: { message: "plan/update version must be a number" } });
 		await expect(
 			client.next((message) => message.type === "event" && message.event === "plan_updated"),
 		).resolves.toMatchObject({
