@@ -190,6 +190,7 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 				session = await RemoteV2Session.create(client, {
 					cwd: options.cwd,
 					...(options.options.name === undefined ? {} : { name: options.options.name }),
+					...(command.parentSession === undefined ? {} : { parentSessionId: command.parentSession }),
 				});
 				await applySessionOptions(session);
 				previousSnapshot = undefined;

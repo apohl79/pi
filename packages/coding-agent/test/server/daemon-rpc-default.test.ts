@@ -179,7 +179,7 @@ describe("production daemon server-default RPC", () => {
 				unknownFlags: new Map(),
 				diagnostics: [],
 			});
-			input.write('{"id":"new-1","type":"new_session"}\n');
+			input.write('{"id":"new-1","type":"new_session","parentSession":"/tmp/parent-session.jsonl"}\n');
 			await runRpc;
 			expect(output).toContainEqual({
 				id: "state-after-new",
@@ -191,6 +191,8 @@ describe("production daemon server-default RPC", () => {
 					thinkingLevel: "high",
 				}),
 			});
+			const sessions = await runtime.service.listSessions();
+			expect(sessions).toContainEqual(expect.objectContaining({ parentSessionId: "/tmp/parent-session.jsonl" }));
 		} finally {
 			await runtime.close();
 		}

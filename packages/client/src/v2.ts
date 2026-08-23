@@ -42,6 +42,7 @@ export interface CreateSessionV2Options {
 	readonly id?: string;
 	readonly name?: string;
 	readonly cwd?: string;
+	readonly parentSessionId?: string;
 }
 
 export interface ForkSessionV2Options {
