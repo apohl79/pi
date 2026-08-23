@@ -632,6 +632,9 @@ describe("AgentHarness v2 scaffold", () => {
 			model: faux.getModel(),
 			systemPrompt: "base system",
 		});
+		harness.hooks.on("before_run", () => {
+			throw new Error("optional contributor failed");
+		});
 		harness.hooks.on("before_run", () => ({
 			messages: [{ role: "user", content: [{ type: "text", text: "hook prompt" }], timestamp: 1 }],
 			systemPrompt: "hook system",

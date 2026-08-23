@@ -83,4 +83,44 @@ describe("AgentHarness manual tool drive", () => {
 		expect(toolContent).toEqual([{ type: "text", text: "post-processed" }]);
 		await harness.close();
 	});
+
+	it("fails closed when before_tool throws", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "before-tool-error-faux",
+			models: [{ id: "before-tool-error-model", contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage(
+				{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hello" } },
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("blocked"),
+		]);
+		let executed = false;
+		const tool: HarnessTool = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: Type.Object({ value: Type.String() }),
+			async execute() {
+				executed = true;
+				return { content: [{ type: "text", text: "unexpected" }], details: {} };
+			},
+		};
+		const { harness } = await AgentHarness.create({
+			models,
+			model: faux.getModel(),
+			session: createSession("before-tool-error"),
+			tools: [tool],
+		});
+		harness.hooks.on("before_tool", () => {
+			throw new Error("policy failure");
+		});
+
+		expect(await harness.prompt("use the tool")).toMatchObject({ ok: true, value: { kind: "failed" } });
+		expect(executed).toBe(false);
+		await harness.close();
+	});
 });
