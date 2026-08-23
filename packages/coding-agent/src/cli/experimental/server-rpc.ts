@@ -38,10 +38,18 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 	let activeBashProcessId: string | undefined;
 
 	const input = options.input ?? process.stdin;
+	const pendingLines = new Set<Promise<void>>();
+	let resolveInputEnd!: () => void;
+	const inputEnded = new Promise<void>((resolve) => {
+		resolveInputEnd = resolve;
+	});
+	input.once("end", resolveInputEnd);
 	const stopReading = attachJsonlLineReader(input, (line) => {
-		void handleLine(line).catch((error: unknown) => {
+		const pending = handleLine(line).catch((error: unknown) => {
 			output({ type: "error", error: error instanceof Error ? error.message : String(error) });
 		});
+		pendingLines.add(pending);
+		void pending.finally(() => pendingLines.delete(pending));
 	});
 
 	async function handleLine(line: string): Promise<void> {
@@ -186,7 +194,9 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 		}
 	}
 
-	void stopReading;
+	await inputEnded;
+	await Promise.all(pendingLines);
+	stopReading();
 }
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
