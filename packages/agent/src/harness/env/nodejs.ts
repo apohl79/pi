@@ -7,15 +7,17 @@ import {
 	lstat,
 	mkdir,
 	mkdtemp,
+	open,
 	readdir,
 	readFile,
 	realpath,
 	rename,
 	rm,
+	unlink,
 	writeFile,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import {
@@ -62,6 +64,60 @@ function resolvePath(cwd: string, path: string): string {
 		}
 	}
 	return isAbsolute(normalized) ? resolve(normalized) : resolve(cwd, normalized);
+}
+
+const NO_FOLLOW_DIRECTORY_FLAGS = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
+const NO_FOLLOW_FILE_FLAGS = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW;
+type OpenedDirectory = Awaited<ReturnType<typeof open>>;
+
+function procFdPath(fd: number): string {
+	if (process.platform === "linux") return `/proc/self/fd/${fd}`;
+	if (process.platform === "darwin" || process.platform === "freebsd") return `/dev/fd/${fd}`;
+	throw new Error("descriptor-relative filesystem mutation is not supported on this platform");
+}
+
+function descriptorMutationError(path: string, error: unknown): FileError {
+	if (error instanceof FileError) return error;
+	const cause = toError(error);
+	if (cause.message.includes("not supported")) return new FileError("not_supported", cause.message, path, cause);
+	return toFileError(cause, path);
+}
+
+async function openPinnedParent(root: string, target: string, createParents: boolean): Promise<OpenedDirectory> {
+	const rootPath = resolvePath(root, ".");
+	const targetPath = resolvePath(root, target);
+	const relativeTarget = relative(rootPath, targetPath);
+	if (
+		!relativeTarget ||
+		relativeTarget === ".." ||
+		relativeTarget.startsWith(`..${sep}`) ||
+		relativeTarget.includes("\0")
+	)
+		throw new FileError("permission_denied", `Path is outside execution root: ${targetPath}`, targetPath);
+	const components = relativeTarget.split(sep).filter(Boolean);
+	components.pop();
+	const rootHandle = await open(rootPath, NO_FOLLOW_DIRECTORY_FLAGS);
+	let current = rootHandle;
+	try {
+		for (const component of components) {
+			const childPath = join(procFdPath(current.fd), component);
+			if (createParents) {
+				try {
+					await mkdir(childPath);
+				} catch (error) {
+					if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+				}
+			}
+			const child = await open(childPath, NO_FOLLOW_DIRECTORY_FLAGS);
+			if (current !== rootHandle) await current.close();
+			current = child;
+		}
+		return current;
+	} catch (error) {
+		if (current !== rootHandle) await current.close().catch(() => {});
+		await rootHandle.close().catch(() => {});
+		throw error;
+	}
 }
 
 function fileKindFromStats(stats: {
@@ -510,6 +566,29 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		}
 	}
 
+	async readTextFileWithinRoot(
+		root: string,
+		path: string,
+		abortSignal?: AbortSignal,
+	): Promise<Result<string, FileError>> {
+		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<string>(abortSignal, resolved);
+		if (aborted) return aborted;
+		let parent: OpenedDirectory | undefined;
+		let file: Awaited<ReturnType<typeof open>> | undefined;
+		try {
+			parent = await openPinnedParent(resolvePath(this.cwd, root), resolved, false);
+			const filePath = join(procFdPath(parent.fd), basename(resolved));
+			file = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+			return ok(await file.readFile({ encoding: "utf8", signal: abortSignal }));
+		} catch (error) {
+			return err(descriptorMutationError(resolved, error));
+		} finally {
+			await file?.close().catch(() => {});
+			await parent?.close().catch(() => {});
+		}
+	}
+
 	async readTextLines(
 		path: string,
 		options?: { maxLines?: number; abortSignal?: AbortSignal },
@@ -596,6 +675,69 @@ export class NodeExecutionEnv implements ExecutionEnv {
 			return ok(undefined);
 		} catch (error) {
 			return err(toFileError(error, source));
+		}
+	}
+
+	async atomicReplaceFileWithinRoot(
+		root: string,
+		targetPath: string,
+		content: string | Uint8Array,
+		abortSignal?: AbortSignal,
+	): Promise<Result<void, FileError>> {
+		const target = resolvePath(this.cwd, targetPath);
+		const aborted = abortResult<void>(abortSignal, target);
+		if (aborted) return aborted;
+		let parent: OpenedDirectory | undefined;
+		let temporaryPath: string | undefined;
+		try {
+			parent = await openPinnedParent(resolvePath(this.cwd, root), target, true);
+			const parentPath = procFdPath(parent.fd);
+			temporaryPath = join(parentPath, `.pi-apply-patch-${randomUUID()}`);
+			let targetMode: number | undefined;
+			try {
+				const targetStats = await lstat(join(parentPath, basename(target)));
+				if (targetStats.isFile()) targetMode = targetStats.mode & 0o7777;
+			} catch (error) {
+				if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+			}
+			const temporary = await open(temporaryPath, NO_FOLLOW_FILE_FLAGS, 0o600);
+			try {
+				await temporary.writeFile(content);
+				if (targetMode !== undefined) await temporary.chmod(targetMode);
+				await temporary.sync();
+			} finally {
+				await temporary.close();
+			}
+			const afterWriteAbort = abortResult<void>(abortSignal, target);
+			if (afterWriteAbort) return afterWriteAbort;
+			await rename(temporaryPath, join(parentPath, basename(target)));
+			temporaryPath = undefined;
+			return ok(undefined);
+		} catch (error) {
+			return err(descriptorMutationError(target, error));
+		} finally {
+			if (temporaryPath) await unlink(temporaryPath).catch(() => {});
+			await parent?.close().catch(() => {});
+		}
+	}
+
+	async removeFileWithinRoot(
+		root: string,
+		targetPath: string,
+		abortSignal?: AbortSignal,
+	): Promise<Result<void, FileError>> {
+		const target = resolvePath(this.cwd, targetPath);
+		const aborted = abortResult<void>(abortSignal, target);
+		if (aborted) return aborted;
+		let parent: OpenedDirectory | undefined;
+		try {
+			parent = await openPinnedParent(resolvePath(this.cwd, root), target, false);
+			await unlink(join(procFdPath(parent.fd), basename(target)));
+			return ok(undefined);
+		} catch (error) {
+			return err(descriptorMutationError(target, error));
+		} finally {
+			await parent?.close().catch(() => {});
 		}
 	}
 
