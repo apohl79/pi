@@ -196,6 +196,22 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("answers and cancels structured input through the control lease", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		await session.respondInput("request-1", { answer: "yes" });
+		await session.cancelInput("request-2");
+		expect(pair.requests.slice(-2).map((request) => request.command)).toEqual([
+			"input/request/respond",
+			"input/request/cancel",
+		]);
+		expect(pair.requests.at(-2)?.payload).toEqual({ requestId: "request-1", answers: { answer: "yes" } });
+		expect(pair.requests.at(-1)?.payload).toEqual({ requestId: "request-2" });
+		await session.dispose();
+	});
+
 	test("rejects mutating commands after detach and reports listener failures", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });

@@ -210,6 +210,26 @@ export class RemoteV2Session {
 		return this.#accept("goal/resume");
 	}
 
+	async respondInput(requestId: string, answers: Readonly<Record<string, string>>): Promise<void> {
+		this.#assertControl();
+		const response = await this.#client.request({
+			command: "input/request/respond",
+			sessionId: this.#handle!.sessionId,
+			payload: { requestId, answers: { ...answers } },
+		});
+		if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
+	}
+
+	async cancelInput(requestId: string): Promise<void> {
+		this.#assertControl();
+		const response = await this.#client.request({
+			command: "input/request/cancel",
+			sessionId: this.#handle!.sessionId,
+			payload: { requestId },
+		});
+		if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
+	}
+
 	async relinquishControl(): Promise<void> {
 		this.#assertNotDisposed();
 		const handle = this.#requireHandle();
