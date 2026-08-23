@@ -174,6 +174,40 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("resumes a deferred provider handle without starting a second operation", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "deferred-resume-faux",
+			deferred: { pendingFetches: 0 },
+			models: [{ id: "deferred-resume-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("resolved after polling")]);
+		const session = createSession("deferred-resume");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			streamOptions: { deferred: true },
+		});
+
+		const suspended = await harness.prompt("defer this");
+		expect(suspended).toMatchObject({ ok: true, value: { kind: "suspended" } });
+		const resumed = await harness.resume();
+
+		expect(resumed).toMatchObject({
+			ok: true,
+			value: { operation: "run", runId: expect.any(String), kind: "completed" },
+		});
+		expect(faux.state.deferredFetchCount).toBe(1);
+		expect(await session.findOpenOperations("main")).toEqual([]);
+		expect((await session.findRecords({ type: "operation_started" })).length).toBe(1);
+		expect((await session.findRecords({ type: "operation_finished" })).map((record) => record.outcome)).toEqual([
+			"completed",
+		]);
+		await harness.close();
+	});
+
 	it("runs idle callbacks after the durable lane is idle", async () => {
 		const harness = await createHarness();
 		let callbackCalled = false;
