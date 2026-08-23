@@ -53,6 +53,23 @@ describe("StatuslineRunner", () => {
 		expect(runner.snapshot).toMatchObject({ output: "new", command: "second.sh" });
 	});
 
+	test("does not restore output when a disposed command resolves late", async () => {
+		let resolvePending: ((result: { stdout: string; stderr: string; exitCode: number }) => void) | undefined;
+		const runner = new StatuslineRunner({
+			command: "statusline.sh",
+			execute: async () =>
+				new Promise((resolve) => {
+					resolvePending = resolve;
+				}),
+		});
+		const update = runner.update({ session: "dispose" });
+		const dispose = runner.dispose();
+		resolvePending?.({ stdout: "late", stderr: "", exitCode: 0 });
+		await dispose;
+		await update;
+		expect(runner.snapshot).toEqual({ pending: false });
+	});
+
 	test("times out and aborts a hanging command", async () => {
 		let aborted = false;
 		const runner = new StatuslineRunner({
