@@ -35,6 +35,8 @@ const sessionSnapshot = {
 	thinkingLevel: "medium",
 	transcript: [],
 	queues: { steer: [], followUp: [] },
+	steeringMode: "one-at-a-time",
+	followUpMode: "all",
 	agents: [],
 	usage: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, pricingState: "known" },
 	context: { inputTokens: 6, contextWindow: 100, usedPercentage: 6 },
@@ -175,6 +177,18 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>)
 							id: message.id,
 							ok: true,
 							accepted: { operationId: "operation-compact", sessionRevision: 2, eventSeq: 2 },
+						}),
+					);
+				} else if (
+					message.request.command === "session/steering-mode/set" ||
+					message.request.command === "session/follow-up-mode/set"
+				) {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							accepted: { operationId: "operation-mode", sessionRevision: 2, eventSeq: 2 },
 						}),
 					);
 				} else if (message.request.command === "blob/put") {
@@ -426,6 +440,38 @@ describe("experimental CLI runtime", () => {
 			sessionId: "session-1",
 		});
 		expect(output).toContainEqual({ id: "compact-1", type: "response", command: "compact", success: true });
+		runtime.close();
+	});
+
+	test("maps RPC queue modes to server-owned session settings", async () => {
+		const requests: Array<{ command: string; payload?: unknown }> = [];
+		const server = clientFactory(requests);
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: () => {},
+			rpcInput: Readable.from([
+				'{"id":"steer-mode","type":"set_steering_mode","mode":"one-at-a-time"}\n',
+				'{"id":"follow-mode","type":"set_follow_up_mode","mode":"all"}\n',
+			]),
+			rpcOutput: (value) => output.push(value),
+		});
+		await runtime.runRpc({ messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(requests).toContainEqual({
+			command: "session/steering-mode/set",
+			sessionId: "session-1",
+			payload: { mode: "one-at-a-time" },
+		});
+		expect(requests).toContainEqual({
+			command: "session/follow-up-mode/set",
+			sessionId: "session-1",
+			payload: { mode: "all" },
+		});
+		expect(output).toContainEqual(expect.objectContaining({ id: "steer-mode", success: true }));
+		expect(output).toContainEqual(expect.objectContaining({ id: "follow-mode", success: true }));
 		runtime.close();
 	});
 

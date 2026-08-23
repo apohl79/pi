@@ -125,6 +125,12 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 			case "set_thinking_level":
 				await session.setThinking(command.level);
 				return success(id, "set_thinking_level");
+			case "set_steering_mode":
+				await session.setSteeringMode(command.mode);
+				return success(id, "set_steering_mode");
+			case "set_follow_up_mode":
+				await session.setFollowUpMode(command.mode);
+				return success(id, "set_follow_up_mode");
 			case "get_available_thinking_levels":
 				return success(id, "get_available_thinking_levels", { levels: THINKING_LEVELS });
 			case "cycle_thinking_level": {
@@ -258,8 +264,8 @@ function stateFor(snapshot: SessionSnapshotV2 | undefined): Record<string, unkno
 		thinkingLevel: snapshot.thinkingLevel,
 		isStreaming: snapshot.phase === "turn",
 		isCompacting: snapshot.phase === "compaction",
-		steeringMode: "all",
-		followUpMode: "all",
+		steeringMode: snapshot.steeringMode ?? "all",
+		followUpMode: snapshot.followUpMode ?? "all",
 		sessionId: snapshot.id,
 		sessionName: snapshot.name,
 		autoCompactionEnabled: snapshot.compactionPolicy.enabled,
