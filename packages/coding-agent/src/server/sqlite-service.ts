@@ -220,6 +220,24 @@ export async function createCodingAgentV2SqliteService(
 					activationOrder,
 					entries: plugin.sampling,
 				})),
+				options.diagnostics === undefined
+					? undefined
+					: (diagnostic) => {
+							void options.diagnostics
+								?.record({
+									kind: "plugin_sampling",
+									severity: diagnostic.reason === "condition_error" ? "warn" : "info",
+									sessionId: metadata.id,
+									...(diagnostic.durationMs === undefined ? {} : { durationMs: diagnostic.durationMs }),
+									payload: {
+										pluginId: diagnostic.pluginId,
+										entryId: diagnostic.entryId,
+										reason: diagnostic.reason,
+										...(diagnostic.characters === undefined ? {} : { characters: diagnostic.characters }),
+									},
+								})
+								.catch(() => {});
+						},
 			);
 			return async (context: SamplingInputContext) => [
 				...(configuredSamplingInput === undefined ? [] : await configuredSamplingInput(context)),

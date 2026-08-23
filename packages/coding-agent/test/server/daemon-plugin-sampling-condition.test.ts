@@ -37,12 +37,27 @@ describe("coding-agent daemon plugin sampling conditions", () => {
 			expect.not.arrayContaining([samplingText]),
 		]);
 		expect(JSON.stringify(result.transcript)).not.toContain(samplingText);
+		expect(result.diagnostics).toMatchObject({
+			ok: true,
+			result: {
+				events: expect.arrayContaining([
+					expect.objectContaining({
+						kind: "plugin_sampling",
+						payload: expect.objectContaining({
+							pluginId: "conditional-plugin@local",
+							reason: "condition_failed",
+						}),
+					}),
+				]),
+			},
+		});
 	}, 60_000);
 });
 
 async function runConditionalSamplingScenario(): Promise<{
 	observedRequests: readonly (readonly string[])[];
 	transcript: readonly unknown[];
+	diagnostics: unknown;
 }> {
 	const directory = await mkdtemp(join(tmpdir(), "pi-daemon-plugin-sampling-condition-"));
 	directories.push(directory);
@@ -122,7 +137,8 @@ async function runConditionalSamplingScenario(): Promise<{
 		await unlink(marker);
 		await client.request({ command: "turn/start", sessionId, payload: { text: "disabled request" } });
 		const transcript = await waitForTurn(client, sessionId);
-		return { observedRequests, transcript };
+		const diagnostics = await client.request({ command: "diagnostics/timeline", payload: { sessionId } });
+		return { observedRequests, transcript, diagnostics };
 	} finally {
 		client.dispose();
 		await runtime.close();

@@ -10,7 +10,7 @@ describe("plugin sampling adapter", () => {
 			provider: "plugin-sampling-faux",
 			models: [{ id: "plugin-sampling-model", reasoning: false, contextWindow: 8_192, maxTokens: 1_024 }],
 		});
-		const diagnostics: string[] = [];
+		const diagnostics: Array<{ pluginId: string; entryId: string; reason: string; durationMs?: number }> = [];
 		const samplingInput = createPluginSamplingInput(
 			env,
 			[
@@ -46,7 +46,7 @@ describe("plugin sampling adapter", () => {
 					],
 				},
 			],
-			(diagnostic) => diagnostics.push(`${diagnostic.pluginId}:${diagnostic.entryId}:${diagnostic.reason}`),
+			(diagnostic) => diagnostics.push(diagnostic),
 		);
 
 		try {
@@ -56,7 +56,9 @@ describe("plugin sampling adapter", () => {
 					message.role === "user" && typeof message.content === "string" ? message.content : "",
 				),
 			).toEqual(["first", "second"]);
-			expect(diagnostics).toEqual(["first:disabled:condition_failed"]);
+			expect(diagnostics).toHaveLength(1);
+			expect(diagnostics[0]).toMatchObject({ pluginId: "first", entryId: "disabled", reason: "condition_failed" });
+			expect(diagnostics[0]?.durationMs).toEqual(expect.any(Number));
 		} finally {
 			await env.cleanup();
 		}
