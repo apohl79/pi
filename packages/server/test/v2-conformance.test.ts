@@ -12,6 +12,7 @@ import type {
 	UsageAggregate,
 } from "@earendil-works/pi-protocol";
 import { afterEach, describe, expect, test } from "vitest";
+import type { V2AgentRequest } from "../src/agents.ts";
 import { InMemoryV2AgentRegistry } from "../src/agents.ts";
 import { InMemoryV2AppRegistry } from "../src/apps.ts";
 import { FileV2BlobStore, InMemoryV2BlobStore } from "../src/blobs.ts";
@@ -49,6 +50,17 @@ const model: ModelMetadata = {
 	supportedThinkingLevels: ["off"],
 	authenticated: true,
 };
+
+const datedModel: ModelMetadata = { ...model, id: "small-20250101", name: "Test Small 2025" };
+
+class CapturingAgentRegistry extends InMemoryV2AgentRegistry {
+	readonly requests: V2AgentRequest[] = [];
+
+	override async spawn(request: V2AgentRequest) {
+		this.requests.push(structuredClone(request));
+		return super.spawn(request);
+	}
+}
 
 function sessionSnapshot(id: string): SessionSnapshotV2 {
 	return {
@@ -211,7 +223,7 @@ class TestService implements PiServerServiceV2 {
 	}
 
 	listModels(): Promise<ModelMetadata[]> {
-		return Promise.resolve([model]);
+		return Promise.resolve([model, datedModel]);
 	}
 
 	openSession(sessionId: string): Promise<PiSessionRuntimeV2> {
@@ -2120,6 +2132,35 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.request({ command: "agent/message", payload: { agentId: agent.id, message: "continue" } });
 		const interrupted = await client.request({ command: "agent/interrupt", payload: { agentId: agent.id } });
 		expect(interrupted).toMatchObject({ ok: true, result: { agent: { id: agent.id, state: "interrupted" } } });
+		await client.close();
+	});
+
+	test("normalizes catalog-backed alias and dated model references to inheritance", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-agent-model-alias-"));
+		directories.push(directory);
+		const agents = new CapturingAgentRegistry();
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			agents,
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		await client.request({
+			command: "agent/spawn",
+			sessionId: "session-1",
+			payload: {
+				taskName: "dated-alias",
+				taskMessage: "inspect model routing",
+				model: { provider: model.provider, id: datedModel.id },
+			},
+		});
+		expect(agents.requests[0]).toMatchObject({
+			model: { provider: model.provider, id: datedModel.id },
+			modelResolution: "inherited",
+		});
 		await client.close();
 	});
 

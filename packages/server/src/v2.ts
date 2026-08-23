@@ -63,6 +63,25 @@ function fileReferencePayload(file: Awaited<ReturnType<V2FileReferenceService["r
 	};
 }
 
+function modelIdFamily(id: string): string {
+	return id.replace(/-\d{8}$/, "");
+}
+
+function modelReferencesResolveToSameCatalogModel(
+	provider: string,
+	leftId: string,
+	rightId: string,
+	models: readonly ModelMetadata[],
+): boolean {
+	if (leftId === rightId) return true;
+	const providerModels = models.filter((model) => model.provider === provider);
+	const left = providerModels.find((model) => model.id === leftId);
+	const right = providerModels.find((model) => model.id === rightId);
+	if (!left || !right || modelIdFamily(left.id) !== modelIdFamily(right.id)) return false;
+	const alias = (id: string): boolean => id.endsWith("-latest") || !/-\d{8}$/.test(id);
+	return alias(left.id) || alias(right.id);
+}
+
 export interface PiSessionRuntimeV2 {
 	snapshot(): MaybePromise<SessionSnapshotV2>;
 	accept(operationId: string): Promise<OperationAccepted>;
@@ -967,11 +986,17 @@ export class PiServerV2 {
 		if (modelPayload.id !== undefined && typeof modelPayload.id !== "string")
 			throw new Error("agent/spawn model.id must be a string");
 		const inheritedModel = (await (await this.service.openSession(command.sessionId)).snapshot()).model;
+		const availableModels = await this.service.listModels();
 		const sameAsParent =
 			typeof modelPayload.provider === "string" &&
 			typeof modelPayload.id === "string" &&
 			modelPayload.provider === inheritedModel.provider &&
-			modelPayload.id === inheritedModel.id;
+			modelReferencesResolveToSameCatalogModel(
+				modelPayload.provider,
+				modelPayload.id,
+				inheritedModel.id,
+				availableModels,
+			);
 		const agent = await this.agents.spawn({
 			sessionId: command.sessionId,
 			parentPath: typeof payload.parentPath === "string" ? payload.parentPath : "/root",
