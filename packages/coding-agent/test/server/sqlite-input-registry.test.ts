@@ -32,6 +32,20 @@ describe("SqliteV2InputRegistry", () => {
 		await reopened.close();
 	});
 
+	test("persists automatic expiry across restart", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-inputs-expiry-"));
+		directories.push(directory);
+		const path = join(directory, "inputs.sqlite");
+		const first = new SqliteV2InputRegistry(createNodeSqliteFactory(), path);
+		const request = await first.create("session-1", questions, 10);
+		await expect(first.wait(request.id)).resolves.toMatchObject({ status: "expired", answers: {} });
+		await first.close();
+
+		const restored = new SqliteV2InputRegistry(createNodeSqliteFactory(), path);
+		expect(await restored.read(request.id)).toMatchObject({ status: "expired", answers: {} });
+		await restored.close();
+	});
+
 	test("rejects malformed persisted input rows", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-inputs-invalid-"));
 		directories.push(directory);

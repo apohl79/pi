@@ -51,7 +51,7 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 	async read(requestId: string): Promise<V2InputRequest> {
 		await this.#pendingWrite;
 		await this.#ensureLoaded();
-		return this.#memory.read(requestId);
+		return this.#persistExpired(await this.#memory.read(requestId));
 	}
 
 	respond(requestId: string, answers: Readonly<Record<string, string>>): Promise<V2InputRequest> {
@@ -71,7 +71,7 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 	async wait(requestId: string): Promise<V2InputRequest> {
 		await this.#pendingWrite;
 		await this.#ensureLoaded();
-		return this.#memory.wait(requestId);
+		return this.#persistExpired(await this.#memory.wait(requestId));
 	}
 
 	async pendingForSession(sessionId: string): Promise<string | undefined> {
@@ -136,7 +136,12 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 		const database = await this.#database();
 		const requests = database.prepare("SELECT request_id, value FROM v2_inputs ORDER BY rowid").all<InputRow>();
 		for (const row of requests) {
-			const request = parseJson(row.value);
+			const request = expireIfDue(parseJson(row.value));
+			if (request.status === "expired") {
+				database
+					.prepare("UPDATE v2_inputs SET value = ? WHERE request_id = ?")
+					.run(JSON.stringify(request), request.id);
+			}
 			this.#memory.restore(request);
 			this.#requests.set(request.id, request);
 			if (request.status === "responded") {
@@ -155,6 +160,19 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 				this.#consumed.add(request.id);
 			}
 		}
+	}
+
+	#persistExpired(request: V2InputRequest): Promise<V2InputRequest> {
+		if (request.status !== "expired") return Promise.resolve(request);
+		return this.#enqueue(async () => {
+			await this.#ensureLoaded();
+			const current = this.#requests.get(request.id);
+			if (current?.status !== "expired") {
+				await this.#save(request);
+				this.#requests.set(request.id, request);
+			}
+			return request;
+		});
 	}
 
 	#database(): Promise<SqliteDatabase> {
@@ -187,4 +205,10 @@ function parseJson(value: string): V2InputRequest {
 	} catch (error) {
 		throw new Error("Invalid SQLite input request", { cause: error });
 	}
+}
+
+function expireIfDue(request: V2InputRequest): V2InputRequest {
+	return request.status === "pending" && request.deadlineAt !== undefined && request.deadlineAt <= Date.now()
+		? { ...request, status: "expired", answers: {} }
+		: request;
 }
