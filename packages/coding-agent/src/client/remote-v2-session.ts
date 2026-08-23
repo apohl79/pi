@@ -92,6 +92,15 @@ export interface RemoteV2BlobRead {
 	readonly data: string;
 }
 
+export interface RemoteV2LocalFileReference {
+	readonly reference: string;
+	readonly path: string;
+	readonly kind: "file";
+	readonly size: number;
+	readonly mimeType: string;
+	readonly blobDigest: string;
+}
+
 const DEFAULT_MAX_LOCAL_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 export interface RemoteV2DiagnosticsStatus {
@@ -615,6 +624,21 @@ export class RemoteV2Session {
 		if (data.byteLength > DEFAULT_MAX_LOCAL_UPLOAD_BYTES)
 			throw new Error(`Local file exceeds maximum upload size of ${DEFAULT_MAX_LOCAL_UPLOAD_BYTES} bytes`);
 		return this.putBlob(data.toString("base64"), mimeType);
+	}
+
+	async uploadLocalFileReference(path: string, mimeType: string): Promise<RemoteV2LocalFileReference> {
+		const data = await readFile(path);
+		if (data.byteLength > DEFAULT_MAX_LOCAL_UPLOAD_BYTES)
+			throw new Error(`Local file exceeds maximum upload size of ${DEFAULT_MAX_LOCAL_UPLOAD_BYTES} bytes`);
+		const blob = await this.putBlob(data.toString("base64"), mimeType);
+		return {
+			reference: `@local:${path}`,
+			path,
+			kind: "file",
+			size: data.byteLength,
+			mimeType: blob.mimeType,
+			blobDigest: blob.digest,
+		};
 	}
 
 	async readBlob(digest: string): Promise<RemoteV2BlobRead> {

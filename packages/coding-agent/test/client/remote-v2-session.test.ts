@@ -658,6 +658,26 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("returns an explicit structured local file reference for an uploaded file", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-local-reference-"));
+		directories.push(directory);
+		const path = join(directory, "note.txt");
+		await writeFile(path, "hi");
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		expect(await session.uploadLocalFileReference(path, "text/plain")).toEqual({
+			reference: `@local:${path}`,
+			path,
+			kind: "file",
+			size: 2,
+			mimeType: "text/plain",
+			blobDigest: "sha256:blob",
+		});
+		await session.dispose();
+	});
+
 	test("inspects server diagnostics", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });
