@@ -707,6 +707,15 @@ describe("PiServer v2 operation acceptance", () => {
 				},
 			},
 		});
+		const malformed = await client.request({
+			command: "image/generate",
+			sessionId: "session-1",
+			payload: { prompt: "a tree", sourceDigest: 42 },
+		});
+		expect(malformed).toMatchObject({
+			ok: false,
+			error: { code: "request_failed", message: "image/generate sourceDigest must be a string" },
+		});
 	});
 
 	test("resolves blob-backed turn content before durable acceptance", async () => {
