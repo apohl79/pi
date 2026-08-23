@@ -45,6 +45,7 @@ boundary is introduced.
 | Codex plugin and marketplace compatibility | Stock-compatible extension | Manifest parsing, acquisition, activation, and sampling can use adapter boundaries without changing provider APIs. |
 | Goals, rollback, usage, and cost projections | Fork core | Durable budgets, append-only rollback, and authoritative accounting must be committed with session state. |
 | Remote TUI views and interactive adapter | Fork-dependent extension | Existing TUI components can render server snapshots, but remote leases and controls require a v2 client adapter. |
+| Server-default SDK session factory | Fork-dependent extension | The public SDK needs a daemon-owned lifecycle and V2 remote session while preserving the direct runtime factory as an explicit compatibility escape hatch; coverage is provided by `packages/coding-agent/test/client/server-sdk.test.ts`. |
 | Session naming, statusline, and migration tooling | Stock-compatible extension | These consume public model, harness, and TUI seams; no protocol change is required. |
 | Runtime build identity in diagnostics | Fork core | A diagnostic bundle must identify the fork build and pinned upstream base; stock runtime metadata has no fork-owned release identity boundary. |
 

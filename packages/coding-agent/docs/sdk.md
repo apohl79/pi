@@ -43,32 +43,30 @@ The SDK is included in the main package. No separate installation needed.
 
 ### Server-backed client
 
-For a detachable, server-owned session, import the remote client surface from
-`@earendil-works/pi-coding-agent/client`. The daemon owns turns, tools, and
-durable state; the client only holds the connection and session lease.
+For SDK integrations, use the server-owned factory by default. The daemon owns
+turns, tools, and durable state; the client only holds the connection and
+session lease.
 
 ```typescript
 import {
-  PiClientV2,
-  RemoteV2Session,
-  createUnixTransportFactory,
+  createServerAgentSession,
 } from "@earendil-works/pi-coding-agent/client";
 
-const client = new PiClientV2({
-  transportFactory: createUnixTransportFactory({ path: "/tmp/pi.sock" }),
+const handle = await createServerAgentSession({
+  agentDir: "/tmp/pi-agent",
+  cwd: process.cwd(),
 });
-await client.connect();
-const session = await RemoteV2Session.create(client, { cwd: process.cwd() }, { mode: "control" });
 
-const operationId = await session.submit("Inspect the repository");
-await session.waitForOperation(operationId);
-await session.dispose();
-client.dispose();
+const operationId = await handle.session.submit("Inspect the repository");
+await handle.session.waitForOperation(operationId);
+await handle.close();
 ```
 
-Use the CLI or `createConfiguredCodingAgentDaemonRuntime()` to own the local
-daemon lifecycle. Use `--no-server` or `createAgentSession()` for direct-mode
-embedding when server ownership is not required.
+Use the CLI or `createConfiguredCodingAgentDaemonRuntime()` when the daemon
+lifecycle is managed by the host. Use `createAgentSession()` only as the
+explicit direct-runtime compatibility escape hatch when server ownership is
+not required. The lower-level `PiClientV2` and `RemoteV2Session` exports remain
+available for callers that connect to an independently managed daemon.
 
 ## Core Concepts
 
