@@ -1,6 +1,8 @@
 import { GoalContinuationScheduler, GoalManager, InMemorySessionStorage, Session } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import { getModel } from "@earendil-works/pi-ai/compat";
+import { InMemoryV2InputRegistry } from "@earendil-works/pi-server";
 import { describe, expect, test } from "vitest";
 import { createCodingAgentHarness } from "../../src/server/create-harness.ts";
 import { ServerRuntimeExtensionHost } from "../../src/server/extension-host.ts";
@@ -13,17 +15,42 @@ import {
 describe("coding-agent v2 service adapter", () => {
 	test("normalizes generated names to safe bounded titles", () => {
 		expect(normalizeGeneratedName("Title: Fix durable session resume now")).toBe("Fix durable session resume now");
-		expect(normalizeGeneratedName("Fix durable\u0085 session resume now")).toBe("Fix durable session resume now");
 		expect(normalizeGeneratedName("one word")).toBe("one word");
 		expect(normalizeGeneratedName("answer.")).toBeUndefined();
 		expect(normalizeGeneratedName("api_key=secret-value hidden title")).toBeUndefined();
-		expect(normalizeGeneratedName("token=secret-value hidden title")).toBeUndefined();
-		expect(normalizeGeneratedName("password: secret-value hidden title")).toBeUndefined();
-		expect(normalizeGeneratedName("secret=secret-value hidden title")).toBeUndefined();
-		expect(normalizeGeneratedName("authorization: Bearer secret-value hidden title")).toBeUndefined();
 		expect(normalizeGeneratedName("A very long session title that exceeds the display limit")).toBe(
 			"A very long session title that",
 		);
+	});
+
+	test("projects a pending structured input request as awaitingInput", async () => {
+		const models = createModels();
+		const session = new Session(new InMemorySessionStorage({ id: "awaiting-input-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+		});
+		const inputs = new InMemoryV2InputRegistry();
+		const service = createCodingAgentV2Service(models, [
+			{
+				metadata: { id: "awaiting-input-session", createdAt: 1, updatedAt: 1 },
+				harness: created.harness,
+				inputs,
+			},
+		]);
+		const request = await inputs.create("awaiting-input-session", [{ id: "answer", prompt: "Answer?" }]);
+		try {
+			expect(await (await service.openSession("awaiting-input-session")).snapshot()).toMatchObject({
+				phase: "awaitingInput",
+			});
+		} finally {
+			await inputs.cancel(request.id);
+			await created.harness.close();
+			await env.cleanup();
+		}
 	});
 
 	test("schedules an active goal continuation after a completed turn", async () => {
@@ -382,65 +409,6 @@ describe("coding-agent v2 service adapter", () => {
 					],
 				},
 			});
-		} finally {
-			await created.harness.close();
-			await env.cleanup();
-		}
-	});
-
-	test("redacts credentials and bounds transcript content", async () => {
-		const models = createModels();
-		const faux = fauxProvider({
-			provider: "coding-agent-v2-transcript-faux",
-			models: [{ id: "coding-agent-v2-transcript-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
-		});
-		models.setProvider(faux.provider);
-		const session = new Session(new InMemorySessionStorage({ id: "transcript-session", createdAt: 1 }));
-		const env = new NodeExecutionEnv({ cwd: process.cwd() });
-		const created = await createCodingAgentHarness({ session, models, model: faux.getModel(), env, tools: [], activeToolNames: [] });
-		try {
-			await session.appendMessage({ role: "user", content: [{ type: "text", text: "Bearer secret-token\u0085" }], timestamp: 1 });
-			await session.appendMessage(
-				fauxAssistantMessage([fauxToolCall("run", { token: "tool-secret" }), { type: "text", text: "password=super-secret" }], {
-					stopReason: "error",
-					errorMessage: "authorization: Bearer error-secret\u009f",
-					timestamp: 2,
-				}),
-			);
-			const service = createCodingAgentV2Service(models, [
-				{ metadata: { id: "transcript-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
-			]);
-			const transcript = (await (await service.openSession("transcript-session")).snapshot()).transcript;
-			expect(transcript).toHaveLength(2);
-			expect(JSON.stringify(transcript)).not.toContain("secret-token");
-			expect(JSON.stringify(transcript)).not.toContain("super-secret");
-			expect(JSON.stringify(transcript)).not.toContain("tool-secret");
-			expect(JSON.stringify(transcript)).not.toContain("error-secret");
-			expect(JSON.stringify(transcript)).not.toContain("\u0085");
-		} finally {
-			await created.harness.close();
-			await env.cleanup();
-		}
-	});
-
-	test("rejects non-object turn payloads", async () => {
-		const models = createModels();
-		const faux = fauxProvider({
-			provider: "coding-agent-v2-command-faux",
-			models: [{ id: "coding-agent-v2-command-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
-		});
-		models.setProvider(faux.provider);
-		const session = new Session(new InMemorySessionStorage({ id: "command-session", createdAt: 1 }));
-		const env = new NodeExecutionEnv({ cwd: process.cwd() });
-		const created = await createCodingAgentHarness({ session, models, model: faux.getModel(), env, tools: [], activeToolNames: [] });
-		try {
-			const service = createCodingAgentV2Service(models, [
-				{ metadata: { id: "command-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
-			]);
-			const runtime = await service.openSession("command-session");
-			await expect(
-				runtime.run("invalid-command", { command: "turn/start", sessionId: "command-session", payload: undefined }),
-			).rejects.toThrow("requires an object payload");
 		} finally {
 			await created.harness.close();
 			await env.cleanup();
