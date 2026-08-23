@@ -4,6 +4,7 @@
 		"outDir": "./dist",
 		"paths": {
 			"@earendil-works/pi-diagnostics": ["../diagnostics/dist/index.d.ts"],
+			"@earendil-works/pi-file-references": ["../file-references/dist/index.d.ts"],
 			"@earendil-works/pi-web-tools": ["../web-tools/dist/index.d.ts"]
 		},
 		"rootDir": "./src"
