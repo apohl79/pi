@@ -24,6 +24,20 @@ export {
 	type SessionStats,
 } from "./core/agent-session.ts";
 export { readStoredCredential } from "./core/auth-storage.ts";
+export {
+	type CodexMarketplaceManifest,
+	type CodexMarketplaceParseResult,
+	type CodexMarketplacePlugin,
+	type CodexMarketplaceSource,
+	type CodexPluginDiagnostic,
+	type CodexPluginJson,
+	type CodexPluginManifest,
+	type CodexPluginParseResult,
+	type CodexPluginResourceResolution,
+	parseCodexMarketplaceManifest,
+	parseCodexPluginManifest,
+	resolveCodexPluginResource,
+} from "./core/codex-plugin.ts";
 // Compaction
 export {
 	type BranchPreparation,
@@ -399,6 +413,21 @@ export {
 	Theme,
 	type ThemeColor,
 } from "./modes/interactive/theme/theme.ts";
+export {
+	type ServerRuntimeExtension,
+	type ServerRuntimeExtensionContext,
+	ServerRuntimeExtensionHost,
+	type ServerRuntimeExtensionHostOptions,
+	type ServerRuntimeExtensionState,
+	type ServerRuntimeModel,
+	type ServerRuntimeOperation,
+} from "./server/extension-host.ts";
+export {
+	type CodingAgentV2Runtime,
+	type CodingAgentV2Service,
+	type CodingAgentV2SessionDefinition,
+	createCodingAgentV2Service,
+} from "./server/v2-service.ts";
 // Clipboard utilities
 export { copyToClipboard } from "./utils/clipboard.ts";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
