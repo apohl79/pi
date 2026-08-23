@@ -43,6 +43,7 @@ import type {
 	MessageRenderer,
 	ProviderConfig,
 	RegisteredCommand,
+	SamplingInputRegistration,
 	ToolDefinition,
 } from "./types.ts";
 
@@ -273,6 +274,15 @@ function createExtensionAPI(
 			runtime.refreshTools();
 		},
 
+		registerSamplingInput(registration: SamplingInputRegistration): void {
+			runtime.assertActive();
+			if (registration.id.trim().length === 0) throw new Error("Sampling input id must not be empty");
+			extension.samplingInputs ??= new Map();
+			if (extension.samplingInputs.has(registration.id))
+				throw new Error(`Sampling input ${registration.id} is already registered`);
+			extension.samplingInputs.set(registration.id, registration);
+		},
+
 		registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo">): void {
 			runtime.assertActive();
 			extension.commands.set(name, {
@@ -486,6 +496,7 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
 		resolvedPath,
 		sourceInfo: createSyntheticSourceInfo(extensionPath, { source, baseDir }),
 		handlers: new Map(),
+		samplingInputs: new Map(),
 		tools: new Map(),
 		messageRenderers: new Map(),
 		entryRenderers: new Map(),
