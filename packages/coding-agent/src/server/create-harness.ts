@@ -64,6 +64,22 @@ export interface CodingAgentImageView {
 	reference: string;
 }
 
+export interface CodingAgentImageGenerationRequest {
+	prompt: string;
+	sourceDigest?: string;
+}
+
+export interface CodingAgentImageGenerationResult {
+	digest: string;
+	mimeType: string;
+	size: number;
+	provider: string;
+	model: string;
+	dimensions?: Readonly<{ width: number; height: number }>;
+	promptHash: string;
+	costUsd?: number;
+}
+
 export interface CodingAgentAgentTools {
 	spawn(request: {
 		taskName: string;
@@ -116,6 +132,10 @@ const webSchema = Type.Object({
 });
 
 const viewImageSchema = Type.Object({ reference: Type.String({ minLength: 1 }) });
+const generateImageSchema = Type.Object({
+	prompt: Type.String({ minLength: 1 }),
+	sourceDigest: Type.Optional(Type.String({ minLength: 1 })),
+});
 const spawnAgentSchema = Type.Object({
 	taskName: Type.String({ minLength: 1 }),
 	taskMessage: Type.String({ minLength: 1 }),
@@ -178,6 +198,7 @@ export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOption
 	) => Promise<CodingAgentInputResponse>;
 	web?: (request: CodingAgentWebRequest) => Promise<readonly CodingAgentWebResult[]>;
 	viewImage?: (reference: string) => Promise<CodingAgentImageView>;
+	generateImage?: (request: CodingAgentImageGenerationRequest) => Promise<CodingAgentImageGenerationResult>;
 	agents?: CodingAgentAgentTools;
 	plans?: CodingAgentPlanTools;
 }
@@ -326,6 +347,19 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 				parameters: viewImageSchema,
 				execute: async (_toolCallId, input) => {
 					const image = await viewImage((input as Static<typeof viewImageSchema>).reference);
+					return { content: [{ type: "text", text: JSON.stringify(image) }], details: { image } };
+				},
+			});
+		}
+		if (options.generateImage) {
+			const generateImage = options.generateImage;
+			tools.push({
+				name: "generate_image",
+				label: "generate_image",
+				description: "Generate or edit an image through the configured server image service.",
+				parameters: generateImageSchema,
+				execute: async (_toolCallId, input) => {
+					const image = await generateImage(input as Static<typeof generateImageSchema>);
 					return { content: [{ type: "text", text: JSON.stringify(image) }], details: { image } };
 				},
 			});
