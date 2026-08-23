@@ -99,4 +99,37 @@ export class HarnessEventBus implements Events {
 			},
 		};
 	}
+
+	/** Register before awaiting a snapshot so events emitted during capture are buffered. */
+	async watchAsync<TSnapshot>(captureSnapshot: () => Promise<TSnapshot>): Promise<WatchHandle<TSnapshot>> {
+		let listener: HarnessEventListener | undefined;
+		let buffered: HarnessEvent[] = [];
+		const receive = (event: HarnessEvent): void => {
+			if (listener) void listener(event);
+			else buffered.push(event);
+		};
+		this.watchListeners.add(receive);
+		try {
+			const snapshot = await captureSnapshot();
+			return {
+				snapshot,
+				start: (nextListener) => {
+					while (buffered.length > 0) {
+						const pending = buffered;
+						buffered = [];
+						for (const event of pending) void nextListener(event);
+					}
+					listener = nextListener;
+				},
+				unsubscribe: () => {
+					this.watchListeners.delete(receive);
+					buffered = [];
+				},
+			};
+		} catch (error) {
+			this.watchListeners.delete(receive);
+			buffered = [];
+			throw error;
+		}
+	}
 }
