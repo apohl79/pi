@@ -134,6 +134,35 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("applies server plan updates without requiring a refresh", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 2,
+			revision: 2,
+			event: "plan_updated",
+			payload: { plan: { version: 1, items: [{ step: "Inspect", status: "in_progress" }] } },
+		});
+		expect(session.snapshot?.plan).toEqual({
+			version: 1,
+			items: [{ step: "Inspect", status: "in_progress" }],
+		});
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 3,
+			revision: 3,
+			event: "plan_updated",
+			payload: { plan: null },
+		});
+		expect(session.snapshot?.plan).toBeUndefined();
+		await session.dispose();
+	});
+
 	test("rejects mutating commands after detach and reports listener failures", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });

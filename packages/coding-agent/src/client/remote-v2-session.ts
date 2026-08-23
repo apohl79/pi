@@ -8,6 +8,7 @@ import type {
 	CommandV2,
 	JsonValue,
 	ModelRef,
+	PlanSnapshot,
 	EventEnvelopeV2 as ProtocolEvent,
 	SessionSnapshotV2 as ProtocolSnapshot,
 	ThinkingLevel as ProtocolThinkingLevel,
@@ -279,6 +280,14 @@ export class RemoteV2Session {
 			const snapshot = asRecord(event.payload)?.snapshot;
 			if (isSnapshot(snapshot)) this.#snapshot = structuredClone(snapshot);
 			this.#lifecycle = { status: "ready" };
+		} else if (event.event === "plan_updated" && this.#snapshot) {
+			const plan = asRecord(event.payload)?.plan;
+			if (plan === null) {
+				const { plan: _plan, ...snapshot } = this.#snapshot;
+				this.#snapshot = snapshot;
+			} else if (isPlanSnapshot(plan)) {
+				this.#snapshot = { ...this.#snapshot, plan: structuredClone(plan) };
+			}
 		}
 		this.#emit();
 	}
@@ -319,5 +328,21 @@ function isSnapshot(value: unknown): value is ProtocolSnapshot {
 		asRecord(value)?.id !== undefined &&
 		asRecord(value)?.revision !== undefined &&
 		asRecord(value)?.phase !== undefined
+	);
+}
+
+function isPlanSnapshot(value: unknown): value is PlanSnapshot {
+	const record = asRecord(value);
+	return (
+		record?.version !== undefined &&
+		typeof record.version === "number" &&
+		Array.isArray(record.items) &&
+		record.items.every((item) => {
+			const entry = asRecord(item);
+			return (
+				typeof entry?.step === "string" &&
+				(entry.status === "pending" || entry.status === "in_progress" || entry.status === "completed")
+			);
+		})
 	);
 }
