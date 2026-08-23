@@ -11,6 +11,7 @@ import type { V2PluginRegistry } from "./plugins.ts";
 import type { V2ProcessRegistry } from "./processes.ts";
 import { createUnixServerV2 } from "./transports/unix/preset.ts";
 import type { UnixServerOptions } from "./transports/unix/types.ts";
+import type { V2UsageLedger } from "./usage-ledger.ts";
 import type { PiServerServiceV2 } from "./v2.ts";
 import type { V2WebService } from "./web.ts";
 
@@ -47,6 +48,7 @@ export interface ServerDaemonOptions {
 	readonly diagnostics?: ForensicRecorder;
 	readonly diagnosticContent?: DiagnosticContentStore;
 	readonly runtimeManifest?: DiagnosticRuntimeManifest;
+	readonly usage?: V2UsageLedger;
 	readonly createServer?: (service: PiServerServiceV2, options: UnixServerOptions) => ServerDaemonServer;
 }
 
@@ -128,6 +130,7 @@ export class ServerDaemon {
 					? {}
 					: { diagnosticContent: this.options.diagnosticContent }),
 				...(this.options.runtimeManifest === undefined ? {} : { runtimeManifest: this.options.runtimeManifest }),
+				...(this.options.usage === undefined ? {} : { usage: this.options.usage }),
 			});
 		} catch (error) {
 			this.state = "stopped";
