@@ -1147,8 +1147,14 @@ describe("coding-agent daemon runtime", () => {
 		try {
 			await runtime.daemon.start();
 			await runtime.cli.runDiagnostics({ command: "diagnostics", action: "doctor" });
-			const result = output.at(-1) as { checks: Array<{ name: string; ok: boolean }> };
+			const result = output.at(-1) as {
+				checks: Array<{ name: string; ok: boolean; details?: Record<string, unknown> }>;
+			};
 			expect(result.checks.find((check) => check.name === "blobs")).toMatchObject({ ok: false });
+			expect(result.checks.find((check) => check.name === "sqlite")).toMatchObject({
+				ok: true,
+				details: { schemaVersion: expect.any(String), quickCheck: ["ok"], foreignKeyErrors: 0 },
+			});
 			await runtime.cli.runDiagnostics({ command: "diagnostics", action: "doctor", repairSafe: true });
 			expect(output.at(-1)).toMatchObject({
 				repairSafe: true,

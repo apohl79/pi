@@ -458,6 +458,24 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 						details: { error: error instanceof Error ? error.name : "unknown" },
 					});
 				}
+				try {
+					const inspection = await repository.inspect();
+					checks.push({
+						name: "sqlite",
+						ok: inspection.healthy,
+						details: {
+							schemaVersion: inspection.schemaVersion,
+							quickCheck: inspection.quickCheck,
+							foreignKeyErrors: inspection.foreignKeyErrors.length,
+						},
+					});
+				} catch (error) {
+					checks.push({
+						name: "sqlite",
+						ok: false,
+						details: { error: error instanceof Error ? error.name : "unknown" },
+					});
+				}
 				return checks;
 			});
 		const runtime = await createCodingAgentDaemonRuntime({
