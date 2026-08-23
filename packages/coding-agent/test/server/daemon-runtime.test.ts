@@ -950,7 +950,10 @@ describe("coding-agent daemon runtime", () => {
 				events: readonly unknown[];
 				capsules?: readonly unknown[];
 				runtimeManifest?: { runtime?: string; platform?: string; arch?: string };
-				clientDiagnostics?: { manifest?: { clientInstanceId?: string } };
+				clientDiagnostics?: {
+					manifest?: { clientInstanceId?: string };
+					records?: readonly { event?: string }[];
+				};
 			};
 			expect(bundle.events.length).toBeGreaterThan(0);
 			expect(bundle.capsules?.length).toBeGreaterThan(0);
@@ -960,6 +963,9 @@ describe("coding-agent daemon runtime", () => {
 				arch: process.arch,
 			});
 			expect(bundle.clientDiagnostics).toMatchObject({ manifest: { clientInstanceId: "production-client-1" } });
+			expect(bundle.clientDiagnostics?.records).toEqual(
+				expect.arrayContaining([expect.objectContaining({ event: "client.connected" })]),
+			);
 			expect(await readFile(join(directory, "diagnostic-log.jsonl"), "utf8")).toContain("daemon_starting");
 			await runtime.cli.runDiagnostics({ command: "diagnostics", action: "verify", bundle: bundlePath });
 			expect(output.at(-1)).toEqual({ valid: true });
