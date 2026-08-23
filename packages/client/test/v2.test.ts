@@ -297,4 +297,20 @@ describe("PiClientV2", () => {
 		await second;
 		client.dispose();
 	});
+
+	test("ignores stale events from the current session without regressing the cursor", async () => {
+		const pair = transportPair();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		const events: number[] = [];
+		client.onEvent((event) => events.push(event.seq));
+		const connection = client.connect();
+		await Promise.resolve();
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
+		await connection;
+		pair.deliver({ type: "event", sessionId: "session-1", seq: 4, revision: 1, event: "usage_updated", payload: {} });
+		pair.deliver({ type: "event", sessionId: "session-1", seq: 3, revision: 1, event: "usage_updated", payload: {} });
+		expect(events).toEqual([4]);
+		expect(client.lastEventCursor).toEqual({ sessionId: "session-1", eventSeq: 4 });
+		client.dispose();
+	});
 });

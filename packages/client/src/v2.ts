@@ -285,6 +285,11 @@ export class PiClientV2 {
 			return;
 		}
 		if (message.type === "event") {
+			if (
+				this.lastEventCursorValue?.sessionId === message.sessionId &&
+				message.seq <= this.lastEventCursorValue.eventSeq
+			)
+				return;
 			this.lastEventCursorValue = { sessionId: message.sessionId, eventSeq: message.seq };
 			for (const listener of this.listeners) {
 				try {
