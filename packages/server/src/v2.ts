@@ -1134,9 +1134,11 @@ export class PiServerV2 {
 		this.requireControl(state, command.sessionId);
 		const payload = objectPayload(command);
 		if (typeof payload.prompt !== "string") throw new Error("image/generate requires prompt");
+		if (payload.sourceDigest !== undefined && typeof payload.sourceDigest !== "string")
+			throw new Error("image/generate sourceDigest must be a string");
 		const image = await this.images.generate(command.sessionId, {
 			prompt: payload.prompt,
-			...(typeof payload.sourceDigest === "string" ? { sourceDigest: payload.sourceDigest } : {}),
+			...(payload.sourceDigest === undefined ? {} : { sourceDigest: payload.sourceDigest }),
 			sourceOperationId: id,
 		});
 		await this.usage.record({
