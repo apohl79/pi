@@ -200,6 +200,40 @@ describe("coding-agent Harness construction", () => {
 		expect(prompt).not.toContain("- edit: Edit files");
 	});
 
+	test("exposes and executes Pi's filesystem search tools in the server-owned defaults", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-harness-filesystem-tools-"));
+		await writeFile(join(directory, "fixture.txt"), "server-owned tools\n");
+		const session = new Session(new InMemorySessionStorage({ id: "filesystem-tools-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: directory });
+		const created = await createCodingAgentHarness({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+		});
+		try {
+			const tools = await created.harness.getTools();
+			expect(tools.map((tool) => tool.name)).toEqual([
+				"apply_patch",
+				"read",
+				"bash",
+				"edit",
+				"write",
+				"grep",
+				"find",
+				"ls",
+			]);
+			const ls = tools.find((tool) => tool.name === "ls");
+			if (!ls) throw new Error("Expected ls tool");
+			const result = await ls.execute("ls-call", {});
+			expect(result.content).toEqual([{ type: "text", text: "fixture.txt" }]);
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("replaceDefault preserves tool, project-context, and role layers", () => {
 		const prompt = buildCodingAgentHarnessSystemPrompt({
 			cwd: "/workspace",
@@ -242,13 +276,25 @@ describe("coding-agent Harness construction", () => {
 		});
 		try {
 			expect(created.suspended).toEqual([]);
-			expect(await created.harness.getActiveTools()).toEqual(["apply_patch", "read", "bash", "edit", "write"]);
+			expect(await created.harness.getActiveTools()).toEqual([
+				"apply_patch",
+				"read",
+				"bash",
+				"edit",
+				"write",
+				"grep",
+				"find",
+				"ls",
+			]);
 			expect((await created.harness.getTools()).map((tool) => tool.name)).toEqual([
 				"apply_patch",
 				"read",
 				"bash",
 				"edit",
 				"write",
+				"grep",
+				"find",
+				"ls",
 			]);
 			expect(await created.harness.getStreamOptions()).toEqual({ maxTokens: 123 });
 			expect(await created.harness.getRetryPolicy()).toEqual({ enabled: true, maxRetries: 2, baseDelayMs: 10 });

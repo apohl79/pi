@@ -2,6 +2,7 @@ import {
 	AgentHarness,
 	type AgentHarnessOptions,
 	type AgentHarnessTool,
+	type AgentTool,
 	createApplyPatchTool,
 	createBashTool,
 	createEditTool,
@@ -21,6 +22,9 @@ import { getExperimentalToolSampling } from "../core/experimental.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "../core/system-prompt.ts";
 import { bashToolSystemPromptContribution } from "../core/tools/bash.ts";
 import { editToolSystemPromptContribution } from "../core/tools/edit.ts";
+import { createFindTool, findToolSystemPromptContribution } from "../core/tools/find.ts";
+import { createGrepTool, grepToolSystemPromptContribution } from "../core/tools/grep.ts";
+import { createLsTool, lsToolSystemPromptContribution } from "../core/tools/ls.ts";
 import { readToolSystemPromptContribution } from "../core/tools/read.ts";
 import { writeToolSystemPromptContribution } from "../core/tools/write.ts";
 import type { ModelInstructionResolver, ResolvedModelInstructionProfile } from "./model-instructions.ts";
@@ -209,6 +213,19 @@ function createCodingAgentHarnessTool<TParameters extends TSchema, TDetails>(
 	};
 }
 
+function createCoreToolHarnessTool<TParameters extends TSchema, TDetails>(
+	tool: AgentTool<TParameters, TDetails>,
+	prompt: Required<Pick<CodingAgentHarnessTool, "promptSnippet" | "promptGuidelines">>,
+): CodingAgentHarnessTool {
+	return {
+		...tool,
+		...prompt,
+		constrainedSampling: getExperimentalToolSampling(),
+		execute: (toolCallId, params, signal, onUpdate) =>
+			tool.execute(toolCallId, params as Static<TParameters>, signal, onUpdate),
+	};
+}
+
 export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOptions, "toolContext" | "tools"> {
 	env: ExecutionEnv;
 	goals?: GoalManager;
@@ -350,6 +367,18 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 			createCodingAgentHarnessTool(createWriteTool<ExecutionToolContext>(), toolContext, {
 				promptSnippet: writeToolSystemPromptContribution.snippet,
 				promptGuidelines: writeToolSystemPromptContribution.guidelines,
+			}),
+			createCoreToolHarnessTool(createGrepTool(env.cwd), {
+				promptSnippet: grepToolSystemPromptContribution.snippet,
+				promptGuidelines: grepToolSystemPromptContribution.guidelines,
+			}),
+			createCoreToolHarnessTool(createFindTool(env.cwd), {
+				promptSnippet: findToolSystemPromptContribution.snippet,
+				promptGuidelines: findToolSystemPromptContribution.guidelines,
+			}),
+			createCoreToolHarnessTool(createLsTool(env.cwd), {
+				promptSnippet: lsToolSystemPromptContribution.snippet,
+				promptGuidelines: lsToolSystemPromptContribution.guidelines,
 			}),
 		];
 		if (options.processes) {
