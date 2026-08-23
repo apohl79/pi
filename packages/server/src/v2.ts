@@ -355,9 +355,9 @@ export class PiServerV2 {
 				sessions: await this.service.listSessions(),
 				models: await this.service.listModels(),
 			};
-			await this.send(state, { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: state.id, snapshot });
 			state.ready = true;
 			clearTimeout(state.handshakeTimeout);
+			await this.send(state, { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: state.id, snapshot });
 			if (message.lastEvent) {
 				const events = this.eventHistory.get(message.lastEvent.sessionId) ?? [];
 				await Promise.all(
