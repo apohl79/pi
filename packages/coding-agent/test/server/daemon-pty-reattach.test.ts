@@ -19,7 +19,11 @@ function resultOf<T>(value: unknown): T {
 	return (value as { result: T }).result;
 }
 
-async function createPtyRuntime(directory: string, socketPath: string) {
+async function createPtyRuntime(
+	directory: string,
+	socketPath: string,
+	processScript = "process.stdin.once('data', d => { process.stdout.write('pty:' + d); process.exit(0); })",
+) {
 	const models = createModels();
 	const faux = fauxProvider({
 		provider: "coding-agent-daemon-pty-faux",
@@ -29,11 +33,11 @@ async function createPtyRuntime(directory: string, socketPath: string) {
 	const processes = new NodeV2ProcessRegistry({
 		ptyLauncher: {
 			spawn: (request) =>
-				spawn(
-					process.execPath,
-					["-e", "process.stdin.once('data', d => { process.stdout.write('pty:' + d); process.exit(0); })"],
-					{ cwd: request.cwd, env: { ...process.env, ...request.env }, stdio: ["pipe", "pipe", "pipe"] },
-				),
+				spawn(process.execPath, ["-e", processScript], {
+					cwd: request.cwd,
+					env: { ...process.env, ...request.env },
+					stdio: ["pipe", "pipe", "pipe"],
+				}),
 		},
 	});
 	return createConfiguredCodingAgentDaemonRuntime({
@@ -102,6 +106,45 @@ describe("coding-agent daemon PTY detach and reattach", () => {
 			}
 		} finally {
 			firstClient.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("closes PTY input through the production daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-pty-eof-"));
+		directories.push(directory);
+		const socketPath = join(directory, "server.sock");
+		const runtime = await createPtyRuntime(
+			directory,
+			socketPath,
+			"process.stdin.on('data', d => process.stdout.write('pty:' + d)); process.stdin.on('end', () => { process.stdout.write(':eof'); process.exit(0); })",
+		);
+		const client = new PiClientV2({ transportFactory: createUnixTransportFactory({ path: socketPath }) });
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const sessionId = resultOf<{ session: { id: string } }>(
+				await client.request({ command: "session/create", payload: { cwd: directory } }),
+			).session.id;
+			await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			const processId = await startPty(client, sessionId);
+			await client.request({
+				command: "process/write",
+				sessionId,
+				payload: { processId, input: "hello", eof: true },
+			});
+			await expect(
+				client.request({ command: "process/wait", sessionId, payload: { processId } }),
+			).resolves.toMatchObject({
+				result: { process: { state: "exited" } },
+			});
+			expect(
+				await client.request({ command: "process/read", sessionId, payload: { processId, cursor: 0 } }),
+			).toMatchObject({
+				result: { output: { output: "pty:hello:eof", cursor: 13, truncated: false } },
+			});
+		} finally {
+			client.dispose();
 			await runtime.close();
 		}
 	});
