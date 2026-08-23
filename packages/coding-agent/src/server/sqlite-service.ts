@@ -22,6 +22,7 @@ import type {
 import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import {
 	type CodingAgentAgentTools,
+	type CodingAgentLifecycleHook,
 	type CreateCodingAgentHarnessOptions,
 	createCodingAgentHarness,
 } from "./create-harness.ts";
@@ -114,6 +115,13 @@ export async function createCodingAgentV2SqliteService(
 		const activePlugins = options.pluginRegistry
 			? (await options.pluginRegistry.listPlugins(true)).filter((plugin) => plugin.enabled)
 			: [];
+		const lifecycleHooks: CodingAgentLifecycleHook[] = activePlugins.flatMap((plugin) =>
+			(plugin.hookDescriptors ?? []).flatMap((hook) =>
+				hook.enabled && hook.command && (hook.event === "turn/accepted" || hook.event === "turn/completed")
+					? [{ id: hook.id, event: hook.event, command: hook.command }]
+					: [],
+			),
+		);
 		const threadMessages = await createPluginSamplingInput(
 			env,
 			activePlugins.map((plugin, activationOrder) => ({
@@ -204,6 +212,7 @@ export async function createCodingAgentV2SqliteService(
 						viewImage: async (reference) => imageService.view(metadata.id, reference),
 						generateImage: async (request) => imageService.generate(metadata.id, request),
 					}),
+			...(lifecycleHooks.length === 0 ? {} : { lifecycleHooks }),
 			...(planRegistry === undefined
 				? {}
 				: {

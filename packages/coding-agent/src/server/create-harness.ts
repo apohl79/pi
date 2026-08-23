@@ -80,6 +80,12 @@ export interface CodingAgentImageGenerationResult {
 	costUsd?: number;
 }
 
+export interface CodingAgentLifecycleHook {
+	id: string;
+	event: "turn/accepted" | "turn/completed";
+	command: string;
+}
+
 export interface CodingAgentAgentTools {
 	spawn(request: {
 		taskName: string;
@@ -199,6 +205,7 @@ export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOption
 	web?: (request: CodingAgentWebRequest) => Promise<readonly CodingAgentWebResult[]>;
 	viewImage?: (reference: string) => Promise<CodingAgentImageView>;
 	generateImage?: (request: CodingAgentImageGenerationRequest) => Promise<CodingAgentImageGenerationResult>;
+	lifecycleHooks?: readonly CodingAgentLifecycleHook[];
 	agents?: CodingAgentAgentTools;
 	plans?: CodingAgentPlanTools;
 }
@@ -498,5 +505,15 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 		systemPrompt,
 	});
 	harness = created.harness;
+	for (const hook of options.lifecycleHooks ?? []) {
+		const lifecycleName = hook.event === "turn/accepted" ? "before_run" : "before_run_end";
+		harness.hooks.on(
+			lifecycleName,
+			async () => {
+				await env.exec(hook.command, { timeout: 5 });
+			},
+			{ id: hook.id },
+		);
+	}
 	return created;
 }
