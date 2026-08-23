@@ -370,7 +370,12 @@ describe("coding-agent v2 service adapter", () => {
 			provider: "coding-agent-v2-naming-fallback-faux",
 			models: [{ id: "session-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
 		});
+		const foreign = fauxProvider({
+			provider: "coding-agent-v2-naming-foreign-faux",
+			models: [{ id: "foreign-fast", reasoning: false, contextWindow: 8_000, maxTokens: 500 }],
+		});
 		models.setProvider(faux.provider);
+		models.setProvider(foreign.provider);
 		faux.setResponses([fauxAssistantMessage("turn response"), fauxAssistantMessage("Recover daemon state")]);
 		const session = new Session(new InMemorySessionStorage({ id: "naming-fallback-session", createdAt: 1 }));
 		const env = new NodeExecutionEnv({ cwd: process.cwd() });
@@ -383,9 +388,11 @@ describe("coding-agent v2 service adapter", () => {
 			activeToolNames: [],
 		});
 		try {
-			const service = createCodingAgentV2Service(models, [
-				{ metadata: { id: "naming-fallback-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
-			]);
+			const service = createCodingAgentV2Service(
+				models,
+				[{ metadata: { id: "naming-fallback-session", createdAt: 1, updatedAt: 1 }, harness: created.harness }],
+				{ fastModel: foreign.getModel() },
+			);
 			const runtime = await service.openSession("naming-fallback-session");
 			await runtime.run("fallback-name", {
 				command: "turn/start",
