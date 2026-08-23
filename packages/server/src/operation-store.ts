@@ -31,6 +31,16 @@ type StoreRecord =
 	| { readonly kind: "operation"; readonly value: OperationRecordV2 }
 	| { readonly kind: "event"; readonly value: EventEnvelopeV2 };
 
+function parseStoreRecord(value: unknown): StoreRecord {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		throw new Error("Invalid operation store record");
+	const record = value as { kind?: unknown; value?: unknown };
+	if (record.kind !== "operation" && record.kind !== "event") throw new Error("Invalid operation store record kind");
+	if (typeof record.value !== "object" || record.value === null || Array.isArray(record.value))
+		throw new Error("Invalid operation store record value");
+	return record as StoreRecord;
+}
+
 export class InMemoryV2OperationStore implements V2OperationStore {
 	private readonly operations = new Map<string, OperationRecordV2>();
 	private readonly events: EventEnvelopeV2[] = [];
@@ -74,7 +84,7 @@ export class JsonlV2OperationStore implements V2OperationStore {
 		for (const [index, line] of lines.entries()) {
 			let record: StoreRecord;
 			try {
-				record = JSON.parse(line) as StoreRecord;
+				record = parseStoreRecord(JSON.parse(line));
 			} catch (error) {
 				const isTornTail = index === lines.length - 1 && !contents.endsWith("\n");
 				if (isTornTail) break;
