@@ -1493,7 +1493,9 @@ export class PiServerV2 {
 			try {
 				repairs = await this.repairSafe();
 			} catch (error) {
-				repairs = [{ name: "repair", ok: false, details: { error: error instanceof Error ? error.name : "unknown" } }];
+				repairs = [
+					{ name: "repair", ok: false, details: { error: error instanceof Error ? error.name : "unknown" } },
+				];
 			}
 		}
 		await this.sendResponse(state, id, {

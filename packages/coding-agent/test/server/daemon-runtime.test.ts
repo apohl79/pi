@@ -1149,6 +1149,11 @@ describe("coding-agent daemon runtime", () => {
 			await runtime.cli.runDiagnostics({ command: "diagnostics", action: "doctor" });
 			const result = output.at(-1) as { checks: Array<{ name: string; ok: boolean }> };
 			expect(result.checks.find((check) => check.name === "blobs")).toMatchObject({ ok: false });
+			await runtime.cli.runDiagnostics({ command: "diagnostics", action: "doctor", repairSafe: true });
+			expect(output.at(-1)).toMatchObject({
+				repairSafe: true,
+				repairs: [{ name: "session-branch-cache", ok: true, details: { sessions: 0 } }],
+			});
 		} finally {
 			await runtime.close();
 		}
