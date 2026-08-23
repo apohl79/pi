@@ -870,7 +870,15 @@ export class AgentHarness implements AgentLane {
 		await this.setOperationPhase(runId, "executing");
 		try {
 			const entries = await this.session.findEntriesOnBranch({ order: "oldestFirst" });
-			const persisted = buildSessionContext(entries);
+			const acceptedMessageIds =
+				initialMessagesPersisted && started.intent.kind === "run"
+					? new Set(started.intent.initialMessages.map((entry) => entry.id))
+					: undefined;
+			const persisted = buildSessionContext(
+				acceptedMessageIds === undefined
+					? entries
+					: entries.filter((entry) => entry.type !== "message" || !acceptedMessageIds.has(entry.id)),
+			);
 			const activeTools = this.tools.filter((tool) => this.activeToolNames.includes(tool.name));
 			let assistantAttempt = 0;
 			let requestOptionsPatch: Partial<SimpleStreamOptions> = {};
