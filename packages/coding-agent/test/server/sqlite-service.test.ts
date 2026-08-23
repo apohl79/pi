@@ -55,6 +55,7 @@ describe("coding-agent SQLite v2 service", () => {
 			expect((await created.runtime.snapshot()).compactionPolicy).toMatchObject({
 				reserveTokens: 123,
 				keepRecentTokens: 789,
+				source: "mixed",
 			});
 			await created.runtime.run("model-switch", {
 				command: "session/model/set",
@@ -65,6 +66,7 @@ describe("coding-agent SQLite v2 service", () => {
 				contextWindow: 16_000,
 				reserveTokens: 456,
 				keepRecentTokens: 789,
+				source: "mixed",
 			});
 			expect(await service.listSessions()).toMatchObject([{ id: "sqlite-session", sessionName: "SQLite session" }]);
 			await service.openSession("sqlite-session");

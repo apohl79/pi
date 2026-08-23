@@ -319,6 +319,7 @@ export type Resources = AgentHarnessResources<Skill, PromptTemplate>;
 export type StreamOptions = SimpleStreamOptions;
 export type StreamOptionsPatch = Partial<SimpleStreamOptions>;
 export type EntryProjector = (entry: Entry) => AgentMessage[] | Promise<AgentMessage[]>;
+export type CompactionPolicySource = "global" | "model" | "mixed";
 
 export interface AgentHarnessOptions {
 	session: Session;
@@ -380,6 +381,7 @@ export interface AgentLane {
 	setModel(model: Model<Api>): Promise<void>;
 	getThinkingLevel(): Promise<ThinkingLevel>;
 	setThinkingLevel(level: ThinkingLevel): Promise<void>;
+	getCompactionPolicySource(): Promise<CompactionPolicySource>;
 	getActiveTools(): Promise<string[]>;
 	setActiveTools(names: string[]): Promise<void>;
 	readonly session: SessionTree;
@@ -1345,6 +1347,14 @@ export class AgentHarness implements AgentLane {
 	}
 	async getCompactionSettings(): Promise<CompactionSettings> {
 		return resolveCompactionSettings(this.compactionSettings, this.model.provider, this.model.id);
+	}
+	async getCompactionPolicySource(): Promise<CompactionPolicySource> {
+		const override = this.compactionSettings.modelOverrides?.[`${this.model.provider}/${this.model.id}`];
+		if (override === undefined) return "global";
+		const overriddenFields = [override.enabled, override.reserveTokens, override.keepRecentTokens].filter(
+			(value) => value !== undefined,
+		).length;
+		return overriddenFields === 3 ? "model" : "mixed";
 	}
 	async setCompactionSettings(settings: CompactionSettings): Promise<void> {
 		this.compactionSettings = { ...settings };
