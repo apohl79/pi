@@ -6,6 +6,7 @@ import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import {
 	type DiagnosticIntegrityCheck,
 	FileV2BlobStore,
+	type ForensicRecorder,
 	InMemoryForensicRecorder,
 	InMemoryV2InputRegistry,
 	InMemoryV2PlanRegistry,
@@ -234,12 +235,19 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			createNodeSqliteFactory(),
 			options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.sqlite"),
 		);
-	await diagnostics.record({ kind: "daemon_migration_started", outcome: "started" });
+	const recordMigrationDiagnostic = async (event: Parameters<ForensicRecorder["record"]>[0]): Promise<void> => {
+		try {
+			await diagnostics.record(event);
+		} catch {
+			// Diagnostic persistence must not mask startup or migration outcomes.
+		}
+	};
+	await recordMigrationDiagnostic({ kind: "daemon_migration_started", outcome: "started" });
 	try {
 		runMigrations(options.cwd, options.agentDir);
-		await diagnostics.record({ kind: "daemon_migration_completed", outcome: "ok" });
+		await recordMigrationDiagnostic({ kind: "daemon_migration_completed", outcome: "ok" });
 	} catch (error) {
-		await diagnostics.record({
+		await recordMigrationDiagnostic({
 			kind: "daemon_migration_failed",
 			severity: "error",
 			outcome: "error",
