@@ -275,6 +275,8 @@ describe("protocol v2 contract", () => {
 	});
 
 	test("freezes every command and authoritative event name in the v2 contract", () => {
+		expect(CommandNameV2Schema.anyOf.map((entry) => entry.const)).toEqual(commandNames);
+		expect(EventNameV2Schema.anyOf.map((entry) => entry.const)).toEqual(eventNames);
 		expect(commandNames.every((command) => Check(CommandNameV2Schema, command))).toBe(true);
 		expect(eventNames.every((event) => Check(EventNameV2Schema, event))).toBe(true);
 		expect(Check(CommandV2Schema, { command: "operation/read", sessionId: "session-1" })).toBe(true);
