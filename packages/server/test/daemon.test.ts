@@ -75,4 +75,26 @@ describe("ServerDaemon", () => {
 		expect(received).toBe(diagnostics);
 		await daemon.stop();
 	});
+
+	test("records daemon lifecycle markers", async () => {
+		const diagnostics = new InMemoryForensicRecorder();
+		const daemon = new ServerDaemon({
+			service: service(),
+			socketPath: "/tmp/daemon-test.sock",
+			diagnostics,
+			createServer: () =>
+				fakeServer(
+					async () => {},
+					async () => {},
+				),
+		});
+		await daemon.start();
+		await daemon.stop();
+		expect((await diagnostics.read()).map((event) => event.kind)).toEqual([
+			"daemon_starting",
+			"daemon_started",
+			"daemon_stopping",
+			"daemon_stopped",
+		]);
+	});
 });
