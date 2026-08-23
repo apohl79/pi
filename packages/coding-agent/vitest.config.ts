@@ -46,6 +46,10 @@ export default mergeConfig(
 					find: /^@earendil-works\/pi-server$/,
 					replacement: fileURLToPath(new URL("../server/src/index.ts", import.meta.url)),
 				},
+				{
+					find: /^@earendil-works\/pi-model-instructions$/,
+					replacement: fileURLToPath(new URL("../model-instructions/src/index.ts", import.meta.url)),
+				},
 				{ find: /^@mariozechner\/pi-ai$/, replacement: workspaceSourcePaths.aiIndex },
 				{ find: /^@mariozechner\/pi-ai\/oauth$/, replacement: workspaceSourcePaths.aiOAuth },
 				{ find: /^@mariozechner\/pi-agent-core$/, replacement: workspaceSourcePaths.agentIndex },
