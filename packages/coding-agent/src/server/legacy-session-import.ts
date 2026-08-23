@@ -137,6 +137,9 @@ export async function importLegacySessions(options: LegacySessionImportOptions):
 				const entries =
 					legacy?.entries ?? (await legacyRepository.open(metadata)).findEntries({ order: "oldestFirst" });
 				await importSession(options.repository, metadata, await entries, contentResult.value, backup);
+				const importedMetadata = (await options.repository.list()).find((item) => item.id === metadata.id);
+				if (!importedMetadata) throw new Error(`Imported session is missing: ${metadata.id}`);
+				await options.repository.verifyReopen();
 				existingIds.add(metadata.id);
 				imported.imported++;
 			} catch {
