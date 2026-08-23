@@ -20,6 +20,7 @@ describe("production daemon three-provider routing", () => {
 		directories.push(directory);
 		const models = createModels();
 		const observed: string[] = [];
+		const reviewerTools: string[][] = [];
 		const root = fauxProvider({
 			provider: "coding-agent-daemon-three-root-faux",
 			models: [
@@ -44,7 +45,13 @@ describe("production daemon three-provider routing", () => {
 			};
 		root.setResponses([record("root", "root response"), record("root", "root follow-up")]);
 		child.setResponses([record("child", "child response")]);
-		reviewer.setResponses([record("reviewer", "review response")]);
+		reviewer.setResponses([
+			(context, _options, _state, model) => {
+				reviewerTools.push((context.tools ?? []).map((tool) => tool.name));
+				observed.push(`reviewer:${model.provider}/${model.id}`);
+				return fauxAssistantMessage("review response");
+			},
+		]);
 		const socketPath = join(directory, "server.sock");
 		const runtime = await createConfiguredCodingAgentDaemonRuntime({
 			agentDir: directory,
@@ -55,10 +62,11 @@ describe("production daemon three-provider routing", () => {
 			agentRoles: {
 				reviewer: {
 					instructions: "Review the change.",
+					toolNames: ["read"],
 					model: { provider: reviewer.provider.id, id: "reviewer-model" },
 				},
 			},
-			harness: { tools: [], activeToolNames: [] },
+			harness: { activeToolNames: ["read", "write"] },
 			write: () => {},
 		});
 		const client = new PiClientV2({ transportFactory: createUnixTransportFactory({ path: socketPath }) });
@@ -92,6 +100,7 @@ describe("production daemon three-provider routing", () => {
 					`reviewer:${reviewer.provider.id}/reviewer-model`,
 					`root:${root.provider.id}/root-follow-up-model`,
 				]);
+				expect(reviewerTools).toEqual([["read"]]);
 			} finally {
 				await session.dispose();
 			}
