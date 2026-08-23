@@ -37,6 +37,15 @@ boundary is introduced.
 | Goals, rollback, usage, and cost projections | Fork core | Durable budgets, append-only rollback, and authoritative accounting must be committed with session state. |
 | Remote TUI views and interactive adapter | Fork-dependent extension | Existing TUI components can render server snapshots, but remote leases and controls require a v2 client adapter. |
 | Session naming, statusline, and migration tooling | Stock-compatible extension | These consume public model, harness, and TUI seams; no protocol change is required. |
+| Runtime build identity in diagnostics | Fork core | A diagnostic bundle must identify the fork build and pinned upstream base; stock runtime metadata has no fork-owned release identity boundary. |
+
+## Runtime identity metadata
+
+Configured daemon builds read release metadata from `PI_BUILD_VERSION`,
+`PI_FORK_COMMIT`, `PI_UPSTREAM_BASE_COMMIT`, and `PI_CONFIG_HASH`. Release and
+CI jobs must inject the first three values so exported diagnostic bundles can
+be attributed to an exact fork build and upstream base; local development may
+omit them and retains only host/runtime identity.
 
 ## Update policy
 

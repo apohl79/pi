@@ -8,6 +8,7 @@ import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import { AdapterV2WebService, InMemoryV2AppRegistry, InMemoryV2PluginRegistry } from "@earendil-works/pi-server";
 import { afterEach, describe, expect, test } from "vitest";
 import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemon-runtime.ts";
+import { createRuntimeManifest } from "../../src/server/runtime-manifest.ts";
 
 const directories: string[] = [];
 
@@ -16,6 +17,26 @@ afterEach(async () => {
 });
 
 describe("coding-agent daemon runtime", () => {
+	test("builds runtime identity from injected release metadata", () => {
+		expect(
+			createRuntimeManifest({
+				PI_BUILD_VERSION: "0.84.2-fork.1",
+				PI_FORK_COMMIT: "fork-sha",
+				PI_UPSTREAM_BASE_COMMIT: "upstream-sha",
+				PI_CONFIG_HASH: "config-sha",
+			}),
+		).toEqual({
+			schemaVersion: 1,
+			runtime: `node ${process.version}`,
+			platform: process.platform,
+			arch: process.arch,
+			buildVersion: "0.84.2-fork.1",
+			forkCommit: "fork-sha",
+			upstreamBaseCommit: "upstream-sha",
+			configHash: "config-sha",
+		});
+	});
+
 	test("composes the SQLite service, daemon lifecycle, and CLI runtime", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-daemon-"));
 		directories.push(directory);
@@ -26,6 +47,7 @@ describe("coding-agent daemon runtime", () => {
 		});
 		models.setProvider(faux.provider);
 		const output: unknown[] = [];
+		let runtimeManifest: unknown;
 		let started = false;
 		const runtime = await createConfiguredCodingAgentDaemonRuntime({
 			agentDir: directory,
@@ -35,19 +57,28 @@ describe("coding-agent daemon runtime", () => {
 			socketPath: join(directory, "pi.sock"),
 			harness: { tools: [], activeToolNames: [] },
 			write: (value) => output.push(value),
-			createServer: (_service, options) => ({
-				id: "daemon-1",
-				addresses: [`unix://${options.path}`],
-				start: async () => {
-					started = true;
-				},
-				close: async () => {
-					started = false;
-				},
-			}),
+			createServer: (_service, options) => {
+				runtimeManifest = options.runtimeManifest;
+				return {
+					id: "daemon-1",
+					addresses: [`unix://${options.path}`],
+					start: async () => {
+						started = true;
+					},
+					close: async () => {
+						started = false;
+					},
+				};
+			},
 		});
 		await runtime.cli.runServer({ command: "server", action: "start" });
 		expect(started).toBe(true);
+		expect(runtimeManifest).toMatchObject({
+			schemaVersion: 1,
+			runtime: `node ${process.version}`,
+			platform: process.platform,
+			arch: process.arch,
+		});
 		expect(runtime.daemon.status()).toEqual({
 			state: "running",
 			serverId: "daemon-1",
