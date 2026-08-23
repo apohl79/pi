@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { env } from "node:process";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
@@ -37,7 +38,7 @@ describe("production remote v2 PTY reattach", () => {
 						],
 						{
 							cwd: request.cwd,
-							env: { ...globalThis.process.env, ...request.env },
+							env: { ...env, ...request.env },
 							stdio: ["pipe", "pipe", "pipe"],
 						},
 					),
