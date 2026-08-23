@@ -26,6 +26,67 @@ import type {
 import type { V2InputRegistry, V2UsageLedger } from "@earendil-works/pi-server";
 import type { ServerRuntimeExtensionHost } from "./extension-host.ts";
 
+const AGENT_COMPLETION = "agent_completion";
+const AGENT_COMPLETION_CONSUMED = "agent_completion_consumed";
+const MAX_AGENT_COMPLETION_RECORDS = 32;
+const MAX_AGENT_COMPLETION_CHARACTERS = 16_000;
+
+interface AgentCompletionRecord {
+	readonly entryId: string;
+	readonly agentId: string;
+	readonly path: string;
+	readonly taskName: string;
+	readonly state: string;
+	readonly model?: { readonly provider: string; readonly id: string };
+}
+
+function readAgentCompletion(entry: Entry): AgentCompletionRecord | undefined {
+	if (entry.type !== "custom" || entry.customType !== AGENT_COMPLETION) return undefined;
+	if (typeof entry.data !== "object" || entry.data === null || Array.isArray(entry.data)) return undefined;
+	const data = entry.data as Record<string, unknown>;
+	if (
+		typeof data.agentId !== "string" ||
+		typeof data.path !== "string" ||
+		typeof data.taskName !== "string" ||
+		typeof data.state !== "string"
+	)
+		return undefined;
+	const model =
+		typeof data.model === "object" && data.model !== null && !Array.isArray(data.model)
+			? (data.model as Record<string, unknown>)
+			: undefined;
+	return {
+		entryId: entry.id,
+		agentId: data.agentId,
+		path: data.path,
+		taskName: data.taskName,
+		state: data.state,
+		...(model && typeof model.provider === "string" && typeof model.id === "string"
+			? { model: { provider: model.provider, id: model.id } }
+			: {}),
+	};
+}
+
+function consumedCompletionId(entry: Entry): string | undefined {
+	if (entry.type !== "custom" || entry.customType !== AGENT_COMPLETION_CONSUMED) return undefined;
+	if (typeof entry.data !== "object" || entry.data === null || Array.isArray(entry.data)) return undefined;
+	const entryId = (entry.data as Record<string, unknown>).entryId;
+	return typeof entryId === "string" ? entryId : undefined;
+}
+
+function appendAgentCompletions(input: AgentMessage, completions: readonly AgentCompletionRecord[]): AgentMessage {
+	if (completions.length === 0 || input.role !== "user") return input;
+	const text = completions
+		.map(
+			(completion) =>
+				`- ${completion.path} (${completion.state})${completion.model ? ` [${completion.model.provider}/${completion.model.id}]` : ""}`,
+		)
+		.join("\n");
+	const summary = `[child agent completions]\n${text}`;
+	if (typeof input.content === "string") return { ...input, content: `${summary}\n\n${input.content}` };
+	return { ...input, content: [{ type: "text", text: summary }, ...input.content] };
+}
+
 export interface CodingAgentV2SessionDefinition {
 	metadata: SessionMetadataV2;
 	harness: AgentHarness;
@@ -353,6 +414,36 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		await this.persistNameState();
 	}
 
+	private async readPendingAgentCompletions(): Promise<AgentCompletionRecord[]> {
+		const entries = await this.definition.harness.session.findEntries();
+		const consumed = new Set(
+			entries.map(consumedCompletionId).filter((entryId): entryId is string => entryId !== undefined),
+		);
+		const pending: AgentCompletionRecord[] = [];
+		let characters = 0;
+		for (const entry of entries) {
+			const completion = readAgentCompletion(entry);
+			if (completion === undefined || consumed.has(completion.entryId)) continue;
+			const line = `${completion.path} ${completion.state} ${completion.taskName}`;
+			if (
+				pending.length >= MAX_AGENT_COMPLETION_RECORDS ||
+				characters + line.length > MAX_AGENT_COMPLETION_CHARACTERS
+			)
+				break;
+			pending.push(completion);
+			characters += line.length;
+		}
+		return pending.reverse();
+	}
+
+	private async markAgentCompletionsConsumed(completions: readonly AgentCompletionRecord[]): Promise<void> {
+		for (const completion of completions)
+			await this.definition.harness.session.appendCustomEntry(AGENT_COMPLETION_CONSUMED, {
+				version: 1,
+				entryId: completion.entryId,
+			});
+	}
+
 	private async ensureAutoNameLoaded(): Promise<void> {
 		if (this.autoNameLoaded) return;
 		const entries = await this.definition.harness.session.findEntriesOnBranch({ order: "newestFirst" });
@@ -628,6 +719,11 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		await this.ensureAutoNameLoaded();
 		await this.ensureNameStateLoaded();
 		const input = commandInput(command);
+		const completions =
+			command.command === "turn/start" || command.command === "turn/followUp"
+				? await this.readPendingAgentCompletions()
+				: [];
+		const promptInput = appendAgentCompletions(input, completions);
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
@@ -650,11 +746,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		};
 		await extensionHost?.onOperationAccepted({ id: _operationId, type: runCommand });
 		try {
-			assertPromptCapabilities(await harness.getModel(), input);
+			assertPromptCapabilities(await harness.getModel(), promptInput);
 			if (runCommand === "turn/start") {
-				await harness.prompt(input);
+				await harness.prompt(promptInput);
 				await this.recordUsageLedger(_operationId, beforeEntryIds);
 				await this.recordGoalUsage(usageBefore);
+				await this.markAgentCompletionsConsumed(completions);
 				goalUsageRecorded = true;
 				generateNameAfterTurn = this.autoName;
 			} else if (runCommand === "turn/resume") {
@@ -670,9 +767,10 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				await this.recordGoalUsage(usageBefore);
 				goalUsageRecorded = true;
 			} else if (runCommand === "turn/followUp") {
-				await harness.followUp(input);
+				await harness.followUp(promptInput);
 				await this.recordUsageLedger(_operationId, beforeEntryIds);
 				await this.recordGoalUsage(usageBefore);
+				await this.markAgentCompletionsConsumed(completions);
 				goalUsageRecorded = true;
 			} else if (runCommand === "turn/abort") await harness.abort();
 			else if (runCommand === "turn/rollback") {
