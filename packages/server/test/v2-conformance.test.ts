@@ -309,6 +309,9 @@ describe("PiServer v2 operation acceptance", () => {
 				bundle: { manifest: { unavailable: ["client-diagnostic-spool"] } },
 			},
 		});
+		expect(
+			(exported as unknown as { result: { integrity: Array<{ name: string; ok: boolean }> } }).result.integrity,
+		).toEqual(expect.arrayContaining([expect.objectContaining({ name: "sessions", ok: true })]));
 		expect(exported).toMatchObject({
 			ok: true,
 			result: {
