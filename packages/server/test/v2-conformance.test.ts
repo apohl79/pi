@@ -349,6 +349,42 @@ describe("PiServer v2 operation acceptance", () => {
 		service.sessions.get("session-1")!.release.resolve(undefined);
 	});
 
+	test("resolves server filesystem mentions without dropping their target", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-mention-"));
+		directories.push(root);
+		await writeFile(join(root, "note.txt"), "server note", "utf8");
+		const service = new TestService();
+		const server = new PiServerV2(service, {
+			listeners: [],
+			files: new LocalV2FileReferenceService({ projectRoot: root, allowAbsolute: true }),
+			serverId: "filesystem-mentions",
+		});
+		await server.start();
+		servers.push(server);
+		const client = connectInMemoryTestClientV2(server.accept.bind(server));
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const accepted = await client.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: {
+				content: [
+					{ type: "text", text: "Review this" },
+					{ type: "mention", name: "server note", path: "server:note.txt" },
+				],
+			},
+		});
+		expect(accepted).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+		service.sessions.get("session-1")!.release.resolve(undefined);
+		await client.next((message) => message.type === "event" && message.event === "operation_terminal");
+		expect(service.sessions.get("session-1")!.commands[0]?.payload).toMatchObject({
+			content: [
+				{ type: "text", text: "Review this" },
+				{ type: "text", text: "@server note server:note.txt" },
+			],
+		});
+	});
+
 	test("brackets an explicit compaction operation with lifecycle events", async () => {
 		const service = new TestService();
 		const server = new PiServerV2(service, { listeners: [], serverId: "compaction-events" });

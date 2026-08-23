@@ -50,7 +50,14 @@ export type RemoteV2PromptPart =
 	| { readonly type: "text"; readonly text: string }
 	| { readonly type: "image"; readonly digest: string; readonly mimeType: string }
 	| { readonly type: "blob"; readonly digest: string; readonly mimeType: string }
-	| { readonly type: "mention"; readonly name: string; readonly path: string };
+	| {
+			readonly type: "mention";
+			readonly name: string;
+			readonly path: string;
+			/** Content-addressed digest for an explicitly uploaded @local reference. */
+			readonly blobDigest?: string;
+			readonly mimeType?: string;
+	  };
 
 export type RemoteV2PromptContent = readonly RemoteV2PromptPart[];
 
@@ -202,7 +209,14 @@ function promptPayload(input: string | RemoteV2PromptContent, label: string): Js
 	if (input.length === 0) throw new Error(`${label} cannot be empty`);
 	const content: JsonValue[] = input.map((part): JsonValue => {
 		if (part.type === "text") return { type: "text", text: part.text } as JsonValue;
-		if (part.type === "mention") return { type: "mention", name: part.name, path: part.path } as JsonValue;
+		if (part.type === "mention")
+			return {
+				type: "mention",
+				name: part.name,
+				path: part.path,
+				...(part.blobDigest === undefined ? {} : { blobDigest: part.blobDigest }),
+				...(part.mimeType === undefined ? {} : { mimeType: part.mimeType }),
+			} as JsonValue;
 		return { type: part.type, digest: part.digest, mimeType: part.mimeType } as JsonValue;
 	});
 	return {

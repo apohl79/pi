@@ -155,7 +155,13 @@ describe("production remote v2 filesystem references", () => {
 				const operationId = await first.submit([
 					{ type: "text", text: "Compare these files" },
 					{ type: "mention", name: "server note", path: serverFile.reference },
-					{ type: "mention", name: "client note", path: localFile.reference },
+					{
+						type: "mention",
+						name: "client note",
+						path: localFile.reference,
+						blobDigest: localFile.blobDigest,
+						mimeType: localFile.mimeType,
+					},
 				]);
 				await first.waitForOperation(operationId);
 				expect(prompts).toHaveLength(1);

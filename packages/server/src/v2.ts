@@ -1979,7 +1979,10 @@ export class PiServerV2 {
 					throw new Error(`turn content item ${index} must be an object`);
 				const item = part as Record<string, unknown>;
 				if (item.type === "text" && typeof item.text === "string") return { type: "text", text: item.text };
-				if (item.type === "mention") return this.resolveMention(item, index);
+				if (item.type === "mention") {
+					if (typeof command.sessionId !== "string") throw new Error("turn mention requires sessionId");
+					return this.resolveMention(command.sessionId, item, index);
+				}
 				if (item.type !== "image" && item.type !== "blob")
 					throw new Error(`turn content item ${index} must be text, image, or blob`);
 				if (typeof item.mimeType !== "string" || !item.mimeType.startsWith("image/"))
@@ -1996,11 +1999,16 @@ export class PiServerV2 {
 		return { ...command, payload: toProtocolJsonValue({ ...payload, content }) };
 	}
 
-	private async resolveMention(item: Record<string, unknown>, index: number): Promise<{ type: "text"; text: string }> {
+	private async resolveMention(
+		sessionId: string,
+		item: Record<string, unknown>,
+		index: number,
+	): Promise<{ type: "text"; text: string }> {
 		if (typeof item.name !== "string" || typeof item.path !== "string")
 			throw new Error(`turn content item ${index} mention requires name and path`);
 		const name = item.name.trim();
 		const path = item.path.trim();
+		const referencePath = path.startsWith("@") ? path.slice(1) : path;
 		if (name.length === 0 || path.length === 0) throw new Error(`turn content item ${index} mention is empty`);
 		if (path.startsWith("app://")) {
 			const appId = path.slice("app://".length);
@@ -2015,7 +2023,16 @@ export class PiServerV2 {
 			const plugin = await this.plugins.readPlugin(path.slice("plugin://".length));
 			if (!plugin?.enabled) throw new Error(`Unknown or disabled plugin mention: ${path}`);
 		} else {
-			throw new Error(`Unsupported mention path: ${path}`);
+			if (referencePath.startsWith("local:")) {
+				if (typeof item.blobDigest !== "string" || typeof item.mimeType !== "string")
+					throw new Error(`Local mention requires blobDigest and mimeType: ${path}`);
+				const blob = await this.blobs.stat(item.blobDigest);
+				if (blob.mimeType !== item.mimeType)
+					throw new Error(`Local mention MIME type does not match blob metadata: ${path}`);
+			} else {
+				await this.files.resolve(sessionId, referencePath);
+			}
+			return { type: "text", text: `@${name} ${path}` };
 		}
 		return { type: "text", text: `@${name}` };
 	}
