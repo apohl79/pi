@@ -626,9 +626,9 @@ export class InMemoryForensicRecorder implements ForensicRecorder {
 
 	/** Rehydrates a previously materialized event for a durable recorder adapter. */
 	restore(event: ForensicEvent): void {
-		if (!Number.isInteger(event.seq) || event.seq < 1) throw new Error("Invalid forensic sequence");
-		this.events.push(structuredClone(event));
-		this.nextSeq = Math.max(this.nextSeq, event.seq + 1);
+		const validated = parseForensicEvent(event);
+		this.events.push(structuredClone(validated));
+		this.nextSeq = Math.max(this.nextSeq, validated.seq + 1);
 		if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
 	}
 }

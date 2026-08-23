@@ -29,4 +29,18 @@ describe("SqliteForensicRecorder", () => {
 		expect(event.seq).toBe(4);
 		await restored.close();
 	});
+
+	test("rejects malformed persisted event rows", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-diagnostics-invalid-"));
+		directories.push(directory);
+		const path = join(directory, "diagnostics.sqlite");
+		const database = await createNodeSqliteFactory().open(path);
+		database.exec("CREATE TABLE v2_diagnostics (seq INTEGER PRIMARY KEY NOT NULL, value TEXT NOT NULL)");
+		database.prepare("INSERT INTO v2_diagnostics (seq, value) VALUES (?, ?)").run(1, JSON.stringify({ seq: 1 }));
+		database.close();
+
+		await expect(new SqliteForensicRecorder(createNodeSqliteFactory(), path).read()).rejects.toThrow(
+			"Invalid forensic event",
+		);
+	});
 });
