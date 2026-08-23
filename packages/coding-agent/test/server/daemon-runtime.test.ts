@@ -929,7 +929,13 @@ describe("coding-agent daemon runtime", () => {
 			models: [{ id: "coding-agent-daemon-print-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
 		});
 		models.setProvider(faux.provider);
-		faux.setResponses([fauxAssistantMessage("server default response")]);
+		let observedSystemPrompt = "";
+		faux.setResponses([
+			(context) => {
+				observedSystemPrompt = context.systemPrompt ?? "";
+				return fauxAssistantMessage("server default response");
+			},
+		]);
 		const output: string[] = [];
 		const runtime = await createConfiguredCodingAgentDaemonRuntime({
 			agentDir: directory,
@@ -937,7 +943,11 @@ describe("coding-agent daemon runtime", () => {
 			models,
 			model: faux.getModel(),
 			socketPath: join(directory, "server.sock"),
-			harness: { tools: [], activeToolNames: [] },
+			harness: {
+				tools: [],
+				activeToolNames: [],
+				systemPromptOptions: { customPrompt: "custom server prompt", appendSystemPrompt: "server suffix" },
+			},
 			write: () => {},
 			writeText: (value) => output.push(value),
 		});
@@ -947,6 +957,8 @@ describe("coding-agent daemon runtime", () => {
 				options: { print: true, messages: ["hello"], fileArgs: [], unknownFlags: new Map(), diagnostics: [] },
 			});
 			expect(output).toEqual(["server default response"]);
+			expect(observedSystemPrompt).toContain("custom server prompt");
+			expect(observedSystemPrompt).toContain("server suffix");
 		} finally {
 			await runtime.close();
 		}

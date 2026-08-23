@@ -73,6 +73,17 @@ async function runCli(): Promise<void> {
 			};
 		},
 		fastModelResolver: (selectedModel) => modelRuntime.getModelRole(selectedModel.provider, "fast"),
+		harness:
+			parsedArgs.systemPrompt === undefined && parsedArgs.appendSystemPrompt === undefined
+				? undefined
+				: {
+						systemPromptOptions: {
+							...(parsedArgs.systemPrompt === undefined ? {} : { customPrompt: parsedArgs.systemPrompt }),
+							...(parsedArgs.appendSystemPrompt === undefined
+								? {}
+								: { appendSystemPrompt: parsedArgs.appendSystemPrompt.join("\n\n") }),
+						},
+					},
 		socketPath: join(agentDir, "pi.sock"),
 		write: (value) => console.log(JSON.stringify(value)),
 		writeText: (value) => process.stdout.write(`${value}\n`),
