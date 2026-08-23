@@ -98,6 +98,9 @@ describe("AgentHarness v2 scaffold", () => {
 		if (!result.ok || result.value.kind !== "completed") throw new Error("Expected completed prompt");
 		expect(result.value.finalMessage.content).toEqual([{ type: "text", text: "hello from faux" }]);
 		expect((await session.findRecords({ type: "operation_started" })).length).toBe(1);
+		const started = (await session.findRecords({ type: "operation_started" }))[0]!;
+		expect(await session.getRegister("op.meta", started.id)).toBeUndefined();
+		expect(await session.getRegister("op.state", started.id)).toBeUndefined();
 		expect((await session.findRecords({ type: "operation_finished" })).map((record) => record.outcome)).toEqual([
 			"completed",
 		]);

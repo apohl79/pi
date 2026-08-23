@@ -705,7 +705,26 @@ export class AgentHarness implements AgentLane {
 
 	private async appendOperationStarted(record: NewRecord<OperationStartedRecord>): Promise<void> {
 		try {
-			await this.durableSession.appendRecord(record);
+			const transaction = this.registerSession();
+			if (transaction) {
+				await transaction.appendTransaction(
+					[record],
+					[
+						{
+							op: "set",
+							namespace: "op.meta",
+							key: record.id,
+							value: durableClone(record.intent) as unknown as JsonValue,
+						},
+						{
+							op: "set",
+							namespace: "op.state",
+							key: record.id,
+							value: { kind: record.intent.kind, status: "running" },
+						},
+					],
+				);
+			} else await this.durableSession.appendRecord(record);
 		} catch (error) {
 			const open = await this.durableSession.findOpenOperations(this.name, { limit: 2 });
 			if (!open.some((operation) => operation.id === record.id)) throw error;
@@ -1637,11 +1656,19 @@ export class AgentHarness implements AgentLane {
 			};
 			await this.appendQueueTransaction(
 				[...cancellations, requested],
-				cancellations.map((record) => ({
-					op: "delete" as const,
-					namespace: "pending.entry",
-					key: record.entryId,
-				})),
+				[
+					{
+						op: "set" as const,
+						namespace: "op.state",
+						key: openRun.id,
+						value: { kind: "run", status: "cancel_requested" },
+					},
+					...cancellations.map((record) => ({
+						op: "delete" as const,
+						namespace: "pending.entry",
+						key: record.entryId,
+					})),
+				],
 			);
 			return { recalled, requested };
 		});
@@ -1819,7 +1846,15 @@ export class AgentHarness implements AgentLane {
 			await transaction.appendAtomicTransaction(
 				record.intent.initialMessages.map((entry) => ({ lane: this.name, entry })),
 				[record],
-				[],
+				[
+					{
+						op: "set",
+						namespace: "op.meta",
+						key: record.id,
+						value: durableClone(record.intent) as unknown as JsonValue,
+					},
+					{ op: "set", namespace: "op.state", key: record.id, value: { kind: "run", status: "running" } },
+				],
 			);
 			return true;
 		}
@@ -2147,6 +2182,17 @@ export class AgentHarness implements AgentLane {
 			limit: 1,
 		});
 		if (existing.length > 0) return existing[0]!;
+		const transaction = this.registerSession();
+		if (transaction) {
+			await transaction.appendTransaction(
+				[record],
+				[
+					{ op: "delete", namespace: "op.meta", key: record.runId },
+					{ op: "delete", namespace: "op.state", key: record.runId },
+				],
+			);
+			return record as OperationFinishedRecord;
+		}
 		return this.durableSession.appendRecord(record);
 	}
 
