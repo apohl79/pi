@@ -85,9 +85,28 @@ function memoryTransport() {
 										model: { provider: "faux", id: "model" },
 									},
 								} as JsonValue)
-							: message.request.command === "plan/update"
-								? ({ plan: { version: 1, items: [{ step: "Inspect", status: "in_progress" }] } } as JsonValue)
-								: { command: message.request.command };
+							: message.request.command === "process/start" ||
+									message.request.command === "process/wait" ||
+									message.request.command === "process/terminate"
+								? ({
+										process: {
+											processId: "process-1",
+											sessionId: "session-1",
+											command: "echo hi",
+											pty: false,
+											state: "running",
+											output: "",
+											cursor: 0,
+											truncated: false,
+										},
+									} as JsonValue)
+								: message.request.command === "process/read" || message.request.command === "process/write"
+									? ({ output: { output: "hi", cursor: 2, truncated: false } } as JsonValue)
+									: message.request.command === "plan/update"
+										? ({
+												plan: { version: 1, items: [{ step: "Inspect", status: "in_progress" }] },
+											} as JsonValue)
+										: { command: message.request.command };
 			const response: ServerMessageV2 =
 				message.request.command.startsWith("turn/") ||
 				message.request.command.startsWith("session/model") ||
@@ -255,6 +274,20 @@ describe("RemoteV2Session", () => {
 			parentPath: "/root",
 			model: { provider: "faux", id: "model" },
 		});
+		await session.dispose();
+	});
+
+	test("controls server-owned process output with cursors", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		const process = await session.startProcess("echo hi");
+		expect(process.processId).toBe("process-1");
+		expect(await session.writeProcess(process.processId, "input")).toMatchObject({ output: "hi", cursor: 2 });
+		expect(await session.readProcess(process.processId, 2)).toMatchObject({ output: "hi", cursor: 2 });
+		expect(await session.waitProcess(process.processId)).toMatchObject({ state: "running" });
+		expect(await session.terminateProcess(process.processId)).toMatchObject({ state: "running" });
 		await session.dispose();
 	});
 
