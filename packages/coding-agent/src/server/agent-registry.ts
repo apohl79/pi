@@ -410,7 +410,13 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				: (userIndexes[Math.max(0, userIndexes.length - request.forkTurns)] ?? transcript.length);
 		const selected = transcript.slice(start);
 		if (selected.length === 0) return undefined;
-		const serialized = selected.map((item) => `${item.role}: ${JSON.stringify(item.content)}`).join("\n");
+		const serialized = selected
+			.map((item) =>
+				item.role === "compactionSummary"
+					? `${item.role}: ${item.summary}`
+					: `${item.role}: ${JSON.stringify(item.content)}`,
+			)
+			.join("\n");
 		const bounded = serialized.slice(0, 32_000);
 		return `[forked context]\n${bounded}`;
 	}

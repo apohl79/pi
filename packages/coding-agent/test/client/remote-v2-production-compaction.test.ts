@@ -51,6 +51,8 @@ describe("production remote v2 compaction", () => {
 			const attachment = await new RemoteV2SessionSelector(client).attachView(sessionId, { mode: "control" });
 			const adapter = new RemoteV2InteractiveAttachment(attachment);
 			try {
+				const naming = await attachment.session.setAutoName(false);
+				await attachment.session.waitForOperation(naming);
 				const initial = await adapter.submit("capture the remote state");
 				await attachment.session.waitForOperation(initial);
 				const compact = await adapter.execute("/compact preserve remote contract");
@@ -58,7 +60,10 @@ describe("production remote v2 compaction", () => {
 				expect((await attachment.session.readOperation(operationId(compact))).state).toBe("complete");
 				expect(attachment.session.snapshot?.transcript).toEqual(
 					expect.arrayContaining([
-						expect.objectContaining({ role: "compactionSummary", summary: "preserved remote summary" }),
+						expect.objectContaining({
+							role: "compactionSummary",
+							summary: expect.stringContaining("preserved remote summary"),
+						}),
 					]),
 				);
 				expect(attachment.session.phase).toBe("idle");

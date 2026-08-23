@@ -188,6 +188,25 @@ describe("protocol v2 contract", () => {
 		expect(Check(SessionSnapshotV2Schema, { ...snapshot, agents: [{ ...agent, startedAt: -1 }] })).toBe(false);
 	});
 
+	test("projects durable compaction summaries as transcript items", () => {
+		const compaction = {
+			id: "compaction-1",
+			role: "compactionSummary",
+			summary: "preserved history",
+			tokensBefore: 420,
+			timestamp: 1_700_000_000_001,
+		} as const;
+		const withCompaction = { ...snapshot, transcript: [compaction] };
+		expect(Check(SessionSnapshotV2Schema, withCompaction)).toBe(true);
+		expect(decodeCbor(encodeCbor(withCompaction))).toEqual(withCompaction);
+		expect(
+			Check(SessionSnapshotV2Schema, {
+				...snapshot,
+				transcript: [{ ...compaction, tokensBefore: -1 }],
+			}),
+		).toBe(false);
+	});
+
 	test("accepts an operation request and durable acceptance response", () => {
 		const request = {
 			type: "request",
