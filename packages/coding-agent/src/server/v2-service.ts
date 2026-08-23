@@ -785,6 +785,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				: [];
 		const promptInput = appendAgentCompletions(input, completions);
 		const harness = this.definition.harness;
+		const operationModel = await harness.getModel();
+		const extensionOperationModel = { id: operationModel.id, provider: operationModel.provider };
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
 		const usageBefore = (await harness.session.getStats()).totalTokens;
@@ -804,7 +806,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				? {}
 				: { compactionPolicy: this.activeOperation.compactionPolicy }),
 		};
-		await extensionHost?.onOperationAccepted({ id: _operationId, type: runCommand });
+		await extensionHost?.onOperationAccepted({ id: _operationId, type: runCommand, model: extensionOperationModel });
 		try {
 			assertPromptCapabilities(await harness.getModel(), promptInput);
 			if (runCommand === "turn/start") {
@@ -937,11 +939,17 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				state: "failed",
 				terminalSeq: this.eventSeq + 1,
 			};
-			await extensionHost?.onOperationTerminal({ id: _operationId, type: runCommand }, "failed");
+			await extensionHost?.onOperationTerminal(
+				{ id: _operationId, type: runCommand, model: extensionOperationModel },
+				"failed",
+			);
 			throw error;
 		}
 		void this.autoName;
-		await extensionHost?.onOperationTerminal({ id: _operationId, type: runCommand }, "completed");
+		await extensionHost?.onOperationTerminal(
+			{ id: _operationId, type: runCommand, model: extensionOperationModel },
+			"completed",
+		);
 		this.revision += 1;
 		this.eventSeq += 1;
 		this.phase = "idle";

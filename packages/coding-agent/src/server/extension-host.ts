@@ -6,6 +6,7 @@ export interface ServerRuntimeModel {
 export interface ServerRuntimeOperation {
 	readonly id: string;
 	readonly type: string;
+	readonly model?: ServerRuntimeModel;
 }
 
 export interface ServerRuntimeExtensionState {
@@ -71,7 +72,7 @@ export class ServerRuntimeExtensionHost {
 	private context(extensionId: string, operation: ServerRuntimeOperation): ServerRuntimeExtensionContext {
 		return {
 			operation,
-			model: this.options.resolveModel(),
+			model: operation.model ?? this.options.resolveModel(),
 			state: {
 				get: async <T>(key: string) => this.getState<T>(extensionId, key),
 				set: async (key: string, value: unknown) => {
