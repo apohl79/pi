@@ -48,7 +48,12 @@ describe("production remote v2 fork and delete", () => {
 					expect(forked.id).not.toBe(source.id);
 					expect(forked.snapshot?.name).toBe("review branch");
 					expect(forked.snapshot?.transcript).toEqual(
-						expect.arrayContaining([expect.objectContaining({ text: "source response" })]),
+						expect.arrayContaining([
+							expect.objectContaining({
+								role: "assistant",
+								content: expect.arrayContaining([expect.objectContaining({ text: "source response" })]),
+							}),
+						]),
 					);
 				} finally {
 					const forkedId = forked.id;
