@@ -1,8 +1,14 @@
+import { createHash } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { InMemoryForensicRecorder, JsonlForensicRecorder, LocalDiagnosticCapsuleStore } from "../src/diagnostics.ts";
+import {
+	InMemoryForensicRecorder,
+	JsonlForensicRecorder,
+	LocalDiagnosticCapsuleStore,
+	verifyDiagnosticBundle,
+} from "../src/diagnostics.ts";
 
 describe("InMemoryForensicRecorder", () => {
 	test("assigns correlated sequence numbers and redacts credential fields", async () => {
@@ -105,5 +111,25 @@ describe("LocalDiagnosticCapsuleStore", () => {
 			ciphertext: `${capsule.ciphertext.slice(0, -1)}${capsule.ciphertext.endsWith("A") ? "B" : "A"}`,
 		};
 		await expect(store.decrypt(tampered)).rejects.toThrow();
+	});
+});
+
+describe("verifyDiagnosticBundle", () => {
+	test("verifies an exported event bundle offline", () => {
+		const events = [
+			{ seq: 1, kind: "boot" },
+			{ seq: 2, kind: "ready" },
+		];
+		const serialized = JSON.stringify(events);
+		const manifest = {
+			schemaVersion: 1,
+			eventCount: 2,
+			firstSeq: 1,
+			lastSeq: 2,
+			eventsSha256: createHash("sha256").update(serialized).digest("hex"),
+		};
+		expect(verifyDiagnosticBundle({ manifest, events })).toEqual({ valid: true });
+		expect(verifyDiagnosticBundle({ manifest: { ...manifest, lastSeq: 3 }, events })).toMatchObject({ valid: false });
+		expect(verifyDiagnosticBundle({ events })).toMatchObject({ valid: false });
 	});
 });

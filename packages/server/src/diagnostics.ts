@@ -43,6 +43,49 @@ export interface DiagnosticCapsuleInput {
 	maxBytes?: number;
 }
 
+export interface DiagnosticContentStore {
+	encrypt(input: DiagnosticCapsuleInput): Promise<DiagnosticCapsule>;
+}
+
+export interface DiagnosticBundleVerification {
+	valid: boolean;
+	reason?: string;
+}
+
+/** Pure offline verifier for exported diagnostic bundles; it does not require a daemon or provider access. */
+export function verifyDiagnosticBundle(value: unknown): DiagnosticBundleVerification {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		return { valid: false, reason: "diagnostic bundle must be an object" };
+	const candidate = value as Record<string, unknown>;
+	const events = candidate.events;
+	const manifest = candidate.manifest;
+	if (!Array.isArray(events) || typeof manifest !== "object" || manifest === null || Array.isArray(manifest))
+		return { valid: false, reason: "diagnostics/verify bundle requires events and manifest" };
+	const fields = manifest as Record<string, unknown>;
+	const serializedEvents = JSON.stringify(events);
+	const digest = createHash("sha256").update(serializedEvents).digest("hex");
+	const firstSeq = events.length === 0 ? 0 : eventSequence(events[0]);
+	const lastSeq = events.length === 0 ? 0 : eventSequence(events[events.length - 1]);
+	const contiguous = events.every((event, index) => {
+		const seq = eventSequence(event);
+		return seq !== undefined && (index === 0 || seq === eventSequence(events[index - 1])! + 1);
+	});
+	const valid =
+		fields.schemaVersion === 1 &&
+		fields.eventCount === events.length &&
+		fields.firstSeq === firstSeq &&
+		fields.lastSeq === lastSeq &&
+		fields.eventsSha256 === digest &&
+		contiguous;
+	return valid ? { valid: true } : { valid: false, reason: "Diagnostic bundle manifest does not match its events" };
+}
+
+function eventSequence(value: unknown): number | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	const seq = (value as Record<string, unknown>).seq;
+	return Number.isInteger(seq) && (seq as number) >= 1 ? (seq as number) : undefined;
+}
+
 interface DiagnosticKeyFile {
 	currentKeyId: string;
 	keys: Record<string, string>;
