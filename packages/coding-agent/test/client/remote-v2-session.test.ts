@@ -1,6 +1,7 @@
 import type { ByteTransport, ByteTransportHandlers } from "@earendil-works/pi-client";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import {
+	type CommandV2,
 	decodeCbor,
 	encodeServerMessageV2,
 	type JsonValue,
@@ -46,6 +47,7 @@ function snapshot(overrides: Partial<SessionSnapshotV2> = {}): SessionSnapshotV2
 function memoryTransport() {
 	let handlers: ByteTransportHandlers | undefined;
 	const sent: ServerMessageV2[] = [];
+	const requests: CommandV2[] = [];
 	const transport: ByteTransport = {
 		send: async (chunk) => {
 			const message = parseClientMessageV2(decodeCbor(chunk.subarray(4)));
@@ -67,6 +69,7 @@ function memoryTransport() {
 				);
 				return;
 			}
+			requests.push(message.request);
 			const result: JsonValue =
 				message.request.command === "session/read"
 					? ({ session: snapshot() } as JsonValue)
@@ -93,6 +96,7 @@ function memoryTransport() {
 			return transport;
 		},
 		sent,
+		requests,
 		deliver(message: ServerMessageV2) {
 			handlers?.onData(encodeServerMessageV2(message));
 		},
@@ -110,9 +114,13 @@ describe("RemoteV2Session", () => {
 			snapshot: { id: "session-1", phase: "idle" },
 		});
 
+		await session.setThinking("high");
 		const operation = session.submit("hello");
 		expect(await operation).toBe("operation-1");
 		expect(session.state.lifecycle).toMatchObject({ status: "busy", operationId: "operation-1" });
+		expect(pair.requests.find((request) => request.command === "session/thinking/set")?.payload).toEqual({
+			level: "high",
+		});
 		pair.deliver({
 			type: "event",
 			sessionId: "session-1",

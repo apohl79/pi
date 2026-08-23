@@ -157,7 +157,7 @@ export class RemoteV2Session {
 		return this.#accept("session/model/set", model);
 	}
 	async setThinking(thinkingLevel: ProtocolThinkingLevel): Promise<string> {
-		return this.#accept("session/thinking/set", { thinkingLevel });
+		return this.#accept("session/thinking/set", { level: thinkingLevel });
 	}
 
 	async relinquishControl(): Promise<void> {
