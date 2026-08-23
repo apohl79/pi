@@ -100,14 +100,14 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
 		if (this.disposed) throw new Error("Coding-agent child registry is disposed");
 		this.validateRequest(request);
+		const parentPath = request.parentPath.replace(/\/$/, "");
 		await this.hydrate(request.sessionId);
 		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
-		if (this.activeCountForParent(request.parentPath) >= this.maxActivePerParent)
-			throw new Error(`Agent active limit ${this.maxActivePerParent} exceeded for parent ${request.parentPath}`);
+		if (this.activeCountForParent(parentPath) >= this.maxActivePerParent)
+			throw new Error(`Agent active limit ${this.maxActivePerParent} exceeded for parent ${parentPath}`);
 		if (!this.service.createSession) throw new Error("Coding-agent service does not support child sessions");
 		const model = await this.resolveModel(request);
 		const forkedContext = await this.readForkedContext(request);
-		const parentPath = request.parentPath.replace(/\/$/, "");
 		const path = `${parentPath}/${request.taskName}`;
 		if ([...this.agents.values()].some((agent) => agent.summary.path === path))
 			throw new Error(`Agent path ${path} already exists`);
