@@ -51,6 +51,44 @@ const snapshot: SessionSnapshotV2 = {
 };
 
 describe("formatRemoteV2Session", () => {
+	test("keeps the active remote terminal projection stable", () => {
+		expect(
+			formatRemoteV2Session(
+				{
+					lifecycle: { status: "ready" },
+					snapshot: {
+						...snapshot,
+						name: "Remote task",
+						goal: {
+							id: "goal-1",
+							objective: "finish the remote implementation",
+							status: "active",
+							tokensUsed: 4,
+							activeTimeSeconds: 2,
+							createdAt: 1,
+							updatedAt: 2,
+						},
+						plan: { version: 3, items: [{ step: "verify the daemon", status: "in_progress" }] },
+					},
+				},
+				{ maxTranscriptItems: 1, maxTranscriptCharacters: 24 },
+			),
+		).toMatchInlineSnapshot(`
+			"Session session-1 · phase=turn · model=faux/model
+			Usage input=0 output=0 cacheRead=0 cost=unknown
+			Goal active · finish the remote implementation
+			Plan v3
+			Plan in_progress · verify the daemon
+			assistant: a long assist…"
+		`);
+	});
+
+	test("keeps the detached terminal projection explicit", () => {
+		expect(formatRemoteV2Session({ lifecycle: { status: "detached" } }, options)).toMatchInlineSnapshot(`
+			"Session detached"
+		`);
+	});
+
 	test("renders current phase, model, bounded transcript, and operation state", () => {
 		const output = formatRemoteV2Session(
 			{ lifecycle: { status: "busy", operationId: "op-1", command: "turn/start" }, snapshot },
