@@ -1598,6 +1598,8 @@ export class AgentHarness implements AgentLane {
 			);
 		}
 		await this.runLifecycleHook("before_resume", { operationId: operation.id, kind: operation.intent.kind });
+		if (operation.intent.kind === "run" && suspended?.deferred !== undefined)
+			return this.resumeDeferredOperation(operation, suspended.deferred);
 		await this.appendOperationFinished({
 			type: "operation_finished",
 			id: this.durableSession.idGenerator.next(),
@@ -1776,6 +1778,116 @@ export class AgentHarness implements AgentLane {
 			);
 			return messages;
 		});
+	}
+	private async resumeDeferredOperation(
+		operation: OperationStartedRecord,
+		handle: DeferredHandle,
+	): Promise<ResumeResult> {
+		const model = this.models.getModel(handle.provider, handle.modelId);
+		if (!model) {
+			return ResultValue.ok({
+				operation: "run",
+				runId: operation.id,
+				kind: "failed",
+				leafId: (await this.session.getLeafId()) ?? "",
+				error: { code: "missing_model", message: `Model ${handle.provider}/${handle.modelId} is unavailable` },
+			});
+		}
+		try {
+			const message = await this.models.fetchDeferred(model, handle);
+			const finalEntry = await this.session.appendMessage(durableClone(message));
+			if (message.stopReason !== "pending") {
+				await this.durableSession.appendRecord({
+					type: "usage",
+					id: this.durableSession.idGenerator.next(),
+					lane: this.name,
+					usage: durableClone(message.usage),
+					cause: "deferred_fetch",
+					runId: operation.id,
+					entryId: finalEntry,
+					attempt: 1,
+					stopReason: message.stopReason,
+				});
+			}
+			if (message.stopReason === "deferred" && message.deferred !== undefined) {
+				await this.setOperationState(operation.id, {
+					phase: "deferred",
+					deferred: structuredClone(message.deferred),
+				});
+				return ResultValue.ok({
+					operation: "run",
+					runId: operation.id,
+					kind: "suspended",
+					leafId: (await this.session.getLeafId()) ?? "",
+					finalEntryId: finalEntry,
+					deferred: structuredClone(message.deferred),
+				});
+			}
+			const outcome =
+				message.stopReason === "aborted" ? "aborted" : message.stopReason === "error" ? "failed" : "completed";
+			await this.appendOperationFinished({
+				type: "operation_finished",
+				id: this.durableSession.idGenerator.next(),
+				lane: this.name,
+				runId: operation.id,
+				outcome,
+				error:
+					message.stopReason === "error"
+						? {
+								code: "deferred_error",
+								message: sanitizeErrorMessage(message.errorMessage, "Deferred provider failed"),
+							}
+						: undefined,
+			});
+			this.suspendedOperations = this.suspendedOperations.filter((candidate) => candidate.id !== operation.id);
+			if (outcome === "failed")
+				return ResultValue.ok({
+					operation: "run",
+					runId: operation.id,
+					kind: "failed",
+					leafId: (await this.session.getLeafId()) ?? "",
+					error: {
+						code: "deferred_error",
+						message: sanitizeErrorMessage(message.errorMessage, "Deferred provider failed"),
+					},
+					finalEntryId: finalEntry,
+					finalMessage: message,
+				});
+			if (outcome === "aborted")
+				return ResultValue.ok({
+					operation: "run",
+					runId: operation.id,
+					kind: "aborted",
+					leafId: (await this.session.getLeafId()) ?? "",
+					finalEntryId: finalEntry,
+					finalMessage: message,
+				});
+			return ResultValue.ok({
+				operation: "run",
+				runId: operation.id,
+				kind: "completed",
+				leafId: (await this.session.getLeafId()) ?? "",
+				finalEntryId: finalEntry,
+				finalMessage: message,
+			});
+		} catch (error) {
+			const message = sanitizeErrorMessage(error, "Deferred provider failed");
+			await this.appendOperationFinished({
+				type: "operation_finished",
+				id: this.durableSession.idGenerator.next(),
+				lane: this.name,
+				runId: operation.id,
+				outcome: "failed",
+				error: { code: "deferred_error", message },
+			});
+			return ResultValue.ok({
+				operation: "run",
+				runId: operation.id,
+				kind: "failed",
+				leafId: (await this.session.getLeafId()) ?? "",
+				error: { code: "deferred_error", message },
+			});
+		}
 	}
 	async nextRun(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
 	async nextRun(_message: AgentMessage): Promise<QueueResult>;
