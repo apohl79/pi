@@ -35,4 +35,10 @@ describe("Session with in-memory storage", () => {
 		expect(mainId).toBe("generated-1");
 		expect(threadId).toBe("generated-2");
 	});
+
+	it("rejects unsafe pagination values before querying storage", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "session", createdAt: 1 }));
+		await expect(session.findEntries({ limit: Number.MAX_SAFE_INTEGER + 1 })).rejects.toThrow("limit");
+		await expect(session.findRecords({ afterSeq: Number.MAX_SAFE_INTEGER + 1 })).rejects.toThrow("cursor");
+	});
 });
