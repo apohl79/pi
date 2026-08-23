@@ -224,6 +224,16 @@ describe("LocalDiagnosticCapsuleStore", () => {
 		await expect(store.decrypt(tampered)).rejects.toThrow();
 	});
 
+	test("rejects decryption when the capsule key is unavailable", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostic-capsules-missing-key-"));
+		const first = new LocalDiagnosticCapsuleStore(join(directory, "first-keys.json"));
+		const capsule = await first.encrypt({ eventId: "event-1", kind: "prompt", content: "secret" });
+		const unrelated = new LocalDiagnosticCapsuleStore(join(directory, "unrelated-keys.json"));
+		await expect(unrelated.decrypt(capsule)).rejects.toThrow(
+			`Diagnostic capsule key is unavailable: ${capsule.keyId}`,
+		);
+	});
+
 	test("persists bounded capsules separately from the key file", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostic-capsules-persist-"));
 		const keyPath = join(directory, "keys.json");
