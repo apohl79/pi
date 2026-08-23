@@ -240,6 +240,7 @@ describe("InMemoryV2AgentRegistry", () => {
 
 	test("rejects unsafe agent registry limits", () => {
 		expect(() => new InMemoryV2AgentRegistry({ maxActive: 9 })).toThrow("maxActive must be an integer from 1 to 8");
+		expect(() => new InMemoryV2AgentRegistry({ maxDepth: Number.MAX_SAFE_INTEGER + 1 })).toThrow("maxDepth");
 		expect(() => new InMemoryV2AgentRegistry({ maxActivePerParent: 0 })).toThrow("maxActivePerParent");
 		expect(() => new InMemoryV2AgentRegistry({ maxActivePerParent: 9 })).toThrow("maxActivePerParent");
 	});

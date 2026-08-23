@@ -49,10 +49,11 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 		this.maxDepth = options.maxDepth ?? 1;
 		this.maxActive = options.maxActive ?? 8;
 		this.maxActivePerParent = options.maxActivePerParent ?? 4;
-		if (!Number.isInteger(this.maxDepth) || this.maxDepth < 1) throw new Error("maxDepth must be a positive integer");
-		if (!Number.isInteger(this.maxActive) || this.maxActive < 1 || this.maxActive > 8)
+		if (!Number.isSafeInteger(this.maxDepth) || this.maxDepth < 1)
+			throw new Error("maxDepth must be a positive integer");
+		if (!Number.isSafeInteger(this.maxActive) || this.maxActive < 1 || this.maxActive > 8)
 			throw new Error("maxActive must be an integer from 1 to 8");
-		if (!Number.isInteger(this.maxActivePerParent) || this.maxActivePerParent < 1 || this.maxActivePerParent > 8)
+		if (!Number.isSafeInteger(this.maxActivePerParent) || this.maxActivePerParent < 1 || this.maxActivePerParent > 8)
 			throw new Error("maxActivePerParent must be an integer from 1 to 8");
 	}
 
@@ -62,7 +63,7 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 			request.forkTurns !== undefined &&
 			request.forkTurns !== "none" &&
 			request.forkTurns !== "all" &&
-			(!Number.isInteger(request.forkTurns) || request.forkTurns < 1 || request.forkTurns > 32)
+			(!Number.isSafeInteger(request.forkTurns) || request.forkTurns < 1 || request.forkTurns > 32)
 		)
 			throw new Error("forkTurns must be none, all, or an integer from 1 to 32");
 		const depth = parentPath.split("/").filter(Boolean).length - 1;
@@ -105,7 +106,7 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	async wait(agentId: string, timeoutMs?: number): Promise<AgentSummary> {
-		if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs < 0))
+		if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0))
 			throw new Error("timeoutMs must be non-negative");
 		if (timeoutMs && timeoutMs > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(timeoutMs, 10)));
 		return this.snapshot(this.get(agentId));
