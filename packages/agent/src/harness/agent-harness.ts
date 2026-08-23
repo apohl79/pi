@@ -548,6 +548,10 @@ export class AgentHarness implements AgentLane {
 					model: this.model,
 					samplingInput,
 					reasoning: this.thinkingLevel === "off" ? undefined : this.thinkingLevel,
+					beforeToolCall: async ({ toolCall }) => {
+						await this.park({ kind: "execute_tool", toolCallId: toolCall.id, toolName: toolCall.name });
+						return undefined;
+					},
 					convertToLlm:
 						this.toProviderMessages ??
 						((messages) =>
