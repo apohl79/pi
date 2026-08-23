@@ -269,8 +269,9 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 		});
 		try {
 			const model = resolveRemoteModel(command.options, await client.listModels());
-			if (model !== undefined) await session.setModel(model);
-			if (command.options.thinking !== undefined) await session.setThinking(command.options.thinking);
+			if (model !== undefined) await session.waitForOperation(await session.setModel(model));
+			if (command.options.thinking !== undefined)
+				await session.waitForOperation(await session.setThinking(command.options.thinking));
 			const hasPrompt = command.options.messages.length > 0 || command.options.fileArgs.length > 0;
 			if (!command.options.print && command.options.mode !== "json") {
 				if (hasPrompt) {
