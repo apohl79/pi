@@ -5,11 +5,13 @@
  */
 
 import {
-	createAgentSession,
+	createDirectAgentSession,
 	DefaultResourceLoader,
 	getAgentDir,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
+
+const createAgentSession = createDirectAgentSession;
 
 // Disable context files entirely by returning an empty list in agentsFilesOverride.
 const loader = new DefaultResourceLoader({

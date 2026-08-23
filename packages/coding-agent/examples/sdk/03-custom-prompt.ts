@@ -5,11 +5,13 @@
  */
 
 import {
-	createAgentSession,
+	createDirectAgentSession,
 	DefaultResourceLoader,
 	getAgentDir,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
+
+const createAgentSession = createDirectAgentSession;
 
 const cwd = process.cwd();
 const agentDir = getAgentDir();

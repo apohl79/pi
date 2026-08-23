@@ -4,7 +4,9 @@
  * Control session persistence: in-memory, new file, continue, or open specific.
  */
 
-import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import { createDirectAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+
+const createAgentSession = createDirectAgentSession;
 
 // In-memory (no persistence)
 const { session: inMemory } = await createAgentSession({

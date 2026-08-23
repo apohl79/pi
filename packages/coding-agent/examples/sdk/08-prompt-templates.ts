@@ -5,13 +5,15 @@
  */
 
 import {
-	createAgentSession,
+	createDirectAgentSession,
 	createSyntheticSourceInfo,
 	DefaultResourceLoader,
 	getAgentDir,
 	type PromptTemplate,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
+
+const createAgentSession = createDirectAgentSession;
 
 // Define custom templates
 const deployTemplate: PromptTemplate = {

@@ -6,13 +6,15 @@
 
 import { getModel } from "@earendil-works/pi-ai/compat";
 import {
-	createAgentSession,
+	createDirectAgentSession,
 	createExtensionRuntime,
 	ModelRuntime,
 	type ResourceLoader,
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+
+const createAgentSession = createDirectAgentSession;
 
 const modelRuntime = await ModelRuntime.create({
 	authPath: "/tmp/my-agent/auth.json",
