@@ -1,10 +1,12 @@
 import { readFile, writeFile } from "node:fs/promises";
 import type { PiClientV2, PiSessionV2Handle } from "@earendil-works/pi-client";
 import type { CommandV2, JsonValue } from "@earendil-works/pi-protocol";
+import { RemoteV2Session } from "../../client/remote-v2-session.ts";
 import type { ExperimentalCliContext } from "./cli.ts";
 import type { AttachCommand } from "./commands/attach.ts";
 import type { ClientCommand } from "./commands/client.ts";
 import type { DiagnosticsCommand } from "./commands/diagnostics.ts";
+import type { PiCommand } from "./commands/pi.ts";
 import type { ServerCommand } from "./commands/server.ts";
 import type { SessionsCommand } from "./commands/sessions.ts";
 import type { TransportAddress } from "./transport-address.ts";
@@ -20,6 +22,7 @@ export type ExperimentalCliRuntimeOptions = {
 	defaultConnect: TransportAddress;
 	createClient(address: TransportAddress): PiClientV2;
 	write(value: unknown): void;
+	writeText?(value: string): void;
 	onAttach?(handle: PiSessionV2Handle): void | Promise<void>;
 };
 
@@ -117,10 +120,39 @@ export function createExperimentalCliRuntime(options: ExperimentalCliRuntimeOpti
 		}
 		await options.onAttach(handle);
 	};
+	const runPi = async (command: PiCommand): Promise<void> => {
+		if (!command.options.print) throw new Error("Server-default runtime currently supports print mode only");
+		const prompt = command.options.messages.join(" ").trim();
+		if (!prompt) throw new Error("Server-default print mode requires a prompt");
+		await options.daemon.start();
+		const client = connect(options.defaultConnect);
+		await client.connect();
+		const session = await RemoteV2Session.create(client, {
+			...(command.options.name === undefined ? {} : { name: command.options.name }),
+			cwd: process.cwd(),
+		});
+		try {
+			const operationId = await session.submit(prompt);
+			const snapshot = await session.waitForOperation(operationId);
+			if (command.options.mode === "json") {
+				options.write(snapshot);
+				return;
+			}
+			const assistant = snapshot.transcript.filter((item) => item.role === "assistant").at(-1);
+			const text = assistant?.content
+				.filter((part) => part.type === "text")
+				.map((part) => part.text)
+				.join("")
+				.trim();
+			if (options.writeText) options.writeText(text ?? "");
+			else options.write(text);
+		} finally {
+			await session.dispose();
+			closeClient(client);
+		}
+	};
 	return {
-		runPi: async () => {
-			throw new Error("The experimental runtime does not execute legacy pi commands");
-		},
+		runPi,
 		runServer,
 		runClient,
 		runAttach,
