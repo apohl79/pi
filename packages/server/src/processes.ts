@@ -281,8 +281,8 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 
 	async write(processId: string, input: string, options: V2ProcessWriteOptions = {}): Promise<V2ProcessOutput> {
 		const process = this.get(processId);
-		if (process.state !== "running" || !process.child.stdin) throw new Error(`Process ${processId} is not running`);
 		if (process.inputClosed) throw new Error(`Process ${processId} input is closed`);
+		if (process.state !== "running" || !process.child.stdin) throw new Error(`Process ${processId} is not running`);
 		const cursor = process.totalBytes;
 		process.child.stdin.write(input);
 		if (options.eof) {
