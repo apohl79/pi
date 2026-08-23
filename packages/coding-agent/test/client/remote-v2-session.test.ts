@@ -128,39 +128,51 @@ function memoryTransport() {
 														encoding: "base64",
 														data: "aGk=",
 													} as JsonValue)
-												: message.request.command === "web"
+												: message.request.command === "blob/put"
 													? ({
-															results: [{ id: "web-1", title: "Pi", source: "faux", retrievedAt: 1 }],
+															blob: { digest: "sha256:blob", mimeType: "text/plain", size: 2 },
 														} as JsonValue)
-													: message.request.command === "image/view"
-														? ({
-																image: {
-																	digest: "sha256:image",
-																	mimeType: "image/png",
-																	size: 4,
-																	reference: "project:image.png",
-																},
-															} as JsonValue)
-														: message.request.command === "image/generate"
+													: message.request.command === "blob/read"
+														? ({ digest: "sha256:blob", encoding: "base64", data: "aGk=" } as JsonValue)
+														: message.request.command === "blob/stat"
 															? ({
-																	image: {
-																		digest: "sha256:generated",
-																		mimeType: "image/png",
-																		size: 4,
-																		reference: "blob:sha256:generated",
-																		provider: "faux",
-																		model: "image-model",
-																		promptHash: "hash",
-																	},
+																	blob: { digest: "sha256:blob", mimeType: "text/plain", size: 2 },
 																} as JsonValue)
-															: message.request.command === "plan/update"
+															: message.request.command === "web"
 																? ({
-																		plan: {
-																			version: 1,
-																			items: [{ step: "Inspect", status: "in_progress" }],
-																		},
+																		results: [
+																			{ id: "web-1", title: "Pi", source: "faux", retrievedAt: 1 },
+																		],
 																	} as JsonValue)
-																: { command: message.request.command };
+																: message.request.command === "image/view"
+																	? ({
+																			image: {
+																				digest: "sha256:image",
+																				mimeType: "image/png",
+																				size: 4,
+																				reference: "project:image.png",
+																			},
+																		} as JsonValue)
+																	: message.request.command === "image/generate"
+																		? ({
+																				image: {
+																					digest: "sha256:generated",
+																					mimeType: "image/png",
+																					size: 4,
+																					reference: "blob:sha256:generated",
+																					provider: "faux",
+																					model: "image-model",
+																					promptHash: "hash",
+																				},
+																			} as JsonValue)
+																		: message.request.command === "plan/update"
+																			? ({
+																					plan: {
+																						version: 1,
+																						items: [{ step: "Inspect", status: "in_progress" }],
+																					},
+																				} as JsonValue)
+																			: { command: message.request.command };
 			const response: ServerMessageV2 =
 				message.request.command.startsWith("turn/") ||
 				message.request.command.startsWith("session/model") ||
@@ -373,6 +385,21 @@ describe("RemoteV2Session", () => {
 			"image/view",
 			"image/generate",
 		]);
+		await session.dispose();
+	});
+
+	test("transfers server-owned blobs", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		expect(await session.putBlob("aGk=", "text/plain")).toEqual({
+			digest: "sha256:blob",
+			mimeType: "text/plain",
+			size: 2,
+		});
+		expect(await session.readBlob("sha256:blob")).toMatchObject({ encoding: "base64", data: "aGk=" });
+		expect(await session.statBlob("sha256:blob")).toMatchObject({ mimeType: "text/plain", size: 2 });
 		await session.dispose();
 	});
 
