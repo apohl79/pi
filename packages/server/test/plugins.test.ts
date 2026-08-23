@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, symlink } from "node:fs/promises";
+import { access, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -92,5 +92,21 @@ describe("InMemoryV2PluginRegistry", () => {
 		const registry = new JsonV2PluginRegistry(path);
 		await registry.addMarketplace("local", "/workspace/plugins");
 		await expect(access(target)).rejects.toThrow();
+	});
+
+	test("rejects malformed persisted plugin records", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-plugin-registry-invalid-"));
+		const path = join(directory, "plugins.json");
+		await writeFile(
+			path,
+			JSON.stringify({
+				marketplaces: [{ name: "local", source: "/workspace/plugins", addedAt: 1 }],
+				plugins: [{ id: "reviewer@local", name: "reviewer", enabled: "yes" }],
+			}),
+		);
+
+		await expect(new JsonV2PluginRegistry(path).listPlugins()).rejects.toThrow(
+			"Plugin registry plugin record is invalid",
+		);
 	});
 });
