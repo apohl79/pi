@@ -89,6 +89,8 @@ describe("coding-agent daemon image workflow", () => {
 			});
 			const usage = await client.request({ command: "usage/read", payload: { sessionId } });
 			expect(usage).toMatchObject({ result: { aggregate: { imageUnits: 1, costUsd: 0.04 } } });
+			const sessionSnapshot = await client.request({ command: "session/read", sessionId });
+			expect(sessionSnapshot).toMatchObject({ result: { session: { usage: { imageUnits: 1 } } } });
 		} finally {
 			client.dispose();
 			await runtime.close();
