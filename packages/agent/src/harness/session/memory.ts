@@ -14,15 +14,18 @@ import {
 	type OperationStartedRecord,
 	type ProvisionedEntry,
 	type RecordQuery,
+	type RegisterWrite,
 	type SessionCreateOptions,
 	SessionError,
 	type SessionMetadata,
+	type SessionRegister,
 	type SessionRepo,
 	type SessionStats,
 	type SessionStorage,
+	type SessionTransactionStorage,
 } from "./types.ts";
 
-export class InMemorySessionStorage implements SessionStorage {
+export class InMemorySessionStorage implements SessionStorage, SessionTransactionStorage {
 	private readonly metadata: SessionMetadata;
 	private readonly state = new SessionState();
 
@@ -116,6 +119,26 @@ export class InMemorySessionStorage implements SessionStorage {
 		}
 		for (const record of records) this.state.applyMutation({ kind: "record", record });
 		return structuredClone(records);
+	}
+
+	async appendTransaction<TRecord extends LaneRecord>(
+		newRecords: readonly NewRecord<TRecord>[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ records: TRecord[]; registers: SessionRegister[] }> {
+		if (newRecords.length === 0 && writes.length === 0) return { records: [], registers: [] };
+		const records = await this.appendRecords(newRecords);
+		const registers: SessionRegister[] = [];
+		for (const write of writes) {
+			const mutation = { kind: "register" as const, seq: this.state.nextSequence, write };
+			this.state.applyMutation(mutation);
+			const register = this.state.getRegister(write.namespace, write.key);
+			if (register !== undefined) registers.push(register);
+		}
+		return { records, registers };
+	}
+
+	async getRegister(namespace: string, key: string): Promise<SessionRegister | undefined> {
+		return this.state.getRegister(namespace, key);
 	}
 
 	async getEntry(id: string): Promise<Entry | undefined> {

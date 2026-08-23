@@ -96,6 +96,27 @@ describe("JsonlSessionRepo conformance", () => {
 });
 
 describe("JSONL v4 persistence", () => {
+	it("persists register transactions and replays the latest value", async () => {
+		const root = createTempDir();
+		const repository = createRepository(root);
+		const session = await repository.create({ id: "registers", cwd: root });
+		await session.appendTransaction(
+			[],
+			[{ op: "set", namespace: "pending.entry", key: "queued-1", value: { text: "queued" } }],
+		);
+		expect(await session.getRegister("pending.entry", "queued-1")).toMatchObject({
+			value: { text: "queued" },
+		});
+
+		const metadata = await session.getMetadata();
+		const reopened = await repository.open(metadata);
+		expect(await reopened.getRegister("pending.entry", "queued-1")).toMatchObject({
+			value: { text: "queued" },
+		});
+		await reopened.appendTransaction([], [{ op: "delete", namespace: "pending.entry", key: "queued-1" }]);
+		expect(await reopened.getRegister("pending.entry", "queued-1")).toBeUndefined();
+	});
+
 	it("exposes the complete metadata contract", async () => {
 		const root = createTempDir();
 		const repository = createRepository(root);

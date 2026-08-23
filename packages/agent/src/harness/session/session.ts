@@ -14,9 +14,12 @@ import type {
 	ProvisionedEntry,
 	RecordBase,
 	RecordQuery,
+	RegisterWrite,
 	SessionMetadata,
+	SessionRegister,
 	SessionStats,
 	SessionStorage,
+	SessionTransactionStorage,
 	SessionTree,
 } from "./types.ts";
 import { SessionError } from "./types.ts";
@@ -214,6 +217,30 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> implem
 		return this.storage.appendRecords(records as readonly NewRecord<LaneRecord>[]) as unknown as Promise<
 			(TNewRecord & Pick<RecordBase, "seq" | "timestamp">)[]
 		>;
+	}
+
+	async appendTransaction<TNewRecord extends NewRecord>(
+		records: readonly TNewRecord[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ records: (TNewRecord & Pick<RecordBase, "seq" | "timestamp">)[]; registers: SessionRegister[] }> {
+		for (const record of records) assertJsonSerializable(record);
+		for (const write of writes) assertJsonSerializable(write);
+		const storage = this.storage as unknown as SessionTransactionStorage;
+		if (typeof storage.appendTransaction !== "function") {
+			throw new SessionError("storage", "Session backend does not support atomic register transactions");
+		}
+		return storage.appendTransaction(records as readonly NewRecord<LaneRecord>[], writes) as unknown as Promise<{
+			records: (TNewRecord & Pick<RecordBase, "seq" | "timestamp">)[];
+			registers: SessionRegister[];
+		}>;
+	}
+
+	async getRegister(namespace: string, key: string): Promise<SessionRegister | undefined> {
+		const storage = this.storage as unknown as SessionTransactionStorage;
+		if (typeof storage.getRegister !== "function") {
+			throw new SessionError("storage", "Session backend does not support registers");
+		}
+		return storage.getRegister(namespace, key);
 	}
 
 	async findRecords<K extends LaneRecord["type"]>(

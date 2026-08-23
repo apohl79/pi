@@ -212,6 +212,22 @@ function decodeMutation(line: string): SessionMutation {
 			return parseLaneMutation(value, seq);
 		case "fact":
 			return parseFactMutation(value, seq);
+		case "register": {
+			const namespace = requireString(value.namespace, "namespace");
+			const key = requireString(value.key, "key");
+			if (value.op !== "set" && value.op !== "delete")
+				throw new JsonlDecodeError("schema", "has unknown register op");
+			if (value.op === "set" && value.value === undefined)
+				throw new JsonlDecodeError("schema", "has missing register value");
+			return {
+				kind: "register",
+				seq,
+				write:
+					value.op === "set"
+						? { op: "set", namespace, key, value: value.value as never }
+						: { op: "delete", namespace, key },
+			};
+		}
 		default:
 			throw new JsonlDecodeError("schema", "has unknown mutation kind");
 	}
@@ -236,5 +252,7 @@ export function encodeMutation(mutation: SessionMutation): string {
 			return `${JSON.stringify(mutation)}\n`;
 		case "fact":
 			return `${JSON.stringify(mutation)}\n`;
+		case "register":
+			return `${JSON.stringify({ kind: "register", seq: mutation.seq, ...mutation.write })}\n`;
 	}
 }

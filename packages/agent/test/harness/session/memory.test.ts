@@ -23,6 +23,38 @@ describe("InMemorySessionRepo conformance", () => {
 });
 
 describe("Session with in-memory storage", () => {
+	it("commits records and register writes through one transaction seam", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "transaction", createdAt: 1 }));
+		const result = await session.appendTransaction(
+			[
+				{
+					type: "usage",
+					id: "usage-1",
+					lane: "main",
+					usage: {
+						input: 1,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 1,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					cause: "adjustment",
+				},
+			],
+			[{ op: "set", namespace: "pending.entry", key: "queued-1", value: { message: "queued" } }],
+		);
+		expect(result.records.map((record) => record.id)).toEqual(["usage-1"]);
+		expect(await session.getRegister("pending.entry", "queued-1")).toMatchObject({
+			namespace: "pending.entry",
+			key: "queued-1",
+			value: { message: "queued" },
+		});
+
+		await session.appendTransaction([], [{ op: "delete", namespace: "pending.entry", key: "queued-1" }]);
+		expect(await session.getRegister("pending.entry", "queued-1")).toBeUndefined();
+	});
+
 	it("publishes record batches all-or-none", async () => {
 		const session = new Session(new InMemorySessionStorage({ id: "batch", createdAt: 1 }));
 		await expect(
