@@ -403,6 +403,13 @@ describe("AgentHarness v2 scaffold", () => {
 				modelOverrides: { "harness-compaction-faux/harness-compaction-model": { reserveTokens: 7 } },
 			},
 		});
+		const compactionEvents: string[] = [];
+		harness.events.on("compaction_start", () => {
+			compactionEvents.push("start");
+		});
+		harness.events.on("compaction_end", () => {
+			compactionEvents.push("end");
+		});
 		expect(await harness.getCompactionSettings()).toMatchObject({
 			enabled: true,
 			reserveTokens: 7,
@@ -421,6 +428,7 @@ describe("AgentHarness v2 scaffold", () => {
 			true,
 		);
 		expect((await session.findRecords({ type: "operation_finished" })).at(-1)?.outcome).toBe("completed");
+		expect(compactionEvents).toEqual(["start", "end"]);
 		await harness.close();
 	});
 
@@ -1171,6 +1179,13 @@ describe("AgentHarness v2 scaffold", () => {
 		]);
 		const session = createSession("navigation");
 		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		const navigationEvents: string[] = [];
+		harness.events.on("navigation_start", () => {
+			navigationEvents.push("start");
+		});
+		harness.events.on("navigation_end", () => {
+			navigationEvents.push("end");
+		});
 		await harness.prompt("first");
 		const firstUser = (await session.findEntriesOnBranch({ order: "oldestFirst" })).find(
 			(entry) => entry.type === "message" && entry.message.role === "user",
@@ -1189,6 +1204,7 @@ describe("AgentHarness v2 scaffold", () => {
 			summary: expect.stringContaining("branch summary"),
 		});
 		expect((await session.findRecords({ type: "operation_finished" })).at(-1)?.outcome).toBe("completed");
+		expect(navigationEvents).toEqual(["start", "end"]);
 		await harness.close();
 	});
 
