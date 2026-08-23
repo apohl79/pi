@@ -315,12 +315,14 @@ export async function createCodingAgentV2SqliteService(
 				? undefined
 				: async () => hashV2PluginSet(await options.pluginRegistry!.listPlugins(true));
 		const agents = agentRegistry === undefined ? undefined : async () => agentRegistry.list(metadata.id);
+		const queues = async () => created.harness.getQueueSnapshot();
 		return {
 			metadata: sessionMetadata(metadata),
 			harness: created.harness,
 			...(instructionProfile === undefined ? {} : { instructionProfile }),
 			...(pluginSetHash === undefined ? {} : { pluginSetHash }),
 			...(agents === undefined ? {} : { agents }),
+			queues,
 			goals,
 			...(goalContinuation === undefined ? {} : { goalContinuation }),
 			...(inputRegistry === undefined ? {} : { inputs: inputRegistry }),

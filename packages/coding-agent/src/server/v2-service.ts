@@ -14,6 +14,7 @@ import type {
 	ModelMetadata,
 	OperationAccepted,
 	OperationSummary,
+	PromptContent,
 	SessionMetadataV2,
 	SessionPhaseV2,
 	SessionSnapshotV2,
@@ -33,6 +34,10 @@ export interface CodingAgentV2SessionDefinition {
 	instructionProfile?: () => Promise<InstructionProfileSummary | undefined>;
 	pluginSetHash?: () => Promise<string>;
 	agents?: () => Promise<readonly AgentSummary[]>;
+	queues?: () => Promise<{
+		steer: readonly { entryId: string; message: AgentMessage }[];
+		followUp: readonly { entryId: string; message: AgentMessage }[];
+	}>;
 }
 
 export interface CodingAgentV2Service {
@@ -89,6 +94,14 @@ function modelMetadata(model: Model<string>): ModelMetadata {
 }
 
 type PromptPart = { type: "text"; text: string } | ImageContent;
+
+function queueContent(message: AgentMessage): PromptContent[] {
+	if (message.role !== "user") return [{ type: "text", text: `[${message.role} message]` }];
+	if (typeof message.content === "string") return [{ type: "text", text: message.content }];
+	return message.content.map((part) =>
+		part.type === "text" ? { type: "text", text: part.text } : { type: "text", text: "[image]" },
+	);
+}
 
 export function normalizeGeneratedName(value: string): string | undefined {
 	const cleaned = value
@@ -399,6 +412,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.definition.pluginSetHash?.(),
 			this.definition.agents?.(),
 		]);
+		const queues = await this.definition.queues?.();
 		const effectiveName = persistedName ?? this.sessionName;
 		const cacheRead = Math.max(0, stats.cachedTokens);
 		const input = Math.max(0, stats.uncachedTokens);
@@ -426,7 +440,18 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			model: { provider: this.model.provider, id: this.model.id },
 			thinkingLevel,
 			transcript,
-			queues: { steer: [], followUp: [] },
+			queues: {
+				steer: (queues?.steer ?? []).map((item) => ({
+					id: item.entryId,
+					content: queueContent(item.message),
+					createdAt: item.message.timestamp ?? 0,
+				})),
+				followUp: (queues?.followUp ?? []).map((item) => ({
+					id: item.entryId,
+					content: queueContent(item.message),
+					createdAt: item.message.timestamp ?? 0,
+				})),
+			},
 			...(goal === undefined ? {} : { goal }),
 			agents: agents === undefined ? [] : [...agents],
 			usage: {
