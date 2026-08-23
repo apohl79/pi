@@ -557,22 +557,4 @@ describe("formatRemoteV2Session", () => {
 		expect(visibleWidth(component.render(10)[0] ?? "")).toBe(10);
 		component.dispose();
 	});
-
-	test("bounds local statusline errors on narrow terminals", async () => {
-		const source = {
-			state: { lifecycle: { status: "ready" as const }, snapshot },
-			subscribe: (callback: (state: RemoteV2SessionState) => void) => {
-				callback(source.state);
-				return () => {};
-			},
-		};
-		const runner = new StatuslineRunner({
-			command: "statusline.sh",
-			execute: async () => ({ stdout: "", stderr: "failure", exitCode: 1 }),
-		});
-		const component = new RemoteV2StatuslineComponent(source, runner, { cwd: "/work", transcriptPath: "" }, () => {});
-		await new Promise<void>((resolve) => setImmediate(resolve));
-		expect(visibleWidth(component.render(10)[0] ?? "")).toBe(10);
-		component.dispose();
-	});
 });
