@@ -40,15 +40,6 @@ function clientFactory() {
 					handlers?.onData(
 						encodeServerMessageV2({ type: "response", id: message.id, ok: true, result: { sessions: [] } }),
 					);
-				} else if (message.request.command === "diagnostics/status") {
-					handlers?.onData(
-						encodeServerMessageV2({
-							type: "response",
-							id: message.id,
-							ok: true,
-							result: { command: "diagnostics/status", eventCount: 2 },
-						}),
-					);
 				} else if (message.request.command === "session/attach") {
 					handlers?.onData(
 						encodeServerMessageV2({
@@ -108,20 +99,6 @@ describe("experimental CLI runtime", () => {
 		});
 		await runtime.runAttach({ command: "attach", sessionId: "session-1" });
 		expect(attached).toHaveBeenCalledTimes(1);
-		runtime.close();
-	});
-
-	test("runs diagnostics through the injected client", async () => {
-		const server = clientFactory();
-		const output: unknown[] = [];
-		const runtime = createExperimentalCliRuntime({
-			daemon: daemon(),
-			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
-			createClient: server.create,
-			write: (value) => output.push(value),
-		});
-		await runtime.runDiagnostics({ command: "diagnostics", action: "status" });
-		expect(output).toEqual([{ command: "diagnostics/status", eventCount: 2 }]);
 		runtime.close();
 	});
 

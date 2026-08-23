@@ -41,7 +41,6 @@ export function createUnixServerV2(service: PiServerServiceV2, options: UnixServ
 		serverId: options.serverId,
 		onError: options.onError,
 		diagnostics: options.diagnostics,
-		diagnosticContent: options.diagnosticContent,
 		operationStore: options.operationStore,
 		processes: options.processes,
 		blobs: options.blobs,

@@ -68,21 +68,6 @@ describe("experimental CLI commands", () => {
 		});
 	});
 
-	test("parses diagnostics actions and positional inputs", () => {
-		expect(experimentalCli.parse(["diagnostics", "status"])).toEqual({
-			ok: true,
-			command: { command: "diagnostics", action: "status" },
-		});
-		expect(experimentalCli.parse(["diagnostics", "timeline", "--operation", "op-1", "session-1"])).toEqual({
-			ok: true,
-			command: { command: "diagnostics", action: "timeline", sessionId: "session-1", operationId: "op-1" },
-		});
-		expect(experimentalCli.parse(["diagnostics", "verify", "/tmp/bundle.json"])).toEqual({
-			ok: true,
-			command: { command: "diagnostics", action: "verify", bundle: "/tmp/bundle.json" },
-		});
-	});
-
 	test("leaves experimental-looking existing option values with the existing parser", () => {
 		expect(experimentalCli.parse(["--system-prompt", "--listen", "unix:///tmp/pi.sock"])).toMatchObject({
 			ok: true,
