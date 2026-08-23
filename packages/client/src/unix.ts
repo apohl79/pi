@@ -12,14 +12,13 @@ export interface UnixTransportOptions {
 /** Creates fresh Unix-domain socket transports for PiClient connection attempts in Node-compatible runtimes. */
 export function createUnixTransportFactory(options: UnixTransportOptions): ByteTransportFactory {
 	if (options.path.length === 0) throw new TypeError("Unix transport path must not be empty");
-	if (Buffer.byteLength(options.path) > MAX_UNIX_SOCKET_PATH_BYTES) {
+	if (process.platform !== "win32" && Buffer.byteLength(options.path) > MAX_UNIX_SOCKET_PATH_BYTES) {
 		throw new TypeError(`Unix transport path is too long; maximum is ${MAX_UNIX_SOCKET_PATH_BYTES} UTF-8 bytes`);
 	}
 	const maxPendingBytes = options.maxPendingBytes ?? DEFAULT_MAX_FRAME_LENGTH * 4;
 	if (!Number.isSafeInteger(maxPendingBytes) || maxPendingBytes <= 0) {
 		throw new TypeError("Unix transport maxPendingBytes must be a positive safe integer");
 	}
-	if (process.platform === "win32") throw new Error("Unix transport is not supported on Windows");
 	return (handlers) => connectUnixSocket(options.path, maxPendingBytes, handlers);
 }
 
