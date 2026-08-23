@@ -275,6 +275,7 @@ function stateFor(snapshot: SessionSnapshotV2 | undefined): Record<string, unkno
 		sessionId: snapshot.id,
 		sessionName: snapshot.name,
 		autoCompactionEnabled: snapshot.compactionPolicy.enabled,
+		autoRetryEnabled: snapshot.autoRetryEnabled ?? false,
 		messageCount: snapshot.transcript.length,
 		pendingMessageCount: snapshot.queues.steer.length + snapshot.queues.followUp.length,
 	};
