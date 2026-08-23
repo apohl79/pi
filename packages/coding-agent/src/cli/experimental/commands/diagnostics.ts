@@ -78,21 +78,21 @@ function actionCommand(action: DiagnosticsAction): Command<DiagnosticsCommand, D
 			const sequence = parseSequence(input.value(afterSeqOption));
 			if (sequence.error) errors.push(sequence.error);
 			const positional = input.remainingArgs[0];
-			if (input.remainingArgs.length > (action === "timeline" || action === "tail" || action === "verify" ? 1 : 0))
+			if (
+				input.remainingArgs.length >
+				(action === "timeline" || action === "tail" || action === "export" || action === "verify" ? 1 : 0)
+			)
 				errors.push(`diagnostics ${action} accepts no extra positional arguments`);
 			const sessionId =
-				input.value(sessionOption) ?? (action === "timeline" || action === "tail" ? positional : undefined);
+				input.value(sessionOption) ??
+				(action === "timeline" || action === "tail" || action === "export" ? positional : undefined);
 			const bundle = input.value(bundleOption) ?? (action === "verify" ? positional : undefined);
-			if ((action === "timeline" || action === "tail") && sessionId === undefined)
+			if ((action === "timeline" || action === "tail" || action === "export") && sessionId === undefined)
 				errors.push(`diagnostics ${action} requires a session id`);
 			if (action === "verify" && bundle === undefined)
 				errors.push("diagnostics verify requires --bundle PATH or a bundle path");
-			if (
-				action === "export" &&
-				input.value(decryptContentOption) === true &&
-				input.value(outputOption) === undefined
-			)
-				errors.push("diagnostics export --decrypt-content requires --output PATH");
+			if (action === "export" && input.value(outputOption) === undefined)
+				errors.push("diagnostics export requires --output PATH");
 			if (errors.length > 0) return { ok: false, errors };
 			return {
 				ok: true,

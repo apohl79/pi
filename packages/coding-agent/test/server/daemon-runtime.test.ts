@@ -727,7 +727,15 @@ describe("coding-agent daemon runtime", () => {
 					diagnostics: [],
 				},
 			});
-			await runtime.cli.runDiagnostics({ command: "diagnostics", action: "export", output: bundlePath });
+			await runtime.cli.runSessions({ command: "sessions" });
+			const sessions = output.at(-1) as readonly { id: string }[];
+			const sessionId = sessions[0]!.id;
+			await runtime.cli.runDiagnostics({
+				command: "diagnostics",
+				action: "export",
+				sessionId,
+				output: bundlePath,
+			});
 			const bundle = JSON.parse(await readFile(bundlePath, "utf8")) as {
 				events: readonly unknown[];
 				capsules?: readonly unknown[];

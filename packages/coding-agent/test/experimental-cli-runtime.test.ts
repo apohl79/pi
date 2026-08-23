@@ -608,7 +608,12 @@ describe("experimental CLI runtime", () => {
 			diagnosticsSpool: spool,
 			write: (value) => output.push(value),
 		});
-		await runtime.runDiagnostics({ command: "diagnostics", action: "export", output: outputPath });
+		await runtime.runDiagnostics({
+			command: "diagnostics",
+			action: "export",
+			sessionId: "session-1",
+			output: outputPath,
+		});
 		expect(JSON.parse(await readFile(outputPath, "utf8"))).toMatchObject({
 			manifest: { schemaVersion: 1 },
 			events: [],
