@@ -57,6 +57,17 @@ import { formatSkillInvocation } from "./skills.ts";
 import type { TelemetryContext } from "./telemetry.ts";
 import type { AgentHarnessResources, PromptTemplate, Skill } from "./types.ts";
 
+interface QueueRegisterSession {
+	appendTransaction(
+		records: readonly NewRecord[],
+		writes: readonly (
+			| { op: "set"; namespace: string; key: string; value: JsonValue }
+			| { op: "delete"; namespace: string; key: string }
+		)[],
+	): Promise<unknown>;
+	getRegister(namespace: string, key: string): Promise<{ value: JsonValue } | undefined>;
+}
+
 export class LaneBusy extends TaggedError("LaneBusy")<{
 	lane: string;
 	operationId: string;
@@ -1584,21 +1595,22 @@ export class AgentHarness implements AgentLane {
 			const recalled = { steer: [] as AgentMessage[], followUp: [] as AgentMessage[] };
 			const cancellations: NewRecord<QueueCancelledRecord>[] = [];
 			for (const item of queued) {
+				const target = await this.queueTarget(item);
 				if (
 					item.queue === "nextRun" ||
 					item.runId !== openRun.id ||
-					cancelled.has(item.target.id) ||
-					item.target.type !== "message"
+					cancelled.has(target.id) ||
+					target.type !== "message"
 				)
 					continue;
-				recalled[item.queue].push(structuredClone(item.target.message));
-				cancelled.add(item.target.id);
+				recalled[item.queue].push(structuredClone(target.message));
+				cancelled.add(target.id);
 				cancellations.push({
 					type: "queue_cancelled",
 					id: this.durableSession.idGenerator.next(),
 					lane: this.name,
 					runId: openRun.id,
-					entryId: item.target.id,
+					entryId: target.id,
 				});
 			}
 			const requested: NewRecord<AbortRequestedRecord> = {
@@ -1607,7 +1619,14 @@ export class AgentHarness implements AgentLane {
 				lane: this.name,
 				runId: openRun.id,
 			};
-			await this.durableSession.appendRecords([...cancellations, requested]);
+			await this.appendQueueTransaction(
+				[...cancellations, requested],
+				cancellations.map((record) => ({
+					op: "delete" as const,
+					namespace: "pending.entry",
+					key: record.entryId,
+				})),
+			);
 			return { recalled, requested };
 		});
 		if (this.activeRun?.id === openRun.id) {
@@ -1649,28 +1668,29 @@ export class AgentHarness implements AgentLane {
 			]);
 			const cancelledIds = new Set(cancelled.map((record) => record.entryId));
 			const pending = queued.filter(
-				(record) =>
-					record.queue === queue &&
-					record.runId === runId &&
-					!cancelledIds.has(record.target.id) &&
-					record.target.type === "message",
+				(record) => record.queue === queue && record.runId === runId && !cancelledIds.has(record.target.id),
 			);
 			const selected =
 				this[queue === "steer" ? "steeringMode" : "followUpMode"] === "all" ? pending : pending.slice(0, 1);
 			const messages: AgentMessage[] = [];
 			const cancellations: NewRecord<QueueCancelledRecord>[] = [];
 			for (const record of selected) {
+				const target = await this.queueTarget(record);
+				if (target.type !== "message") continue;
 				cancellations.push({
 					type: "queue_cancelled",
 					id: this.durableSession.idGenerator.next(),
 					lane: this.name,
 					runId,
-					entryId: record.target.id,
+					entryId: target.id,
 					disposition: "consumed",
 				});
-				if (record.target.type === "message") messages.push(durableClone(record.target.message));
+				messages.push(durableClone(target.message));
 			}
-			await this.durableSession.appendRecords(cancellations);
+			await this.appendQueueTransaction(
+				cancellations,
+				cancellations.map((record) => ({ op: "delete" as const, namespace: "pending.entry", key: record.entryId })),
+			);
 			return messages;
 		});
 	}
@@ -1706,7 +1726,7 @@ export class AgentHarness implements AgentLane {
 							runId: enqueued.runId,
 							entryId,
 						};
-			await this.durableSession.appendRecord(record);
+			await this.appendQueueTransaction([record], [{ op: "delete", namespace: "pending.entry", key: entryId }]);
 			return ResultValue.ok({ outcome: "cancelled" });
 		});
 	}
@@ -1748,9 +1768,48 @@ export class AgentHarness implements AgentLane {
 							runId: openRun!.id,
 							target,
 						};
-			await this.durableSession.appendRecord(record);
+			await this.appendQueueTransaction(
+				[record],
+				[
+					{
+						op: "set",
+						namespace: "pending.entry",
+						key: target.id,
+						value: durableClone(target) as unknown as JsonValue,
+					},
+				],
+			);
 			return ResultValue.ok({ entryId: target.id });
 		});
+	}
+
+	private registerSession(): QueueRegisterSession | undefined {
+		const candidate = this.durableSession as unknown as Partial<QueueRegisterSession>;
+		return typeof candidate.appendTransaction === "function" && typeof candidate.getRegister === "function"
+			? (candidate as QueueRegisterSession)
+			: undefined;
+	}
+
+	private async appendQueueTransaction(
+		records: readonly NewRecord[],
+		writes: readonly (
+			| { op: "set"; namespace: string; key: string; value: JsonValue }
+			| { op: "delete"; namespace: string; key: string }
+		)[],
+	): Promise<void> {
+		const transaction = this.registerSession();
+		if (transaction) {
+			await transaction.appendTransaction(records, writes);
+			return;
+		}
+		await this.durableSession.appendRecords(records);
+	}
+
+	private async queueTarget(record: QueueEnqueuedRecord): Promise<ProvisionedEntry> {
+		const register = this.registerSession();
+		if (!register) return record.target;
+		const pending = await register.getRegister("pending.entry", record.target.id);
+		return (pending?.value as unknown as ProvisionedEntry | undefined) ?? record.target;
 	}
 	async recordUsage(usage: Usage, options?: { entryId?: string; details?: JsonValue }): Promise<RecordUsageResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
@@ -2070,8 +2129,9 @@ export class AgentHarness implements AgentLane {
 		const cancelledIds = new Set(cancelled.map((record) => record.entryId));
 		const queues = { steer: [], followUp: [], nextRun: [] } as LaneSnapshot["queues"];
 		for (const record of queued) {
-			if (cancelledIds.has(record.target.id) || record.target.type !== "message") continue;
-			queues[record.queue].push({ entryId: record.target.id, message: durableClone(record.target.message) });
+			const target = await this.queueTarget(record);
+			if (cancelledIds.has(target.id) || target.type !== "message") continue;
+			queues[record.queue].push({ entryId: target.id, message: durableClone(target.message) });
 		}
 		const operation = open[0];
 		return {
