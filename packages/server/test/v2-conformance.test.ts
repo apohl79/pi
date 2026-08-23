@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type {
 	AgentSummary,
 	CommandV2,
+	JsonValue,
 	ModelMetadata,
 	OperationAccepted,
 	SessionMetadataV2,
@@ -18,7 +19,7 @@ import { InMemoryForensicRecorder } from "../src/diagnostics.ts";
 import { LocalV2FileReferenceService } from "../src/files.ts";
 import { InMemoryV2InputRegistry } from "../src/inputs.ts";
 import { InMemoryV2OperationStore, JsonlV2OperationStore } from "../src/operation-store.ts";
-import { InMemoryV2ProcessRegistry } from "../src/processes.ts";
+import { InMemoryV2ProcessRegistry, NodeV2ProcessRegistry } from "../src/processes.ts";
 import { connectUnixTestClientV2, Deferred } from "../src/testing/index.ts";
 import { createUnixServerV2 } from "../src/transports/unix/preset.ts";
 import type { PiServerServiceV2, PiSessionRuntimeV2 } from "../src/v2.ts";
@@ -88,6 +89,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	runEntered = false;
 	disposed = false;
 	disposeCount = 0;
+	fail = false;
 	private current: SessionSnapshotV2;
 
 	constructor(id: string) {
@@ -106,6 +108,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 
 	async run(operationId: string, _command: CommandV2): Promise<void> {
 		this.commands.push(structuredClone(_command));
+		if (this.fail) throw new Error("runtime failed");
 		this.runEntered = true;
 		await this.release.promise;
 		this.started.resolve(undefined);
@@ -330,6 +333,19 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(exported).toMatchObject({ ok: true, result: { format: "json", events: [{ seq: 1 }] } });
 		expect(verified).toMatchObject({ ok: true, result: { valid: true, gaps: [] } });
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
+		const bundle = (exported as unknown as { result: { bundle: JsonValue } }).result.bundle;
+		const bundleVerified = await client.request({ command: "diagnostics/verify", payload: { bundle } });
+		expect(bundleVerified).toMatchObject({ ok: true, result: { valid: true } });
+		const tampered = structuredClone(bundle) as {
+			events: Array<{ [key: string]: JsonValue }>;
+			manifest: { [key: string]: JsonValue };
+		};
+		tampered.events[0]!.payload = { token: "changed" };
+		const tamperedVerification = await client.request({
+			command: "diagnostics/verify",
+			payload: { bundle: tampered as JsonValue },
+		});
+		expect(tamperedVerification).toMatchObject({ ok: true, result: { valid: false } });
 	});
 
 	test("enables metadata diagnostics when no recorder is injected", async () => {
@@ -507,6 +523,30 @@ describe("PiServer v2 operation acceptance", () => {
 		);
 		expect(terminal).toMatchObject({ type: "event", sessionId: "session-1", payload: { state: "complete" } });
 		await secondClient.close();
+	});
+
+	test("includes the authoritative snapshot in a failed terminal event", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-failure-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const runtime = service.sessions.get("session-1")!;
+		runtime.fail = true;
+
+		await client.request({ command: "turn/start", sessionId: "session-1", payload: { text: "hello" } });
+		const terminal = await client.next(
+			(message) => message.type === "event" && message.event === "operation_terminal",
+		);
+		expect(terminal).toMatchObject({
+			type: "event",
+			payload: { state: "failed", error: "runtime failed", snapshot: { id: "session-1", phase: "idle" } },
+		});
+		await client.close();
 	});
 
 	test("disposes detached runtimes when the server closes", async () => {
@@ -818,6 +858,32 @@ describe("PiServer v2 operation acceptance", () => {
 		await observer.close();
 	});
 
+	test("forwards process environment deltas to the node process registry", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-process-env-"));
+		directories.push(directory);
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			processes: new NodeV2ProcessRegistry(),
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const started = await client.request({
+			command: "process/start",
+			sessionId: "session-1",
+			payload: {
+				command: `${process.execPath} -e "process.stdout.write(process.env.PI_V2_ENV ?? '')"`,
+				env: { PI_V2_ENV: "forwarded" },
+			},
+		});
+		const processId = (started as unknown as { result: { process: { processId: string } } }).result.process.processId;
+		await client.request({ command: "process/wait", payload: { processId } });
+		const output = await client.request({ command: "process/read", payload: { processId, cursor: 0 } });
+		expect(output).toMatchObject({ ok: true, result: { output: { output: "forwarded", truncated: false } } });
+		await client.close();
+	});
+
 	test("transports content-addressed blobs without embedding binary bytes in CBOR", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
@@ -857,10 +923,15 @@ describe("PiServer v2 operation acceptance", () => {
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
 		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const agentEvent = client.next((message) => message.type === "event" && message.event === "agent_updated");
 		const spawned = await client.request({
 			command: "agent/spawn",
 			sessionId: "session-1",
 			payload: { taskName: "research", taskMessage: "inspect auth" },
+		});
+		expect(await agentEvent).toMatchObject({
+			event: "agent_updated",
+			payload: { agent: { path: "/root/research" } },
 		});
 		const agent = (spawned as unknown as { result: { agent: { id: string; path: string } } }).result.agent;
 		expect(agent.path).toBe("/root/research");
@@ -868,7 +939,20 @@ describe("PiServer v2 operation acceptance", () => {
 			ok: true,
 			result: { agents: [{ id: agent.id, state: "running" }] },
 		});
-		await client.request({ command: "agent/message", payload: { agentId: agent.id, message: "continue" } });
+		const messageEvent = client.next((message) => message.type === "event" && message.event === "agent_message");
+		await client.request({
+			command: "agent/message",
+			payload: { agentId: agent.id, message: `token=super-secret ${"continue ".repeat(1000)}` },
+		});
+		const receivedMessage = await messageEvent;
+		expect(receivedMessage).toMatchObject({
+			event: "agent_message",
+			payload: { agentId: agent.id, message: expect.stringContaining("token=[redacted]") },
+		});
+		if (receivedMessage.type === "event") {
+			const payload = receivedMessage.payload as { message?: unknown };
+			if (typeof payload.message === "string") expect(payload.message.length).toBeLessThanOrEqual(4096);
+		}
 		const interrupted = await client.request({ command: "agent/interrupt", payload: { agentId: agent.id } });
 		expect(interrupted).toMatchObject({ ok: true, result: { agent: { id: agent.id, state: "interrupted" } } });
 		await client.close();

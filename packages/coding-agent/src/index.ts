@@ -8,11 +8,30 @@ export {
 	type ExperimentalDaemonController,
 } from "./cli/experimental/runtime.ts";
 export {
+	parseRemoteV2Command,
+	REMOTE_V2_SLASH_COMMANDS,
+	type RemoteV2Command,
+	type RemoteV2CommandResult,
+	RemoteV2InteractiveAttachment,
+} from "./client/remote-v2-interactive.ts";
+export {
+	type RemoteV2SessionAttachment,
+	type RemoteV2SessionEntry,
+	RemoteV2SessionSelector,
+	type RemoteV2SessionStatus,
+	sessionStatus,
+} from "./client/remote-v2-selector.ts";
+export {
 	RemoteV2Session,
 	type RemoteV2SessionLifecycle,
 	type RemoteV2SessionOptions,
 	type RemoteV2SessionState,
 } from "./client/remote-v2-session.ts";
+export {
+	formatRemoteV2Session,
+	RemoteV2SessionView,
+	type RemoteV2SessionViewOptions,
+} from "./client/remote-v2-view.ts";
 // Config paths
 export {
 	CONFIG_DIR_NAME,

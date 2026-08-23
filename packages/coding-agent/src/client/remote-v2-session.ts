@@ -1,4 +1,4 @@
-import type { PiClientV2, PiSessionV2Handle } from "@earendil-works/pi-client";
+import type { PiClientV2, PiSessionV2Handle, V2SessionLeaseMode } from "@earendil-works/pi-client";
 import type {
 	CommandV2,
 	JsonValue,
@@ -23,6 +23,7 @@ export interface RemoteV2SessionState {
 
 export interface RemoteV2SessionOptions {
 	readonly onListenerError?: (error: Error) => void;
+	readonly mode?: V2SessionLeaseMode;
 }
 
 type Listener = (state: RemoteV2SessionState) => void;
@@ -30,6 +31,7 @@ type Listener = (state: RemoteV2SessionState) => void;
 export class RemoteV2Session {
 	readonly #client: PiClientV2;
 	readonly #onListenerError: ((error: Error) => void) | undefined;
+	readonly #mode: V2SessionLeaseMode;
 	readonly #listeners = new Set<Listener>();
 	#handle: PiSessionV2Handle | undefined;
 	#unsubscribe: (() => void) | undefined;
@@ -40,6 +42,7 @@ export class RemoteV2Session {
 	private constructor(client: PiClientV2, options: RemoteV2SessionOptions) {
 		this.#client = client;
 		this.#onListenerError = options.onListenerError;
+		this.#mode = options.mode ?? "control";
 	}
 
 	static async open(
@@ -69,6 +72,9 @@ export class RemoteV2Session {
 	get phase(): ProtocolSnapshot["phase"] | undefined {
 		return this.#snapshot?.phase;
 	}
+	get mode(): V2SessionLeaseMode | undefined {
+		return this.#handle?.mode;
+	}
 
 	subscribe(listener: Listener): () => void {
 		this.#assertNotDisposed();
@@ -90,7 +96,7 @@ export class RemoteV2Session {
 		let next: PiSessionV2Handle | undefined;
 		let unsubscribe: (() => void) | undefined;
 		try {
-			next = await this.#client.openSession(sessionId, "control");
+			next = await this.#client.openSession(sessionId, this.#mode);
 			unsubscribe = next.onEvent((event) => this.#receiveEvent(event));
 			this.#handle = next;
 			this.#unsubscribe = unsubscribe;
@@ -128,6 +134,21 @@ export class RemoteV2Session {
 		return this.#accept(command, { text: normalized });
 	}
 
+	async followUp(text: string): Promise<string> {
+		const normalized = text.trim();
+		if (!normalized) throw new Error("Session follow-up cannot be empty");
+		return this.#accept("turn/followUp", { text: normalized });
+	}
+
+	async resume(): Promise<string> {
+		return this.#accept("turn/resume");
+	}
+
+	async rollback(turns = 1): Promise<string> {
+		if (!Number.isInteger(turns) || turns < 1) throw new Error("Rollback turns must be a positive integer");
+		return this.#accept("turn/rollback", { turns });
+	}
+
 	async abort(): Promise<string> {
 		return this.#accept("turn/abort", undefined, true);
 	}
@@ -136,7 +157,35 @@ export class RemoteV2Session {
 		return this.#accept("session/model/set", model);
 	}
 	async setThinking(thinkingLevel: ProtocolThinkingLevel): Promise<string> {
-		return this.#accept("session/thinking/set", { thinkingLevel });
+		return this.#accept("session/thinking/set", { level: thinkingLevel });
+	}
+	async createGoal(objective: string, tokenBudget?: number): Promise<string> {
+		const normalized = objective.trim();
+		if (!normalized) throw new Error("Goal objective cannot be empty");
+		return this.#accept("goal/create", {
+			objective: normalized,
+			...(tokenBudget === undefined ? {} : { tokenBudget }),
+		});
+	}
+	async pauseGoal(): Promise<string> {
+		return this.#accept("goal/pause");
+	}
+	async resumeGoal(): Promise<string> {
+		return this.#accept("goal/resume");
+	}
+
+	async relinquishControl(): Promise<void> {
+		this.#assertNotDisposed();
+		const handle = this.#requireHandle();
+		await handle.relinquishControl();
+		this.#emit();
+	}
+
+	async acquireControl(): Promise<void> {
+		this.#assertNotDisposed();
+		const handle = this.#requireHandle();
+		await handle.acquireControl();
+		this.#emit();
 	}
 
 	async detach(): Promise<void> {

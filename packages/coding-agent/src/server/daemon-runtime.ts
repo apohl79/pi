@@ -10,12 +10,14 @@ import {
 	type ExperimentalCliRuntimeOptions,
 } from "../cli/experimental/runtime.ts";
 import type { TransportAddress } from "../cli/experimental/transport-address.ts";
+import { createCodingAgentV2AgentRegistry } from "./agent-registry.ts";
 import { type CodingAgentV2SqliteServiceOptions, createCodingAgentV2SqliteService } from "./sqlite-service.ts";
 
 export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOptions, "repository"> & {
 	repository: SqliteSessionRepository;
 	socketPath: string;
 	serverId?: string;
+	agents?: ServerDaemonOptions["agents"];
 	createServer?: ServerDaemonOptions["createServer"];
 	write(value: unknown): void;
 	onAttach?: ExperimentalCliRuntimeOptions["onAttach"];
@@ -43,10 +45,13 @@ export async function createCodingAgentDaemonRuntime(
 	options: CodingAgentDaemonRuntimeOptions,
 ): Promise<CodingAgentDaemonRuntime> {
 	const service = await createCodingAgentV2SqliteService(options);
+	const agents = options.agents ?? (service.createSession ? createCodingAgentV2AgentRegistry(service) : undefined);
+	const ownsAgents = options.agents === undefined && agents !== undefined && "dispose" in agents;
 	const daemon = new ServerDaemon({
 		service,
 		socketPath: options.socketPath,
 		...(options.serverId === undefined ? {} : { serverId: options.serverId }),
+		...(agents === undefined ? {} : { agents }),
 		...(options.createServer === undefined ? {} : { createServer: options.createServer }),
 	});
 	const defaultConnect: TransportAddress = { transport: "unix", path: options.socketPath };
@@ -74,7 +79,21 @@ export async function createCodingAgentDaemonRuntime(
 		cli,
 		close: async () => {
 			cli.close();
-			await daemon.stop();
+			const errors: unknown[] = [];
+			try {
+				await daemon.stop();
+			} catch (error) {
+				errors.push(error);
+			}
+			if (ownsAgents) {
+				try {
+					await (agents as { dispose(): Promise<void> }).dispose();
+				} catch (error) {
+					errors.push(error);
+				}
+			}
+			if (errors.length === 1) throw errors[0];
+			if (errors.length > 1) throw new AggregateError(errors, "Failed to close coding-agent daemon runtime");
 		},
 	};
 }

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	type ClientHelloV2,
 	type CommandV2,
@@ -90,6 +90,7 @@ const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 const MAX_REPLAY_EVENTS = 256;
 const MAX_REPLAY_BYTES = 16 * 1024 * 1024;
 const MAX_UINT32 = 0xffff_ffff;
+const MAX_AGENT_MESSAGE_EVENT_LENGTH = 4096;
 
 function validateBoundedOption(name: string, value: number | undefined, fallback: number, maximum: number): number {
 	const candidate = value ?? fallback;
@@ -142,6 +143,17 @@ function safeDiagnosticMessage(error: unknown): string {
 	return message;
 }
 
+function safeAgentMessage(message: string): string {
+	const normalized = message.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+	const redacted = normalized
+		.replace(/bearer\s+\S+/gi, "Bearer [redacted]")
+		.replace(/((?:api[_-]?key|token|secret|password)\s*[:=]\s*)\S+/gi, "$1[redacted]")
+		.replace(/\b(?:sk|pk|rk)-[a-z0-9_-]{8,}/gi, "[redacted]");
+	return redacted.length > MAX_AGENT_MESSAGE_EVENT_LENGTH
+		? `${redacted.slice(0, MAX_AGENT_MESSAGE_EVENT_LENGTH - 1)}…`
+		: redacted;
+}
+
 function referenceFrom(command: CommandV2, payload: Record<string, unknown>): string {
 	const reference = payload.reference ?? command.operationId;
 	if (typeof reference !== "string" || reference.length === 0) throw new Error("file reference is required");
@@ -165,10 +177,14 @@ export class PiServerV2 {
 	private readonly inputs: V2InputRegistry;
 	private readonly files: V2FileReferenceService;
 	private readonly plugins: V2PluginRegistry;
+	private readonly ownsAgents: boolean;
 	private readonly connections = new Set<V2ConnectionState>();
 	private readonly controls = new Map<string, string>();
 	private readonly runtimes = new Set<PiSessionRuntimeV2>();
 	private readonly eventHistory = new Map<string, EventEnvelopeV2[]>();
+	/** Serializes event reservation per session so concurrent broadcasts cannot reuse cursors. */
+	private readonly broadcastTails = new Map<string, Promise<void>>();
+	private readonly agentWatches = new Map<string, { rerun: boolean }>();
 	private readonly operations = new Map<string, OperationRecordV2>();
 	private readonly processSessions = new Map<string, string>();
 	private readonly agentSessions = new Map<string, string>();
@@ -204,6 +220,7 @@ export class PiServerV2 {
 		this.files =
 			options.files ?? new LocalV2FileReferenceService({ projectRoot: process.cwd(), allowAbsolute: false });
 		this.plugins = options.plugins ?? new InMemoryV2PluginRegistry();
+		this.ownsAgents = options.agents === undefined;
 	}
 
 	get addresses(): readonly string[] {
@@ -277,19 +294,33 @@ export class PiServerV2 {
 		if (this.closePromise) return this.closePromise;
 		this.closing = true;
 		this.closePromise = (async () => {
-			await this.startPromise?.catch(() => undefined);
-			const listenerResults = await Promise.allSettled(this.listeners.map((listener) => listener.close()));
-			for (const result of listenerResults)
-				if (result.status === "rejected")
-					this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
-			await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state, undefined, true)));
-			await this.disposeActiveOperationRuntimes();
-			const runtimeResults = await Promise.allSettled(Array.from(this.runtimes, (runtime) => this.disposeRuntime(runtime)));
-			for (const result of runtimeResults)
-				if (result.status === "rejected")
-					this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
-			this.runtimes.clear();
-			this.started = false;
+			try {
+				await this.startPromise?.catch(() => undefined);
+				const listenerResults = await Promise.allSettled(this.listeners.map((listener) => listener.close()));
+				for (const result of listenerResults)
+					if (result.status === "rejected")
+						this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
+				const connectionResults = await Promise.allSettled(
+					Array.from(this.connections, (state) => this.closeConnection(state, undefined, true)),
+				);
+				for (const result of connectionResults)
+					if (result.status === "rejected")
+						this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
+				await this.disposeActiveOperationRuntimes();
+				const runtimeResults = await Promise.allSettled(Array.from(this.runtimes, (runtime) => this.disposeRuntime(runtime)));
+				for (const result of runtimeResults)
+					if (result.status === "rejected")
+						this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
+				this.runtimes.clear();
+				if (this.ownsAgents) {
+					const agentResult = await Promise.allSettled([this.agents.dispose?.()]);
+					for (const result of agentResult)
+						if (result.status === "rejected")
+							this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
+				}
+			} finally {
+				this.started = false;
+			}
 		})();
 		return this.closePromise;
 	}
@@ -628,10 +659,21 @@ export class PiServerV2 {
 		this.requireControl(state, command.sessionId);
 		const payload = objectPayload(command);
 		if (typeof payload.command !== "string") throw new Error("process/start requires command");
+		let env: Record<string, string> | undefined;
+		if (payload.env !== undefined) {
+			if (typeof payload.env !== "object" || payload.env === null || Array.isArray(payload.env))
+				throw new Error("process/start env must be an object");
+			env = {};
+			for (const [name, value] of Object.entries(payload.env)) {
+				if (typeof value !== "string") throw new Error(`process/start env ${name} must be a string`);
+				env[name] = value;
+			}
+		}
 		const process = await this.processes.start({
 			sessionId: command.sessionId,
 			command: payload.command,
 			...(typeof payload.cwd === "string" ? { cwd: payload.cwd } : {}),
+			...(env === undefined ? {} : { env }),
 			...(typeof payload.pty === "boolean" ? { pty: payload.pty } : {}),
 		});
 		this.processSessions.set(process.processId, command.sessionId);
@@ -738,6 +780,11 @@ export class PiServerV2 {
 		});
 		this.agentSessions.set(agent.id, command.sessionId);
 		await this.sendResponse(state, id, { command: command.command, agent });
+		const runtime = state.sessions.get(command.sessionId);
+		if (runtime) {
+			await this.broadcastEvent(command.sessionId, runtime, { agent }, undefined, "agent_updated");
+			this.watchAgent(command.sessionId, runtime, agent.id);
+		}
 	}
 
 	private async listAgents(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
@@ -765,8 +812,12 @@ export class PiServerV2 {
 		this.requireControl(state, (await this.agents.getSnapshot(agentId)).sessionId);
 		this.requireResource(state, this.agentSessions, agentId, "agent");
 		if (typeof payload.message !== "string") throw new Error("agent/message requires message");
-		await this.agents.message(agentId, payload.message);
+		const message = payload.message;
+		await this.agents.message(agentId, message);
 		await this.sendResponse(state, id, { command: command.command, agentId });
+		const sessionId = (await this.agents.getSnapshot(agentId)).sessionId;
+		const runtime = state.sessions.get(sessionId);
+		if (runtime) await this.broadcastEvent(sessionId, runtime, { agentId, message: safeAgentMessage(message) }, undefined, "agent_message");
 	}
 
 	private async followUpAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
@@ -775,20 +826,68 @@ export class PiServerV2 {
 		this.requireControl(state, (await this.agents.getSnapshot(agentId)).sessionId);
 		this.requireResource(state, this.agentSessions, agentId, "agent");
 		if (typeof payload.message !== "string") throw new Error("agent/followUp requires message");
+		const agent = await this.agents.followUp(agentId, payload.message);
 		await this.sendResponse(state, id, {
 			command: command.command,
-			agent: await this.agents.followUp(agentId, payload.message),
+			agent,
 		});
+		const sessionId = (await this.agents.getSnapshot(agentId)).sessionId;
+		const runtime = state.sessions.get(sessionId);
+		if (runtime) {
+			await this.broadcastEvent(sessionId, runtime, { agent }, undefined, "agent_updated");
+			this.watchAgent(sessionId, runtime, agent.id);
+		}
 	}
 
 	private async interruptAgent(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		this.requireControl(state, (await this.agents.getSnapshot(agentIdFrom(command, payload))).sessionId);
 		this.requireResource(state, this.agentSessions, agentIdFrom(command, payload), "agent");
+		const agent = await this.agents.interrupt(agentIdFrom(command, payload));
 		await this.sendResponse(state, id, {
 			command: command.command,
-			agent: await this.agents.interrupt(agentIdFrom(command, payload)),
+			agent,
 		});
+		const sessionId = (await this.agents.getSnapshot(agent.id)).sessionId;
+		const runtime = state.sessions.get(sessionId);
+		if (runtime) {
+			await this.broadcastEvent(sessionId, runtime, { agent }, undefined, "agent_updated");
+			this.watchAgent(sessionId, runtime, agent.id);
+		}
+	}
+
+	private watchAgent(sessionId: string, runtime: PiSessionRuntimeV2, agentId: string): void {
+		const key = `${sessionId}:${agentId}`;
+		const existing = this.agentWatches.get(key);
+		if (existing) {
+			existing.rerun = true;
+			return;
+		}
+		const watch = { rerun: false };
+		this.agentWatches.set(key, watch);
+		void (async () => {
+			try {
+				while (!this.closing) {
+					const agent = await this.agents.wait(agentId);
+					if (this.closing) return;
+					await this.broadcastEvent(sessionId, runtime, { agent }, undefined, "agent_updated");
+					if (watch.rerun) {
+						watch.rerun = false;
+						continue;
+					}
+					const current = await this.agents.getSnapshot(agentId);
+					if (current.state === "running" || current.state === "awaitingInput" || watch.rerun) {
+						watch.rerun = false;
+						continue;
+					}
+					break;
+				}
+			} catch (error) {
+				this.reportError(error instanceof Error ? error : new Error(String(error)));
+			} finally {
+				this.agentWatches.delete(key);
+			}
+		})();
 	}
 
 	private async listApps(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
@@ -980,10 +1079,20 @@ export class PiServerV2 {
 
 	private async diagnosticsExport(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		this.requireControl(state, command);
+		const events = (await this.diagnosticEvents()).slice(0, MAX_REPLAY_EVENTS);
+		const serializedEvents = JSON.stringify(events);
+		const manifest = {
+			schemaVersion: 1,
+			eventCount: events.length,
+			firstSeq: events[0]?.seq ?? 0,
+			lastSeq: events.at(-1)?.seq ?? 0,
+			eventsSha256: createHash("sha256").update(serializedEvents).digest("hex"),
+		};
 		await this.sendBoundedDiagnosticsResponse(state, id, {
 			command: command.command,
 			format: "json",
-			events: (await this.diagnosticEvents()).slice(0, MAX_REPLAY_EVENTS),
+			events,
+			bundle: { manifest, events },
 		});
 	}
 
@@ -1005,6 +1114,24 @@ export class PiServerV2 {
 
 	private async diagnosticsVerify(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		this.requireControl(state, command);
+		const payload = objectPayload(command);
+		const bundle = payload.bundle;
+		if (typeof bundle === "object" && bundle !== null && !Array.isArray(bundle)) {
+			const candidate = bundle as Record<string, unknown>;
+			const events = candidate.events;
+			const manifest = candidate.manifest;
+			if (!Array.isArray(events) || typeof manifest !== "object" || manifest === null || Array.isArray(manifest))
+				throw new Error("diagnostics/verify bundle requires events and manifest");
+			const fields = manifest as Record<string, unknown>;
+			const digest = createHash("sha256").update(JSON.stringify(events)).digest("hex");
+			const valid = fields.schemaVersion === 1 && fields.eventCount === events.length && fields.eventsSha256 === digest;
+			await this.sendResponse(state, id, {
+				command: command.command,
+				valid,
+				...(valid ? {} : { reason: "Diagnostic bundle manifest does not match its events" }),
+			});
+			return;
+		}
 		const events = await this.diagnosticEvents();
 		const gaps = events.slice(1).flatMap((event, index) => {
 			const previous = events[index];
@@ -1354,21 +1481,42 @@ export class PiServerV2 {
 		sessionId: string,
 		runtime: PiSessionRuntimeV2,
 		payload: Record<string, unknown>,
-		operationId: string,
-		eventName: "operation_accepted" | "operation_terminal",
+		operationId: string | undefined,
+		eventName: EventEnvelopeV2["event"],
+		sequence?: { eventSeq: number; revision: number },
+	): Promise<void> {
+		const previous = this.broadcastTails.get(sessionId) ?? Promise.resolve();
+		const current = previous.catch(() => undefined).then(() =>
+			this.broadcastEventInternal(sessionId, runtime, payload, operationId, eventName, sequence),
+		);
+		this.broadcastTails.set(sessionId, current);
+		try {
+			await current;
+		} finally {
+			if (this.broadcastTails.get(sessionId) === current) this.broadcastTails.delete(sessionId);
+		}
+	}
+
+	private async broadcastEventInternal(
+		sessionId: string,
+		runtime: PiSessionRuntimeV2,
+		payload: Record<string, unknown>,
+		operationId: string | undefined,
+		eventName: EventEnvelopeV2["event"],
 		sequence?: { eventSeq: number; revision: number },
 	): Promise<void> {
 		const snapshot = await runtime.snapshot();
+		const history = this.eventHistory.get(sessionId) ?? [];
+		const lastEvent = history.at(-1);
 		const event: ServerMessageV2 = {
 			type: "event",
 			sessionId,
-			seq: sequence?.eventSeq ?? snapshot.eventSeq,
-			revision: sequence?.revision ?? snapshot.revision,
-			operationId,
+			seq: sequence?.eventSeq ?? Math.max(snapshot.eventSeq, lastEvent?.seq ?? 0) + 1,
+			revision: sequence?.revision ?? Math.max(snapshot.revision, lastEvent?.revision ?? 0) + 1,
+			...(operationId === undefined ? {} : { operationId }),
 			event: eventName,
 			payload: toProtocolJsonValue(payload),
 		};
-		const history = this.eventHistory.get(sessionId) ?? [];
 		history.push(event);
 		if (history.length > 256) history.splice(0, history.length - 256);
 		this.eventHistory.set(sessionId, history);
