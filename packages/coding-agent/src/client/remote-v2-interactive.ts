@@ -4,6 +4,8 @@ import type { RemoteV2SessionAttachment } from "./remote-v2-selector.ts";
 
 export const REMOTE_V2_SLASH_COMMANDS = [
 	"/abort",
+	"/agent-follow-up",
+	"/agent-interrupt",
 	"/compact",
 	"/detach",
 	"/follow-up",
@@ -26,6 +28,8 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 
 export type RemoteV2Command =
 	| { readonly name: "abort" }
+	| { readonly name: "agent-follow-up"; readonly agentId: string; readonly text: string }
+	| { readonly name: "agent-interrupt"; readonly agentId: string }
 	| { readonly name: "compact"; readonly instructions?: string }
 	| { readonly name: "detach" }
 	| { readonly name: "follow-up"; readonly text: string }
@@ -68,6 +72,15 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		const text = arguments_.join(" ").trim();
 		if (!text) throw new Error("/follow-up requires text");
 		return { name: "follow-up", text };
+	}
+	if (name === "/agent-follow-up") {
+		const text = arguments_.slice(1).join(" ").trim();
+		if (arguments_.length < 2 || !text) throw new Error("/agent-follow-up requires <agent-id> <text>");
+		return { name: "agent-follow-up", agentId: arguments_[0], text };
+	}
+	if (name === "/agent-interrupt") {
+		if (arguments_.length !== 1) throw new Error("/agent-interrupt requires <agent-id>");
+		return { name: "agent-interrupt", agentId: arguments_[0] };
 	}
 	if (name === "/compact") {
 		const instructions = arguments_.join(" ").trim();
@@ -195,6 +208,14 @@ export class RemoteV2InteractiveAttachment implements Component {
 		switch (command.name) {
 			case "abort":
 				return operation(await this.session.abort());
+			case "agent-follow-up": {
+				const agent = await this.session.followUpAgent(command.agentId, command.text);
+				return { kind: "status", text: `agent ${agent.state}` };
+			}
+			case "agent-interrupt": {
+				const agent = await this.session.interruptAgent(command.agentId);
+				return { kind: "status", text: `agent ${agent.state}` };
+			}
 			case "compact":
 				return operation(await this.session.compact(command.instructions));
 			case "detach":
