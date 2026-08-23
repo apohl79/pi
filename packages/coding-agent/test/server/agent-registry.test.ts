@@ -218,6 +218,24 @@ describe("CodingAgentV2AgentRegistry", () => {
 		});
 	});
 
+	test("queues bounded child completion metadata in the parent session", async () => {
+		const { registry, runtime } = fixture();
+		const agent = await registry.spawn({
+			sessionId: "parent-session",
+			parentPath: "root",
+			taskName: "worker",
+			taskMessage: "complete this task",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		await registry.wait(agent.id);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(
+			runtime.customEntries.find((entry) => entry.type === "custom" && entry.customType === "agent_completion"),
+		).toMatchObject({
+			data: { version: 1, agentId: agent.id, path: "root/worker", state: "complete" },
+		});
+	});
+
 	test("snapshots bounded parent context into a forked child turn", async () => {
 		const { registry, runtime } = fixture();
 		const agent = await registry.spawn({
