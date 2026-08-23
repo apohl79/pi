@@ -264,6 +264,24 @@ describe("AgentHarness v2 scaffold", () => {
 		await reopened.harness.close();
 	});
 
+	it("persists retry policy changes across harness recreation", async () => {
+		const session = createSession("retry-policy");
+		const harness = await createHarness(session);
+		await harness.setRetryPolicy({ enabled: true, maxRetries: 3, baseDelayMs: 17 });
+		await harness.close();
+		const reopened = await AgentHarness.create({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+		});
+		expect(await reopened.harness.getRetryPolicy()).toEqual({
+			enabled: true,
+			maxRetries: 3,
+			baseDelayMs: 17,
+		});
+		await reopened.harness.close();
+	});
+
 	it("runs registered lifecycle hooks and emits operation events", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
