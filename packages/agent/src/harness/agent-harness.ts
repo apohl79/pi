@@ -11,7 +11,14 @@ import type {
 	Usage,
 } from "@earendil-works/pi-ai";
 import { runAgentLoop } from "../agent-loop.ts";
-import type { AgentMessage, AgentTool, QueueMode, SamplingInputContext, ThinkingLevel } from "../types.ts";
+import type {
+	AgentMessage,
+	AgentTool,
+	QueueMode,
+	SamplingInput,
+	SamplingInputContext,
+	ThinkingLevel,
+} from "../types.ts";
 import {
 	type BranchSummaryResult,
 	collectEntriesForBranchSummary,
@@ -329,6 +336,7 @@ export interface AgentHarnessOptions {
 	drive?: "automatic" | "manual";
 	toProviderMessages?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	samplingInput?: (context: SamplingInputContext) => AgentMessage[] | Promise<AgentMessage[]>;
+	samplingInputFactory?: () => SamplingInput | Promise<SamplingInput>;
 	entryProjectors?: Record<string, EntryProjector>;
 	context?: TelemetryContext;
 }
@@ -384,6 +392,7 @@ export class AgentHarness implements AgentLane {
 	private readonly systemPromptSource: AgentHarnessOptions["systemPrompt"];
 	private readonly toProviderMessages: AgentHarnessOptions["toProviderMessages"];
 	private readonly samplingInput: AgentHarnessOptions["samplingInput"];
+	private readonly samplingInputFactory: AgentHarnessOptions["samplingInputFactory"];
 	private model: Model<Api>;
 	private thinkingLevel: ThinkingLevel;
 	private activeToolNames: string[];
@@ -423,6 +432,7 @@ export class AgentHarness implements AgentLane {
 		this.systemPromptSource = options.systemPrompt;
 		this.toProviderMessages = options.toProviderMessages;
 		this.samplingInput = options.samplingInput;
+		this.samplingInputFactory = options.samplingInputFactory;
 		this.session = options.session;
 		this.lifecycle = new LifecycleRegistry(() => this.closed);
 		this.hooks = this.lifecycle;
@@ -540,13 +550,14 @@ export class AgentHarness implements AgentLane {
 					? await this.systemPromptSource()
 					: (this.systemPromptSource ?? "");
 			const activeTools = this.tools.filter((tool) => this.activeToolNames.includes(tool.name));
+			const samplingInput = this.samplingInputFactory ? await this.samplingInputFactory() : this.samplingInput;
 			const newMessages = await runAgentLoop(
 				prompts,
 				{ systemPrompt, messages: persisted.messages, tools: activeTools },
 				{
 					...this.streamOptions,
 					model: this.model,
-					samplingInput: this.samplingInput,
+					samplingInput,
 					reasoning: this.thinkingLevel === "off" ? undefined : this.thinkingLevel,
 					convertToLlm:
 						this.toProviderMessages ??

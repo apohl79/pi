@@ -4,6 +4,14 @@ import { dirname } from "node:path";
 
 export type V2PluginScope = "user" | "project";
 
+export type V2PluginSamplingEntry = Readonly<{
+	id: string;
+	slot: "contextual_user" | "developer_policy" | "developer_capabilities" | "separate_developer";
+	position: "preamble" | "supplement";
+	text: string;
+	conditionShell?: string;
+}>;
+
 export type V2Marketplace = Readonly<{
 	name: string;
 	source: string;
@@ -26,6 +34,7 @@ export type V2Plugin = Readonly<{
 		apps: number;
 		hooks: number;
 	}>;
+	sampling: readonly V2PluginSamplingEntry[];
 }>;
 
 export type V2PluginRegistryState = Readonly<{
@@ -66,6 +75,52 @@ function resourceCount(value: unknown): number {
 	return Array.isArray(value) ? value.length : value === undefined ? 0 : 1;
 }
 
+const samplingSlots = new Set<V2PluginSamplingEntry["slot"]>([
+	"contextual_user",
+	"developer_policy",
+	"developer_capabilities",
+	"separate_developer",
+]);
+const samplingPositions = new Set<V2PluginSamplingEntry["position"]>(["preamble", "supplement"]);
+
+function samplingEntries(manifest: Record<string, unknown>): readonly V2PluginSamplingEntry[] {
+	const context = manifest.context;
+	if (!context || typeof context !== "object" || Array.isArray(context)) return [];
+	const sampling = (context as Record<string, unknown>).sampling;
+	if (!Array.isArray(sampling)) return [];
+	return sampling
+		.flatMap((value) => {
+			if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+			const entry = value as Record<string, unknown>;
+			if (
+				typeof entry.id !== "string" ||
+				typeof entry.text !== "string" ||
+				!samplingSlots.has(entry.slot as V2PluginSamplingEntry["slot"]) ||
+				!samplingPositions.has(entry.position as V2PluginSamplingEntry["position"])
+			)
+				return [];
+			const text = entry.text.slice(0, 8_000);
+			return [
+				{
+					id: entry.id,
+					slot: entry.slot as V2PluginSamplingEntry["slot"],
+					position: entry.position as V2PluginSamplingEntry["position"],
+					text,
+					...(typeof entry.condition_shell === "string"
+						? { conditionShell: entry.condition_shell }
+						: typeof entry.conditionShell === "string"
+							? { conditionShell: entry.conditionShell }
+							: {}),
+				},
+			];
+		})
+		.slice(0, 32);
+}
+
+function normalizePlugin(plugin: V2Plugin): V2Plugin {
+	return { ...plugin, sampling: plugin.sampling ?? [] };
+}
+
 export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 	private readonly marketplaces = new Map<string, V2Marketplace>();
 	private readonly plugins = new Map<string, V2Plugin>();
@@ -73,7 +128,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 	constructor(state?: V2PluginRegistryState) {
 		for (const marketplace of state?.marketplaces ?? [])
 			this.marketplaces.set(marketplace.name, structuredClone(marketplace));
-		for (const plugin of state?.plugins ?? []) this.plugins.set(plugin.id, structuredClone(plugin));
+		for (const plugin of state?.plugins ?? []) this.plugins.set(plugin.id, structuredClone(normalizePlugin(plugin)));
 	}
 
 	toState(): V2PluginRegistryState {
@@ -85,7 +140,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		this.plugins.clear();
 		for (const marketplace of state.marketplaces)
 			this.marketplaces.set(marketplace.name, structuredClone(marketplace));
-		for (const plugin of state.plugins ?? []) this.plugins.set(plugin.id, structuredClone(plugin));
+		for (const plugin of state.plugins ?? []) this.plugins.set(plugin.id, structuredClone(normalizePlugin(plugin)));
 	}
 
 	async listMarketplaces(): Promise<readonly V2Marketplace[]> {
@@ -119,11 +174,11 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 
 	async listPlugins(installedOnly = false): Promise<readonly V2Plugin[]> {
 		void installedOnly;
-		return [...this.plugins.values()].map((plugin) => structuredClone(plugin));
+		return [...this.plugins.values()].map((plugin) => structuredClone(normalizePlugin(plugin)));
 	}
 
 	async readPlugin(id: string): Promise<V2Plugin | undefined> {
-		return this.plugins.has(id) ? structuredClone(this.plugins.get(id)!) : undefined;
+		return this.plugins.has(id) ? structuredClone(normalizePlugin(this.plugins.get(id)!)) : undefined;
 	}
 
 	async installPlugin(input: {
@@ -161,6 +216,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 				apps: resourceCount(manifest.apps),
 				hooks: resourceCount(manifest.hooks),
 			},
+			sampling: samplingEntries(manifest),
 		};
 		this.plugins.set(id, plugin);
 		return structuredClone(plugin);

@@ -1,11 +1,18 @@
-import { type ExecutionEnv, GoalContinuationScheduler, GoalManager, type Session } from "@earendil-works/pi-agent-core";
+import {
+	type ExecutionEnv,
+	GoalManager,
+	type SamplingInput,
+	type SamplingInputContext,
+	type Session,
+} from "@earendil-works/pi-agent-core";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { SessionMetadataV2 } from "@earendil-works/pi-protocol";
+import type { V2PluginRegistry } from "@earendil-works/pi-server";
 import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import { type CreateCodingAgentHarnessOptions, createCodingAgentHarness } from "./create-harness.ts";
+import { createPluginSamplingInput } from "./plugin-sampling.ts";
 import {
 	type CodingAgentV2Service,
-	type CodingAgentV2Runtime,
 	type CodingAgentV2SessionDefinition,
 	type CodingAgentV2SessionStore,
 	createCodingAgentV2ServiceFromStore,
@@ -16,6 +23,7 @@ export interface CodingAgentV2SqliteServiceOptions {
 	models: Models;
 	env: ExecutionEnv | ((metadata: SqliteSessionMetadata) => ExecutionEnv | Promise<ExecutionEnv>);
 	model: Model<Api> | ((metadata: SqliteSessionMetadata) => Model<Api> | Promise<Model<Api>>);
+	pluginRegistry?: V2PluginRegistry;
 	harness?: Omit<CreateCodingAgentHarnessOptions, "session" | "models" | "model" | "env" | "sessionFile">;
 }
 
@@ -42,8 +50,26 @@ export async function createCodingAgentV2SqliteService(
 			modelOverride ?? (typeof options.model === "function" ? await options.model(metadata) : options.model);
 		const env = typeof options.env === "function" ? await options.env(metadata) : options.env;
 		const goals = new GoalManager(session);
-		let runtime: CodingAgentV2Runtime | undefined;
-		let continuationSequence = 0;
+		const samplingInputFactory = async (): Promise<SamplingInput> => {
+			const configuredSamplingInput = options.harness?.samplingInputFactory
+				? await options.harness.samplingInputFactory()
+				: options.harness?.samplingInput;
+			const plugins = options.pluginRegistry
+				? (await options.pluginRegistry.listPlugins(true)).filter((plugin) => plugin.enabled)
+				: [];
+			const pluginSamplingInput = createPluginSamplingInput(
+				env,
+				plugins.map((plugin, activationOrder) => ({
+					pluginId: plugin.id,
+					activationOrder,
+					entries: plugin.sampling,
+				})),
+			);
+			return async (context: SamplingInputContext) => [
+				...(configuredSamplingInput === undefined ? [] : await configuredSamplingInput(context)),
+				...(await pluginSamplingInput(context)),
+			];
+		};
 		const created = await createCodingAgentHarness({
 			...options.harness,
 			session,
@@ -51,34 +77,10 @@ export async function createCodingAgentV2SqliteService(
 			model,
 			env,
 			goals,
+			samplingInputFactory,
 			sessionFile: metadata.path,
 		});
-		const goalContinuation = new GoalContinuationScheduler({
-			goals,
-			waitForIdle: async (callback) => {
-				await created.harness.waitForIdle();
-				await callback();
-			},
-			continueGoal: async (goal) => {
-				if (!runtime) throw new Error("Goal continuation runtime is not ready");
-				const operationId = `goal-continuation-${goal.id}-${++continuationSequence}`;
-				await runtime.accept(operationId);
-				await runtime.run(operationId, {
-					command: "turn/followUp",
-					sessionId: metadata.id,
-					payload: { text: `Continue working toward the goal: ${goal.objective}` },
-				});
-			},
-		});
-		return {
-			metadata: sessionMetadata(metadata),
-			harness: created.harness,
-			goals,
-			goalContinuation,
-			onRuntimeReady: (value) => {
-				runtime = value;
-			},
-		};
+		return { metadata: sessionMetadata(metadata), harness: created.harness, goals };
 	};
 	const store: CodingAgentV2SessionStore = {
 		list: async () => {

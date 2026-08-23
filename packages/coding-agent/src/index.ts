@@ -485,6 +485,12 @@ export {
 	type ResolvedModelInstructionProfile,
 } from "./server/model-instructions.ts";
 export {
+	createPluginSamplingInput,
+	type PluginSamplingDiagnostic,
+	type PluginSamplingDiagnosticSink,
+	type PluginSamplingSource,
+} from "./server/plugin-sampling.ts";
+export {
 	type CodingAgentV2SqliteServiceOptions,
 	createCodingAgentV2SqliteService,
 } from "./server/sqlite-service.ts";

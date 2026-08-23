@@ -20,6 +20,17 @@ describe("InMemoryV2PluginRegistry", () => {
 				commands: ["commands/review"],
 				apps: [{ id: "tracker" }],
 				hooks: { afterTurn: "hooks/after-turn" },
+				context: {
+					sampling: [
+						{
+							id: "reminder",
+							slot: "contextual_user",
+							position: "supplement",
+							text: "Check project context",
+							condition_shell: "true",
+						},
+					],
+				},
 			},
 		});
 
@@ -28,6 +39,15 @@ describe("InMemoryV2PluginRegistry", () => {
 			manifestDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
 			enabled: true,
 			resources: { skills: ["skills/review"], commands: ["commands/review"], apps: 1, hooks: 1 },
+			sampling: [
+				{
+					id: "reminder",
+					slot: "contextual_user",
+					position: "supplement",
+					text: "Check project context",
+					conditionShell: "true",
+				},
+			],
 		});
 		expect(await registry.setEnabled(plugin.id, false, "project")).toMatchObject({
 			enabled: false,
