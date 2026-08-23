@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -176,6 +176,17 @@ describe("JsonlForensicRecorder", () => {
 		const path = join(directory, "events.jsonl");
 		await writeFile(path, `${JSON.stringify({ schemaVersion: 1, seq: 1, kind: "boot" })}\n`);
 		await expect(new JsonlForensicRecorder(path).read()).rejects.toThrow("Invalid forensic event");
+	});
+
+	test("does not publish an event when the append fails", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-failure-"));
+		const path = join(directory, "events.jsonl");
+		const recorder = new JsonlForensicRecorder(path);
+		await recorder.read();
+		await rm(directory, { recursive: true });
+		await writeFile(directory, "not a directory");
+		await expect(recorder.record({ kind: "accepted" })).rejects.toThrow();
+		expect(await recorder.read()).toEqual([]);
 	});
 });
 
