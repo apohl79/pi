@@ -144,6 +144,43 @@ describe("CodingAgentV2AgentRegistry", () => {
 		expect(runtime.commands.map((command) => command.command)).toEqual(["turn/start", "turn/start"]);
 	});
 
+	test("enforces the active-child limit per parent", async () => {
+		const { registry, runtime } = fixture();
+		runtime.blocked = true;
+		await registry.spawn({
+			sessionId: "parent-session",
+			parentPath: "root",
+			taskName: "first",
+			taskMessage: "first task",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		const limited = new CodingAgentV2AgentRegistry(
+			{
+				listSessions: async () => [],
+				listModels: async () => [],
+				openSession: async () => runtime,
+				createSession: async () => ({ sessionId: "child-session", runtime }),
+			},
+			{ maxActivePerParent: 1 },
+		);
+		await limited.spawn({
+			sessionId: "parent-session",
+			parentPath: "root",
+			taskName: "first",
+			taskMessage: "first task",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		await expect(
+			limited.spawn({
+				sessionId: "parent-session",
+				parentPath: "root",
+				taskName: "second",
+				taskMessage: "second task",
+				model: { provider: "inherit", id: "inherit" },
+			}),
+		).rejects.toThrow("for parent parent-session");
+	});
+
 	test("bounds queued child messages", async () => {
 		const { registry } = fixture();
 		const agent = await registry.spawn({

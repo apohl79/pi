@@ -180,4 +180,21 @@ describe("InMemoryV2AgentRegistry", () => {
 	] as const)("rejects invalid %s limit (%s)", (name, value) => {
 		expect(() => new InMemoryV2AgentRegistry({ [name]: value })).toThrow(name);
 	});
+
+	test("enforces separate per-parent and process-wide active limits", async () => {
+		const registry = new InMemoryV2AgentRegistry({ maxActive: 3, maxActivePerParent: 2 });
+		const spawn = (sessionId: string, taskName: string, parentPath = "/root") =>
+			registry.spawn({
+				sessionId,
+				parentPath,
+				taskName,
+				taskMessage: "work",
+				model: { provider: "test", id: "small" },
+			});
+		await spawn("parent-a", "one");
+		await spawn("parent-a", "two");
+		await expect(spawn("parent-a", "three")).rejects.toThrow("for parent parent-a");
+		await spawn("parent-b", "b-one");
+		await expect(spawn("parent-b", "b-two")).rejects.toThrow("active limit 3");
+	});
 });
