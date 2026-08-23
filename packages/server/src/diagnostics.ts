@@ -319,6 +319,7 @@ function isClientDiagnosticExport(value: unknown): boolean {
 		if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) return false;
 		const fields = manifest as Record<string, unknown>;
 		return (
+			(fields.clientInstanceId === undefined || typeNonEmpty(fields.clientInstanceId)) &&
 			typeNonEmpty(fields.runtime) &&
 			typeNonEmpty(fields.platform) &&
 			typeNonEmpty(fields.arch) &&
@@ -637,35 +638,44 @@ export class InMemoryForensicRecorder implements ForensicRecorder {
 export class JsonlForensicRecorder implements ForensicRecorder {
 	private readonly path: string;
 	private readonly maxEvents: number;
+	private readonly maxBytes: number;
+	private readonly maxFiles: number;
 	private readonly events: ForensicEvent[] = [];
 	private readonly processInstanceId = randomUUID();
 	private pendingWrite: Promise<void> = Promise.resolve();
 	private loaded = false;
 	private nextSeq = 1;
+	private currentBytes = 0;
 
-	constructor(path: string, options: { maxEvents?: number } = {}) {
+	constructor(path: string, options: { maxEvents?: number; maxBytes?: number; maxFiles?: number } = {}) {
 		this.path = path;
 		this.maxEvents = options.maxEvents ?? 2_048;
+		this.maxBytes = positiveLimit(options.maxBytes ?? Number.MAX_SAFE_INTEGER, "maxBytes");
+		this.maxFiles = positiveLimit(options.maxFiles ?? 3, "maxFiles");
 	}
 
 	private async ensureLoaded(): Promise<void> {
 		if (this.loaded) return;
 		this.loaded = true;
-		let contents: string;
-		try {
-			contents = await readFile(this.path, "utf8");
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-			throw error;
-		}
-		for (const line of contents.split("\n").filter(Boolean)) {
-			const parsed = parseForensicEvent(JSON.parse(line));
-			const event =
-				parsed.schemaVersion === 1 && parsed.eventId !== undefined
-					? parsed
-					: materializeEvent(parsed, parsed.seq, parsed.timestamp, this.processInstanceId);
-			this.events.push(event);
-			this.nextSeq = Math.max(this.nextSeq, event.seq + 1);
+		for (let index = this.maxFiles - 1; index >= 0; index--) {
+			const filePath = index === 0 ? this.path : `${this.path}.${index}`;
+			let contents: string;
+			try {
+				contents = await readFile(filePath, "utf8");
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+				throw error;
+			}
+			if (index === 0) this.currentBytes = Buffer.byteLength(contents);
+			for (const line of contents.split("\n").filter(Boolean)) {
+				const parsed = parseForensicEvent(JSON.parse(line));
+				const event =
+					parsed.schemaVersion === 1 && parsed.eventId !== undefined
+						? parsed
+						: materializeEvent(parsed, parsed.seq, parsed.timestamp, this.processInstanceId);
+				this.events.push(event);
+				this.nextSeq = Math.max(this.nextSeq, event.seq + 1);
+			}
 		}
 		if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
 	}
@@ -678,20 +688,27 @@ export class JsonlForensicRecorder implements ForensicRecorder {
 			this.events.push(event);
 			if (this.events.length > this.maxEvents) this.events.splice(0, this.events.length - this.maxEvents);
 			await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+			const line = `${JSON.stringify(event)}\n`;
+			if (!wasFull && this.currentBytes > 0 && this.currentBytes + Buffer.byteLength(line) > this.maxBytes) {
+				await this.rotate();
+			}
 			if (!wasFull) {
 				const handle = await open(this.path, "a", 0o600);
 				try {
-					await handle.write(`${JSON.stringify(event)}\n`, undefined, "utf8");
+					await handle.write(line, undefined, "utf8");
 					await handle.sync();
 				} finally {
 					await handle.close();
 				}
+				this.currentBytes += Buffer.byteLength(line);
 			} else {
 				const temporary = `${this.path}.${process.pid}.tmp`;
-				await writeFile(temporary, `${this.events.map((item) => JSON.stringify(item)).join("\n")}\n`, {
+				const contents = `${this.events.map((item) => JSON.stringify(item)).join("\n")}\n`;
+				await writeFile(temporary, contents, {
 					mode: 0o600,
 				});
 				await rename(temporary, this.path);
+				this.currentBytes = Buffer.byteLength(contents);
 			}
 			return event;
 		});
@@ -702,11 +719,70 @@ export class JsonlForensicRecorder implements ForensicRecorder {
 		return structuredClone(await write);
 	}
 
+	private async rotate(): Promise<void> {
+		for (let index = this.maxFiles - 1; index >= 2; index--) {
+			const source = `${this.path}.${index - 1}`;
+			const target = `${this.path}.${index}`;
+			try {
+				await rename(source, target);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			}
+		}
+		try {
+			await rename(this.path, `${this.path}.1`);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		this.currentBytes = 0;
+	}
+
 	async read(afterSeq = 0): Promise<ForensicEvent[]> {
 		await this.pendingWrite;
 		await this.ensureLoaded();
 		return structuredClone(this.events.filter((event) => event.seq > afterSeq));
 	}
+}
+
+/** Mirrors critical events to a bounded operational log without making log failures block acceptance. */
+export class TeeForensicRecorder implements ForensicRecorder {
+	private readonly primary: ForensicRecorder;
+	private readonly secondary: ForensicRecorder;
+	private secondaryFailures = 0;
+
+	constructor(primary: ForensicRecorder, secondary: ForensicRecorder) {
+		this.primary = primary;
+		this.secondary = secondary;
+	}
+
+	async record(input: ForensicEventInput): Promise<ForensicEvent> {
+		const event = await this.primary.record(input);
+		try {
+			await this.secondary.record({
+				...input,
+				eventId: event.eventId,
+				traceId: event.traceId,
+				spanId: event.spanId,
+				...(event.parentSpanId === undefined ? {} : { parentSpanId: event.parentSpanId }),
+			});
+		} catch {
+			this.secondaryFailures += 1;
+		}
+		return event;
+	}
+
+	read(afterSeq = 0): Promise<ForensicEvent[]> {
+		return this.primary.read(afterSeq);
+	}
+
+	getOperationalLogFailureCount(): number {
+		return this.secondaryFailures;
+	}
+}
+
+function positiveLimit(value: number, name: string): number {
+	if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError(`${name} must be a positive safe integer`);
+	return value;
 }
 
 function parseForensicEvent(value: unknown): ForensicEvent {

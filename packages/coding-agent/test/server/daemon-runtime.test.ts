@@ -716,6 +716,8 @@ describe("coding-agent daemon runtime", () => {
 		const runtime = await createConfiguredCodingAgentDaemonRuntime({
 			agentDir: directory,
 			cwd: directory,
+			clientDiagnosticSpoolPath: join(directory, "client-diagnostics.jsonl"),
+			clientInstanceId: "production-client-1",
 			models,
 			model: faux.getModel(),
 			socketPath: join(directory, "server.sock"),
@@ -748,6 +750,7 @@ describe("coding-agent daemon runtime", () => {
 				events: readonly unknown[];
 				capsules?: readonly unknown[];
 				runtimeManifest?: { runtime?: string; platform?: string; arch?: string };
+				clientDiagnostics?: { manifest?: { clientInstanceId?: string } };
 			};
 			expect(bundle.events.length).toBeGreaterThan(0);
 			expect(bundle.capsules?.length).toBeGreaterThan(0);
@@ -756,6 +759,8 @@ describe("coding-agent daemon runtime", () => {
 				platform: process.platform,
 				arch: process.arch,
 			});
+			expect(bundle.clientDiagnostics).toMatchObject({ manifest: { clientInstanceId: "production-client-1" } });
+			expect(await readFile(join(directory, "diagnostic-log.jsonl"), "utf8")).toContain("daemon_starting");
 			await runtime.cli.runDiagnostics({ command: "diagnostics", action: "verify", bundle: bundlePath });
 			expect(output.at(-1)).toEqual({ valid: true });
 		} finally {

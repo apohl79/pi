@@ -20,6 +20,7 @@ import {
 	NodeV2ProcessRegistry,
 	ServerDaemon,
 	type ServerDaemonOptions,
+	TeeForensicRecorder,
 	type V2AppRegistry,
 	type V2BlobStore,
 	type V2FileReferenceService,
@@ -53,6 +54,9 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	socketPath: string;
 	planStorePath?: string;
 	diagnosticStorePath?: string;
+	diagnosticLogPath?: string;
+	diagnosticLogMaxBytes?: number;
+	diagnosticLogMaxFiles?: number;
 	diagnosticKeyPath?: string;
 	clientDiagnosticSpoolPath?: string;
 	clientInstanceId?: string;
@@ -110,11 +114,21 @@ export async function createCodingAgentDaemonRuntime(
 		(options.planStorePath === undefined
 			? new InMemoryV2PlanRegistry()
 			: new JsonlV2PlanRegistry(options.planStorePath));
-	const diagnostics =
+	const primaryDiagnostics =
 		options.diagnostics ??
 		(options.diagnosticStorePath === undefined
 			? new InMemoryForensicRecorder()
 			: new JsonlForensicRecorder(options.diagnosticStorePath));
+	const diagnostics =
+		options.diagnosticLogPath === undefined
+			? primaryDiagnostics
+			: new TeeForensicRecorder(
+					primaryDiagnostics,
+					new JsonlForensicRecorder(options.diagnosticLogPath, {
+						...(options.diagnosticLogMaxBytes === undefined ? {} : { maxBytes: options.diagnosticLogMaxBytes }),
+						...(options.diagnosticLogMaxFiles === undefined ? {} : { maxFiles: options.diagnosticLogMaxFiles }),
+					}),
+				);
 	const diagnosticContent =
 		options.diagnosticKeyPath === undefined ? undefined : new LocalDiagnosticCapsuleStore(options.diagnosticKeyPath);
 	const processes = options.processes ?? new NodeV2ProcessRegistry();
@@ -191,6 +205,7 @@ export async function createCodingAgentDaemonRuntime(
 					: {
 							diagnostics: {
 								manifest: {
+									clientInstanceId: clientSpool.clientInstanceId,
 									runtime: clientRuntimeManifest.runtime,
 									platform: clientRuntimeManifest.platform,
 									arch: clientRuntimeManifest.arch,
@@ -230,12 +245,19 @@ export async function createCodingAgentDaemonRuntime(
 export async function createConfiguredCodingAgentDaemonRuntime(
 	options: ConfiguredCodingAgentDaemonRuntimeOptions,
 ): Promise<ConfiguredCodingAgentDaemonRuntime> {
-	const diagnostics =
+	const primaryDiagnostics =
 		options.diagnostics ??
 		new SqliteForensicRecorder(
 			createNodeSqliteFactory(),
 			options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.sqlite"),
 		);
+	const diagnostics = new TeeForensicRecorder(
+		primaryDiagnostics,
+		new JsonlForensicRecorder(options.diagnosticLogPath ?? join(options.agentDir, "diagnostic-log.jsonl"), {
+			...(options.diagnosticLogMaxBytes === undefined ? {} : { maxBytes: options.diagnosticLogMaxBytes }),
+			...(options.diagnosticLogMaxFiles === undefined ? {} : { maxFiles: options.diagnosticLogMaxFiles }),
+		}),
+	);
 	const migrationSpool =
 		options.diagnostics === undefined
 			? new JsonlForensicRecorder(options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"))
@@ -412,7 +434,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 				if (usage instanceof SqliteV2UsageLedger) await usage.close();
 				if (plans instanceof SqliteV2PlanRegistry) await plans.close();
 				if (inputs instanceof SqliteV2InputRegistry) await inputs.close();
-				if (diagnostics instanceof SqliteForensicRecorder) await diagnostics.close();
+				if (primaryDiagnostics instanceof SqliteForensicRecorder) await primaryDiagnostics.close();
 				await repository.close();
 				await env.cleanup();
 			},

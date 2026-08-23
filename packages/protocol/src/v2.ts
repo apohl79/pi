@@ -391,6 +391,7 @@ export const EventEnvelopeV2Schema = StrictObject({
 export type EventEnvelopeV2 = Static<typeof EventEnvelopeV2Schema>;
 
 export const ClientDiagnosticManifestV2Schema = StrictObject({
+	clientInstanceId: Type.Optional(Type.String({ minLength: 1 })),
 	runtime: Type.String({ minLength: 1 }),
 	platform: Type.String({ minLength: 1 }),
 	arch: Type.String({ minLength: 1 }),

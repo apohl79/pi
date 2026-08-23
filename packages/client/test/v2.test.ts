@@ -204,7 +204,13 @@ describe("PiClientV2", () => {
 		const client = new PiClientV2({
 			transportFactory: pair.factory,
 			diagnostics: {
-				manifest: { runtime: "node v22", platform: "linux", arch: "x64", forkCommit: "fork-sha" },
+				manifest: {
+					clientInstanceId: "client-1",
+					runtime: "node v22",
+					platform: "linux",
+					arch: "x64",
+					forkCommit: "fork-sha",
+				},
 				afterSeq: 4,
 			},
 		});
@@ -212,7 +218,7 @@ describe("PiClientV2", () => {
 		await Promise.resolve();
 		const hello = parseClientMessageV2(decodeCbor(pair.sent[0]!.subarray(4)));
 		expect(hello).toMatchObject({
-			diagnostics: { manifest: { forkCommit: "fork-sha" }, afterSeq: 4 },
+			diagnostics: { manifest: { clientInstanceId: "client-1", forkCommit: "fork-sha" }, afterSeq: 4 },
 		});
 		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
 		await connection;
@@ -226,7 +232,7 @@ describe("PiClientV2", () => {
 		const client = new PiClientV2({
 			transportFactory: pair.factory,
 			diagnostics: {
-				manifest: { runtime: "node v22", platform: "linux", arch: "x64" },
+				manifest: { clientInstanceId: spool.clientInstanceId, runtime: "node v22", platform: "linux", arch: "x64" },
 				spool,
 			},
 		});
