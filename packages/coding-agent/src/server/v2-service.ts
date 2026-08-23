@@ -104,6 +104,7 @@ export interface CodingAgentV2SessionDefinition {
 	instructionProfile?: () => Promise<InstructionProfileSummary | undefined>;
 	pluginSetHash?: () => Promise<string>;
 	agents?: () => Promise<readonly AgentSummary[]>;
+	abortChildren?: () => Promise<void>;
 	plan?: () => Promise<PlanSnapshot | undefined>;
 	diagnostics?: () => Promise<DiagnosticsSnapshot>;
 	queues?: () => Promise<{
@@ -793,8 +794,10 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				await this.recordGoalUsage(usageBefore);
 				await this.markAgentCompletionsConsumed(completions);
 				goalUsageRecorded = true;
-			} else if (runCommand === "turn/abort") await harness.abort();
-			else if (runCommand === "turn/rollback") {
+			} else if (runCommand === "turn/abort") {
+				await this.definition.abortChildren?.();
+				await harness.abort();
+			} else if (runCommand === "turn/rollback") {
 				const turns = typeof payload.turns === "number" ? payload.turns : 1;
 				const result = await harness.rollback(turns);
 				if (!result.ok) throw new Error(result.error.message);

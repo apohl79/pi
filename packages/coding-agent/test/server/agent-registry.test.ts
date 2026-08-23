@@ -28,7 +28,7 @@ class FixtureRuntime implements CodingAgentV2Runtime {
 	async run(_operationId: string, command: CommandV2): Promise<void> {
 		this.commands.push(command);
 		if (this.fail) throw new Error("fixture failure");
-		if (this.blocked) {
+		if (this.blocked && command.command === "turn/start") {
 			this.releasePromise ??= new Promise<void>((resolve) => {
 				this.releaseBlocked = resolve;
 			});
@@ -185,6 +185,38 @@ describe("CodingAgentV2AgentRegistry", () => {
 		runtime.release();
 		expect((await registry.wait(agent.id)).state).toBe("complete");
 		expect(runtime.commands.map((command) => command.command)).toEqual(["turn/start", "turn/start"]);
+	});
+
+	test("interrupts every active descendant owned by a parent session", async () => {
+		const runtime = new FixtureRuntime();
+		runtime.blocked = true;
+		let childNumber = 0;
+		const registry = new CodingAgentV2AgentRegistry(
+			{
+				listSessions: async () => [],
+				listModels: async () => [],
+				openSession: async () => runtime,
+				createSession: async () => ({ sessionId: `child-session-${++childNumber}`, runtime }),
+			},
+			{ maxDepth: 2 },
+		);
+		const parent = await registry.spawn({
+			sessionId: "root-session",
+			parentPath: "/root",
+			taskName: "parent",
+			taskMessage: "parent task",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		const nested = await registry.spawn({
+			sessionId: "child-session-1",
+			parentPath: "/ignored",
+			taskName: "nested",
+			taskMessage: "nested task",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		await registry.interruptSession!("root-session");
+		expect((await registry.getSnapshot(parent.id)).state).toBe("interrupted");
+		expect((await registry.getSnapshot(nested.id)).state).toBe("interrupted");
 	});
 
 	test("enforces the active-child limit per parent", async () => {
