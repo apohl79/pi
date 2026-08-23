@@ -1588,6 +1588,7 @@ describe("PiServer v2 operation acceptance", () => {
 		await first.hello();
 		await first.request({ command: "session/attach", sessionId: "session-1" });
 		const runtime = service.sessions.get("session-1")!;
+		runtime.emitLifecycleEvents = true;
 		const response = await first.request({
 			command: "turn/start",
 			sessionId: "session-1",
@@ -1600,8 +1601,30 @@ describe("PiServer v2 operation acceptance", () => {
 		await runtime.started.promise;
 		const second = await connectUnixTestClientV2(server.addresses[0]!);
 		await second.hello({ sessionId: "session-1", eventSeq: 2 });
+		const operationId = (response as { accepted: OperationAccepted }).accepted.operationId;
+		const replayedItem = await second.next(
+			(message) => message.type === "event" && message.event === "item_completed",
+		);
+		const replayedToolStart = await second.next(
+			(message) => message.type === "event" && message.event === "tool_started",
+		);
+		const replayedToolEnd = await second.next(
+			(message) => message.type === "event" && message.event === "tool_completed",
+		);
+		expect(replayedItem).toMatchObject({
+			operationId,
+			payload: { role: "assistant" },
+		});
+		expect(replayedToolStart).toMatchObject({
+			operationId,
+			payload: { toolCallId: "tool-1", toolName: "exec_command" },
+		});
+		expect(replayedToolEnd).toMatchObject({
+			operationId,
+			payload: { toolCallId: "tool-1", isError: false },
+		});
 		const replay = await second.next((message) => message.type === "event" && message.event === "operation_terminal");
-		expect(replay).toMatchObject({ type: "event", seq: 6, payload: { state: "complete" } });
+		expect(replay).toMatchObject({ type: "event", payload: { state: "complete" } });
 		await second.close();
 	});
 
