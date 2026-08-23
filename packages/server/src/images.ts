@@ -50,6 +50,16 @@ function assertImageMime(mimeType: string): void {
 	if (!mimeType.startsWith("image/")) throw new Error(`Unsupported image MIME type: ${mimeType}`);
 }
 
+function assertImageDimensions(dimensions: Readonly<{ width: number; height: number }>): void {
+	if (
+		!Number.isSafeInteger(dimensions.width) ||
+		!Number.isSafeInteger(dimensions.height) ||
+		dimensions.width <= 0 ||
+		dimensions.height <= 0
+	)
+		throw new Error("Generated image dimensions must be positive safe integers");
+}
+
 export class BlobV2ImageService implements V2ImageService {
 	private readonly files: V2FileReferenceService;
 	private readonly blobs: V2BlobStore;
@@ -83,6 +93,9 @@ export class BlobV2ImageService implements V2ImageService {
 		}
 		const generated = await this.generator.generate(request);
 		assertImageMime(generated.mimeType);
+		if (generated.dimensions !== undefined) assertImageDimensions(generated.dimensions);
+		if (generated.costUsd !== undefined && (!Number.isFinite(generated.costUsd) || generated.costUsd < 0))
+			throw new Error("Generated image cost must be a non-negative finite number");
 		const blob = await this.blobs.put(generated.data, generated.mimeType);
 		return {
 			digest: blob.digest,

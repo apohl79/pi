@@ -79,4 +79,33 @@ describe("BlobV2ImageService", () => {
 		);
 		expect(calls).toBe(0);
 	});
+
+	test("rejects invalid generated dimensions and cost before storing the blob", async () => {
+		const blobs = new InMemoryV2BlobStore();
+		const invalidDimensions = new BlobV2ImageService(new LocalV2FileReferenceService({ projectRoot: "." }), blobs, {
+			generate: async () => ({
+				data: new Uint8Array([1]),
+				mimeType: "image/png",
+				provider: "fake",
+				model: "image-fast",
+				dimensions: { width: 1.5, height: 2 },
+			}),
+		});
+		await expect(invalidDimensions.generate("session-1", { prompt: "draw" })).rejects.toThrow(
+			"Generated image dimensions must be positive safe integers",
+		);
+
+		const invalidCost = new BlobV2ImageService(new LocalV2FileReferenceService({ projectRoot: "." }), blobs, {
+			generate: async () => ({
+				data: new Uint8Array([1]),
+				mimeType: "image/png",
+				provider: "fake",
+				model: "image-fast",
+				costUsd: -1,
+			}),
+		});
+		await expect(invalidCost.generate("session-1", { prompt: "draw" })).rejects.toThrow(
+			"Generated image cost must be a non-negative finite number",
+		);
+	});
 });
