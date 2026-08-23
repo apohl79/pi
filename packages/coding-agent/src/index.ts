@@ -502,6 +502,7 @@ export {
 	type ModelInstructionResolverOptions,
 	type ResolvedModelInstructionProfile,
 } from "./server/model-instructions.ts";
+export { adaptPiExtensionSampling } from "./server/pi-extension-adapter.ts";
 export {
 	AcquiringV2PluginRegistry,
 	ActivatingV2PluginRegistry,
