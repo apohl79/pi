@@ -14,6 +14,7 @@ import type {
 	ModelMetadata,
 	OperationAccepted,
 	OperationSummary,
+	PlanSnapshot,
 	PromptContent,
 	SessionMetadataV2,
 	SessionPhaseV2,
@@ -34,6 +35,7 @@ export interface CodingAgentV2SessionDefinition {
 	instructionProfile?: () => Promise<InstructionProfileSummary | undefined>;
 	pluginSetHash?: () => Promise<string>;
 	agents?: () => Promise<readonly AgentSummary[]>;
+	plan?: () => Promise<PlanSnapshot | undefined>;
 	queues?: () => Promise<{
 		steer: readonly { entryId: string; message: AgentMessage }[];
 		followUp: readonly { entryId: string; message: AgentMessage }[];
@@ -405,12 +407,13 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.definition.usage?.aggregate({ sessionId: this.definition.metadata.id }),
 		]);
 		void leafId;
-		const [goal, persistedName, instructionProfile, pluginSetHash, agents] = await Promise.all([
+		const [goal, persistedName, instructionProfile, pluginSetHash, agents, plan] = await Promise.all([
 			this.definition.goals?.read(),
 			this.definition.harness.session.getName(),
 			this.definition.instructionProfile?.(),
 			this.definition.pluginSetHash?.(),
 			this.definition.agents?.(),
+			this.definition.plan?.(),
 		]);
 		const queues = await this.definition.queues?.();
 		const effectiveName = persistedName ?? this.sessionName;
@@ -453,6 +456,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				})),
 			},
 			...(goal === undefined ? {} : { goal }),
+			...(plan === undefined ? {} : { plan }),
 			agents: agents === undefined ? [] : [...agents],
 			usage: {
 				input,
