@@ -565,16 +565,31 @@ export class AgentHarness implements AgentLane {
 		return this.session.getLeafId();
 	}
 
-	private async estimateProviderRequestOverhead(): Promise<number> {
+	private async resolveSamplingInput(): Promise<SamplingInput | undefined> {
+		return this.samplingInputFactory ? await this.samplingInputFactory() : this.samplingInput;
+	}
+
+	private async estimateProviderRequestOverhead(
+		messages: readonly AgentMessage[] = [],
+		samplingInput?: SamplingInput,
+	): Promise<number> {
 		const systemPrompt =
 			typeof this.systemPromptSource === "function"
 				? await this.systemPromptSource()
 				: (this.systemPromptSource ?? "");
-		const promptMessages: AgentMessage[] = [{ role: "user", content: systemPrompt, timestamp: 0 }];
-		if (Array.isArray(this.samplingInput)) promptMessages.push(...this.samplingInput);
-		const tools = this.tools
-			.filter((tool) => this.activeToolNames.includes(tool.name))
-			.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
+		const activeTools = this.tools.filter((tool) => this.activeToolNames.includes(tool.name));
+		const tools = activeTools.map((tool) => ({
+			name: tool.name,
+			description: tool.description,
+			parameters: tool.parameters,
+		}));
+		const samplingMessages = samplingInput
+			? await samplingInput({ model: this.model, systemPrompt, messages, tools: activeTools })
+			: [];
+		const promptMessages: AgentMessage[] = [
+			{ role: "user", content: systemPrompt, timestamp: 0 },
+			...samplingMessages,
+		];
 		return (
 			promptMessages.reduce((total, message) => total + estimateTokens(message), 0) +
 			Math.ceil((JSON.stringify(tools)?.length ?? 0) / 4)
@@ -599,10 +614,13 @@ export class AgentHarness implements AgentLane {
 		const prompts = this.normalizePromptInput(input, images);
 		const compactionSettings = resolveCompactionSettings(this.compactionSettings, this.model.provider, this.model.id);
 		const stats = await this.session.getStats();
+		const preflightEntries = await this.session.findEntriesOnBranch({ order: "oldestFirst" });
+		const preflightContext = buildSessionContext(preflightEntries).messages;
+		const samplingInput = await this.resolveSamplingInput();
 		const contextTokens =
 			stats.totalTokens +
 			prompts.reduce((total, message) => total + estimateTokens(message), 0) +
-			(await this.estimateProviderRequestOverhead());
+			(await this.estimateProviderRequestOverhead([...preflightContext, ...prompts], samplingInput));
 		if (shouldCompact(contextTokens, this.model.contextWindow ?? 128_000, compactionSettings)) {
 			await this.compact();
 		}
@@ -634,7 +652,6 @@ export class AgentHarness implements AgentLane {
 					? await this.systemPromptSource()
 					: (this.systemPromptSource ?? "");
 			const activeTools = this.tools.filter((tool) => this.activeToolNames.includes(tool.name));
-			const samplingInput = this.samplingInputFactory ? await this.samplingInputFactory() : this.samplingInput;
 			let assistantAttempt = 0;
 			const newMessages = await runAgentLoop(
 				prompts,
@@ -1323,7 +1340,12 @@ export class AgentHarness implements AgentLane {
 		);
 		const settings = resolveCompactionSettings(this.compactionSettings, model.provider, model.id);
 		const stats = await this.session.getStats();
-		const requestOverhead = await this.estimateProviderRequestOverhead();
+		const entries = await this.session.findEntriesOnBranch({ order: "oldestFirst" });
+		const samplingInput = await this.resolveSamplingInput();
+		const requestOverhead = await this.estimateProviderRequestOverhead(
+			buildSessionContext(entries).messages,
+			samplingInput,
+		);
 		if (shouldCompact(stats.totalTokens + requestOverhead, model.contextWindow ?? 128_000, settings))
 			await this.compact();
 	}
