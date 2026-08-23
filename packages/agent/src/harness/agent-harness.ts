@@ -33,7 +33,7 @@ import {
 	resolveCompactionSettings,
 	shouldCompact,
 } from "./compaction/compaction.ts";
-import { HarnessEventBus } from "./events.ts";
+import { type HarnessEvent, HarnessEventBus } from "./events.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
 import { Result as ResultValue, TaggedError } from "./result.ts";
 import { buildSessionContext } from "./session/context.ts";
@@ -557,7 +557,10 @@ export interface AgentLane {
 	prompt(message: AgentMessage | AgentMessage[]): Promise<RunResult>;
 	skill(name: string, additionalInstructions?: string): Promise<RunResult>;
 	promptFromTemplate(name: string, args?: string[]): Promise<RunResult>;
-	compact(options?: { customInstructions?: string }): Promise<CompactionResult>;
+	compact(options?: {
+		customInstructions?: string;
+		reason?: "manual" | "threshold" | "overflow";
+	}): Promise<CompactionResult>;
 	navigateTree(targetId: string | null, options?: NavigateOptions): Promise<NavigationResult>;
 	rollback(turns: number): Promise<RollbackResult>;
 	resume(): Promise<ResumeResult>;
@@ -623,6 +626,11 @@ export class AgentHarness implements AgentLane {
 		reject: (error: Error) => void;
 	};
 	private closed = false;
+
+	private emitPassiveEvent(event: HarnessEvent): void {
+		this.watchBus.emit(event);
+		this.lifecycle.emit(event.type, event);
+	}
 
 	private constructor(options: AgentHarnessOptions) {
 		this.name = options.lane ?? "main";
@@ -818,7 +826,7 @@ export class AgentHarness implements AgentLane {
 			prompts.reduce((total, message) => total + estimateTokens(message), 0) +
 			(await this.estimateProviderRequestOverhead([...preflightContext, ...prompts], samplingInput));
 		if (shouldCompact(contextTokens, this.model.contextWindow ?? 128_000, compactionSettings)) {
-			await this.compact();
+			await this.compact({ reason: "threshold" });
 		}
 		const runId = this.durableSession.idGenerator.next();
 		let systemPrompt =
@@ -1162,7 +1170,7 @@ export class AgentHarness implements AgentLane {
 			)
 				await this.nextRun(runEnd.followUp);
 			this.lifecycle.emit("operation_finished", { operationId: runId, outcome: "completed" });
-			this.watchBus.emit({
+			this.emitPassiveEvent({
 				type: "run_end",
 				lane: this.name,
 				runId,
@@ -1284,7 +1292,10 @@ export class AgentHarness implements AgentLane {
 		if (!template) return ResultValue.err(new UnknownTemplate({ name, message: `Unknown prompt template: ${name}` }));
 		return this.prompt(formatPromptTemplateInvocation(template, args));
 	}
-	async compact(_options?: { customInstructions?: string }): Promise<CompactionResult> {
+	async compact(_options?: {
+		customInstructions?: string;
+		reason?: "manual" | "threshold" | "overflow";
+	}): Promise<CompactionResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
 		const open = await this.durableSession.findOpenOperations(this.name, { limit: 1 });
 		if (open.length > 0) {
@@ -1339,6 +1350,8 @@ export class AgentHarness implements AgentLane {
 			},
 		});
 		await this.setOperationPhase(runId, "executing");
+		const reason = _options?.reason ?? "manual";
+		this.emitPassiveEvent({ type: "compaction_start", runId, reason });
 		try {
 			await this.park({ kind: "stream_assistant", step: "compaction", attempt: 1 });
 			const result = await compact(
@@ -1361,6 +1374,20 @@ export class AgentHarness implements AgentLane {
 						code: result.error.code,
 						message: sanitizeErrorMessage(result.error.message, result.error.code),
 					},
+				});
+				this.emitPassiveEvent({
+					type: "compaction_end",
+					runId,
+					reason,
+					outcome: result.error.code === "aborted" ? "aborted" : "failed",
+					...(result.error.code === "aborted"
+						? {}
+						: {
+								error: {
+									code: result.error.code,
+									message: sanitizeErrorMessage(result.error.message, result.error.code),
+								},
+							}),
 				});
 				if (result.error.code === "aborted") {
 					return ResultValue.ok({
@@ -1398,6 +1425,7 @@ export class AgentHarness implements AgentLane {
 				runId,
 				outcome: "completed",
 			});
+			this.emitPassiveEvent({ type: "compaction_end", runId, reason, outcome: "completed", entryId: entry.id });
 			return ResultValue.ok({
 				runId,
 				kind: "completed",
@@ -1411,6 +1439,13 @@ export class AgentHarness implements AgentLane {
 				id: this.durableSession.idGenerator.next(),
 				lane: this.name,
 				runId,
+				outcome: "failed",
+				error: { code: "compaction_failed", message },
+			});
+			this.emitPassiveEvent({
+				type: "compaction_end",
+				runId,
+				reason,
 				outcome: "failed",
 				error: { code: "compaction_failed", message },
 			});
@@ -1481,6 +1516,7 @@ export class AgentHarness implements AgentLane {
 			},
 		});
 		await this.setOperationPhase(runId, "executing");
+		this.emitPassiveEvent({ type: "navigation_start", runId, targetId });
 		try {
 			let summary: BranchSummaryResult | undefined;
 			if (summarize && oldLeafId) {
@@ -1513,6 +1549,21 @@ export class AgentHarness implements AgentLane {
 							code: generated.error.code,
 							message: sanitizeErrorMessage(generated.error.message, generated.error.code),
 						},
+					});
+					this.emitPassiveEvent({
+						type: "navigation_end",
+						runId,
+						oldLeafId,
+						newLeafId: oldLeafId,
+						outcome: generated.error.code === "aborted" ? "aborted" : "failed",
+						...(generated.error.code === "aborted"
+							? {}
+							: {
+									error: {
+										code: generated.error.code,
+										message: sanitizeErrorMessage(generated.error.message, generated.error.code),
+									},
+								}),
 					});
 					return ResultValue.ok({
 						runId,
@@ -1554,6 +1605,13 @@ export class AgentHarness implements AgentLane {
 				runId,
 				outcome: "completed",
 			});
+			this.emitPassiveEvent({
+				type: "navigation_end",
+				runId,
+				oldLeafId,
+				newLeafId: summaryEntry?.id ?? targetId,
+				outcome: "completed",
+			});
 			return ResultValue.ok({ runId, kind: "completed", newLeafId: summaryEntry?.id ?? targetId, summaryEntry });
 		} catch (error) {
 			const message = sanitizeErrorMessage(error, "Navigation failed");
@@ -1562,6 +1620,14 @@ export class AgentHarness implements AgentLane {
 				id: this.durableSession.idGenerator.next(),
 				lane: this.name,
 				runId,
+				outcome: "failed",
+				error: { code: "navigation_failed", message },
+			});
+			this.emitPassiveEvent({
+				type: "navigation_end",
+				runId,
+				oldLeafId,
+				newLeafId: oldLeafId,
 				outcome: "failed",
 				error: { code: "navigation_failed", message },
 			});
