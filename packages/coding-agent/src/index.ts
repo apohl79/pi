@@ -44,6 +44,9 @@ export {
 /** The package-default SDK entry point is server-owned. */
 export {
 	type CreateServerAgentSessionOptions,
+	type CreateServerAgentSessionOptions as CreateAgentSessionOptions,
+	type CreateServerAgentSessionResult,
+	type CreateServerAgentSessionResult as CreateAgentSessionResult,
 	createServerAgentSession,
 	createServerAgentSession as createAgentSession,
 	openServerAgentSession,
@@ -282,8 +285,8 @@ export {
 	type AgentSessionRuntimeDiagnostic,
 	type AgentSessionServices,
 	type CreateAgentSessionFromServicesOptions,
-	type CreateAgentSessionOptions,
-	type CreateAgentSessionResult,
+	type CreateAgentSessionOptions as CreateDirectAgentSessionOptions,
+	type CreateAgentSessionResult as CreateDirectAgentSessionResult,
 	type CreateAgentSessionRuntimeFactory,
 	type CreateAgentSessionRuntimeResult,
 	type CreateAgentSessionServicesOptions,

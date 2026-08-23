@@ -3,7 +3,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, test } from "vitest";
-import { createAgentSession } from "../../src/index.ts";
+import {
+	type CreateAgentSessionOptions,
+	type CreateAgentSessionResult,
+	type CreateDirectAgentSessionOptions,
+	type CreateDirectAgentSessionResult,
+	createAgentSession,
+} from "../../src/index.ts";
+
+const serverSdkTypeCheck: CreateAgentSessionOptions = { cwd: process.cwd() };
+const directSdkTypeCheck: CreateDirectAgentSessionOptions = { noTools: "all" };
+type ServerSdkResultMatchesFactory = Awaited<ReturnType<typeof createAgentSession>> extends CreateAgentSessionResult
+	? true
+	: false;
+const serverSdkResultTypeCheck: ServerSdkResultMatchesFactory = true;
+const directSdkResultTypeCheck: CreateDirectAgentSessionResult | undefined = undefined;
+void serverSdkTypeCheck;
+void directSdkTypeCheck;
+void serverSdkResultTypeCheck;
+void directSdkResultTypeCheck;
 
 const directories: string[] = [];
 

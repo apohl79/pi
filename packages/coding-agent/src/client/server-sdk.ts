@@ -31,6 +31,9 @@ export type ServerAgentSession = Readonly<{
 	close(): Promise<void>;
 }>;
 
+/** Result returned by the package-default server-owned SDK factory. */
+export type CreateServerAgentSessionResult = ServerAgentSession;
+
 /** Create a daemon-owned SDK session. The returned close method owns client and daemon cleanup. */
 export async function createServerAgentSession(
 	options: CreateServerAgentSessionOptions = {},
