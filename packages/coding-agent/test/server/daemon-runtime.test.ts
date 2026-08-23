@@ -918,6 +918,73 @@ describe("coding-agent daemon runtime", () => {
 		}
 	});
 
+	test("exports provider failure evidence after an unclean daemon restart", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-provider-failure-diagnostics-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-provider-failure-faux",
+			models: [{ id: "provider-failure-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage("provider failed", { stopReason: "error", errorMessage: "provider failure" }),
+		]);
+		const output: unknown[] = [];
+		const socketPath = join(tmpdir(), "pi-provider-failure.sock");
+		const options = {
+			agentDir: directory,
+			cwd: directory,
+			clientDiagnosticSpoolPath: join(directory, "client-diagnostics.jsonl"),
+			models,
+			model: faux.getModel(),
+			socketPath,
+			harness: { tools: [], activeToolNames: [] as string[] },
+			write: (value: unknown): void => {
+				output.push(value);
+			},
+			writeText: () => {},
+		};
+		const first = await createConfiguredCodingAgentDaemonRuntime(options);
+		let sessionId: string;
+		try {
+			await first.cli.runPi({
+				command: "pi",
+				options: {
+					print: true,
+					messages: ["trigger provider failure"],
+					fileArgs: [],
+					unknownFlags: new Map(),
+					diagnostics: [],
+				},
+			});
+			await first.cli.runSessions({ command: "sessions" });
+			sessionId = (output.at(-1) as readonly { id: string }[])[0]!.id;
+		} finally {
+			await first.close();
+		}
+		await writeFile(
+			join(directory, "daemon-state.json"),
+			JSON.stringify({ schemaVersion: 1, daemonInstanceId: "crashed", state: "running", timestamp: 1 }),
+		);
+
+		const second = await createConfiguredCodingAgentDaemonRuntime(options);
+		const bundlePath = join(directory, "provider-failure-bundle.json");
+		try {
+			await second.daemon.start();
+			await second.cli.runDiagnostics({ command: "diagnostics", action: "export", sessionId, output: bundlePath });
+			const bundle = JSON.parse(await readFile(bundlePath, "utf8")) as { events: readonly unknown[] };
+			const serialized = JSON.stringify(bundle);
+			expect(bundle.events.length).toBeGreaterThan(0);
+			expect(serialized).toContain("provider failure");
+			expect(serialized).toContain("client.connected");
+			await second.cli.runDiagnostics({ command: "diagnostics", action: "verify", bundle: bundlePath });
+			expect(output.at(-1)).toEqual({ valid: true });
+		} finally {
+			await second.close();
+		}
+	});
+
 	test("reports corrupted configured blobs through the production doctor", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-blob-doctor-"));
 		directories.push(directory);
