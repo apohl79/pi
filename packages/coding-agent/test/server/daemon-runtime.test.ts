@@ -973,11 +973,17 @@ describe("coding-agent daemon runtime", () => {
 		try {
 			await second.daemon.start();
 			await second.cli.runDiagnostics({ command: "diagnostics", action: "export", sessionId, output: bundlePath });
-			const bundle = JSON.parse(await readFile(bundlePath, "utf8")) as { events: readonly unknown[] };
+			const bundle = JSON.parse(await readFile(bundlePath, "utf8")) as {
+				events: readonly unknown[];
+				manifest: { unavailable?: readonly string[] };
+				clientDiagnostics?: { records?: readonly unknown[] };
+			};
 			const serialized = JSON.stringify(bundle);
 			expect(bundle.events.length).toBeGreaterThan(0);
 			expect(serialized).toContain("provider failure");
 			expect(serialized).toContain("client.connected");
+			expect(bundle.clientDiagnostics?.records?.length).toBeGreaterThan(0);
+			expect(bundle.manifest.unavailable).toBeUndefined();
 			await second.cli.runDiagnostics({ command: "diagnostics", action: "verify", bundle: bundlePath });
 			expect(output.at(-1)).toEqual({ valid: true });
 		} finally {

@@ -434,7 +434,7 @@ describe("PiServer v2 operation acceptance", () => {
 			result: {
 				format: "json",
 				bundle: {
-					manifest: { unavailable: ["client-diagnostic-spool"], projectionsSha256: expect.any(String) },
+					manifest: { projectionsSha256: expect.any(String) },
 					projections: {
 						sessions: [],
 						operations: [{ operationId: "operation-1", sessionId: "session-1", state: "complete" }],

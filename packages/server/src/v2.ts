@@ -1199,7 +1199,7 @@ export class PiServerV2 {
 							...(operationId === undefined ? {} : { operationId }),
 						},
 					}),
-			unavailable: ["client-diagnostic-spool"],
+			...(state.clientDiagnostics === undefined ? { unavailable: ["client-diagnostic-spool"] } : {}),
 		};
 		await this.sendResponse(state, id, {
 			command: command.command,
