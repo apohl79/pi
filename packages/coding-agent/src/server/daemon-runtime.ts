@@ -43,6 +43,7 @@ import {
 import type { TransportAddress } from "../cli/experimental/transport-address.ts";
 import { acquireCodexMarketplacePlugin, type CodexPluginAcquisitionOptions } from "../core/codex-plugin-acquisition.ts";
 import { CodexPluginActivationStore } from "../core/codex-plugin-activation.ts";
+import { DefaultResourceLoader } from "../core/resource-loader.ts";
 import { runMigrations } from "../migrations.ts";
 import { type CodingAgentV2AgentRegistryOptions, createCodingAgentV2AgentRegistry } from "./agent-registry.ts";
 import { createCodingAgentNativePtyLauncher } from "./native-pty.ts";
@@ -291,6 +292,12 @@ export async function createCodingAgentDaemonRuntime(
 export async function createConfiguredCodingAgentDaemonRuntime(
 	options: ConfiguredCodingAgentDaemonRuntimeOptions,
 ): Promise<ConfiguredCodingAgentDaemonRuntime> {
+	let discoveredPiExtensions = options.piExtensions;
+	if (discoveredPiExtensions === undefined) {
+		const resourceLoader = new DefaultResourceLoader({ cwd: options.cwd, agentDir: options.agentDir });
+		await resourceLoader.reload();
+		discoveredPiExtensions = resourceLoader.getExtensions().extensions;
+	}
 	const primaryDiagnostics =
 		options.diagnostics ??
 		new SqliteForensicRecorder(
@@ -487,6 +494,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			});
 		const runtime = await createCodingAgentDaemonRuntime({
 			...options,
+			piExtensions: discoveredPiExtensions,
 			repository,
 			env,
 			diagnostics,
