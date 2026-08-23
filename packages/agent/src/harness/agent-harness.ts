@@ -1796,13 +1796,19 @@ export class AgentHarness implements AgentLane {
 	): Promise<ResumeResult> {
 		const model = this.models.getModel(handle.provider, handle.modelId);
 		if (!model) {
-			return ResultValue.ok({
-				operation: "run",
-				runId: operation.id,
-				kind: "failed",
-				leafId: (await this.session.getLeafId()) ?? "",
-				error: { code: "missing_model", message: `Model ${handle.provider}/${handle.modelId} is unavailable` },
-			});
+			const suspended = this.suspendedOperations.find((candidate) => candidate.id === operation.id);
+			const modelId = `${handle.provider}/${handle.modelId}`;
+			if (suspended && !suspended.missing.models.includes(modelId)) {
+				suspended.missing.models.push(modelId);
+			}
+			return ResultValue.err(
+				new MissingIdentities({
+					lane: this.name,
+					tools: [...(suspended?.missing.tools ?? [])],
+					models: [...(suspended?.missing.models ?? [modelId])],
+					message: "Resume requires missing tools or models",
+				}),
+			);
 		}
 		try {
 			const message = await this.models.fetchDeferred(model, handle);
