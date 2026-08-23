@@ -191,6 +191,14 @@ describe("JsonlForensicRecorder", () => {
 });
 
 describe("LocalDiagnosticCapsuleStore", () => {
+	test("rejects invalid retention limits at construction", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostic-capsules-limits-"));
+		expect(() => new LocalDiagnosticCapsuleStore(join(directory, "keys.json"), { maxBytes: 0 })).toThrow("maxBytes");
+		expect(() => new LocalDiagnosticCapsuleStore(join(directory, "keys.json"), { maxCapsules: 0 })).toThrow(
+			"maxCapsules",
+		);
+	});
+
 	test("encrypts bounded content and decrypts after key rotation", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostic-capsules-"));
 		const store = new LocalDiagnosticCapsuleStore(join(directory, "keys.json"), { maxBytes: 5 });
