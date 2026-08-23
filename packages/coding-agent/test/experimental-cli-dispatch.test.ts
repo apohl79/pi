@@ -9,7 +9,6 @@ function context(): ExperimentalCliContext {
 		runClient: vi.fn(),
 		runAttach: vi.fn(),
 		runSessions: vi.fn(),
-		runDiagnostics: vi.fn(),
 	};
 }
 
@@ -19,17 +18,10 @@ describe("experimental CLI dispatch", () => {
 		["client", true],
 		["attach", true],
 		["sessions", true],
-		["diagnostics", true],
 		["--model", false],
 		[undefined, false],
 	] as const)("recognizes %s as %s", (command, expected) => {
 		expect(isExperimentalCommand(command === undefined ? [] : [command])).toBe(expected);
-	});
-
-	test("dispatches diagnostics commands", async () => {
-		const handlers = context();
-		expect(await dispatchExperimentalCommand(["diagnostics", "status"], handlers)).toBe(true);
-		expect(handlers.runDiagnostics).toHaveBeenCalledWith({ command: "diagnostics", action: "status" });
 	});
 
 	test("dispatches recognized commands without entering legacy parsing", async () => {
