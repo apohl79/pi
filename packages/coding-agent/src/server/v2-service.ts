@@ -333,7 +333,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	private model: Model<string>;
 	private nameRevision = 0;
 	private autoName = true;
-	private readonly queuedFollowUps = new Set<string>();
+	private readonly queuedTurnOperations = new Set<string>();
 	private sessionName: string | undefined;
 	private nameSource: "explicit" | "generated" | "derived" | undefined;
 	private phase: SessionPhaseV2 = "idle";
@@ -796,12 +796,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	async accept(_operationId: string, command?: CommandV2): Promise<OperationAccepted> {
 		const policy = await this.compactionPolicySnapshot();
 		if (
-			command?.command === "turn/followUp" &&
+			(command?.command === "turn/followUp" || command?.command === "turn/steer") &&
 			(this.activeOperation?.state === "accepted" || this.activeOperation?.state === "running")
 		) {
 			this.revision += 1;
 			this.eventSeq += 1;
-			this.queuedFollowUps.add(_operationId);
+			this.queuedTurnOperations.add(_operationId);
 			return {
 				operationId: _operationId,
 				sessionRevision: this.revision,
@@ -861,7 +861,9 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const extensionOperationModel = { id: operationModel.id, provider: operationModel.provider };
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
-		const queuedFollowUp = runCommand === "turn/followUp" && this.queuedFollowUps.delete(_operationId);
+		const queuedTurnOperation =
+			(runCommand === "turn/followUp" || runCommand === "turn/steer") &&
+			this.queuedTurnOperations.delete(_operationId);
 		const usageBefore = (await harness.session.getStats()).totalTokens;
 		const beforeEntryIds = new Set(
 			(await harness.session.findEntriesOnBranch({ order: "oldestFirst" })).map((entry) => entry.id),
@@ -869,7 +871,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		let goalUsageRecorded = false;
 		let generateNameAfterTurn = false;
 		const extensionHost = this.definition.extensionHost;
-		if (!queuedFollowUp) {
+		if (!queuedTurnOperation) {
 			this.phase = "turn";
 			this.activeOperation = {
 				operationId: _operationId,
@@ -1021,7 +1023,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 					// Usage attribution must not hide the original operation failure.
 				}
 			}
-			if (!queuedFollowUp) {
+			if (!queuedTurnOperation) {
 				this.phase = "failed";
 				this.activeOperation = {
 					...this.activeOperation!,
@@ -1048,7 +1050,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				"completed",
 			),
 		);
-		if (!queuedFollowUp) {
+		if (!queuedTurnOperation) {
 			this.revision += 1;
 			this.eventSeq += 1;
 			this.phase = "idle";
