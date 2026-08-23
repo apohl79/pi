@@ -13,6 +13,20 @@ describe("InMemoryV2ProcessRegistry", () => {
 		expect(await registry.wait(started.processId)).toMatchObject({ state: "terminated" });
 	});
 
+	test("keeps UTF-8 byte cursors aligned across multibyte output", async () => {
+		const registry = new InMemoryV2ProcessRegistry({ maxOutputBytes: 5 });
+		const started = await registry.start({ sessionId: "session-unicode", command: "demo" });
+		await registry.write(started.processId, "α🙂z");
+
+		expect(await registry.getSnapshot(started.processId)).toMatchObject({
+			output: "🙂z",
+			cursor: 7,
+			truncated: true,
+		});
+		expect(await registry.read(started.processId, 2)).toMatchObject({ output: "🙂z", cursor: 7 });
+		expect(await registry.read(started.processId, 3)).toMatchObject({ output: "z", cursor: 7 });
+	});
+
 	test("runs a node-backed process without tying it to a client connection", async () => {
 		const registry = new NodeV2ProcessRegistry();
 		const started = await registry.start({
@@ -22,6 +36,19 @@ describe("InMemoryV2ProcessRegistry", () => {
 		const completed = await registry.wait(started.processId);
 
 		expect(completed).toMatchObject({ state: "exited", exitCode: 0, output: "hello", cursor: 5 });
+	});
+
+	test("reports Node output cursors in UTF-8 bytes", async () => {
+		const registry = new NodeV2ProcessRegistry();
+		const started = await registry.start({
+			sessionId: "session-node-unicode",
+			command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('🙂z')"`,
+		});
+		const completed = await registry.wait(started.processId);
+
+		expect(completed).toMatchObject({ output: "🙂z", cursor: 5, exitCode: 0 });
+		expect(await registry.read(started.processId, 0)).toMatchObject({ output: "🙂z", cursor: 5 });
+		expect(await registry.read(started.processId, 1)).toMatchObject({ output: "z", cursor: 5 });
 	});
 
 	test("parses quoted argv without shell expansion and rejects shell syntax", async () => {
