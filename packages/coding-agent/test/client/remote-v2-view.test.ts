@@ -78,6 +78,7 @@ describe("formatRemoteV2Session", () => {
 							taskName: "worker",
 							state: "running",
 							model: { provider: "anthropic", id: "sonnet" },
+							startedAt: Date.now() - 102_000,
 							usage: {
 								input: 38_000,
 								output: 4_200,
@@ -92,7 +93,7 @@ describe("formatRemoteV2Session", () => {
 			},
 			{ maxAgentItems: 1 },
 		);
-		expect(output).toContain("Agent /root/worker · running · anthropic/sonnet · ↓38000 ↑4200 $0.71");
+		expect(output).toMatch(/Agent \/root\/worker · running · anthropic\/sonnet · 01:4[12] · ↓38000 ↑4200 \$0\.71/);
 	});
 
 	test("renders authoritative goal and plan state", () => {

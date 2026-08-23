@@ -158,6 +158,7 @@ export const AgentSummarySchema = StrictObject({
 		Type.Literal("interrupted"),
 	]),
 	model: ModelRefSchema,
+	startedAt: Type.Optional(TimestampSchema),
 	usage: Type.Optional(UsageAggregateSchema),
 });
 export type AgentSummary = Static<typeof AgentSummarySchema>;
