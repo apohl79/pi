@@ -161,6 +161,17 @@ class TestService implements PiServerServiceV2 {
 		return { sessionId, runtime };
 	}
 
+	async forkSession(
+		sourceSessionId: string,
+		options: Record<string, unknown>,
+	): Promise<{ sessionId: string; runtime: PiSessionRuntimeV2 }> {
+		if (!this.sessions.has(sourceSessionId)) throw new Error(`Unknown session ${sourceSessionId}`);
+		const sessionId = typeof options.id === "string" ? options.id : `${sourceSessionId}-fork`;
+		const runtime = new TestRuntime(sessionId);
+		this.sessions.set(sessionId, runtime);
+		return { sessionId, runtime };
+	}
+
 	async deleteSession(sessionId: string): Promise<void> {
 		if (!this.sessions.delete(sessionId)) throw new Error(`Unknown session ${sessionId}`);
 	}
@@ -705,6 +716,29 @@ describe("PiServer v2 operation acceptance", () => {
 			reacquirer.request({ command: "session/attach", sessionId: "created-session", payload: { mode: "control" } }),
 		).resolves.toMatchObject({ ok: true, result: { lease: "control" } });
 		await reacquirer.close();
+	});
+
+	test("delegates session forks through the v2 service boundary", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-session-fork-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1", payload: { mode: "control" } });
+		const forked = await client.request({
+			command: "session/fork",
+			sessionId: "session-1",
+			payload: { id: "forked-session", scope: "branch", position: "at" },
+		});
+		expect(forked).toMatchObject({
+			ok: true,
+			result: { command: "session/fork", session: { id: "forked-session" } },
+		});
+		expect(service.sessions.has("forked-session")).toBe(true);
+		await client.close();
 	});
 
 	test("keeps session deletion under the session controller", async () => {

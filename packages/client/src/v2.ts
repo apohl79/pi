@@ -40,6 +40,15 @@ export interface CreateSessionV2Options {
 	readonly cwd?: string;
 }
 
+export interface ForkSessionV2Options {
+	readonly id?: string;
+	readonly name?: string;
+	readonly cwd?: string;
+	readonly scope?: "branch" | "tree";
+	readonly entryId?: string;
+	readonly position?: "before" | "at";
+}
+
 export interface PiSessionV2Handle {
 	readonly sessionId: string;
 	readonly mode: V2SessionLeaseMode;
@@ -175,6 +184,19 @@ export class PiClientV2 {
 		);
 		if (typeof result.session !== "object" || result.session === null || Array.isArray(result.session))
 			throw new Error("Invalid session/create result");
+		return result.session as SessionSnapshotV2;
+	}
+
+	async forkSession(sourceSessionId: string, options: ForkSessionV2Options = {}): Promise<SessionSnapshotV2> {
+		const result = commandResult(
+			await this.request({
+				command: "session/fork",
+				sessionId: sourceSessionId,
+				...(Object.keys(options).length === 0 ? {} : { payload: { ...options } as Record<string, JsonValue> }),
+			}),
+		);
+		if (typeof result.session !== "object" || result.session === null || Array.isArray(result.session))
+			throw new Error("Invalid session/fork result");
 		return result.session as SessionSnapshotV2;
 	}
 

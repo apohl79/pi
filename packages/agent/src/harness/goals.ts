@@ -130,6 +130,15 @@ export class GoalManager {
 		return structuredClone(goal);
 	}
 
+	/** Re-identifies copied goal state after a session fork so future accounting is independent. */
+	async forkIdentity(): Promise<GoalSnapshot | undefined> {
+		const current = await this.read();
+		if (!current) return undefined;
+		const goal = { ...current, id: uuidv7(), createdAt: this.now(), updatedAt: this.now() };
+		await this.session.appendCustomEntry(GOAL_ENTRY_TYPE, goal);
+		return structuredClone(goal);
+	}
+
 	async update(patch: GoalUpdate): Promise<GoalSnapshot> {
 		const current = await this.read();
 		if (!current) throw new Error("No active goal");

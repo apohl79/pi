@@ -530,6 +530,27 @@ export async function createCodingAgentV2SqliteService(
 				throw new Error("Requested child model or role model is not available in the configured model catalog");
 			return definition(metadata, session, modelOverride);
 		},
+		fork: async (sourceSessionId, payload) => {
+			await ensureLegacyImport();
+			const source =
+				metadataById.get(sourceSessionId) ??
+				(await options.repository.list()).find((item) => item.id === sourceSessionId);
+			if (!source) throw new Error(`Unknown session: ${sourceSessionId}`);
+			const scope = payload.scope === "tree" ? "tree" : "branch";
+			const forked = await options.repository.fork(source, {
+				...(scope === "tree" ? { scope: "tree" as const } : { scope: "branch" as const }),
+				...(typeof payload.entryId === "string" ? { entryId: payload.entryId } : {}),
+				...(payload.position === "before" || payload.position === "at" ? { position: payload.position } : {}),
+				...(typeof payload.id === "string" ? { id: payload.id } : {}),
+				cwd: typeof payload.cwd === "string" && payload.cwd.length > 0 ? payload.cwd : source.cwd,
+			});
+			const metadata = await forked.getMetadata();
+			metadataById.set(metadata.id, metadata);
+			if (typeof payload.name === "string") await forked.setName(payload.name);
+			const created = await definition(metadata, forked);
+			await created.goals?.forkIdentity();
+			return created;
+		},
 		delete: async (sessionId) => {
 			const metadata =
 				metadataById.get(sessionId) ?? (await options.repository.list()).find((item) => item.id === sessionId);
