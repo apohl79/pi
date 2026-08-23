@@ -66,7 +66,7 @@ function cleanReference(reference: string): string {
 }
 
 function scopeOf(reference: string): FileScope {
-	return reference.startsWith("~/") || reference === "~"
+	return reference.startsWith("~/") || reference.startsWith("~\\") || reference === "~"
 		? "home"
 		: isAbsolute(reference)
 			? "absolute"
@@ -77,6 +77,11 @@ function scopeOf(reference: string): FileScope {
 					: reference.startsWith("project:")
 						? "project"
 						: "relative";
+}
+
+function homeReferencePath(reference: string): string {
+	const path = reference.slice(2);
+	return reference.startsWith("~\\") ? path.replaceAll("\\", sep) : path;
 }
 
 function projectReference(reference: string): string {
@@ -196,7 +201,7 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 				: scope === "server"
 					? serverReference(clean)
 					: scope === "home"
-						? clean.slice(2)
+						? homeReferencePath(clean)
 						: clean;
 		const base = scope === "project" ? this.projectRoot : scope === "home" ? this.homeDirectory : this.cwd;
 		const candidate = isAbsolute(logical) ? logical : resolve(base, logical);
@@ -345,7 +350,7 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 				: scope === "server"
 					? serverReference(reference)
 					: scope === "home"
-						? reference.slice(2)
+						? homeReferencePath(reference)
 						: reference;
 		const base = scope === "project" ? this.projectRoot : scope === "home" ? this.homeDirectory : this.cwd;
 		const absoluteServerPath = scope === "server" && isAbsolute(logical);
