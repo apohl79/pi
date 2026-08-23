@@ -9,6 +9,7 @@ import { ClientDiagnosticSpool } from "@earendil-works/pi-client/diagnostics";
 import {
 	decodeCbor,
 	encodeServerMessageV2,
+	type JsonValue,
 	PROTOCOL_V2_VERSION,
 	parseClientMessageV2,
 	type ServerSnapshotV2,
@@ -56,7 +57,7 @@ const sessionSnapshot = {
 	updatedAt: 1,
 };
 
-function clientFactory(requests?: Array<{ command: string; payload?: unknown }>) {
+function clientFactory(requests?: Array<{ command: string; payload?: unknown }>, clientDiagnostics?: unknown) {
 	let handlers: ByteTransportHandlers | undefined;
 	const factory = async (next: ByteTransportHandlers): Promise<ByteTransport> => {
 		handlers = next;
@@ -133,6 +134,9 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>)
 								bundle: {
 									manifest: { schemaVersion: 1, unavailable: ["client-diagnostic-spool"] },
 									events: [],
+									...(clientDiagnostics === undefined
+										? {}
+										: { clientDiagnostics: clientDiagnostics as JsonValue }),
 								},
 							},
 						}),
@@ -653,6 +657,32 @@ describe("experimental CLI runtime", () => {
 		};
 		expect(bundle.manifest.unavailable).toEqual(["client-diagnostic-spool"]);
 		expect(output).toMatchObject([{ command: "diagnostics/export" }]);
+		runtime.close();
+	});
+
+	test("does not merge a client spool with a mismatched server manifest", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-cli-diagnostics-manifest-mismatch-"));
+		const outputPath = join(directory, "bundle.json");
+		const spool = new ClientDiagnosticSpool({
+			path: join(directory, "client.jsonl"),
+			clientInstanceId: "local-client",
+		});
+		await spool.append({ event: "client.local" });
+		const server = clientFactory(undefined, { manifest: { clientInstanceId: "remote-client" }, afterSeq: 0 });
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			diagnosticsSpool: spool,
+			write: () => {},
+		});
+		await runtime.runDiagnostics({ command: "diagnostics", action: "export", output: outputPath });
+		const bundle = JSON.parse(await readFile(outputPath, "utf8")) as {
+			manifest: { unavailable?: readonly string[] };
+			clientDiagnostics?: { records?: readonly unknown[] };
+		};
+		expect(bundle.manifest.unavailable).toEqual(["client-diagnostic-spool"]);
+		expect(bundle.clientDiagnostics?.records).toBeUndefined();
 		runtime.close();
 	});
 

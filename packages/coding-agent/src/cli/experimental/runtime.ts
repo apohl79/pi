@@ -322,12 +322,20 @@ async function mergeClientDiagnostics(
 	const afterSeq = typeof clientDiagnostics.afterSeq === "number" ? clientDiagnostics.afterSeq : 0;
 	let records: Awaited<ReturnType<ClientDiagnosticSpool["read"]>> = [];
 	let latestSeq = afterSeq;
-	let unavailableFromSpool = false;
-	try {
-		records = await spool.read(afterSeq);
-		latestSeq = await spool.latestSeq();
-	} catch {
-		unavailableFromSpool = true;
+	const remoteManifest =
+		typeof clientDiagnostics.manifest === "object" && clientDiagnostics.manifest !== null
+			? (clientDiagnostics.manifest as Record<string, unknown>)
+			: undefined;
+	const remoteClientInstanceId =
+		typeof remoteManifest?.clientInstanceId === "string" ? remoteManifest.clientInstanceId : undefined;
+	let unavailableFromSpool = remoteClientInstanceId !== undefined && remoteClientInstanceId !== spool.clientInstanceId;
+	if (!unavailableFromSpool) {
+		try {
+			records = await spool.read(afterSeq);
+			latestSeq = await spool.latestSeq();
+		} catch {
+			unavailableFromSpool = true;
+		}
 	}
 	const manifest =
 		typeof source.manifest === "object" && source.manifest !== null
