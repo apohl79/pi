@@ -577,6 +577,29 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("restores busy lifecycle from an expired-cursor active operation", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		const recovered = snapshot({
+			revision: 300,
+			eventSeq: 300,
+			phase: "turn",
+			activeOperation: { operationId: "operation-2", kind: "turn/start", state: "running", acceptedSeq: 299 },
+		});
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 44,
+			revision: 300,
+			event: "session_snapshot",
+			payload: { reason: "event_cursor_expired", requestedEventSeq: 1, retainedFrom: 45, snapshot: recovered },
+		});
+		expect(session.state.lifecycle).toEqual({ status: "busy", operationId: "operation-2", command: "turn/start" });
+		await session.dispose();
+	});
+
 	test("applies server agent updates without requiring a refresh", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });
