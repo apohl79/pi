@@ -1,3 +1,4 @@
+import type { Entry } from "@earendil-works/pi-agent-core";
 import type { CommandV2, OperationAccepted, SessionSnapshotV2 } from "@earendil-works/pi-protocol";
 import { describe, expect, test } from "vitest";
 import { CodingAgentV2AgentRegistry } from "../../src/server/agent-registry.ts";
@@ -7,6 +8,8 @@ class FixtureRuntime implements CodingAgentV2Runtime {
 	readonly commands: CommandV2[] = [];
 	disposed = false;
 	blocked = false;
+	fail = false;
+	readonly customEntries: Entry[] = [];
 	private releasePromise: Promise<void> | undefined;
 	private releaseBlocked: (() => void) | undefined;
 	async snapshot(): Promise<SessionSnapshotV2> {
@@ -17,12 +20,29 @@ class FixtureRuntime implements CodingAgentV2Runtime {
 	}
 	async run(_operationId: string, command: CommandV2): Promise<void> {
 		this.commands.push(command);
+		if (this.fail) throw new Error("fixture failure");
 		if (this.blocked) {
 			this.releasePromise ??= new Promise<void>((resolve) => {
 				this.releaseBlocked = resolve;
 			});
 			await this.releasePromise;
 		}
+	}
+	async appendCustomEntry(customType: string, data?: unknown): Promise<string> {
+		const id = `entry-${this.customEntries.length}`;
+		this.customEntries.unshift({
+			type: "custom",
+			id,
+			seq: this.customEntries.length + 1,
+			parentId: null,
+			timestamp: 1,
+			customType,
+			data,
+		});
+		return id;
+	}
+	async readCustomEntries(customType: string): Promise<readonly Entry[]> {
+		return this.customEntries.filter((entry) => entry.type === "custom" && entry.customType === customType);
 	}
 	release(): void {
 		this.releaseBlocked?.();
@@ -135,5 +155,23 @@ describe("CodingAgentV2AgentRegistry", () => {
 		});
 		for (let index = 0; index < 32; index++) await registry.message(agent.id, `message-${index}`);
 		await expect(registry.message(agent.id, "overflow")).rejects.toThrow("inbox limit");
+	});
+
+	test("persists failed terminal state", async () => {
+		const { registry, runtime } = fixture();
+		runtime.fail = true;
+		const agent = await registry.spawn({
+			sessionId: "parent-session",
+			parentPath: "root",
+			taskName: "worker",
+			taskMessage: "fail this task",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		expect((await registry.wait(agent.id)).state).toBe("failed");
+		expect(runtime.customEntries[0]).toMatchObject({
+			type: "custom",
+			customType: "agent_registry_state",
+			data: { state: "failed" },
+		});
 	});
 });
