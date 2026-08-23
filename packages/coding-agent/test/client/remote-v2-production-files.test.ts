@@ -168,7 +168,12 @@ describe("production remote v2 filesystem references", () => {
 				expect(prompts[0]).toContain(serverFile.reference);
 				expect(prompts[0]).toContain(localFile.reference);
 				expect(first.snapshot?.transcript).toEqual(
-					expect.arrayContaining([expect.objectContaining({ role: "assistant", text: "references received" })]),
+					expect.arrayContaining([
+						expect.objectContaining({
+							role: "assistant",
+							content: expect.arrayContaining([{ type: "text", text: "references received" }]),
+						}),
+					]),
 				);
 			} finally {
 				await first.dispose();
@@ -176,7 +181,7 @@ describe("production remote v2 filesystem references", () => {
 			if (!sessionId) throw new Error("Session id unavailable");
 			const reattached = await RemoteV2Session.open(client, sessionId, { mode: "control" });
 			try {
-				expect(JSON.stringify(reattached.snapshot?.transcript)).toContain(`@server:${serverPath}`);
+				expect(JSON.stringify(reattached.snapshot?.transcript)).toContain(`server:${serverPath}`);
 				expect(JSON.stringify(reattached.snapshot?.transcript)).toContain(`@local:${localPath}`);
 			} finally {
 				await reattached.dispose();
