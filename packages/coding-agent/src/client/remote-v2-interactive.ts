@@ -1,7 +1,7 @@
 import type { PlanItem, ThinkingLevel } from "@earendil-works/pi-protocol";
 import type { Component } from "@earendil-works/pi-tui";
 import type { RemoteV2SessionAttachment } from "./remote-v2-selector.ts";
-import type { RemoteV2PromptContent } from "./remote-v2-session.ts";
+import type { RemoteV2FileCompletion, RemoteV2PromptContent } from "./remote-v2-session.ts";
 
 export const REMOTE_V2_SLASH_COMMANDS = [
 	"/abort",
@@ -67,6 +67,19 @@ export type RemoteV2CommandResult =
 	| { readonly kind: "control"; readonly mode: "control" | "observer" }
 	| { readonly kind: "status"; readonly text: string }
 	| { readonly kind: "detached" };
+
+/** Applies a server completion while keeping directory navigation composable across Tab presses. */
+export function applyRemoteFileCompletion(
+	input: string,
+	tokenStart: number,
+	item: Pick<RemoteV2FileCompletion, "reference" | "kind">,
+): string {
+	if (item.kind === "file") return `${input.slice(0, tokenStart)}${item.reference}`;
+	const separator = item.reference.includes("\\") && !item.reference.includes("/") ? "\\" : "/";
+	const reference =
+		item.reference.endsWith("/") || item.reference.endsWith("\\") ? item.reference : `${item.reference}${separator}`;
+	return `${input.slice(0, tokenStart)}${reference}`;
+}
 
 export function parseRemoteV2Command(input: string): RemoteV2Command {
 	const parts = input.trim().split(/\s+/u);
@@ -421,7 +434,7 @@ export class RemoteV2InteractiveAttachment implements Component {
 			if (sequence !== this.#completionSequence || this.#input.slice(tokenStart) !== prefix) return;
 			const item = items[0];
 			if (item === undefined) return;
-			this.#input = `${this.#input.slice(0, tokenStart)}${item.reference}`;
+			this.#input = applyRemoteFileCompletion(this.#input, tokenStart, item);
 			this.invalidate();
 		} catch (error: unknown) {
 			if (sequence === this.#completionSequence)
