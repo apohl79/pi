@@ -936,6 +936,7 @@ export class AgentHarness implements AgentLane {
 							isError,
 							usage: result.usage === undefined ? undefined : durableClone(result.usage),
 						});
+						await this.setOperationPhase(runId, "executing");
 						if (hookResult === null || typeof hookResult !== "object") return undefined;
 						const patch: AfterToolCallResult = {};
 						if ("content" in hookResult && Array.isArray(hookResult.content)) patch.content = hookResult.content;
