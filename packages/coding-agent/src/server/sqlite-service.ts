@@ -543,7 +543,7 @@ function createAgentTools(registry: V2AgentRegistry, sessionId: string, model: M
 		spawn: (request) =>
 			registry.spawn({
 				sessionId,
-				parentPath: `/${sessionId}`,
+				parentPath: "/root",
 				taskName: request.taskName,
 				taskMessage: request.taskMessage,
 				...(request.role === undefined ? {} : { role: request.role }),
