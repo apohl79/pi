@@ -71,6 +71,7 @@ const commandNames = [
 	"app/list",
 	"app/read",
 	"app/auth/start",
+	"app/auth/complete",
 	"blob/put",
 	"blob/read",
 	"blob/stat",
@@ -82,6 +83,10 @@ const commandNames = [
 	"diagnostics/export",
 	"diagnostics/verify",
 	"diagnostics/doctor",
+	"usage/read",
+	"web",
+	"image/view",
+	"image/generate",
 ] as const;
 
 const eventNames = [
