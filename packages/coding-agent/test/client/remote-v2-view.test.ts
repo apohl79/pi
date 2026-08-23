@@ -346,6 +346,24 @@ describe("formatRemoteV2Session", () => {
 		expect(output).toContain("Input request pending · input-1");
 	});
 
+	test("keeps image transcript parts visible on terminals without image rendering", () => {
+		const output = formatRemoteV2Session({
+			lifecycle: { status: "ready" },
+			snapshot: {
+				...snapshot,
+				transcript: [
+					{
+						id: "user-image",
+						role: "user",
+						content: [{ type: "image", data: `blob:${"a".repeat(64)}`, mimeType: "image/png" }],
+						timestamp: 3,
+					},
+				],
+			},
+		});
+		expect(output).toContain("user: [image image/png]");
+	});
+
 	test("renders usage and degraded recovery indicators without guessing cost", () => {
 		const output = formatRemoteV2Session({
 			lifecycle: { status: "ready" },
