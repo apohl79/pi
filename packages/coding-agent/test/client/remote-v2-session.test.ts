@@ -620,6 +620,36 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("applies server name and phase updates without requiring a refresh", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 2,
+			revision: 2,
+			event: "session_name_updated",
+			payload: { name: "Renamed", nameSource: "explicit", nameRevision: 2 },
+		});
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 3,
+			revision: 3,
+			event: "session_phase_changed",
+			payload: { phase: "turn" },
+		});
+		expect(session.snapshot).toMatchObject({
+			name: "Renamed",
+			nameSource: "explicit",
+			nameRevision: 2,
+			phase: "turn",
+		});
+		await session.dispose();
+	});
+
 	test("replaces local state from an expired-cursor session snapshot", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });
