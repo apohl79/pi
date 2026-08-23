@@ -113,9 +113,6 @@ async function runCli(): Promise<void> {
 				const removeInputListener = tui.addInputListener(inputListener);
 				process.stdin.once("end", finish);
 				tui.start();
-				void (async () => {
-					for (const message of options.messages) await session.submit(message);
-				})();
 			});
 		},
 	});
