@@ -3,7 +3,9 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import {
+	InMemoryForensicRecorder,
 	InMemoryV2PlanRegistry,
+	JsonlForensicRecorder,
 	JsonlV2PlanRegistry,
 	ServerDaemon,
 	type ServerDaemonOptions,
@@ -25,11 +27,13 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	repository: SqliteSessionRepository;
 	socketPath: string;
 	planStorePath?: string;
+	diagnosticStorePath?: string;
 	serverId?: string;
 	agents?: ServerDaemonOptions["agents"];
 	inputs?: V2InputRegistry;
 	web?: V2WebService;
 	images?: V2ImageService;
+	diagnostics?: ServerDaemonOptions["diagnostics"];
 	createServer?: ServerDaemonOptions["createServer"];
 	write(value: unknown): void;
 	onAttach?: ExperimentalCliRuntimeOptions["onAttach"];
@@ -62,6 +66,11 @@ export async function createCodingAgentDaemonRuntime(
 		(options.planStorePath === undefined
 			? new InMemoryV2PlanRegistry()
 			: new JsonlV2PlanRegistry(options.planStorePath));
+	const diagnostics =
+		options.diagnostics ??
+		(options.diagnosticStorePath === undefined
+			? new InMemoryForensicRecorder()
+			: new JsonlForensicRecorder(options.diagnosticStorePath));
 	const service = await createCodingAgentV2SqliteService(
 		options.agentRegistry === undefined
 			? {
@@ -82,6 +91,7 @@ export async function createCodingAgentDaemonRuntime(
 		...(options.web === undefined ? {} : { web: options.web }),
 		...(options.images === undefined ? {} : { images: options.images }),
 		plans,
+		diagnostics,
 		...(options.createServer === undefined ? {} : { createServer: options.createServer }),
 	});
 	const defaultConnect: TransportAddress = { transport: "unix", path: options.socketPath };
@@ -127,6 +137,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			repository,
 			env,
 			planStorePath: options.planStorePath ?? join(options.agentDir, "plans.jsonl"),
+			diagnosticStorePath: options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"),
 		});
 		return {
 			...runtime,

@@ -1,4 +1,5 @@
 import type { V2AgentRegistry } from "./agents.ts";
+import type { ForensicRecorder } from "./diagnostics.ts";
 import type { V2InputRegistry } from "./inputs.ts";
 import type { V2PlanRegistry } from "./plans.ts";
 import { createUnixServerV2 } from "./transports/unix/preset.ts";
@@ -27,6 +28,7 @@ export interface ServerDaemonOptions {
 	readonly agents?: V2AgentRegistry;
 	readonly inputs?: V2InputRegistry;
 	readonly plans?: V2PlanRegistry;
+	readonly diagnostics?: ForensicRecorder;
 	readonly createServer?: (service: PiServerServiceV2, options: UnixServerOptions) => ServerDaemonServer;
 }
 
@@ -92,6 +94,7 @@ export class ServerDaemon {
 			...(this.options.agents === undefined ? {} : { agents: this.options.agents }),
 			...(this.options.inputs === undefined ? {} : { inputs: this.options.inputs }),
 			...(this.options.plans === undefined ? {} : { plans: this.options.plans }),
+			...(this.options.diagnostics === undefined ? {} : { diagnostics: this.options.diagnostics }),
 		});
 		try {
 			await server.start();

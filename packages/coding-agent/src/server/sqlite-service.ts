@@ -1,4 +1,5 @@
 import {
+	type CompactionSettings,
 	type ExecutionEnv,
 	GoalManager,
 	type SamplingInput,
@@ -34,6 +35,7 @@ export interface CodingAgentV2SqliteServiceOptions {
 	models: Models;
 	env: ExecutionEnv | ((metadata: SqliteSessionMetadata) => ExecutionEnv | Promise<ExecutionEnv>);
 	model: Model<Api> | ((metadata: SqliteSessionMetadata) => Model<Api> | Promise<Model<Api>>);
+	compaction?: (model: Model<Api>) => CompactionSettings | undefined;
 	pluginRegistry?: V2PluginRegistry;
 	inputs?: V2InputRegistry;
 	web?: V2WebService;
@@ -66,6 +68,7 @@ export async function createCodingAgentV2SqliteService(
 			modelOverride ?? (typeof options.model === "function" ? await options.model(metadata) : options.model);
 		const env = typeof options.env === "function" ? await options.env(metadata) : options.env;
 		const goals = new GoalManager(session);
+		const compaction = options.compaction?.(model);
 		const inputRegistry = options.inputs;
 		const webService = options.web;
 		const imageService = options.images;
@@ -98,6 +101,7 @@ export async function createCodingAgentV2SqliteService(
 			models: options.models,
 			model,
 			env,
+			...(compaction === undefined ? {} : { compaction }),
 			goals,
 			samplingInputFactory,
 			sessionFile: metadata.path,
