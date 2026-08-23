@@ -2,7 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
-import { ClientDiagnosticSpool, PiClientV2 } from "@earendil-works/pi-client";
+import { PiClientV2 } from "@earendil-works/pi-client";
+import { ClientDiagnosticSpool } from "@earendil-works/pi-client/diagnostics";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import { afterEach, describe, expect, test } from "vitest";
 import { RemoteV2Session } from "../../src/index.ts";
@@ -129,7 +130,7 @@ describe("production remote v2 diagnostics", () => {
 		}
 	});
 
-	test("merges direct client diagnostic evidence into the remote bundle", async () => {
+	test("hands off direct client diagnostic identity to the remote bundle", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-remote-diagnostics-client-spool-"));
 		directories.push(directory);
 		const models = createModels();
@@ -177,8 +178,8 @@ describe("production remote v2 diagnostics", () => {
 				const bundle = await session.diagnosticsExport({ sessionId: session.id });
 				expect(bundle.clientDiagnostics).toMatchObject({
 					manifest: { clientInstanceId: "remote-client-evidence" },
-					records: expect.arrayContaining([expect.objectContaining({ event: "client.connected" })]),
 				});
+				expect(bundle.clientDiagnostics).not.toHaveProperty("records");
 				expect((bundle.manifest as { unavailable?: readonly string[] }).unavailable).not.toContain(
 					"client-diagnostic-spool",
 				);
