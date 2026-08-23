@@ -25,6 +25,8 @@ export interface V2InputRequest {
 	readonly deadlineAt?: number;
 }
 
+export type V2InputChangeListener = (request: V2InputRequest) => void;
+
 interface InputState {
 	request: V2InputRequest;
 	timer?: NodeJS.Timeout;
@@ -140,6 +142,7 @@ export function cancelV2InputRequest(request: V2InputRequest): V2InputRequest {
 }
 
 export interface V2InputRegistry {
+	onChange?(listener: V2InputChangeListener): () => void;
 	create(sessionId: string, questions: readonly V2InputQuestion[], autoResolutionMs?: number): Promise<V2InputRequest>;
 	read(requestId: string): Promise<V2InputRequest>;
 	respond(requestId: string, answers: Readonly<Record<string, string>>): Promise<V2InputRequest>;
@@ -152,6 +155,12 @@ export interface V2InputRegistry {
 export class InMemoryV2InputRegistry implements V2InputRegistry {
 	private readonly requests = new Map<string, InputState>();
 	private readonly consumedResponses = new Set<string>();
+	private readonly listeners = new Set<V2InputChangeListener>();
+
+	onChange(listener: V2InputChangeListener): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
 
 	async create(
 		sessionId: string,
@@ -170,6 +179,7 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 			state.timer.unref();
 		}
 		this.requests.set(request.id, state);
+		this.notify(request);
 		return structuredClone(request);
 	}
 
@@ -191,6 +201,7 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 		state.request = respondV2InputRequest(state.request, answers);
 		if (state.timer) clearTimeout(state.timer);
 		this.resolveWaiters(state);
+		this.notify(state.request);
 		return structuredClone(state.request);
 	}
 
@@ -199,6 +210,7 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 		state.request = cancelV2InputRequest(state.request);
 		if (state.timer) clearTimeout(state.timer);
 		this.resolveWaiters(state);
+		this.notify(state.request);
 		return structuredClone(state.request);
 	}
 
@@ -263,6 +275,10 @@ export class InMemoryV2InputRegistry implements V2InputRegistry {
 		const waiters = state.waiters.splice(0);
 		for (const resolve of waiters) resolve(state.request);
 	}
+
+	private notify(request: V2InputRequest): void {
+		for (const listener of this.listeners) listener(structuredClone(request));
+	}
 }
 
 type InputRecord = V2InputRequest | { readonly kind: "consumed"; readonly requestId: string };
@@ -275,6 +291,7 @@ function isConsumedInputRecord(value: unknown): value is { readonly kind: "consu
 /** Durable append-only structured-input requests for configured daemon restart recovery. */
 export class JsonlV2InputRegistry implements V2InputRegistry {
 	private readonly memory = new InMemoryV2InputRegistry();
+	private readonly listeners = new Set<V2InputChangeListener>();
 	private readonly consumed = new Set<string>();
 	private readonly path: string;
 	private loaded: Promise<void>;
@@ -283,6 +300,11 @@ export class JsonlV2InputRegistry implements V2InputRegistry {
 	constructor(path: string) {
 		this.path = path;
 		this.loaded = this.load();
+	}
+
+	onChange(listener: V2InputChangeListener): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
 	}
 
 	async create(
@@ -295,6 +317,7 @@ export class JsonlV2InputRegistry implements V2InputRegistry {
 			const request = createV2InputRequest(sessionId, questions, autoResolutionMs);
 			await this.append(request);
 			this.memory.restore(request);
+			this.notify(request);
 			return request;
 		});
 		this.pendingWrite = write.then(
@@ -314,6 +337,9 @@ export class JsonlV2InputRegistry implements V2InputRegistry {
 		return this.mutate(async () => {
 			const next = respondV2InputRequest(await this.memory.read(requestId), answers);
 			return { durable: next, commit: () => this.memory.respond(requestId, answers) };
+		}).then((request) => {
+			this.notify(request);
+			return request;
 		});
 	}
 
@@ -322,7 +348,14 @@ export class JsonlV2InputRegistry implements V2InputRegistry {
 		return this.mutate(async () => {
 			const next = cancelV2InputRequest(await this.memory.read(requestId));
 			return { durable: next, commit: () => this.memory.cancel(requestId) };
+		}).then((request) => {
+			this.notify(request);
+			return request;
 		});
+	}
+
+	private notify(request: V2InputRequest): void {
+		for (const listener of this.listeners) listener(structuredClone(request));
 	}
 
 	async wait(requestId: string): Promise<V2InputRequest> {

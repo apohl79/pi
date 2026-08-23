@@ -335,6 +335,25 @@ describe("PiServer v2 operation acceptance", () => {
 		service.sessions.get("session-1")!.release.resolve(undefined);
 	});
 
+	test("emits an input-request event when the registry creates a request", async () => {
+		const service = new TestService();
+		const inputs = new InMemoryV2InputRegistry();
+		const server = new PiServerV2(service, { listeners: [], inputs, serverId: "input-request-events" });
+		await server.start();
+		servers.push(server);
+		const client = connectInMemoryTestClientV2(server.accept.bind(server));
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const request = await inputs.create("session-1", [{ id: "choice", prompt: "Choose" }]);
+		const event = await client.next(
+			(message) => message.type === "event" && message.event === "input_request_updated",
+		);
+		expect(event).toMatchObject({
+			event: "input_request_updated",
+			payload: { request: { id: request.id, sessionId: "session-1", status: "pending" } },
+		});
+	});
+
 	test("emits a usage event when an operation changes the usage aggregate", async () => {
 		const service = new TestService();
 		service.sessions.get("session-1")!.usageUpdated = true;

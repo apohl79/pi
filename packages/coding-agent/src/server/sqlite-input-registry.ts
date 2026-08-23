@@ -1,4 +1,9 @@
-import type { V2InputQuestion, V2InputRegistry, V2InputRequest } from "@earendil-works/pi-server";
+import type {
+	V2InputChangeListener,
+	V2InputQuestion,
+	V2InputRegistry,
+	V2InputRequest,
+} from "@earendil-works/pi-server";
 import {
 	cancelV2InputRequest,
 	createV2InputRequest,
@@ -27,10 +32,16 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 	readonly #responded = new Map<string, string[]>();
 	readonly #consumed = new Set<string>();
 	readonly #requests = new Map<string, V2InputRequest>();
+	readonly #listeners = new Set<V2InputChangeListener>();
 
 	constructor(databaseFactory: SqliteDatabaseFactory, databasePath: string) {
 		this.#databaseFactory = databaseFactory;
 		this.#databasePath = databasePath;
+	}
+
+	onChange(listener: V2InputChangeListener): () => void {
+		this.#listeners.add(listener);
+		return () => this.#listeners.delete(listener);
 	}
 
 	create(
@@ -44,6 +55,7 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 			await this.#save(request);
 			this.#memory.restore(request);
 			this.#requests.set(request.id, request);
+			this.#notify(request);
 			return request;
 		});
 	}
@@ -58,6 +70,9 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 		return this.#mutate(async () => {
 			const next = respondV2InputRequest(await this.#memory.read(requestId), answers);
 			return { durable: next, commit: () => this.#memory.respond(requestId, answers) };
+		}).then((request) => {
+			this.#notify(request);
+			return request;
 		});
 	}
 
@@ -65,7 +80,14 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 		return this.#mutate(async () => {
 			const next = cancelV2InputRequest(await this.#memory.read(requestId));
 			return { durable: next, commit: () => this.#memory.cancel(requestId) };
+		}).then((request) => {
+			this.#notify(request);
+			return request;
 		});
+	}
+
+	#notify(request: V2InputRequest): void {
+		for (const listener of this.#listeners) listener(structuredClone(request));
 	}
 
 	async wait(requestId: string): Promise<V2InputRequest> {
