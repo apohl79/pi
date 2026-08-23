@@ -98,6 +98,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	rejected: Array<{ operationId: string; error: string }> = [];
 	fail = false;
 	usageUpdated = false;
+	goalUpdated = false;
 	private current: SessionSnapshotV2;
 
 	constructor(id: string) {
@@ -136,6 +137,20 @@ class TestRuntime implements PiSessionRuntimeV2 {
 			this.current = {
 				...this.current,
 				usage: { ...this.current.usage, output: this.current.usage.output + 1 },
+			};
+		}
+		if (this.goalUpdated) {
+			this.current = {
+				...this.current,
+				goal: {
+					id: "goal-1",
+					objective: "Ship feature",
+					status: "active",
+					tokensUsed: 1,
+					activeTimeSeconds: 0,
+					createdAt: 1,
+					updatedAt: 1,
+				},
 			};
 		}
 		this.current = {
@@ -301,6 +316,26 @@ describe("PiServer v2 operation acceptance", () => {
 		service.sessions.get("session-1")!.release.resolve(undefined);
 		const usageEvent = await client.next((message) => message.type === "event" && message.event === "usage_updated");
 		expect(usageEvent).toMatchObject({ event: "usage_updated", payload: { usage: { output: 1 } } });
+	});
+
+	test("emits a goal event when an operation changes the goal projection", async () => {
+		const service = new TestService();
+		service.sessions.get("session-1")!.goalUpdated = true;
+		const server = new PiServerV2(service, { listeners: [], serverId: "goal-events" });
+		await server.start();
+		servers.push(server);
+		const client = connectInMemoryTestClientV2(server.accept.bind(server));
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const accepted = await client.request({
+			command: "goal/create",
+			sessionId: "session-1",
+			payload: { objective: "Ship feature" },
+		});
+		expect(accepted).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+		service.sessions.get("session-1")!.release.resolve(undefined);
+		const goalEvent = await client.next((message) => message.type === "event" && message.event === "goal_updated");
+		expect(goalEvent).toMatchObject({ event: "goal_updated", payload: { goal: { id: "goal-1", status: "active" } } });
 	});
 
 	test("accepts deterministic in-memory v2 handshakes and fragmented requests", async () => {
