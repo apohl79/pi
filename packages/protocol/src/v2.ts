@@ -308,6 +308,7 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("plugin/list"),
 	Type.Literal("plugin/read"),
 	Type.Literal("plugin/install"),
+	Type.Literal("plugin/upgrade"),
 	Type.Literal("plugin/uninstall"),
 	Type.Literal("plugin/enable"),
 	Type.Literal("plugin/disable"),

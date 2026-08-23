@@ -709,6 +709,11 @@ export class RemoteV2Session {
 		await this.#direct({ command: "plugin/uninstall", payload: { id } });
 	}
 
+	async upgradePlugin(id: string, version: string): Promise<Record<string, unknown>> {
+		const result = await this.#direct({ command: "plugin/upgrade", payload: { id, version } });
+		return record(result.plugin, "plugin/upgrade");
+	}
+
 	async setPluginEnabled(id: string, enabled: boolean, scope?: "user" | "project"): Promise<Record<string, unknown>> {
 		const result = await this.#direct({
 			command: enabled ? "plugin/enable" : "plugin/disable",

@@ -71,6 +71,7 @@ const commandNames = [
 	"plugin/list",
 	"plugin/read",
 	"plugin/install",
+	"plugin/upgrade",
 	"plugin/uninstall",
 	"plugin/enable",
 	"plugin/disable",

@@ -94,6 +94,7 @@ export interface V2PluginRegistry {
 		root?: string;
 		scope?: V2PluginScope;
 	}): Promise<V2Plugin>;
+	upgradePlugin(id: string, version: string): Promise<V2Plugin>;
 	uninstallPlugin(id: string): Promise<void>;
 	setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin>;
 	startAppAuth?(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthStart>;
@@ -406,6 +407,16 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		if (!this.plugins.delete(requireName(id, "plugin id"))) throw new Error(`Unknown plugin: ${id}`);
 	}
 
+	async upgradePlugin(id: string, version: string): Promise<V2Plugin> {
+		const normalizedId = requireName(id, "plugin id");
+		const normalizedVersion = requireName(version, "plugin version");
+		const existing = this.plugins.get(normalizedId);
+		if (!existing) throw new Error(`Unknown plugin: ${normalizedId}`);
+		const updated = { ...existing, version: normalizedVersion };
+		this.plugins.set(normalizedId, updated);
+		return structuredClone(updated);
+	}
+
 	async setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin> {
 		const existing = this.plugins.get(requireName(id, "plugin id"));
 		if (!existing) throw new Error(`Unknown plugin: ${id}`);
@@ -545,6 +556,13 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 		await this.ensureLoaded();
 		await this.memory.uninstallPlugin(id);
 		await this.persist();
+	}
+
+	async upgradePlugin(id: string, version: string): Promise<V2Plugin> {
+		await this.ensureLoaded();
+		const value = await this.memory.upgradePlugin(id, version);
+		await this.persist();
+		return value;
 	}
 
 	async setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin> {

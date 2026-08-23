@@ -227,6 +227,7 @@ function memoryTransport() {
 																							} as JsonValue)
 																						: message.request.command === "plugin/read" ||
 																								message.request.command === "plugin/install" ||
+																								message.request.command === "plugin/upgrade" ||
 																								message.request.command === "plugin/enable" ||
 																								message.request.command === "plugin/disable"
 																							? ({
@@ -758,6 +759,7 @@ describe("RemoteV2Session", () => {
 		expect(await session.addMarketplace("local", "file:///tmp/local")).toMatchObject({ name: "local" });
 		expect((await session.listPlugins(true))[0]).toMatchObject({ id: "plugin-1" });
 		expect(await session.readPlugin("plugin-1")).toMatchObject({ name: "demo" });
+		expect(await session.upgradePlugin("plugin-1", "2.0.0")).toMatchObject({ id: "plugin-1" });
 		expect(await session.setPluginEnabled("plugin-1", true)).toMatchObject({ enabled: true });
 		expect((await session.listApps())[0]).toMatchObject({ id: "app-1" });
 		expect(await session.readApp("app-1")).toMatchObject({ name: "Demo" });

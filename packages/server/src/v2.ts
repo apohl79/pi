@@ -449,6 +449,7 @@ export class PiServerV2 {
 			if (command.command === "plugin/list") return void (await this.listPlugins(state, id, command));
 			if (command.command === "plugin/read") return void (await this.readPlugin(state, id, command));
 			if (command.command === "plugin/install") return void (await this.installPlugin(state, id, command));
+			if (command.command === "plugin/upgrade") return void (await this.upgradePlugin(state, id, command));
 			if (command.command === "plugin/uninstall") return void (await this.uninstallPlugin(state, id, command));
 			if (command.command === "plugin/enable") return void (await this.setPluginEnabled(state, id, command, true));
 			if (command.command === "plugin/disable") return void (await this.setPluginEnabled(state, id, command, false));
@@ -1322,6 +1323,16 @@ export class PiServerV2 {
 		if (typeof payload.id !== "string") throw new Error("plugin/uninstall requires id");
 		await this.plugins.uninstallPlugin(payload.id);
 		await this.sendResponse(state, id, { command: command.command, id: payload.id });
+	}
+
+	private async upgradePlugin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		if (typeof payload.id !== "string" || typeof payload.version !== "string")
+			throw new Error("plugin/upgrade requires id and version");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			plugin: await this.plugins.upgradePlugin(payload.id, payload.version),
+		});
 	}
 
 	private async setPluginEnabled(
