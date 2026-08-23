@@ -9,6 +9,7 @@ import {
 	encodeClientMessageV2,
 	FrameDecoder,
 	type JsonValue,
+	type ModelMetadata,
 	type OperationRecordV2,
 	PROTOCOL_V2_VERSION,
 	parseServerMessageV2,
@@ -159,6 +160,12 @@ export class PiClientV2 {
 		return result.sessions as SessionMetadataV2[];
 	}
 
+	async listModels(): Promise<readonly ModelMetadata[]> {
+		const result = commandResult(await this.request({ command: "model/list" }));
+		if (!Array.isArray(result.models)) throw new Error("Invalid model/list result");
+		return result.models as ModelMetadata[];
+	}
+
 	async createSession(options: CreateSessionV2Options = {}): Promise<SessionSnapshotV2> {
 		const result = commandResult(
 			await this.request({
@@ -173,6 +180,10 @@ export class PiClientV2 {
 
 	async attachSession(sessionId: string, mode: "control" | "observer" = "control"): Promise<void> {
 		commandResult(await this.request({ command: "session/attach", sessionId, payload: { mode } }));
+	}
+
+	async deleteSession(sessionId: string): Promise<void> {
+		commandResult(await this.request({ command: "session/delete", sessionId }));
 	}
 
 	async openSession(sessionId: string, mode: V2SessionLeaseMode = "control"): Promise<PiSessionV2Handle> {

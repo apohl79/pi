@@ -131,6 +131,26 @@ describe("PiClientV2", () => {
 		expect(await operation).toMatchObject({ operationId: "operation-1", state: "complete", terminalSeq: 5 });
 	});
 
+	test("lists models and deletes a session through typed helpers", async () => {
+		const pair = transportPair();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		const connecting = client.connect();
+		await Promise.resolve();
+		pair.deliver({ type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
+		await connecting;
+		const models = client.listModels();
+		pair.deliver({
+			type: "response",
+			id: "v2-request-1",
+			ok: true,
+			result: { models: [{ provider: "faux", id: "model" }] },
+		});
+		expect(await models).toMatchObject([{ provider: "faux", id: "model" }]);
+		const deleted = client.deleteSession("session-1");
+		pair.deliver({ type: "response", id: "v2-request-2", ok: true, result: { sessionId: "session-1" } });
+		await deleted;
+	});
+
 	test("keeps session lease transitions and filters session events", async () => {
 		const pair = transportPair();
 		const client = new PiClientV2({ transportFactory: pair.factory });

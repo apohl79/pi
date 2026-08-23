@@ -354,6 +354,8 @@ function memoryTransport() {
 																																						};
 			const response: ServerMessageV2 =
 				message.request.command.startsWith("turn/") ||
+				message.request.command === "goal/update" ||
+				message.request.command.startsWith("session/name/") ||
 				message.request.command.startsWith("session/model") ||
 				message.request.command.startsWith("session/thinking")
 					? {
@@ -622,6 +624,24 @@ describe("RemoteV2Session", () => {
 		expect(await session.readGoal()).toMatchObject({ status: "active", objective: "Inspect" });
 		expect(await session.readPlan()).toMatchObject({ version: 1 });
 		expect(await session.readInputRequest("request-1")).toMatchObject({ sessionId: "session-1" });
+		await session.dispose();
+	});
+
+	test("updates goals and session naming through accepted operations", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		await session.updateGoal({ status: "complete" });
+		await session.setName("Renamed");
+		await session.generateName();
+		await session.setAutoName(true);
+		expect(pair.requests.slice(-4).map((request) => request.command)).toEqual([
+			"goal/update",
+			"session/name/set",
+			"session/name/generate",
+			"session/name/auto/set",
+		]);
 		await session.dispose();
 	});
 
