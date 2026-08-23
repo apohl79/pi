@@ -27,6 +27,11 @@ describe("parseArgs", () => {
 			expect(isServerDefaultCompatible(parseArgs(["--system-prompt", "custom"]))).toBe(false);
 			expect(isServerDefaultCompatible(parseArgs(["--provider", "faux"]))).toBe(false);
 		});
+
+		test("rejects unsupported options for server-default print and RPC modes", () => {
+			expect(isServerDefaultCompatible(parseArgs(["--print", "--tools", "read", "prompt"]))).toBe(false);
+			expect(isServerDefaultCompatible(parseArgs(["--mode", "rpc", "--resume"]))).toBe(false);
+		});
 	});
 	describe("--version flag", () => {
 		test("parses --version flag", () => {

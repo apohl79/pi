@@ -32,12 +32,14 @@ const LEGACY_COMMANDS = new Set(["install", "remove", "uninstall", "update", "li
 
 async function runCli(): Promise<void> {
 	const args = process.argv.slice(2);
+	const parsedArgs = parseArgs(args);
 	const jsonMode = args.some((arg, index) => arg === "--mode" && args[index + 1] === "json");
 	const rpcMode = args.some((arg, index) => arg === "--mode" && args[index + 1] === "rpc");
-	const serverDefaultRpc = !args.includes("--no-server") && rpcMode;
+	const serverDefaultRpc = !args.includes("--no-server") && rpcMode && isServerDefaultCompatible(parsedArgs);
 	const serverDefaultPrint =
-		!args.includes("--no-server") && (args.includes("--print") || args.includes("-p") || jsonMode);
-	const parsedArgs = parseArgs(args);
+		!args.includes("--no-server") &&
+		(args.includes("--print") || args.includes("-p") || jsonMode) &&
+		isServerDefaultCompatible(parsedArgs);
 	const serverDefaultInteractive =
 		!args.includes("--no-server") &&
 		!isExperimentalCommand(args) &&
