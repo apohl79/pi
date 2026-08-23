@@ -455,6 +455,17 @@ describe("formatRemoteV2Session", () => {
 		});
 	});
 
+	test("keeps the snapshot while marking a detached statusline connection", () => {
+		const payload = createRemoteV2StatuslinePayload(
+			{ lifecycle: { status: "detached" }, snapshot },
+			{ cwd: "/work", transcriptPath: "/tmp/session.jsonl" },
+		);
+		expect(payload).toMatchObject({
+			session_id: "session-1",
+			server: { connected: false, phase: "turn", detachable: true },
+		});
+	});
+
 	test("omits aggregate child cost when any child price is unknown", () => {
 		const payload = createRemoteV2StatuslinePayload(
 			{
