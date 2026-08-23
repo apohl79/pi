@@ -236,6 +236,29 @@ describe("PiServer v2 operation acceptance", () => {
 		}
 	});
 
+	test("labels unavailable diagnostic decryption without failing an empty export", async () => {
+		const service = new TestService();
+		const server = new PiServerV2(service, { listeners: [], serverId: "memory-server" });
+		await server.start();
+		const client = connectInMemoryTestClientV2(server.accept.bind(server));
+		try {
+			await client.hello();
+			const exported = await client.request({ command: "diagnostics/export", payload: { decryptContent: true } });
+			expect(exported).toMatchObject({
+				ok: true,
+				result: {
+					command: "diagnostics/export",
+					bundle: {
+						manifest: { eventCount: expect.any(Number), unavailable: ["client-diagnostic-spool"] },
+					},
+				},
+			});
+		} finally {
+			await client.close();
+			await server.close();
+		}
+	});
+
 	test("routes host-scoped filesystem completion, resolution, and reads", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-files-"));
 		directories.push(directory);
