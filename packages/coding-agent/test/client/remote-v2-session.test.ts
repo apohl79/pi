@@ -237,78 +237,121 @@ function memoryTransport() {
 																														],
 																													} as JsonValue)
 																												: message.request.command ===
-																														"diagnostics/status"
+																														"goal/read"
 																													? ({
-																															capture: "metadata",
-																															degraded: false,
-																															lastCriticalEventSeq: 3,
-																															eventCount: 3,
+																															goal: {
+																																status: "active",
+																																objective: "Inspect",
+																															},
 																														} as JsonValue)
 																													: message.request.command ===
-																															"diagnostics/timeline"
+																															"plan/read"
 																														? ({
-																																events: [
-																																	{
-																																		seq: 3,
-																																		kind: "operation",
-																																		outcome: "ok",
-																																	},
-																																],
+																																plan: {
+																																	version: 1,
+																																	items: [
+																																		{
+																																			step: "Inspect",
+																																			status:
+																																				"in_progress",
+																																		},
+																																	],
+																																},
 																															} as JsonValue)
 																														: message.request.command ===
-																																"diagnostics/export"
+																																"input/request/read"
 																															? ({
-																																	bundle: {
-																																		manifest: {
-																																			schemaVersion: 1,
-																																			eventCount: 3,
-																																			firstSeq: 1,
-																																			lastSeq: 3,
-																																			eventsSha256:
-																																				"hash",
-																																		},
-																																		events: [],
+																																	request: {
+																																		requestId:
+																																			"request-1",
+																																		sessionId:
+																																			"session-1",
+																																		questions: [],
 																																	},
 																																} as JsonValue)
 																															: message.request
 																																		.command ===
-																																	"diagnostics/verify"
+																																	"diagnostics/status"
 																																? ({
-																																		valid: true,
+																																		capture:
+																																			"metadata",
+																																		degraded: false,
+																																		lastCriticalEventSeq: 3,
+																																		eventCount: 3,
 																																	} as JsonValue)
 																																: message.request
 																																			.command ===
-																																		"diagnostics/doctor"
+																																		"diagnostics/timeline"
 																																	? ({
-																																			ok: true,
-																																			checks: [
+																																			events: [
 																																				{
-																																					name: "recorder",
-																																					ok: true,
+																																					seq: 3,
+																																					kind: "operation",
+																																					outcome:
+																																						"ok",
 																																				},
 																																			],
 																																		} as JsonValue)
 																																	: message.request
 																																				.command ===
-																																			"plan/update"
+																																			"diagnostics/export"
 																																		? ({
-																																				plan: {
-																																					version: 1,
-																																					items: [
+																																				bundle: {
+																																					manifest:
 																																						{
-																																							step: "Inspect",
-																																							status:
-																																								"in_progress",
+																																							schemaVersion: 1,
+																																							eventCount: 3,
+																																							firstSeq: 1,
+																																							lastSeq: 3,
+																																							eventsSha256:
+																																								"hash",
 																																						},
-																																					],
+																																					events:
+																																						[],
 																																				},
 																																			} as JsonValue)
-																																		: {
-																																				command:
-																																					message
+																																		: message.request
+																																					.command ===
+																																				"diagnostics/verify"
+																																			? ({
+																																					valid: true,
+																																				} as JsonValue)
+																																			: message
 																																						.request
-																																						.command,
-																																			};
+																																						.command ===
+																																					"diagnostics/doctor"
+																																				? ({
+																																						ok: true,
+																																						checks:
+																																							[
+																																								{
+																																									name: "recorder",
+																																									ok: true,
+																																								},
+																																							],
+																																					} as JsonValue)
+																																				: message
+																																							.request
+																																							.command ===
+																																						"plan/update"
+																																					? ({
+																																							plan: {
+																																								version: 1,
+																																								items: [
+																																									{
+																																										step: "Inspect",
+																																										status:
+																																											"in_progress",
+																																									},
+																																								],
+																																							},
+																																						} as JsonValue)
+																																					: {
+																																							command:
+																																								message
+																																									.request
+																																									.command,
+																																						};
 			const response: ServerMessageV2 =
 				message.request.command.startsWith("turn/") ||
 				message.request.command.startsWith("session/model") ||
@@ -568,6 +611,17 @@ describe("RemoteV2Session", () => {
 		expect(await session.readApp("app-1")).toMatchObject({ name: "Demo" });
 		expect(await session.startAppAuth({ id: "app-1" })).toMatchObject({ state: "authenticated" });
 		expect((await session.readUsage({ sessionId: "session-1" })).entries).toHaveLength(1);
+		await session.dispose();
+	});
+
+	test("reads remote goal, plan, and input state", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		expect(await session.readGoal()).toMatchObject({ status: "active", objective: "Inspect" });
+		expect(await session.readPlan()).toMatchObject({ version: 1 });
+		expect(await session.readInputRequest("request-1")).toMatchObject({ sessionId: "session-1" });
 		await session.dispose();
 	});
 
