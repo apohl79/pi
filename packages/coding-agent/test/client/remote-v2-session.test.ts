@@ -651,12 +651,31 @@ describe("RemoteV2Session", () => {
 				usage: { input: 0, output: 2, cacheRead: 0, cacheWrite: 0, costUsd: 0, pricingState: "known" },
 			},
 		});
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 5,
+			revision: 5,
+			event: "goal_updated",
+			payload: {
+				goal: {
+					id: "goal-1",
+					objective: "Ship feature",
+					status: "active",
+					tokensUsed: 1,
+					activeTimeSeconds: 0,
+					createdAt: 1,
+					updatedAt: 1,
+				},
+			},
+		});
 		expect(session.snapshot).toMatchObject({
 			name: "Renamed",
 			nameSource: "explicit",
 			nameRevision: 2,
 			phase: "turn",
 			usage: { output: 2 },
+			goal: { id: "goal-1", status: "active" },
 		});
 		await session.dispose();
 	});

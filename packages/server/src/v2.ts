@@ -2000,6 +2000,8 @@ export class PiServerV2 {
 			before.usage.pricingState !== after.usage.pricingState
 		)
 			await this.broadcastEvent(sessionId, runtime, { usage: after.usage }, operationId, "usage_updated");
+		if (JSON.stringify(before.goal) !== JSON.stringify(after.goal))
+			await this.broadcastEvent(sessionId, runtime, { goal: after.goal ?? null }, operationId, "goal_updated");
 	}
 
 	private async readOperation(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

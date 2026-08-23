@@ -9,6 +9,7 @@ import type {
 import type {
 	AgentSummary,
 	CommandV2,
+	GoalSnapshot,
 	JsonValue,
 	ModelRef,
 	OperationRecordV2,
@@ -22,6 +23,7 @@ import type {
 } from "@earendil-works/pi-protocol";
 import {
 	AgentSummarySchema,
+	GoalSnapshotSchema,
 	PlanSnapshotSchema,
 	SessionSnapshotV2Schema,
 	UsageAggregateSchema,
@@ -1083,6 +1085,14 @@ export class RemoteV2Session {
 		} else if (event.event === "usage_updated" && this.#snapshot) {
 			const usage = asRecord(event.payload)?.usage;
 			if (isUsageAggregate(usage)) this.#snapshot = { ...this.#snapshot, usage: structuredClone(usage) };
+		} else if (event.event === "goal_updated" && this.#snapshot) {
+			const goal = asRecord(event.payload)?.goal;
+			if (goal === null) {
+				const { goal: _goal, ...snapshot } = this.#snapshot;
+				this.#snapshot = snapshot;
+			} else if (isGoalSnapshot(goal)) {
+				this.#snapshot = { ...this.#snapshot, goal: structuredClone(goal) };
+			}
 		} else if (event.event === "plan_updated" && this.#snapshot) {
 			const plan = asRecord(event.payload)?.plan;
 			if (plan === null) {
@@ -1165,6 +1175,10 @@ function isSessionPhase(value: unknown): value is SessionPhaseV2 {
 
 function isUsageAggregate(value: unknown): value is UsageAggregate {
 	return Check(UsageAggregateSchema, value);
+}
+
+function isGoalSnapshot(value: unknown): value is GoalSnapshot {
+	return Check(GoalSnapshotSchema, value);
 }
 
 function isSnapshot(value: unknown): value is ProtocolSnapshot {
