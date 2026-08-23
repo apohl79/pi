@@ -2419,7 +2419,13 @@ export class PiServerV2 {
 	private async disposeRuntime(runtime: PiSessionRuntimeV2): Promise<void> {
 		if (this.disposedRuntimes.has(runtime)) return;
 		this.disposedRuntimes.add(runtime);
-		await runtime.dispose();
+		const unsubscribe = this.runtimeEventUnsubscribers.get(runtime);
+		this.runtimeEventUnsubscribers.delete(runtime);
+		try {
+			await runtime.dispose();
+		} finally {
+			unsubscribe?.();
+		}
 	}
 
 	private reportError(error: Error): void {

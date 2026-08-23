@@ -112,6 +112,9 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	readonly started = new Deferred<void>();
 	readonly release = new Deferred<void>();
 	disposeCount = 0;
+	get listenerCount(): number {
+		return this.eventListeners.size;
+	}
 	rejected: Array<{ operationId: string; error: string }> = [];
 	fail = false;
 	usageUpdated = false;
@@ -1642,6 +1645,7 @@ describe("PiServer v2 operation acceptance", () => {
 
 		await server.close();
 		expect(runtime.disposeCount).toBe(1);
+		expect(runtime.listenerCount).toBe(0);
 	});
 
 	test("keeps an explicitly detached runtime alive for same-daemon reattach", async () => {
