@@ -28,6 +28,7 @@ import {
 import { resolveCredentialForPrint } from "./cli/credential-print.ts";
 import type { ExperimentalCliContext } from "./cli/experimental/cli.ts";
 import { dispatchExperimentalCommand } from "./cli/experimental/dispatch.ts";
+import { createExperimentalCliRuntime, type ExperimentalCliRuntimeOptions } from "./cli/experimental/runtime.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
@@ -558,10 +559,19 @@ async function promptForMissingSessionCwd(
 export interface MainOptions {
 	extensionFactories?: InlineExtension[];
 	experimentalCliContext?: ExperimentalCliContext;
+	experimentalCliRuntimeOptions?: ExperimentalCliRuntimeOptions;
 }
 
 export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
+	if (options?.experimentalCliRuntimeOptions) {
+		const runtime = createExperimentalCliRuntime(options.experimentalCliRuntimeOptions);
+		try {
+			if (await dispatchExperimentalCommand(args, runtime)) return;
+		} finally {
+			runtime.close();
+		}
+	}
 	if (options?.experimentalCliContext && (await dispatchExperimentalCommand(args, options.experimentalCliContext)))
 		return;
 	const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];

@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-protocol";
 import { describe, expect, test, vi } from "vitest";
 import { createExperimentalCliRuntime, type ExperimentalDaemonController } from "../src/cli/experimental/runtime.ts";
+import { main } from "../src/main.ts";
 
 const snapshot: ServerSnapshotV2 = {
 	serverId: "server-1",
@@ -131,5 +132,21 @@ describe("experimental CLI runtime", () => {
 		});
 		await expect(runtime.runAttach({ command: "attach", sessionId: "session-1" })).rejects.toThrow("attach failed");
 		runtime.close();
+	});
+
+	test("main constructs and closes the runtime for experimental commands", async () => {
+		const controller = daemon();
+		const server = clientFactory();
+		const output: unknown[] = [];
+		await main(["server", "status"], {
+			experimentalCliRuntimeOptions: {
+				daemon: controller,
+				defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+				createClient: server.create,
+				write: (value) => output.push(value),
+			},
+		});
+		expect(controller.status).toHaveBeenCalledTimes(1);
+		expect(output).toEqual([{ state: "stopped" }]);
 	});
 });
