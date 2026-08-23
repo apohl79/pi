@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
@@ -114,8 +114,17 @@ async function runPluginAppsScenario(): Promise<{
 		});
 		const completed = await client.request({
 			command: "app/auth/complete",
-			payload: { id: "calendar-plugin@local:calendar", code: "redacted-code" },
+			payload: {
+				id: "calendar-plugin@local:calendar",
+				code: "redacted-code",
+				credentials: { accessToken: "stored-outside-plugin-state" },
+			},
 		});
+		const credentials = JSON.parse(await readFile(join(directory, "app-credentials.json"), "utf8")) as Record<
+			string,
+			unknown
+		>;
+		expect(credentials).toEqual({ "calendar-plugin@local:calendar": { accessToken: "stored-outside-plugin-state" } });
 		const afterAuth = await client.request({
 			command: "app/read",
 			payload: { id: "calendar-plugin@local:calendar" },

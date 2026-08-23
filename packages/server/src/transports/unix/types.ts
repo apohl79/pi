@@ -1,5 +1,5 @@
 import type { V2AgentRegistry } from "../../agents.ts";
-import type { V2AppRegistry } from "../../apps.ts";
+import type { V2AppCredentialStore, V2AppRegistry } from "../../apps.ts";
 import type { V2BlobStore } from "../../blobs.ts";
 import type {
 	DiagnosticContentStore,
@@ -43,6 +43,7 @@ export interface UnixServerOptions extends Omit<PiServerOptions, "listeners">, U
 	blobs?: V2BlobStore;
 	agents?: V2AgentRegistry;
 	apps?: V2AppRegistry;
+	appCredentials?: V2AppCredentialStore;
 	plans?: V2PlanRegistry;
 	inputs?: V2InputRegistry;
 	files?: V2FileReferenceService;

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { V2AgentRegistry } from "./agents.ts";
-import type { V2AppRegistry } from "./apps.ts";
+import type { V2AppCredentialStore, V2AppRegistry } from "./apps.ts";
 import type { V2BlobStore } from "./blobs.ts";
 import type {
 	DiagnosticContentStore,
@@ -52,6 +52,7 @@ export interface ServerDaemonOptions {
 	readonly files?: V2FileReferenceService;
 	readonly plugins?: V2PluginRegistry;
 	readonly apps?: V2AppRegistry;
+	readonly appCredentials?: V2AppCredentialStore;
 	readonly operationStore?: V2OperationStore;
 	readonly blobs?: V2BlobStore;
 	readonly diagnostics?: ForensicRecorder;
@@ -157,6 +158,7 @@ export class ServerDaemon {
 				...(this.options.files === undefined ? {} : { files: this.options.files }),
 				...(this.options.plugins === undefined ? {} : { plugins: this.options.plugins }),
 				...(this.options.apps === undefined ? {} : { apps: this.options.apps }),
+				...(this.options.appCredentials === undefined ? {} : { appCredentials: this.options.appCredentials }),
 				...(this.options.operationStore === undefined ? {} : { operationStore: this.options.operationStore }),
 				...(this.options.blobs === undefined ? {} : { blobs: this.options.blobs }),
 				...(this.options.diagnostics === undefined ? {} : { diagnostics: this.options.diagnostics }),
