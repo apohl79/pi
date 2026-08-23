@@ -58,6 +58,29 @@ async function runCli(): Promise<void> {
 	const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false });
 	const model = modelRuntime.getModels()[0];
 	if (model === undefined) throw new Error("No configured model is available for the experimental daemon");
+	const harnessOptions =
+		parsedArgs.systemPrompt === undefined &&
+		parsedArgs.appendSystemPrompt === undefined &&
+		parsedArgs.tools === undefined &&
+		parsedArgs.noTools !== true
+			? undefined
+			: {
+					...(parsedArgs.systemPrompt === undefined && parsedArgs.appendSystemPrompt === undefined
+						? {}
+						: {
+								systemPromptOptions: {
+									...(parsedArgs.systemPrompt === undefined ? {} : { customPrompt: parsedArgs.systemPrompt }),
+									...(parsedArgs.appendSystemPrompt === undefined
+										? {}
+										: { appendSystemPrompt: parsedArgs.appendSystemPrompt.join("\n\n") }),
+								},
+							}),
+					...(parsedArgs.noTools === true
+						? { activeToolNames: [] }
+						: parsedArgs.tools === undefined
+							? {}
+							: { activeToolNames: [...parsedArgs.tools] }),
+				};
 	const runtime = await createConfiguredCodingAgentDaemonRuntime({
 		agentDir,
 		cwd: process.cwd(),
@@ -73,17 +96,7 @@ async function runCli(): Promise<void> {
 			};
 		},
 		fastModelResolver: (selectedModel) => modelRuntime.getModelRole(selectedModel.provider, "fast"),
-		harness:
-			parsedArgs.systemPrompt === undefined && parsedArgs.appendSystemPrompt === undefined
-				? undefined
-				: {
-						systemPromptOptions: {
-							...(parsedArgs.systemPrompt === undefined ? {} : { customPrompt: parsedArgs.systemPrompt }),
-							...(parsedArgs.appendSystemPrompt === undefined
-								? {}
-								: { appendSystemPrompt: parsedArgs.appendSystemPrompt.join("\n\n") }),
-						},
-					},
+		harness: harnessOptions,
 		socketPath: join(agentDir, "pi.sock"),
 		write: (value) => console.log(JSON.stringify(value)),
 		writeText: (value) => process.stdout.write(`${value}\n`),

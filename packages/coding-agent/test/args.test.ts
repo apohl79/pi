@@ -26,11 +26,13 @@ describe("parseArgs", () => {
 			expect(isServerDefaultCompatible(parseArgs(["@README.md"]))).toBe(true);
 			expect(isServerDefaultCompatible(parseArgs(["--system-prompt", "custom"]))).toBe(true);
 			expect(isServerDefaultCompatible(parseArgs(["--append-system-prompt", "extra"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--tools", "read,bash"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--no-tools"]))).toBe(true);
 			expect(isServerDefaultCompatible(parseArgs(["--provider", "faux"]))).toBe(true);
 		});
 
-		test("rejects unsupported options for server-default print and RPC modes", () => {
-			expect(isServerDefaultCompatible(parseArgs(["--print", "--tools", "read", "prompt"]))).toBe(false);
+		test("rejects unsupported legacy session options for server-default modes", () => {
+			expect(isServerDefaultCompatible(parseArgs(["--print", "--system-prompt", "custom", "prompt"]))).toBe(true);
 			expect(isServerDefaultCompatible(parseArgs(["--mode", "rpc", "--resume"]))).toBe(false);
 		});
 	});
