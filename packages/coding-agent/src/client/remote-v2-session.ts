@@ -1115,6 +1115,16 @@ export class RemoteV2Session {
 			} else if (isInstructionProfile(instructionProfile)) {
 				this.#snapshot = { ...this.#snapshot, instructionProfile: structuredClone(instructionProfile) };
 			}
+		} else if (event.event === "input_request_updated" && this.#snapshot) {
+			const request = asRecord(event.payload)?.request;
+			if (isInputRequestProjection(request)) {
+				if (request.status === "pending") {
+					this.#snapshot = { ...this.#snapshot, pendingInputRequestId: request.id };
+				} else {
+					const { pendingInputRequestId: _pendingInputRequestId, ...snapshot } = this.#snapshot;
+					this.#snapshot = snapshot;
+				}
+			}
 		} else if (event.event === "plan_updated" && this.#snapshot) {
 			const plan = asRecord(event.payload)?.plan;
 			if (plan === null) {
@@ -1213,6 +1223,18 @@ function isInstructionProfile(value: unknown): value is NonNullable<ProtocolSnap
 
 function isSnapshot(value: unknown): value is ProtocolSnapshot {
 	return Check(SessionSnapshotV2Schema, value);
+}
+
+function isInputRequestProjection(value: unknown): value is { readonly id: string; readonly status: string } {
+	const record = asRecord(value);
+	return (
+		typeof record?.id === "string" &&
+		typeof record.sessionId === "string" &&
+		(record.status === "pending" ||
+			record.status === "responded" ||
+			record.status === "cancelled" ||
+			record.status === "expired")
+	);
 }
 
 function isPlanSnapshot(value: unknown): value is PlanSnapshot {
