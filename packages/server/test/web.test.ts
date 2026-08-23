@@ -25,6 +25,9 @@ describe("AdapterV2WebService", () => {
 
 	test("rejects private and credential-bearing URLs", () => {
 		expect(() => assertSafeWebUrl("http://127.0.0.1/admin")).toThrow("private network");
+		expect(() => assertSafeWebUrl("http://169.254.169.254/latest/meta-data")).toThrow("private network");
+		expect(() => assertSafeWebUrl("http://[::ffff:127.0.0.1]/admin")).toThrow("private network");
+		expect(() => assertSafeWebUrl("http://[::1]/admin")).toThrow("private network");
 		expect(() => assertSafeWebUrl("https://user:pass@example.test")).toThrow("credentials");
 	});
 });
