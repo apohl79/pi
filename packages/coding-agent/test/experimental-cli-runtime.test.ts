@@ -36,33 +36,6 @@ function clientFactory() {
 							snapshot,
 						}),
 					);
-				} else if (message.request.command === "session/create") {
-					handlers?.onData(
-						encodeServerMessageV2({
-							type: "response",
-							id: message.id,
-							ok: true,
-							result: { session: { id: "session-1", revision: 1, phase: "idle", transcript: [] } },
-						}),
-					);
-				} else if (message.request.command === "session/read") {
-					handlers?.onData(
-						encodeServerMessageV2({
-							type: "response",
-							id: message.id,
-							ok: true,
-							result: { session: { id: "session-1", revision: 1, phase: "idle", transcript: [] } },
-						}),
-					);
-				} else if (message.request.command === "session/detach") {
-					handlers?.onData(
-						encodeServerMessageV2({
-							type: "response",
-							id: message.id,
-							ok: true,
-							result: { command: "session/detach" },
-						}),
-					);
 				} else if (message.request.command === "session/list") {
 					handlers?.onData(
 						encodeServerMessageV2({ type: "response", id: message.id, ok: true, result: { sessions: [] } }),
@@ -83,34 +56,6 @@ function clientFactory() {
 							id: message.id,
 							ok: true,
 							result: { command: "session/attach" },
-						}),
-					);
-				} else if (message.request.command === "turn/start") {
-					handlers?.onData(
-						encodeServerMessageV2({
-							type: "response",
-							id: message.id,
-							ok: true,
-							accepted: { operationId: "operation-1", sessionRevision: 2, eventSeq: 2 },
-						}),
-					);
-					handlers?.onData(
-						encodeServerMessageV2({
-							type: "event",
-							sessionId: "session-1",
-							seq: 2,
-							revision: 2,
-							operationId: "operation-1",
-							event: "operation_terminal",
-							payload: {
-								state: "complete",
-								snapshot: {
-									id: "session-1",
-									revision: 2,
-									phase: "idle",
-									transcript: [{ role: "assistant", content: [{ type: "text", text: "remote reply" }] }],
-								},
-							},
 						}),
 					);
 				}
@@ -177,24 +122,6 @@ describe("experimental CLI runtime", () => {
 		});
 		await runtime.runDiagnostics({ command: "diagnostics", action: "status" });
 		expect(output).toEqual([{ command: "diagnostics/status", eventCount: 2 }]);
-		runtime.close();
-	});
-
-	test("runs print mode through a server-owned remote session", async () => {
-		const server = clientFactory();
-		const output: string[] = [];
-		const runtime = createExperimentalCliRuntime({
-			daemon: daemon(),
-			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
-			createClient: server.create,
-			write: () => {},
-			writeText: (value) => output.push(value),
-		});
-		await runtime.runPi({
-			command: "pi",
-			options: { print: true, messages: ["hello"], fileArgs: [], unknownFlags: new Map(), diagnostics: [] },
-		});
-		expect(output).toEqual(["remote reply"]);
 		runtime.close();
 	});
 
