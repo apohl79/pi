@@ -73,7 +73,9 @@ function memoryTransport() {
 			const result: JsonValue =
 				message.request.command === "session/read"
 					? ({ session: snapshot() } as JsonValue)
-					: { command: message.request.command };
+					: message.request.command === "plan/update"
+						? ({ plan: { version: 1, items: [{ step: "Inspect", status: "in_progress" }] } } as JsonValue)
+						: { command: message.request.command };
 			const response: ServerMessageV2 =
 				message.request.command.startsWith("turn/") ||
 				message.request.command.startsWith("session/model") ||
@@ -209,6 +211,18 @@ describe("RemoteV2Session", () => {
 		]);
 		expect(pair.requests.at(-2)?.payload).toEqual({ requestId: "request-1", answers: { answer: "yes" } });
 		expect(pair.requests.at(-1)?.payload).toEqual({ requestId: "request-2" });
+		await session.dispose();
+	});
+
+	test("updates and clears plans through the control lease", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		const plan = await session.updatePlan([{ step: "Inspect", status: "in_progress" }]);
+		expect(plan).toEqual({ version: 1, items: [{ step: "Inspect", status: "in_progress" }] });
+		await session.clearPlan();
+		expect(pair.requests.slice(-2).map((request) => request.command)).toEqual(["plan/update", "plan/clear"]);
 		await session.dispose();
 	});
 

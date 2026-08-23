@@ -9,6 +9,7 @@ import type {
 	CommandV2,
 	JsonValue,
 	ModelRef,
+	PlanItem,
 	PlanSnapshot,
 	EventEnvelopeV2 as ProtocolEvent,
 	SessionSnapshotV2 as ProtocolSnapshot,
@@ -227,6 +228,26 @@ export class RemoteV2Session {
 			sessionId: this.#handle!.sessionId,
 			payload: { requestId },
 		});
+		if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
+	}
+
+	async updatePlan(items: readonly PlanItem[], version?: number): Promise<PlanSnapshot> {
+		this.#assertControl();
+		const response = await this.#client.request({
+			command: "plan/update",
+			sessionId: this.#handle!.sessionId,
+			payload: { items: items.map((item) => ({ ...item })), ...(version === undefined ? {} : { version }) },
+		});
+		if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
+		if (!("result" in response)) throw new Error("Invalid plan/update response");
+		const plan = asRecord(response.result)?.plan;
+		if (!isPlanSnapshot(plan)) throw new Error("Invalid plan/update response");
+		return structuredClone(plan);
+	}
+
+	async clearPlan(): Promise<void> {
+		this.#assertControl();
+		const response = await this.#client.request({ command: "plan/clear", sessionId: this.#handle!.sessionId });
 		if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
 	}
 
