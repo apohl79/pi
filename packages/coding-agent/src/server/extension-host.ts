@@ -31,6 +31,12 @@ export interface ServerRuntimeExtension {
 	onOperationTerminal?(context: ServerRuntimeExtensionContext & { readonly outcome: string }): void | Promise<void>;
 }
 
+export interface ServerRuntimeExtensionHookResult {
+	readonly extensionId: string;
+	readonly status: "fulfilled" | "rejected";
+	readonly reason?: unknown;
+}
+
 export interface ServerRuntimeExtensionHostOptions {
 	readonly resolveModel: () => ServerRuntimeModel;
 	readonly loadState?: (extensionId: string, key: string) => unknown | Promise<unknown>;
@@ -55,19 +61,18 @@ export class ServerRuntimeExtensionHost {
 		throw new Error("server runtime extensions cannot register client commands");
 	}
 
-	public async onOperationAccepted(operation: ServerRuntimeOperation): Promise<void> {
-		await Promise.all(
-			[...this.extensions.values()].map((extension) =>
-				extension.onOperationAccepted?.(this.context(extension.id, operation)),
-			),
-		);
+	public async onOperationAccepted(
+		operation: ServerRuntimeOperation,
+	): Promise<readonly ServerRuntimeExtensionHookResult[]> {
+		return this.dispatchHook((extension) => extension.onOperationAccepted?.(this.context(extension.id, operation)));
 	}
 
-	public async onOperationTerminal(operation: ServerRuntimeOperation, outcome: string): Promise<void> {
-		await Promise.all(
-			[...this.extensions.values()].map((extension) =>
-				extension.onOperationTerminal?.({ ...this.context(extension.id, operation), outcome }),
-			),
+	public async onOperationTerminal(
+		operation: ServerRuntimeOperation,
+		outcome: string,
+	): Promise<readonly ServerRuntimeExtensionHookResult[]> {
+		return this.dispatchHook((extension) =>
+			extension.onOperationTerminal?.({ ...this.context(extension.id, operation), outcome }),
 		);
 	}
 
@@ -77,8 +82,8 @@ export class ServerRuntimeExtensionHost {
 
 	private context(extensionId: string, operation: ServerRuntimeOperation): ServerRuntimeExtensionContext {
 		return {
-			operation,
-			model: operation.model ?? this.options.resolveModel(),
+			operation: { ...operation },
+			model: { ...(operation.model ?? this.options.resolveModel()) },
 			capabilities: extensionCapabilities(this.extensions.get(extensionId)),
 			state: {
 				get: async <T>(key: string) => this.getState<T>(extensionId, key),
@@ -87,6 +92,22 @@ export class ServerRuntimeExtensionHost {
 				},
 			},
 		};
+	}
+
+	private async dispatchHook(
+		hook: (extension: ServerRuntimeExtension) => void | Promise<void>,
+	): Promise<readonly ServerRuntimeExtensionHookResult[]> {
+		const extensions = [...this.extensions.values()];
+		const settled = await Promise.allSettled(
+			extensions.map(async (extension) => {
+				await hook(extension);
+			}),
+		);
+		return settled.map((result, index) =>
+			result.status === "fulfilled"
+				? { extensionId: extensions[index]!.id, status: "fulfilled" as const }
+				: { extensionId: extensions[index]!.id, status: "rejected" as const, reason: result.reason },
+		);
 	}
 }
 

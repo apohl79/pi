@@ -64,4 +64,29 @@ describe("ServerRuntimeExtensionHost", () => {
 		await host.onOperationTerminal({ id: "op-1", type: "turn/start", model: { id: "accepted-model" } }, "completed");
 		expect(models).toEqual(["accepted:accepted-model", "terminal:accepted-model"]);
 	});
+
+	it("isolates hook failures and returns per-extension outcomes", async () => {
+		const calls: string[] = [];
+		const host = new ServerRuntimeExtensionHost({ resolveModel: () => ({ id: "model-a" }) });
+		await host.register({
+			id: "fails",
+			onOperationAccepted: async () => {
+				calls.push("fails");
+				throw new Error("extension failed");
+			},
+		});
+		await host.register({
+			id: "survives",
+			onOperationAccepted: () => {
+				calls.push("survives");
+			},
+		});
+
+		const results = await host.onOperationAccepted({ id: "op-1", type: "turn/start" });
+
+		expect(calls).toEqual(["fails", "survives"]);
+		expect(results).toHaveLength(2);
+		expect(results[0]).toMatchObject({ extensionId: "fails", status: "rejected" });
+		expect(results[1]).toEqual({ extensionId: "survives", status: "fulfilled" });
+	});
 });

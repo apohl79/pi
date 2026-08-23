@@ -193,8 +193,9 @@ export async function createCodingAgentV2SqliteService(
 								extensionId,
 								key,
 							),
-						persistState: (extensionId, key, value) =>
-							session.appendCustomEntry(SERVER_EXTENSION_STATE, { extensionId, key, value }),
+						persistState: async (extensionId, key, value) => {
+							await session.appendCustomEntry(SERVER_EXTENSION_STATE, { extensionId, key, value });
+						},
 					});
 		if (extensionHost !== undefined) {
 			for (const extension of options.serverExtensions ?? []) await extensionHost.register(extension);

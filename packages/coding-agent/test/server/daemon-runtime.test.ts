@@ -16,6 +16,7 @@ import {
 } from "@earendil-works/pi-server";
 import { afterEach, describe, expect, test } from "vitest";
 import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemon-runtime.ts";
+import type { ServerRuntimeExtension } from "../../src/server/extension-host.ts";
 import { createRuntimeManifest } from "../../src/server/runtime-manifest.ts";
 
 const directories: string[] = [];
@@ -369,6 +370,62 @@ describe("coding-agent daemon runtime", () => {
 		} finally {
 			secondClient.dispose();
 			await second.close();
+		}
+	});
+
+	test("forwards registered server extensions through the production daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-extensions-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-extensions-faux",
+			models: [
+				{ id: "coding-agent-daemon-extensions-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		const calls: string[] = [];
+		const extension: ServerRuntimeExtension = {
+			id: "daemon-extension",
+			onOperationAccepted: async (context) => {
+				calls.push(`accepted:${context.operation.type}:${context.model.id}`);
+				await context.state.set("lastOperation", context.operation.id);
+			},
+			onOperationTerminal: (context) => {
+				calls.push(`terminal:${context.outcome}`);
+			},
+		};
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			serverExtensions: [extension],
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
+			const sessionId = (created.result as { session: { id: string } }).session.id;
+			await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			await client.request({ command: "session/name/auto/set", sessionId, payload: { enabled: false } });
+			for (let attempt = 0; attempt < 50 && calls.length < 2; attempt++) {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			expect(calls).toEqual([
+				"accepted:session/name/auto/set:coding-agent-daemon-extensions-model",
+				"terminal:completed",
+			]);
+		} finally {
+			client.dispose();
+			await runtime.close();
 		}
 	});
 
