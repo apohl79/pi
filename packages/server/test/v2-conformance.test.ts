@@ -2170,6 +2170,22 @@ describe("PiServer v2 operation acceptance", () => {
 		});
 		const agent = (spawned as unknown as { result: { agent: { id: string; path: string } } }).result.agent;
 		expect(agent.path).toBe("/root/research");
+		const messageEvent = client.next((message) => message.type === "event" && message.event === "agent_message");
+		expect(
+			await client.request({ command: "agent/message", payload: { agentId: agent.id, message: "add context" } }),
+		).toMatchObject({ ok: true, result: { agentId: agent.id } });
+		expect(await messageEvent).toMatchObject({
+			event: "agent_message",
+			payload: { agentId: agent.id, message: "add context" },
+		});
+		const followUpEvent = client.next((message) => message.type === "event" && message.event === "agent_updated");
+		expect(
+			await client.request({ command: "agent/followUp", payload: { agentId: agent.id, message: "continue" } }),
+		).toMatchObject({ ok: true, result: { agent: { id: agent.id, state: "running" } } });
+		expect(await followUpEvent).toMatchObject({
+			event: "agent_updated",
+			payload: { agent: { id: agent.id, state: "running" } },
+		});
 		const observer = await connectUnixTestClientV2(server.addresses[0]!);
 		await observer.hello();
 		expect(await observer.request({ command: "agent/list", sessionId: "session-1" })).toMatchObject({
