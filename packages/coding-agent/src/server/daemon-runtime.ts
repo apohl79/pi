@@ -7,7 +7,6 @@ import {
 	InMemoryV2PlanRegistry,
 	JsonlForensicRecorder,
 	JsonlV2PlanRegistry,
-	LocalDiagnosticCapsuleStore,
 	ServerDaemon,
 	type ServerDaemonOptions,
 	type V2ImageService,
@@ -29,7 +28,6 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	socketPath: string;
 	planStorePath?: string;
 	diagnosticStorePath?: string;
-	diagnosticKeyPath?: string;
 	serverId?: string;
 	agents?: ServerDaemonOptions["agents"];
 	inputs?: V2InputRegistry;
@@ -38,7 +36,6 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	diagnostics?: ServerDaemonOptions["diagnostics"];
 	createServer?: ServerDaemonOptions["createServer"];
 	write(value: unknown): void;
-	writeText?: (value: string) => void;
 	onAttach?: ExperimentalCliRuntimeOptions["onAttach"];
 };
 
@@ -74,8 +71,6 @@ export async function createCodingAgentDaemonRuntime(
 		(options.diagnosticStorePath === undefined
 			? new InMemoryForensicRecorder()
 			: new JsonlForensicRecorder(options.diagnosticStorePath));
-	const diagnosticContent =
-		options.diagnosticKeyPath === undefined ? undefined : new LocalDiagnosticCapsuleStore(options.diagnosticKeyPath);
 	const service = await createCodingAgentV2SqliteService(
 		options.agentRegistry === undefined
 			? {
@@ -97,7 +92,6 @@ export async function createCodingAgentDaemonRuntime(
 		...(options.images === undefined ? {} : { images: options.images }),
 		plans,
 		diagnostics,
-		...(diagnosticContent === undefined ? {} : { diagnosticContent }),
 		...(options.createServer === undefined ? {} : { createServer: options.createServer }),
 	});
 	const defaultConnect: TransportAddress = { transport: "unix", path: options.socketPath };
@@ -115,7 +109,6 @@ export async function createCodingAgentDaemonRuntime(
 		createClient: (address) =>
 			new PiClientV2({ transportFactory: createUnixTransportFactory({ path: address.path }) }),
 		write: options.write,
-		...(options.writeText === undefined ? {} : { writeText: options.writeText }),
 		onAttach: options.onAttach,
 	});
 	return {
@@ -145,7 +138,6 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			env,
 			planStorePath: options.planStorePath ?? join(options.agentDir, "plans.jsonl"),
 			diagnosticStorePath: options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"),
-			diagnosticKeyPath: options.diagnosticKeyPath ?? join(options.agentDir, "diagnostic-keys.json"),
 		});
 		return {
 			...runtime,
