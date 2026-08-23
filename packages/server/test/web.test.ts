@@ -64,6 +64,39 @@ describe("AdapterV2WebService", () => {
 		await expect(service.execute("session-1", { operation: "search_query" })).rejects.toThrow("result id");
 	});
 
+	test("requires screenshot results to reference image blobs", async () => {
+		const service = new AdapterV2WebService({
+			execute: async () => [
+				{
+					id: "pdf-page",
+					title: "Page 1",
+					source: "fake",
+					retrievedAt: 1,
+					url: "https://example.test/document.pdf",
+					mimeType: "application/pdf",
+				},
+			],
+		});
+
+		await expect(
+			service.execute("session-1", { operation: "screenshot", url: "https://example.test/document.pdf" }),
+		).rejects.toThrow("image blob");
+		const valid = new AdapterV2WebService({
+			execute: async () => [
+				{
+					id: "page-image",
+					title: "Page 1",
+					source: "fake",
+					retrievedAt: 1,
+					url: "https://example.test/document.pdf",
+					mimeType: "image/png",
+					blobDigest: "a".repeat(64),
+				},
+			],
+		});
+		await expect(valid.execute("session-1", { operation: "screenshot" })).resolves.toHaveLength(1);
+	});
+
 	test("bounds extracts in UTF-8 bytes without splitting code points", async () => {
 		const adapter: V2WebAdapter = {
 			execute: async () => [

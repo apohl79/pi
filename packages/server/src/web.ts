@@ -112,6 +112,8 @@ export class AdapterV2WebService implements V2WebService {
 		const results = await this.adapter.execute(request, policy);
 		return results.slice(0, policy.maxResults).map((result) => {
 			assertWebResult(result);
+			if (request.operation === "screenshot" && (!result.blobDigest || !result.mimeType?.startsWith("image/")))
+				throw new Error("Web screenshot results must reference an image blob");
 			return {
 				...result,
 				url: assertSafeWebUrl(result.url, policy).toString(),
