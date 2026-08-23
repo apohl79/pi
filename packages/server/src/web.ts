@@ -110,12 +110,29 @@ export class AdapterV2WebService implements V2WebService {
 		};
 		if (request.url) assertSafeWebUrl(request.url, policy);
 		const results = await this.adapter.execute(request, policy);
-		return results.slice(0, policy.maxResults).map((result) => ({
-			...result,
-			url: assertSafeWebUrl(result.url, policy).toString(),
-			...(result.extract ? { extract: truncateUtf8(result.extract, policy.maxExtractBytes) } : {}),
-		}));
+		return results.slice(0, policy.maxResults).map((result) => {
+			assertWebResult(result);
+			return {
+				...result,
+				url: assertSafeWebUrl(result.url, policy).toString(),
+				...(result.extract ? { extract: truncateUtf8(result.extract, policy.maxExtractBytes) } : {}),
+			};
+		});
 	}
+}
+
+function assertWebResult(result: V2WebResult): void {
+	if (result.id.trim().length === 0) throw new Error("Web result id must not be empty");
+	if (result.title.trim().length === 0) throw new Error("Web result title must not be empty");
+	if (result.source.trim().length === 0) throw new Error("Web result source must not be empty");
+	if (!Number.isSafeInteger(result.retrievedAt) || result.retrievedAt < 0)
+		throw new Error("Web result retrievedAt must be a non-negative safe integer");
+	if (result.extract !== undefined && typeof result.extract !== "string")
+		throw new Error("Web result extract must be a string");
+	if (result.mimeType !== undefined && result.mimeType.trim().length === 0)
+		throw new Error("Web result mimeType must not be empty");
+	if (result.blobDigest !== undefined && !/^[a-f0-9]{64}$/u.test(result.blobDigest))
+		throw new Error("Web result blobDigest is invalid");
 }
 
 function truncateUtf8(value: string, maxBytes: number): string {
