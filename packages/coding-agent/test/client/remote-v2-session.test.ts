@@ -656,6 +656,32 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("ignores malformed plan and agent update payloads", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		const original = session.snapshot;
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 2,
+			revision: 2,
+			event: "plan_updated",
+			payload: { plan: { version: 1, items: [{ step: "", status: "pending" }] } },
+		});
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 3,
+			revision: 3,
+			event: "agent_updated",
+			payload: { agent: { id: "agent-1", path: "/root", taskName: "child", state: "running", model: {} } },
+		});
+		expect(session.snapshot).toEqual(original);
+		await session.dispose();
+	});
+
 	test("answers and cancels structured input through the control lease", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });
