@@ -197,4 +197,10 @@ describe("InMemoryV2AgentRegistry", () => {
 		await spawn("parent-b", "b-one");
 		await expect(spawn("parent-b", "b-two")).rejects.toThrow("active limit 3");
 	});
+
+	test("rejects unsafe agent registry limits", () => {
+		expect(() => new InMemoryV2AgentRegistry({ maxActive: 9 })).toThrow("maxActive must be an integer from 1 to 8");
+		expect(() => new InMemoryV2AgentRegistry({ maxActivePerParent: 0 })).toThrow("maxActivePerParent");
+		expect(() => new InMemoryV2AgentRegistry({ maxActivePerParent: 9 })).toThrow("maxActivePerParent");
+	});
 });
