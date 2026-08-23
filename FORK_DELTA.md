@@ -68,6 +68,10 @@ the conventional leading `v` from `RELEASE_TAG`, preserve explicit
 encode generated literals safely before compilation. The runtime-manifest
 contract test protects blank-environment fallback to compiled identity.
 
+The user-visible fork compatibility contract is documented in
+[`README.fork.md`](README.fork.md); update it when a supported remote,
+plugin, statusline, or extension-boundary promise changes.
+
 ## Update policy
 
 Every new fork-core change must add or refine one ledger row with the
