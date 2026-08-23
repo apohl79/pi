@@ -944,6 +944,31 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.close();
 	});
 
+	test("propagates blob quota failures through the v2 transport", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-blob-quota-"));
+		directories.push(directory);
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			blobs: new InMemoryV2BlobStore({ maxTotalBytes: 5, maxBlobs: 1 }),
+		});
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const first = await client.request({
+			command: "blob/put",
+			payload: { data: "aGVsbG8=", encoding: "base64", mimeType: "text/plain" },
+		});
+		expect(first).toMatchObject({ ok: true });
+		expect(
+			await client.request({
+				command: "blob/put",
+				payload: { data: "d29ybGQ=", encoding: "base64", mimeType: "text/plain" },
+			}),
+		).toMatchObject({ ok: false, error: { code: "request_failed", message: expect.stringContaining("Blob count") } });
+		await client.close();
+	});
+
 	test("exposes the server-owned agent graph and lifecycle commands", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
