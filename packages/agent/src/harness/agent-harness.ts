@@ -66,6 +66,14 @@ interface QueueRegisterSession {
 		)[],
 	): Promise<unknown>;
 	getRegister(namespace: string, key: string): Promise<{ value: JsonValue } | undefined>;
+	appendAtomicTransaction(
+		entries: readonly { lane: string; entry: ProvisionedEntry }[],
+		records: readonly NewRecord[],
+		writes: readonly (
+			| { op: "set"; namespace: string; key: string; value: JsonValue }
+			| { op: "delete"; namespace: string; key: string }
+		)[],
+	): Promise<unknown>;
 }
 
 export class LaneBusy extends TaggedError("LaneBusy")<{
@@ -792,7 +800,7 @@ export class AgentHarness implements AgentLane {
 				})),
 			},
 		};
-		await this.appendOperationStarted(started);
+		const initialMessagesPersisted = await this.appendRunAcceptance(started);
 		this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
 		this.watchBus.emit({ type: "run_start", lane: this.name, runId });
 		const controller = new AbortController();
@@ -943,7 +951,8 @@ export class AgentHarness implements AgentLane {
 			);
 			let finalEntryId: string | undefined;
 			const transcriptMessages: AgentMessage[] = [];
-			for (const message of newMessages.map(sanitizeTranscriptMessage)) {
+			const messagesToPersist = initialMessagesPersisted ? newMessages.slice(prompts.length) : newMessages;
+			for (const message of messagesToPersist.map(sanitizeTranscriptMessage)) {
 				if (message.role !== "assistant") {
 					transcriptMessages.push(message);
 					continue;
@@ -1788,6 +1797,20 @@ export class AgentHarness implements AgentLane {
 		return typeof candidate.appendTransaction === "function" && typeof candidate.getRegister === "function"
 			? (candidate as QueueRegisterSession)
 			: undefined;
+	}
+
+	private async appendRunAcceptance(record: NewRecord<OperationStartedRecord>): Promise<boolean> {
+		const transaction = this.registerSession();
+		if (transaction && record.intent.kind === "run") {
+			await transaction.appendAtomicTransaction(
+				record.intent.initialMessages.map((entry) => ({ lane: this.name, entry })),
+				[record],
+				[],
+			);
+			return true;
+		}
+		await this.appendOperationStarted(record);
+		return false;
 	}
 
 	private async appendQueueTransaction(
