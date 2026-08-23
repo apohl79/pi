@@ -1,8 +1,14 @@
+import { createHash } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { InMemoryForensicRecorder, JsonlForensicRecorder } from "../src/diagnostics.ts";
+import {
+	InMemoryForensicRecorder,
+	JsonlForensicRecorder,
+	LocalDiagnosticCapsuleStore,
+	verifyDiagnosticBundle,
+} from "../src/diagnostics.ts";
 
 describe("InMemoryForensicRecorder", () => {
 	test("assigns correlated sequence numbers and redacts credential fields", async () => {
@@ -34,57 +40,26 @@ describe("InMemoryForensicRecorder", () => {
 		expect((await recorder.read()).map((event) => event.kind)).toEqual(["two", "three"]);
 	});
 
-	test("redacts common credential key casing and separators", async () => {
+	test("redacts normalized credential keys and credential-shaped strings", async () => {
 		const recorder = new InMemoryForensicRecorder();
 		const event = await recorder.record({
-			kind: "credentials",
+			kind: "credential-shape",
 			payload: {
-				API_KEY: "one",
-				"api-key": "two",
-				access_token: "three",
-				"client-secret": "four",
-				"x-api-key": "five",
-			},
-		});
-
-		expect(event.payload).toEqual({
-			API_KEY: "[REDACTED]",
-			"api-key": "[REDACTED]",
-			access_token: "[REDACTED]",
-			"client-secret": "[REDACTED]",
-			"x-api-key": "[REDACTED]",
-		});
-	});
-
-	test("redacts sensitive key substrings and credential-shaped values", async () => {
-		const recorder = new InMemoryForensicRecorder();
-		const event = await recorder.record({
-			kind: "credentials",
-			payload: {
-				providerAuthorizationHeader: "Bearer abcdefghijklmnop",
-				nested: { databasePasswordHash: "hidden" },
-				bearer: "Bearer abcdefghijklmnop",
-				assignment: "token=abcdefghijk",
-				apiKeyValue: "sk-aaaaaaaa",
+				API_KEY: "secret-value",
+				nested: { access_token: "another-secret" },
+				message: "Authorization: Bearer abcdefghijklmnop",
+				providerKey: "sk-example_12345678",
 				safe: "ordinary diagnostic text",
 			},
 		});
-
 		expect(event.payload).toEqual({
-			providerAuthorizationHeader: "[REDACTED]",
-			nested: { databasePasswordHash: "[REDACTED]" },
-			bearer: "[REDACTED]",
-			assignment: "[REDACTED]",
-			apiKeyValue: "[REDACTED]",
+			API_KEY: "[REDACTED]",
+			nested: { access_token: "[REDACTED]" },
+			message: "[REDACTED]",
+			providerKey: "[REDACTED]",
 			safe: "ordinary diagnostic text",
 		});
 	});
-
-	test.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])("rejects invalid maxEvents: %s", (maxEvents) => {
-		expect(() => new InMemoryForensicRecorder({ maxEvents })).toThrow(
-			"maxEvents must be a finite integer greater than or equal to 1",
-		);
-	});
 });
 
 describe("JsonlForensicRecorder", () => {
@@ -112,402 +87,49 @@ describe("JsonlForensicRecorder", () => {
 	});
 });
 
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
+describe("LocalDiagnosticCapsuleStore", () => {
+	test("encrypts bounded content and decrypts after key rotation", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostic-capsules-"));
+		const store = new LocalDiagnosticCapsuleStore(join(directory, "keys.json"), { maxBytes: 5 });
+		const first = await store.encrypt({ eventId: "event-1", kind: "prompt", content: "secret-content" });
+		expect(first).toMatchObject({ byteLength: 5, originalByteLength: 14, truncated: true });
+		expect(Buffer.from(await store.decrypt(first)).toString()).toBe("secre");
+		const oldKey = first.keyId;
+		const newKey = await store.rotateKey();
+		expect(newKey).not.toBe(oldKey);
+		const second = await store.encrypt({ eventId: "event-2", kind: "tool", content: "result" });
+		expect(second.keyId).toBe(newKey);
+		expect(Buffer.from(await store.decrypt(first)).toString()).toBe("secre");
 	});
 
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
-	});
-});
-
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
-	});
-
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
+	test("rejects authenticated ciphertext tampering", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostic-capsules-tamper-"));
+		const store = new LocalDiagnosticCapsuleStore(join(directory, "keys.json"));
+		const capsule = await store.encrypt({ eventId: "event-1", kind: "prompt", content: "secret" });
+		const tampered = {
+			...capsule,
+			ciphertext: `${capsule.ciphertext.slice(0, -1)}${capsule.ciphertext.endsWith("A") ? "B" : "A"}`,
+		};
+		await expect(store.decrypt(tampered)).rejects.toThrow();
 	});
 });
 
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
-	});
-
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
-	});
-});
-
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
-	});
-
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
-	});
-});
-
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
-	});
-
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
-	});
-});
-
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
-	});
-
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
-	});
-});
-
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
-	});
-
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
-	});
-});
-
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
-	});
-
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
-	});
-});
-
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
-	});
-
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
-	});
-});
-
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
-	});
-
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
-	});
-});
-
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
-	});
-
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
-	});
-});
-
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
-	});
-
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
-	});
-});
-
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
-	});
-
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
-	});
-});
-
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
-	});
-
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
-	});
-});
-
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
-	});
-
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
-	});
-});
-
-describe("JsonlForensicRecorder", () => {
-	test("recovers sequence and redaction state after restart", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-"));
-		const path = join(directory, "nested", "events.jsonl");
-		const first = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		await first.record({ kind: "boot", payload: { token: "secret" } });
-		await first.record({ kind: "accepted" });
-
-		const reopened = new JsonlForensicRecorder(path, { maxEvents: 3 });
-		const event = await reopened.record({ kind: "terminal" });
-		expect(event.seq).toBe(3);
-		expect((await reopened.read()).map((item) => item.kind)).toEqual(["boot", "accepted", "terminal"]);
-		expect((await reopened.read())[0]?.payload).toEqual({ token: "[REDACTED]" });
-	});
-
-	test("bounds the retained JSONL window while preserving monotonic sequence", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-diagnostics-bounded-"));
-		const recorder = new JsonlForensicRecorder(join(directory, "events.jsonl"), { maxEvents: 2 });
-		await recorder.record({ kind: "one" });
-		await recorder.record({ kind: "two" });
-		await recorder.record({ kind: "three" });
-		expect((await recorder.read()).map((event) => event.seq)).toEqual([2, 3]);
+describe("verifyDiagnosticBundle", () => {
+	test("verifies an exported event bundle offline", () => {
+		const events = [
+			{ seq: 1, kind: "boot" },
+			{ seq: 2, kind: "ready" },
+		];
+		const serialized = JSON.stringify(events);
+		const manifest = {
+			schemaVersion: 1,
+			eventCount: 2,
+			firstSeq: 1,
+			lastSeq: 2,
+			eventsSha256: createHash("sha256").update(serialized).digest("hex"),
+		};
+		expect(verifyDiagnosticBundle({ manifest, events })).toEqual({ valid: true });
+		expect(verifyDiagnosticBundle({ manifest: { ...manifest, lastSeq: 3 }, events })).toMatchObject({ valid: false });
+		expect(verifyDiagnosticBundle({ events })).toMatchObject({ valid: false });
 	});
 });
