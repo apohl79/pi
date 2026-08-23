@@ -37,6 +37,7 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 	constructor(databaseFactory: SqliteDatabaseFactory, databasePath: string) {
 		this.#databaseFactory = databaseFactory;
 		this.#databasePath = databasePath;
+		this.#memory.onChange?.((request) => this.#notify(request));
 	}
 
 	onChange(listener: V2InputChangeListener): () => void {
@@ -70,9 +71,6 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 		return this.#mutate(async () => {
 			const next = respondV2InputRequest(await this.#memory.read(requestId), answers);
 			return { durable: next, commit: () => this.#memory.respond(requestId, answers) };
-		}).then((request) => {
-			this.#notify(request);
-			return request;
 		});
 	}
 
@@ -80,9 +78,6 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 		return this.#mutate(async () => {
 			const next = cancelV2InputRequest(await this.#memory.read(requestId));
 			return { durable: next, commit: () => this.#memory.cancel(requestId) };
-		}).then((request) => {
-			this.#notify(request);
-			return request;
 		});
 	}
 

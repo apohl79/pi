@@ -344,13 +344,23 @@ describe("PiServer v2 operation acceptance", () => {
 		const client = connectInMemoryTestClientV2(server.accept.bind(server));
 		await client.hello();
 		await client.request({ command: "session/attach", sessionId: "session-1" });
-		const request = await inputs.create("session-1", [{ id: "choice", prompt: "Choose" }]);
+		const request = await inputs.create("session-1", [{ id: "choice", prompt: "Choose" }], 0);
 		const event = await client.next(
 			(message) => message.type === "event" && message.event === "input_request_updated",
 		);
 		expect(event).toMatchObject({
 			event: "input_request_updated",
 			payload: { request: { id: request.id, sessionId: "session-1", status: "pending" } },
+		});
+		const expired = await client.next(
+			(message) =>
+				message.type === "event" &&
+				message.event === "input_request_updated" &&
+				(message.payload as { request?: { status?: string } }).request?.status === "expired",
+		);
+		expect(expired).toMatchObject({
+			event: "input_request_updated",
+			payload: { request: { id: request.id, status: "expired" } },
 		});
 	});
 
