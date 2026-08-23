@@ -208,6 +208,30 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("cancels a deferred provider handle before terminal abort cleanup", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "deferred-cancel-faux",
+			deferred: { pendingFetches: 1 },
+			models: [{ id: "deferred-cancel-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("cancelled later")]);
+		const session = createSession("deferred-cancel");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			streamOptions: { deferred: true },
+		});
+
+		expect(await harness.prompt("defer then abort")).toMatchObject({ ok: true, value: { kind: "suspended" } });
+		expect(await harness.abort()).toMatchObject({ ok: true, value: { runId: expect.any(String) } });
+		expect(faux.state.cancelledDeferred).toHaveLength(1);
+		expect(await session.findOpenOperations("main")).toEqual([]);
+		await harness.close();
+	});
+
 	it("runs idle callbacks after the durable lane is idle", async () => {
 		const harness = await createHarness();
 		let callbackCalled = false;
