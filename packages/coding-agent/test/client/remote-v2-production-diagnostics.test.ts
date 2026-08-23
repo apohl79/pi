@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
+import { ClientDiagnosticSpool } from "@earendil-works/pi-client/diagnostics";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import { afterEach, describe, expect, test } from "vitest";
 import { RemoteV2Session } from "../../src/index.ts";
@@ -126,6 +127,69 @@ describe("production remote v2 diagnostics", () => {
 		} finally {
 			secondClient.dispose();
 			await secondRuntime.close();
+		}
+	});
+
+	test("hands off direct client diagnostic identity to the remote bundle", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-remote-diagnostics-client-spool-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-remote-diagnostics-client-spool-faux",
+			models: [
+				{ id: "remote-diagnostics-client-spool-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("client evidence response")]);
+		const socketPath = join(directory, "server.sock");
+		const spool = new ClientDiagnosticSpool({
+			path: join(directory, "client-diagnostics.jsonl"),
+			clientInstanceId: "remote-client-evidence",
+		});
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath,
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: socketPath }),
+			diagnostics: {
+				manifest: {
+					clientInstanceId: spool.clientInstanceId,
+					runtime: "node test",
+					platform: process.platform,
+					arch: process.arch,
+				},
+				spool,
+			},
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
+			try {
+				const operationId = await session.submit("capture client evidence");
+				await session.waitForOperation(operationId);
+				const bundle = await session.diagnosticsExport({ sessionId: session.id });
+				expect(bundle.clientDiagnostics).toMatchObject({
+					manifest: { clientInstanceId: "remote-client-evidence" },
+				});
+				expect(bundle.clientDiagnostics).not.toHaveProperty("records");
+				expect((bundle.manifest as { unavailable?: readonly string[] }).unavailable).not.toContain(
+					"client-diagnostic-spool",
+				);
+				expect(await session.diagnosticsVerify(bundle)).toMatchObject({ valid: true });
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
 		}
 	});
 });
