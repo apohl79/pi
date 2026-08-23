@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
@@ -112,6 +113,22 @@ function mimeTypeFor(path: string): string | undefined {
 									: undefined;
 }
 
+function fuzzyScore(query: string, value: string): number | undefined {
+	const normalizedQuery = query.toLocaleLowerCase();
+	const normalizedValue = value.toLocaleLowerCase();
+	let queryIndex = 0;
+	let score = 0;
+	let previousIndex = -2;
+	for (let valueIndex = 0; valueIndex < normalizedValue.length && queryIndex < normalizedQuery.length; valueIndex++) {
+		if (normalizedValue[valueIndex] !== normalizedQuery[queryIndex]) continue;
+		if (valueIndex === previousIndex + 1) score += 2;
+		if (valueIndex === 0 || normalizedValue[valueIndex - 1] === "/") score += 3;
+		previousIndex = valueIndex;
+		queryIndex += 1;
+	}
+	return queryIndex === normalizedQuery.length ? score - normalizedValue.length / 100 : undefined;
+}
+
 export class LocalV2FileReferenceService implements V2FileReferenceService {
 	private readonly projectRoot: string;
 	private readonly cwd: string;
@@ -161,6 +178,8 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 		const clean = cleanReference(prefix);
 		const scope = scopeOf(clean);
 		if (scope === "local") throw new Error("Client-local file references must be uploaded as blobs");
+		if (scope === "relative" && !clean.includes("/") && !clean.includes("\\") && clean.length > 0)
+			return this.completeFuzzy(clean, signal);
 		const logical =
 			scope === "project"
 				? projectReference(clean)
@@ -187,14 +206,17 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 						const resolved = await realpath(path);
 						if (!(await this.allowed(resolved, scope === "absolute" || absoluteServerPath))) return undefined;
 						const reference = referenceFor(scope, base, path, absoluteServerPath);
+						const isDirectory = entry.isDirectory();
+						const mimeType = isDirectory ? undefined : mimeTypeFor(path);
 						return {
 							reference,
 							display: reference,
 							hostScope: "server",
 							path,
 							canonicalPath: resolved,
-							kind: entry.isDirectory() ? "directory" : "file",
-							...(entry.isDirectory() ? {} : { size: (await lstat(path)).size, mimeType: mimeTypeFor(path) }),
+							kind: isDirectory ? "directory" : "file",
+							...(isDirectory ? {} : { size: (await lstat(path)).size }),
+							...(mimeType === undefined ? {} : { mimeType }),
 						} satisfies V2FileCompletion;
 					} catch {
 						return undefined;
@@ -210,6 +232,67 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 					left.reference.localeCompare(right.reference),
 			)
 			.slice(0, this.maxCompletions);
+	}
+
+	private async completeFuzzy(query: string, signal: AbortSignal): Promise<readonly V2FileCompletion[]> {
+		type Candidate = V2FileCompletion & { readonly score: number };
+		const candidates: Candidate[] = [];
+		const visited = new Set<string>();
+		const visit = async (directory: string): Promise<void> => {
+			if (signal.aborted) throw new Error("filesystem completion cancelled");
+			let canonicalDirectory: string;
+			try {
+				canonicalDirectory = await realpath(directory);
+			} catch {
+				return;
+			}
+			if (visited.has(canonicalDirectory)) return;
+			visited.add(canonicalDirectory);
+			let entries: Dirent[];
+			try {
+				entries = await readdir(directory, { withFileTypes: true });
+			} catch {
+				return;
+			}
+			for (const entry of entries) {
+				if (signal.aborted) throw new Error("filesystem completion cancelled");
+				const path = resolve(directory, entry.name);
+				try {
+					const canonicalPath = await realpath(path);
+					if (!(await this.allowed(canonicalPath))) continue;
+					const relativePath = relative(this.cwd, path);
+					const score = fuzzyScore(query, relativePath);
+					const isDirectory = entry.isDirectory();
+					const mimeType = isDirectory ? undefined : mimeTypeFor(path);
+					if (score !== undefined) {
+						candidates.push({
+							reference: relativePath,
+							display: relativePath,
+							hostScope: "server",
+							path,
+							canonicalPath,
+							kind: isDirectory ? "directory" : "file",
+							...(isDirectory ? {} : { size: (await lstat(path)).size }),
+							...(mimeType === undefined ? {} : { mimeType }),
+							score,
+						});
+					}
+					if (isDirectory) await visit(path);
+				} catch {
+					// Entries can disappear or become inaccessible during a completion scan.
+				}
+			}
+		};
+		await visit(this.cwd);
+		return candidates
+			.sort(
+				(left, right) =>
+					Number(right.kind === "directory") - Number(left.kind === "directory") ||
+					right.score - left.score ||
+					left.reference.localeCompare(right.reference),
+			)
+			.slice(0, this.maxCompletions)
+			.map(({ score: _score, ...candidate }) => candidate);
 	}
 
 	async resolve(sessionId: string, reference: string): Promise<V2FileReference> {

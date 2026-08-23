@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
@@ -100,6 +100,35 @@ describe("production daemon filesystem completion", () => {
 			expect(Buffer.from(readResult.result.data, "base64").toString("utf8")).toBe(
 				await readFile(outsidePath, "utf8"),
 			);
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("fuzzy-searches bare references beneath the execution cwd", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-filesystem-fuzzy-"));
+		directories.push(directory);
+		await mkdir(join(directory, "src", "nested"), { recursive: true });
+		await writeFile(join(directory, "src", "nested", "target-file.ts"), "target", "utf8");
+		const runtime = await createFilesystemRuntime(directory);
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			const sessionId = (created as unknown as { result: { session: { id: string } } }).result.session.id;
+			const completed = await client.request({
+				command: "filesystem/complete",
+				sessionId,
+				payload: { prefix: "@tft" },
+			});
+			expect(completed).toMatchObject({
+				ok: true,
+				result: { items: [{ reference: join("src", "nested", "target-file.ts"), kind: "file" }] },
+			});
 		} finally {
 			client.dispose();
 			await runtime.close();
