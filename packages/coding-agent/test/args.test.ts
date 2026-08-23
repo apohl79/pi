@@ -30,6 +30,8 @@ describe("parseArgs", () => {
 			expect(isServerDefaultCompatible(parseArgs(["--no-tools"]))).toBe(true);
 			expect(isServerDefaultCompatible(parseArgs(["--exclude-tools", "bash"]))).toBe(true);
 			expect(isServerDefaultCompatible(parseArgs(["--no-builtin-tools"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--extension", "./extension.ts"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--no-extensions"]))).toBe(true);
 			expect(isServerDefaultCompatible(parseArgs(["--provider", "faux"]))).toBe(true);
 		});
 
