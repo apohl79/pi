@@ -776,6 +776,67 @@ export class AgentHarness implements AgentLane {
 			const finalMessage = transcriptMessages.at(-1);
 			if (!finalEntryId || !finalMessage || finalMessage.role !== "assistant")
 				throw new Error("Agent loop produced no assistant message");
+			if (finalMessage.stopReason === "aborted" || finalMessage.stopReason === "error") {
+				if (finalMessage.stopReason === "aborted") {
+					await this.runLifecycleHook("after_response", {
+						operationId: runId,
+						message: durableClone(finalMessage),
+					});
+					await this.durableSession.appendRecord({
+						type: "operation_finished",
+						id: this.durableSession.idGenerator.next(),
+						lane: this.name,
+						runId,
+						outcome: "aborted",
+					});
+					await this.runLifecycleHook("before_run_end", { operationId: runId, outcome: "aborted" });
+					this.lifecycle.emit("operation_finished", { operationId: runId, outcome: "aborted" });
+					this.watchBus.emit({
+						type: "run_end",
+						lane: this.name,
+						runId,
+						outcome: "aborted",
+						leafId: (await this.session.getLeafId()) ?? "",
+					});
+					return ResultValue.ok({
+						runId,
+						kind: "aborted",
+						leafId: (await this.session.getLeafId()) ?? "",
+						finalEntryId,
+						finalMessage,
+					});
+				}
+				const error: OperationError = {
+					code: "run_error",
+					message: sanitizeErrorMessage(finalMessage.errorMessage, "Provider request failed"),
+				};
+				await this.runLifecycleHook("after_response", { operationId: runId, message: durableClone(finalMessage) });
+				await this.durableSession.appendRecord({
+					type: "operation_finished",
+					id: this.durableSession.idGenerator.next(),
+					lane: this.name,
+					runId,
+					outcome: "failed",
+					error,
+				});
+				await this.runLifecycleHook("before_run_end", { operationId: runId, outcome: "failed" });
+				this.lifecycle.emit("operation_finished", { operationId: runId, outcome: "failed" });
+				this.watchBus.emit({
+					type: "run_end",
+					lane: this.name,
+					runId,
+					outcome: "failed",
+					leafId: (await this.session.getLeafId()) ?? "",
+				});
+				return ResultValue.ok({
+					runId,
+					kind: "failed",
+					leafId: (await this.session.getLeafId()) ?? "",
+					finalEntryId,
+					finalMessage,
+					error,
+				});
+			}
 			await this.runLifecycleHook("after_response", { operationId: runId, message: durableClone(finalMessage) });
 			await this.durableSession.appendRecord({
 				type: "operation_finished",

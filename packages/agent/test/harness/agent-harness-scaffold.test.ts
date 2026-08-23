@@ -817,7 +817,7 @@ describe("AgentHarness v2 scaffold", () => {
 		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
 
 		const result = await harness.prompt("hello");
-		expect(result).toMatchObject({ ok: true, value: { kind: "completed" } });
+		expect(result).toMatchObject({ ok: true, value: { kind: "failed" } });
 		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
 		const assistant = entries.find((entry) => entry.type === "message" && entry.message.role === "assistant");
 		expect(assistant).toBeDefined();
@@ -831,6 +831,27 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(assistant.message.errorMessage).toContain("request failed");
 		expect(assistant.message.errorMessage).not.toMatch(/json-secret|bearer-error|project-secret/);
 		expect(assistant.message.errorMessage!.length).toBeLessThanOrEqual(512);
+		await harness.close();
+	});
+
+	it("records provider error stops as failed operations", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "provider-error-terminal-faux",
+			models: [{ id: "provider-error-terminal-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "provider failed" })]);
+		const session = createSession("provider-error-terminal");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+
+		const result = await harness.prompt("hello");
+
+		expect(result).toMatchObject({ ok: true, value: { kind: "failed", error: { code: "run_error" } } });
+		expect((await session.findRecords({ type: "operation_finished" })).at(-1)).toMatchObject({
+			outcome: "failed",
+			error: { code: "run_error", message: "provider failed" },
+		});
 		await harness.close();
 	});
 });
