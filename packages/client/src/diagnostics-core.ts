@@ -43,10 +43,11 @@ export async function mergeClientDiagnosticBundle(
 	const unavailable = Array.isArray(manifest.unavailable)
 		? manifest.unavailable.filter((item): item is string => item !== "client-diagnostic-spool")
 		: [];
+	const { unavailable: _unavailable, ...manifestWithoutUnavailable } = manifest;
 	return {
 		...source,
 		manifest: {
-			...manifest,
+			...manifestWithoutUnavailable,
 			...(unavailableFromSpool || unavailable.length > 0
 				? { unavailable: [...unavailable, "client-diagnostic-spool"] }
 				: {}),
