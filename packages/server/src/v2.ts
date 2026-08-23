@@ -303,6 +303,7 @@ export class PiServerV2 {
 				if (result.status === "rejected")
 					this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
 			this.runtimes.clear();
+			await this.agents.dispose?.();
 			this.started = false;
 		})();
 		return this.closePromise;

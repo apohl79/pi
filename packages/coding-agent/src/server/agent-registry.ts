@@ -216,11 +216,15 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private async resolveModel(request: V2AgentRequest): Promise<{ provider: string; id: string }> {
 		if (request.model.provider !== "inherit" && request.model.id !== "inherit") return request.model;
 		const parent = await this.service.openSession(request.sessionId);
-		const inherited = (await parent.snapshot()).model;
-		return {
-			provider: request.model.provider === "inherit" ? inherited.provider : request.model.provider,
-			id: request.model.id === "inherit" ? inherited.id : request.model.id,
-		};
+		try {
+			const inherited = (await parent.snapshot()).model;
+			return {
+				provider: request.model.provider === "inherit" ? inherited.provider : request.model.provider,
+				id: request.model.id === "inherit" ? inherited.id : request.model.id,
+			};
+		} finally {
+			await parent.dispose();
+		}
 	}
 
 	private activeCount(): number {

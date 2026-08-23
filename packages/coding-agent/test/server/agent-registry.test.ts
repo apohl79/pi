@@ -99,4 +99,17 @@ describe("CodingAgentV2AgentRegistry", () => {
 		await registry.dispose();
 		expect(runtime.disposeCount).toBe(1);
 	});
+
+	test("disposes the parent lookup runtime after model inheritance", async () => {
+		const { registry, runtime } = fixture();
+		const agent = await registry.spawn({
+			sessionId: "parent",
+			parentPath: "root",
+			taskName: "worker",
+			taskMessage: "work",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		expect(agent.model).toEqual({ provider: "parent-provider", id: "parent-model" });
+		expect(runtime.disposeCount).toBe(1);
+	});
 });
