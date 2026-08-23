@@ -559,6 +559,24 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("replaces local state from an expired-cursor session snapshot", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		const recovered = snapshot({ revision: 300, eventSeq: 300, phase: "idle", thinkingLevel: "high" });
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 44,
+			revision: 300,
+			event: "session_snapshot",
+			payload: { reason: "event_cursor_expired", requestedEventSeq: 1, retainedFrom: 45, snapshot: recovered },
+		});
+		expect(session.snapshot).toEqual(recovered);
+		await session.dispose();
+	});
+
 	test("applies server agent updates without requiring a refresh", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });

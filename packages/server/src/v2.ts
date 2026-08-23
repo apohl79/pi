@@ -115,6 +115,7 @@ type V2ConnectionState = {
 };
 
 const DEFAULT_MAX_FRAME_LENGTH = 4 * 1024 * 1024;
+const MAX_EVENT_HISTORY = 256;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 
 function objectPayload(command: CommandV2): Record<string, unknown> {
@@ -271,6 +272,7 @@ export class PiServerV2 {
 		for (const event of stored.events) {
 			const history = this.eventHistory.get(event.sessionId) ?? [];
 			history.push(event);
+			if (history.length > MAX_EVENT_HISTORY) history.splice(0, history.length - MAX_EVENT_HISTORY);
 			this.eventHistory.set(event.sessionId, history);
 		}
 		this.restored = true;
@@ -358,17 +360,36 @@ export class PiServerV2 {
 			state.ready = true;
 			clearTimeout(state.handshakeTimeout);
 			await this.send(state, { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: state.id, snapshot });
-			if (message.lastEvent) {
-				const events = this.eventHistory.get(message.lastEvent.sessionId) ?? [];
-				await Promise.all(
-					events
-						.filter((event) => event.seq > message.lastEvent!.eventSeq)
-						.map((event) => this.send(state, event)),
-				);
-			}
+			if (message.lastEvent) await this.replayEvents(state, message.lastEvent);
 		} catch (error) {
 			await this.failProtocol(state, "internal_error", error instanceof Error ? error.message : String(error));
 		}
+	}
+
+	private async replayEvents(
+		state: V2ConnectionState,
+		cursor: { sessionId: string; eventSeq: number },
+	): Promise<void> {
+		const events = this.eventHistory.get(cursor.sessionId) ?? [];
+		const retainedFrom = events[0]?.seq;
+		if (retainedFrom !== undefined && cursor.eventSeq < retainedFrom - 1) {
+			const runtime = await this.service.openSession(cursor.sessionId);
+			const session = await this.snapshotForSession(cursor.sessionId, runtime);
+			await this.send(state, {
+				type: "event",
+				sessionId: cursor.sessionId,
+				seq: retainedFrom - 1,
+				revision: session.revision,
+				event: "session_snapshot",
+				payload: {
+					reason: "event_cursor_expired",
+					requestedEventSeq: cursor.eventSeq,
+					retainedFrom,
+					snapshot: toProtocolJsonValue(session),
+				},
+			});
+		}
+		await Promise.all(events.filter((event) => event.seq > cursor.eventSeq).map((event) => this.send(state, event)));
 	}
 
 	private async handleRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
@@ -1717,7 +1738,7 @@ export class PiServerV2 {
 			payload: toProtocolJsonValue(payload),
 		};
 		history.push(event);
-		if (history.length > 256) history.splice(0, history.length - 256);
+		if (history.length > MAX_EVENT_HISTORY) history.splice(0, history.length - MAX_EVENT_HISTORY);
 		this.eventHistory.set(sessionId, history);
 		await this.operationStore.appendEvent(event);
 		await Promise.all(

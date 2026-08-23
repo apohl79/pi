@@ -991,6 +991,12 @@ export class RemoteV2Session {
 			const snapshot = asRecord(event.payload)?.snapshot;
 			if (isSnapshot(snapshot)) this.#snapshot = structuredClone(snapshot);
 			this.#lifecycle = { status: "ready" };
+		} else if (event.event === "session_snapshot") {
+			const snapshot = asRecord(event.payload)?.snapshot;
+			if (isSnapshot(snapshot)) {
+				this.#snapshot = structuredClone(snapshot);
+				this.#lifecycle = snapshot.phase === "idle" ? { status: "ready" } : this.#lifecycle;
+			}
 		} else if (event.event === "plan_updated" && this.#snapshot) {
 			const plan = asRecord(event.payload)?.plan;
 			if (plan === null) {
