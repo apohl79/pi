@@ -362,7 +362,11 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	private async generateName(operationId: string): Promise<void> {
-		const namingModel = this.fastModelResolver?.(this.model) ?? this.fastModel ?? this.model;
+		const resolvedFastModel = this.fastModelResolver?.(this.model);
+		const namingModel =
+			(resolvedFastModel?.provider === this.model.provider ? resolvedFastModel : undefined) ??
+			(this.fastModel?.provider === this.model.provider ? this.fastModel : undefined) ??
+			this.model;
 		const initialSource = this.nameSource;
 		if (initialSource === "explicit") return;
 		const initialRevision = this.nameRevision;
