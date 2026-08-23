@@ -281,6 +281,7 @@ export class PiServerV2 {
 	private readonly disposedRuntimes = new WeakSet<PiSessionRuntimeV2>();
 	private readonly runtimeEventUnsubscribers = new WeakMap<PiSessionRuntimeV2, () => void>();
 	private diagnosticsDegradedNotified = false;
+	private lastEmittedStoreIntegrityHealthy: boolean | undefined;
 	private closing = false;
 	private started = false;
 	private restored = false;
@@ -1680,6 +1681,22 @@ export class PiServerV2 {
 			checks,
 			...(payload.repairSafe === true ? { repairSafe: true, repairs } : {}),
 		});
+		await this.broadcastStoreIntegrityChanged(checks.every((check) => check.ok));
+	}
+
+	private async broadcastStoreIntegrityChanged(healthy: boolean): Promise<void> {
+		if (this.lastEmittedStoreIntegrityHealthy === healthy) return;
+		const runtimes = new Map<string, PiSessionRuntimeV2>();
+		for (const connection of this.connections) {
+			for (const [sessionId, runtime] of connection.sessions) runtimes.set(sessionId, runtime);
+		}
+		if (runtimes.size === 0) return;
+		this.lastEmittedStoreIntegrityHealthy = healthy;
+		await Promise.all(
+			Array.from(runtimes, ([sessionId, runtime]) =>
+				this.broadcastEvent(sessionId, runtime, { healthy }, undefined, "store_integrity_changed"),
+			),
+		);
 	}
 
 	private async addMarketplace(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
