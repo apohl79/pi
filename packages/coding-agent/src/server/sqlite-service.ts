@@ -450,6 +450,7 @@ export async function createCodingAgentV2SqliteService(
 				? {}
 				: {
 						plans: {
+							read: async () => planRegistry.read(metadata.id),
 							update: async (input) => planRegistry.update(metadata.id, input),
 						},
 					}),

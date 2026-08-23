@@ -434,6 +434,7 @@ describe("coding-agent Harness construction", () => {
 			model: getModel("google", "gemini-2.5-flash"),
 			env,
 			plans: {
+				read: async () => undefined,
 				update: async (input) => {
 					updates.push(input);
 					return { version: 1, items: input.items };
