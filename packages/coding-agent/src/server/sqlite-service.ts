@@ -122,7 +122,10 @@ export async function createCodingAgentV2SqliteService(
 		const modelInstructions: CreateCodingAgentHarnessOptions["modelInstructions"] = options.harness?.modelInstructions
 			? {
 					...options.harness.modelInstructions,
-					scope: metadata.parentSessionId === undefined ? ("root" as const) : ("subagent" as const),
+					scope:
+						metadata.parentSessionId === undefined
+							? (options.harness.modelInstructions.scope ?? "root")
+							: "subagent",
 				}
 			: undefined;
 		const activePlugins = options.pluginRegistry
