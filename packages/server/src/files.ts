@@ -32,7 +32,7 @@ export interface V2FileReferenceOptions {
 	readonly maxReadBytes?: number;
 }
 
-type FileScope = "project" | "relative" | "server" | "home" | "absolute";
+type FileScope = "project" | "relative" | "server" | "local" | "home" | "absolute";
 
 const DEFAULT_MAX_READ_BYTES = 8 * 1024 * 1024;
 
@@ -48,9 +48,11 @@ function scopeOf(reference: string): FileScope {
 			? "absolute"
 			: reference.startsWith("server:")
 				? "server"
-				: reference.startsWith("project:")
-					? "project"
-					: "relative";
+				: reference.startsWith("local:")
+					? "local"
+					: reference.startsWith("project:")
+						? "project"
+						: "relative";
 }
 
 function projectReference(reference: string): string {
@@ -116,6 +118,7 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 		void sessionId;
 		const clean = cleanReference(prefix);
 		const scope = scopeOf(clean);
+		if (scope === "local") throw new Error("Client-local file references must be uploaded as blobs");
 		const logical =
 			scope === "project"
 				? projectReference(clean)
@@ -173,6 +176,7 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 
 	private async authorize(reference: string): Promise<string> {
 		const scope = scopeOf(reference);
+		if (scope === "local") throw new Error("Client-local file references must be uploaded as blobs");
 		const logical =
 			scope === "project"
 				? projectReference(reference)

@@ -51,6 +51,8 @@ describe("LocalV2FileReferenceService", () => {
 
 		await expect(service.resolve("session-1", "../secret.txt")).rejects.toThrow("escapes");
 		await expect(service.resolve("session-1", "link.txt")).rejects.toThrow("escapes");
+		await expect(service.resolve("session-1", "@local:secret.txt")).rejects.toThrow("uploaded as blobs");
+		await expect(service.complete("session-1", "@local:")).rejects.toThrow("uploaded as blobs");
 	});
 
 	test("allows explicit absolute references across the execution host when enabled", async () => {
