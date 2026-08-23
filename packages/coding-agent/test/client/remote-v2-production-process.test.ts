@@ -15,6 +15,53 @@ afterEach(async () => {
 });
 
 describe("production remote v2 processes", () => {
+	test("writes input, reads the cursor, and terminates a live process remotely", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-remote-process-control-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-remote-process-control-faux",
+			models: [{ id: "remote-process-control-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const socketPath = join(directory, "server.sock");
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath,
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		const client = new PiClientV2({ transportFactory: createUnixTransportFactory({ path: socketPath }) });
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
+			try {
+				const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+					"process.stdin.on('data', chunk => process.stdout.write(chunk)); process.stdin.resume();",
+				)}`;
+				const started = await session.startProcess(command);
+				await session.writeProcess(started.processId, "remote input");
+				let output = await session.readProcess(started.processId, 0);
+				for (let attempt = 0; attempt < 50 && output.output !== "remote input"; attempt++) {
+					await new Promise((resolve) => setTimeout(resolve, 10));
+					output = await session.readProcess(started.processId, output.cursor);
+				}
+				expect(output).toMatchObject({ output: "remote input", cursor: Buffer.byteLength("remote input") });
+				expect(await session.terminateProcess(started.processId)).toMatchObject({ state: "terminated" });
+				expect(await session.waitProcess(started.processId)).toMatchObject({ state: "terminated" });
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
 	test("runs and reads a server-owned process through the Unix client", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-remote-process-"));
 		directories.push(directory);
