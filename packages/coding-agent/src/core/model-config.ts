@@ -159,6 +159,9 @@ const CompactionConfigSchema = Type.Object({
 	reserveTokens: Type.Optional(Type.Number({ minimum: 0 })),
 	keepRecentTokens: Type.Optional(Type.Number({ minimum: 0 })),
 });
+const ModelRoleConfigSchema = Type.Object({
+	fast: Type.Optional(Type.String({ minLength: 1 })),
+});
 
 const ModelDefinitionSchema = Type.Object({
 	id: Type.String({ minLength: 1 }),
@@ -214,6 +217,7 @@ const ProviderConfigSchema = Type.Object({
 
 const ModelsConfigSchema = Type.Object({
 	providers: Type.Record(Type.String(), ProviderConfigSchema),
+	modelRoles: Type.Optional(Type.Record(Type.String(), ModelRoleConfigSchema)),
 });
 const validateModelsConfig = Compile(ModelsConfigSchema);
 
@@ -293,10 +297,16 @@ function validateCompactionPolicies(config: ModelsJson): string | undefined {
 /** One immutable load of models.json. */
 export class ModelConfig {
 	private readonly providers: ReadonlyMap<string, ModelsJsonProvider>;
+	private readonly modelRoles: ReadonlyMap<string, Readonly<{ fast?: string }>>;
 	private readonly error: string | undefined;
 
-	private constructor(providers: ReadonlyMap<string, ModelsJsonProvider>, error?: string) {
+	private constructor(
+		providers: ReadonlyMap<string, ModelsJsonProvider>,
+		modelRoles: ReadonlyMap<string, Readonly<{ fast?: string }>> = new Map(),
+		error?: string,
+	) {
 		this.providers = providers;
+		this.modelRoles = modelRoles;
 		this.error = error;
 	}
 
@@ -310,6 +320,7 @@ export class ModelConfig {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") return new ModelConfig(new Map());
 			return new ModelConfig(
 				new Map(),
+				new Map(),
 				`Failed to load models.json: ${error instanceof Error ? error.message : error}\n\nFile: ${path}`,
 			);
 		}
@@ -319,6 +330,7 @@ export class ModelConfig {
 			parsed = JSON.parse(stripJsonComments(stripBom(content)));
 		} catch (error) {
 			return new ModelConfig(
+				new Map(),
 				new Map(),
 				`Failed to parse models.json: ${error instanceof Error ? error.message : error}\n\nFile: ${path}`,
 			);
@@ -330,17 +342,20 @@ export class ModelConfig {
 					.Errors(parsed)
 					.map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
 					.join("\n") || "Unknown schema error";
-			return new ModelConfig(new Map(), `Invalid models.json schema:\n${errors}\n\nFile: ${path}`);
+			return new ModelConfig(new Map(), new Map(), `Invalid models.json schema:\n${errors}\n\nFile: ${path}`);
 		}
 
 		const config = parsed as ModelsJson;
 		const compactionError = validateCompactionPolicies(config);
-		if (compactionError !== undefined) return new ModelConfig(new Map(), compactionError);
+		if (compactionError !== undefined) return new ModelConfig(new Map(), new Map(), compactionError);
 		const providers = new Map<string, ModelsJsonProvider>();
 		for (const [providerId, provider] of Object.entries(config.providers)) {
 			providers.set(providerId, deepFreeze(structuredClone(provider)));
 		}
-		return new ModelConfig(providers);
+		const modelRoles = new Map<string, Readonly<{ fast?: string }>>();
+		for (const [providerId, roles] of Object.entries(config.modelRoles ?? {}))
+			modelRoles.set(providerId, deepFreeze(structuredClone(roles)));
+		return new ModelConfig(providers, modelRoles);
 	}
 
 	getProvider(providerId: string): ModelsJsonProvider | undefined {
@@ -358,6 +373,10 @@ export class ModelConfig {
 		const override = provider.modelOverrides?.[modelId]?.compaction;
 		if (!model && !override) return undefined;
 		return { ...model, ...override };
+	}
+
+	getModelRole(providerId: string, role: "fast"): string | undefined {
+		return this.modelRoles.get(providerId)?.[role];
 	}
 
 	getError(): string | undefined {

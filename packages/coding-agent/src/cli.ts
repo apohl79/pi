@@ -68,6 +68,7 @@ async function runCli(): Promise<void> {
 					: { modelOverrides: { [`${selectedModel.provider}/${selectedModel.id}`]: override } }),
 			};
 		},
+		fastModelResolver: (selectedModel) => modelRuntime.getModelRole(selectedModel.provider, "fast"),
 		socketPath: join(agentDir, "pi.sock"),
 		write: (value) => console.log(JSON.stringify(value)),
 		writeText: (value) => process.stdout.write(`${value}\n`),

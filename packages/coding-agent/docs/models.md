@@ -8,6 +8,7 @@ Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.pi/ag
 - [Full Example](#full-example)
 - [Supported APIs](#supported-apis)
 - [Provider Configuration](#provider-configuration)
+- [Model Roles](#model-roles)
 - [Model Configuration](#model-configuration)
 - [Overriding Built-in Providers](#overriding-built-in-providers)
 - [Per-model Overrides](#per-model-overrides)
@@ -141,6 +142,21 @@ Set `api` at provider level (default for all models) or model level (override pe
 | `authHeader` | Set `true` to add `Authorization: Bearer <apiKey>` automatically |
 | `models` | Array of model configurations |
 | `modelOverrides` | Per-model overrides for built-in or extension-registered models on this provider |
+
+## Model Roles
+
+Top-level `modelRoles` assigns provider-local utility models without changing the active session model. The daemon uses
+the `fast` role for automatic session naming and never resolves that role across providers:
+
+```json
+{
+  "modelRoles": {
+    "ollama": { "fast": "qwen2.5-coder:7b" }
+  }
+}
+```
+
+If the configured role is absent or unavailable, automatic naming falls back to the session model.
 
 For providers with `models`, non-built-in provider configs need `baseUrl` and an `api` value at either provider or model level. `apiKey` is not required to load the file: models become available when auth is configured through `/login`/`auth.json`, CLI `--api-key`, or provider `apiKey`. If no auth is configured, the models load but stay unavailable in `/model` and `--list-models`.
 
