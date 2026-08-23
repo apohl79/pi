@@ -245,6 +245,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	private activeOperation: OperationSummary | undefined;
 
 	private readonly fastModel: Model<string> | undefined;
+	private autoNameLoaded = false;
 
 	constructor(
 		definition: CodingAgentV2SessionDefinition,
@@ -344,6 +345,17 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		this.nameRevision += 1;
 	}
 
+	private async ensureAutoNameLoaded(): Promise<void> {
+		if (this.autoNameLoaded) return;
+		const entries = await this.definition.harness.session.findEntriesOnBranch({ order: "newestFirst" });
+		const setting = entries.find(
+			(entry) =>
+				entry.type === "custom" && entry.customType === "auto_name_setting" && typeof entry.data === "boolean",
+		);
+		if (setting?.type === "custom" && typeof setting.data === "boolean") this.autoName = setting.data;
+		this.autoNameLoaded = true;
+	}
+
 	private async recordGoalUsage(beforeTokens: number): Promise<void> {
 		if (!this.definition.goals) return;
 		if (!(await this.definition.goals.read())) return;
@@ -389,6 +401,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async snapshot(): Promise<SessionSnapshotV2> {
+		await this.ensureAutoNameLoaded();
 		const [
 			leafId,
 			thinkingLevel,
@@ -515,6 +528,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async run(_operationId: string, command: CommandV2): Promise<void> {
+		await this.ensureAutoNameLoaded();
 		const input = commandInput(command);
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
@@ -637,6 +651,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			} else if (runCommand === "session/name/auto/set") {
 				if (typeof payload.enabled !== "boolean") throw new Error("session/name/auto/set requires enabled");
 				this.autoName = payload.enabled;
+				await harness.session.appendCustomEntry("auto_name_setting", payload.enabled);
 			}
 		} catch (error) {
 			if (!goalUsageRecorded) {
