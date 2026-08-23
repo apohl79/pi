@@ -224,11 +224,9 @@ describe("production daemon plugin hook execution", () => {
 							label: "Failing tool",
 							description: "Deterministically fails for the diagnostic scenario",
 							parameters: Type.Object({}),
-							execute: async () => ({
-								content: [{ type: "text", text: "tool failure" }],
-								details: {},
-								isError: true,
-							}),
+							execute: async () => {
+								throw new Error("tool failure");
+							},
 						},
 					],
 					activeToolNames: ["failing_tool"],
