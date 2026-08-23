@@ -778,10 +778,19 @@ export class PiServerV2 {
 				return [key, value];
 			}),
 		);
+		const responded = await this.inputs.respond(requestId, answers);
 		await this.sendResponse(state, id, {
 			command: command.command,
-			request: await this.inputs.respond(requestId, answers),
+			request: responded,
 		});
+		const runtime = state.sessions.get(request.sessionId);
+		if (runtime !== undefined && (await runtime.snapshot()).phase === "idle") {
+			const operationId = randomUUID();
+			await runtime.accept(operationId);
+			void runtime
+				.run(operationId, { command: "turn/resume", sessionId: request.sessionId, payload: {} })
+				.catch(() => undefined);
+		}
 	}
 
 	private async cancelInputRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
