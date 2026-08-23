@@ -1,5 +1,5 @@
 import type { PlanItem, ThinkingLevel } from "@earendil-works/pi-protocol";
-import type { Component } from "@earendil-works/pi-tui";
+import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
 import type { RemoteV2SessionAttachment } from "./remote-v2-selector.ts";
 import type { RemoteV2FileCompletion, RemoteV2PromptContent } from "./remote-v2-session.ts";
 
@@ -371,7 +371,8 @@ export class RemoteV2InteractiveAttachment implements Component {
 
 	render(width: number): string[] {
 		this.#assertActive();
-		return [...this.view.render(width), `${this.#status ? `${this.#status} ` : ""}> ${this.#input}`];
+		const prompt = `${this.#status ? `${this.#status} ` : ""}> ${this.#input}`;
+		return [...this.view.render(width), truncateToWidth(prompt, Math.max(1, width), "")];
 	}
 
 	invalidate(): void {
