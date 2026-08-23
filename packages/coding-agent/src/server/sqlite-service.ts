@@ -665,6 +665,7 @@ export async function createCodingAgentV2SqliteService(
 	return createCodingAgentV2ServiceFromStore(options.models, store, {
 		...(options.fastModel === undefined ? {} : { fastModel: options.fastModel }),
 		...(options.fastModelResolver === undefined ? {} : { fastModelResolver: options.fastModelResolver }),
+		awaitAutomaticNaming: false,
 	});
 }
 

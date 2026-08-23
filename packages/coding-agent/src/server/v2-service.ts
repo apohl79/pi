@@ -150,6 +150,8 @@ export interface CodingAgentV2Service {
 export interface CodingAgentV2ServiceOptions {
 	/** Provider-local fast model used only for side-band automatic naming. */
 	fastModel?: Model<string>;
+	/** Keep direct in-memory adapter tests deterministic without blocking production daemon turns. */
+	awaitAutomaticNaming?: boolean;
 	/** Resolve a provider-local role without changing the session's active model. */
 	fastModelResolver?: (model: Model<string>) => Model<string> | undefined;
 	/** Durable owner creates a fully initialized session definition. */
@@ -190,6 +192,7 @@ export interface CodingAgentV2Runtime {
 }
 
 function modelMetadata(model: Model<string>): ModelMetadata {
+	const wireCost = (value: number): number => (Number.isFinite(value) && value >= 0 ? value : 0);
 	return {
 		provider: model.provider,
 		id: model.id,
@@ -199,7 +202,12 @@ function modelMetadata(model: Model<string>): ModelMetadata {
 		input: model.input,
 		contextWindow: model.contextWindow,
 		maxTokens: model.maxTokens,
-		cost: model.cost,
+		cost: {
+			input: wireCost(model.cost.input),
+			output: wireCost(model.cost.output),
+			cacheRead: wireCost(model.cost.cacheRead),
+			cacheWrite: wireCost(model.cost.cacheWrite),
+		},
 		supportedThinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
 		authenticated: true,
 	};
@@ -361,8 +369,10 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 
 	private readonly fastModel: Model<string> | undefined;
 	private readonly fastModelResolver: ((model: Model<string>) => Model<string> | undefined) | undefined;
+	private readonly awaitAutomaticNaming: boolean;
 	private autoNameLoaded = false;
 	private nameStateLoaded = false;
+	private nameGeneration: Promise<void> | undefined;
 
 	constructor(
 		definition: CodingAgentV2SessionDefinition,
@@ -398,6 +408,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		];
 		this.fastModel = options?.fastModel;
 		this.fastModelResolver = options?.fastModelResolver;
+		this.awaitAutomaticNaming = options?.awaitAutomaticNaming ?? true;
 	}
 
 	onEvent(listener: (event: PiSessionRuntimeEventV2) => void): () => void {
@@ -593,6 +604,15 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			source: this.nameSource ?? null,
 			revision: this.nameRevision,
 		});
+	}
+
+	private scheduleNameGeneration(operationId: string): void {
+		if (this.nameGeneration !== undefined) return;
+		this.nameGeneration = this.generateName(operationId)
+			.catch(() => undefined)
+			.finally(() => {
+				this.nameGeneration = undefined;
+			});
 	}
 
 	private async recordCurrentGoalUsage(beforeTokens: number): Promise<void> {
@@ -1138,7 +1158,10 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				terminalSeq: this.eventSeq,
 			};
 		}
-		if (generateNameAfterTurn) await this.generateName(_operationId);
+		if (generateNameAfterTurn) {
+			if (this.awaitAutomaticNaming) await this.generateName(_operationId);
+			else this.scheduleNameGeneration(_operationId);
+		}
 		if (runCommand === "turn/start" || runCommand === "turn/resume" || runCommand === "turn/followUp")
 			void this.definition.goalContinuation?.schedule().catch(() => undefined);
 		this.activeOperationId = undefined;
@@ -1254,7 +1277,7 @@ export function createCodingAgentV2Service(
 export async function createCodingAgentV2ServiceFromStore(
 	models: Models,
 	store: CodingAgentV2SessionStore,
-	options?: Pick<CodingAgentV2ServiceOptions, "fastModel" | "fastModelResolver">,
+	options?: Pick<CodingAgentV2ServiceOptions, "fastModel" | "fastModelResolver" | "awaitAutomaticNaming">,
 ): Promise<CodingAgentV2Service> {
 	const initialSessions = await store.list();
 	return createCodingAgentV2Service(models, [], {
