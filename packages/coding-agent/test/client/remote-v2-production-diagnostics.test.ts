@@ -64,7 +64,7 @@ describe("production remote v2 diagnostics", () => {
 	});
 
 	test("retains a provider failure in the bundle after daemon recreation", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-remote-diagnostics-provider-failure-"));
+		const directory = await mkdtemp(join("/tmp", "pi-rdp-"));
 		directories.push(directory);
 		const models = createModels();
 		const faux = fauxProvider({
@@ -181,11 +181,12 @@ describe("production remote v2 diagnostics", () => {
 					manifest: { clientInstanceId: "remote-client-evidence" },
 					records: expect.arrayContaining([expect.objectContaining({ event: "client.connected" })]),
 				});
-				expect((bundle.manifest as { unavailable?: readonly string[] }).unavailable).not.toContain(
+				expect((bundle.manifest as { unavailable?: readonly string[] }).unavailable ?? []).not.toContain(
 					"client-diagnostic-spool",
 				);
 				expect(await session.diagnosticsVerify(bundle)).toMatchObject({ valid: true });
 			} finally {
+				if (!client.connected) await client.connect();
 				await session.dispose();
 			}
 		} finally {
