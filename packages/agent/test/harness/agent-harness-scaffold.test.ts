@@ -282,6 +282,24 @@ describe("AgentHarness v2 scaffold", () => {
 		await reopened.harness.close();
 	});
 
+	it("persists compaction settings across harness recreation", async () => {
+		const session = createSession("compaction-settings");
+		const harness = await createHarness(session);
+		await harness.setCompactionSettings({ enabled: false, reserveTokens: 123, keepRecentTokens: 456 });
+		await harness.close();
+		const reopened = await AgentHarness.create({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+		});
+		expect(await reopened.harness.getCompactionSettings()).toMatchObject({
+			enabled: false,
+			reserveTokens: 123,
+			keepRecentTokens: 456,
+		});
+		await reopened.harness.close();
+	});
+
 	it("runs registered lifecycle hooks and emits operation events", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
