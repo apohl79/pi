@@ -1493,6 +1493,7 @@ export class PiServerV2 {
 			throw new Error("diagnostics/export decryptContent must be a boolean");
 		const sessionId = payload.sessionId === undefined ? undefined : payload.sessionId;
 		const operationId = payload.operationId === undefined ? undefined : payload.operationId;
+		await this.broadcastBundleProgress(sessionId, "started", 0, 1);
 		const allEvents = await this.diagnosticEvents();
 		const events = allEvents.filter(
 			(event) =>
@@ -1567,6 +1568,26 @@ export class PiServerV2 {
 			...(decryptedCapsules === undefined ? {} : { decryptedCapsules }),
 			...(integrity === undefined ? {} : { integrity }),
 		});
+		await this.broadcastBundleProgress(sessionId, "completed", 1, 1);
+	}
+
+	private async broadcastBundleProgress(
+		sessionId: string | undefined,
+		phase: "started" | "completed",
+		completed: number,
+		total: number,
+	): Promise<void> {
+		const runtimes = new Map<string, PiSessionRuntimeV2>();
+		for (const connection of this.connections) {
+			for (const [attachedSessionId, runtime] of connection.sessions) {
+				if (sessionId === undefined || sessionId === attachedSessionId) runtimes.set(attachedSessionId, runtime);
+			}
+		}
+		await Promise.all(
+			Array.from(runtimes, ([attachedSessionId, runtime]) =>
+				this.broadcastEvent(attachedSessionId, runtime, { phase, completed, total }, undefined, "bundle_progress"),
+			),
+		);
 	}
 
 	private async diagnosticProjections(
