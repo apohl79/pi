@@ -12,7 +12,7 @@ import {
 	type ShellExecOptions,
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { createModels } from "@earendil-works/pi-ai";
+import { createModels, fauxProvider } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
 import { InMemoryV2ProcessRegistry } from "@earendil-works/pi-server";
 import { Type } from "typebox";
@@ -467,6 +467,51 @@ describe("coding-agent Harness construction", () => {
 		} finally {
 			await created.harness.close();
 			await env.cleanup();
+		}
+	});
+
+	test("keeps the child-agent tool contract available for three configured providers", async () => {
+		const models = createModels();
+		const providers = [
+			fauxProvider({
+				provider: "coding-agent-harness-agent-tools-openai-faux",
+				models: [{ id: "openai-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			}),
+			fauxProvider({
+				provider: "coding-agent-harness-agent-tools-anthropic-faux",
+				models: [{ id: "anthropic-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			}),
+			fauxProvider({
+				provider: "coding-agent-harness-agent-tools-google-faux",
+				models: [{ id: "google-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			}),
+		];
+		for (const provider of providers) models.setProvider(provider.provider);
+		const expected = ["spawn_agent", "list_agents", "wait_agent", "send_message", "followup_task", "interrupt_agent"];
+
+		for (const [index, provider] of providers.entries()) {
+			const session = new Session(new InMemorySessionStorage({ id: `agent-tools-${index}`, createdAt: 1 }));
+			const env = new NodeExecutionEnv({ cwd: "/workspace" });
+			const created = await createCodingAgentHarness({
+				session,
+				models,
+				model: provider.getModel()!,
+				env,
+				agents: {
+					spawn: async (request) => ({ id: "agent-1", ...request }),
+					list: async () => [],
+					wait: async (agentId) => ({ id: agentId, state: "complete" }),
+					message: async () => {},
+					followUp: async (agentId) => ({ id: agentId, state: "running" }),
+					interrupt: async (agentId) => ({ id: agentId, state: "interrupted" }),
+				},
+			});
+			try {
+				expect((await created.harness.getTools()).map((tool) => tool.name).slice(-6)).toEqual(expected);
+			} finally {
+				await created.harness.close();
+				await env.cleanup();
+			}
 		}
 	});
 
