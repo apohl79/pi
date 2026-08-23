@@ -36,6 +36,7 @@ const requiredFiles = [
 	"packages/coding-agent/test/server/daemon-rollback-invariants.test.ts",
 	"packages/coding-agent/test/client/remote-v2-production-statusline.test.ts",
 	"packages/coding-agent/test/client/remote-v2-production-usage.test.ts",
+	"packages/coding-agent/test/client/remote-v2-production-web-image.test.ts",
 ];
 
 const requiredPatterns = [
@@ -69,6 +70,10 @@ const requiredPatterns = [
 	["storage publication-ordering evidence", "packages/session-backends/sqlite-node/test/repository.test.ts", "does not publish connection state when an append transaction fails"],
 	["in-memory acceptance evidence", "packages/server/test/v2-conformance.test.ts", "connectInMemoryTestClientV2"],
 	["faux-provider integration evidence", "packages/coding-agent/test/server/daemon-three-provider-routing.test.ts", "fauxProvider"],
+	["plugin lifecycle evidence", "packages/coding-agent/test/server/daemon-plugin-e2e.test.ts", "exercises every supported resource"],
+	["web tool evidence", "packages/coding-agent/test/server/daemon-web-tool.test.ts", "routes a model web tool call"],
+	["image tool evidence", "packages/coding-agent/test/server/daemon-generate-image-tool.test.ts", "routes a model image-generation call"],
+	["remote web and image evidence", "packages/coding-agent/test/client/remote-v2-production-web-image.test.ts", "routes web and image requests"],
 ];
 
 export function auditForkSpec() {
