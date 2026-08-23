@@ -55,6 +55,7 @@ function snapshot(overrides: Partial<SessionSnapshotV2> = {}): SessionSnapshotV2
 
 function memoryTransport() {
 	let handlers: ByteTransportHandlers | undefined;
+	let failNextCommand: CommandV2["command"] | undefined;
 	const sent: ServerMessageV2[] = [];
 	const requests: CommandV2[] = [];
 	const transport: ByteTransport = {
@@ -79,6 +80,18 @@ function memoryTransport() {
 				return;
 			}
 			requests.push(message.request);
+			if (message.request.command === failNextCommand) {
+				failNextCommand = undefined;
+				const response: ServerMessageV2 = {
+					type: "response",
+					id: message.id,
+					ok: false,
+					error: { code: "invalid_request", message: "forced attach failure" },
+				};
+				sent.push(response);
+				handlers?.onData(encodeServerMessageV2(response));
+				return;
+			}
 			if (message.request.command === "operation/read") {
 				const response: ServerMessageV2 = {
 					type: "response",
@@ -431,6 +444,9 @@ function memoryTransport() {
 			handlers = next;
 			return transport;
 		},
+		failNext(command: CommandV2["command"]) {
+			failNextCommand = command;
+		},
 		sent,
 		requests,
 		deliver(message: ServerMessageV2) {
@@ -467,6 +483,28 @@ describe("RemoteV2Session", () => {
 			payload: { state: "complete", snapshot: snapshot({ revision: 3, eventSeq: 3, phase: "idle" }) },
 		});
 		expect(session.state).toMatchObject({ lifecycle: { status: "ready" }, snapshot: { revision: 3 } });
+		await session.dispose();
+	});
+
+	test("preserves the current attachment when replacement refresh fails", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		pair.failNext("session/read");
+
+		await expect(session.attach("session-2")).rejects.toThrow("invalid_request: forced attach failure");
+		expect(session.id).toBe("session-1");
+		expect(session.state.lifecycle).toEqual({ status: "ready" });
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 4,
+			revision: 4,
+			event: "usage_updated",
+			payload: {},
+		});
+		expect(session.state.lastEvent).toMatchObject({ sessionId: "session-1", event: "usage_updated" });
 		await session.dispose();
 	});
 

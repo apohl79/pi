@@ -264,10 +264,24 @@ export class RemoteV2Session {
 	async attach(sessionId: string): Promise<void> {
 		this.#assertNotDisposed();
 		if (this.#handle?.sessionId === sessionId && this.#lifecycle.status === "ready") return;
-		this.#unsubscribe?.();
-		this.#handle = await this.#client.openSession(sessionId, this.#mode);
-		this.#unsubscribe = this.#handle.onEvent((event) => this.#receiveEvent(event));
-		await this.refresh();
+		const previousHandle = this.#handle;
+		const previousUnsubscribe = this.#unsubscribe;
+		const nextHandle = await this.#client.openSession(sessionId, this.#mode);
+		let nextUnsubscribe: (() => void) | undefined;
+		try {
+			nextUnsubscribe = nextHandle.onEvent((event) => this.#receiveEvent(event));
+			const nextSnapshot = await nextHandle.read();
+			if (previousHandle !== undefined) await previousHandle.detach();
+			previousUnsubscribe?.();
+			this.#handle = nextHandle;
+			this.#unsubscribe = nextUnsubscribe;
+			this.#snapshot = structuredClone(nextSnapshot);
+			this.#lastEvent = undefined;
+		} catch (error) {
+			nextUnsubscribe?.();
+			await nextHandle.detach().catch(() => {});
+			throw error;
+		}
 		this.#lifecycle = { status: "ready" };
 		this.#emit();
 	}
