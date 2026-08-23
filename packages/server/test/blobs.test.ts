@@ -12,6 +12,7 @@ describe("InMemoryV2BlobStore", () => {
 
 		expect(second.digest).toBe(first.digest);
 		expect(await store.stat(first.digest)).toEqual({ digest: first.digest, mimeType: "text/plain", size: 5 });
+		expect(await store.list()).toEqual([{ digest: first.digest, mimeType: "text/plain", size: 5 }]);
 		expect(new TextDecoder().decode(await store.read(first.digest))).toBe("hello");
 		await expect(store.put(new TextEncoder().encode("hello"), "text/plain; charset=utf-8")).rejects.toThrow(
 			"MIME type",
@@ -29,6 +30,7 @@ describe("FileV2BlobStore", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-blobs-integrity-"));
 		const store = new FileV2BlobStore(directory);
 		const stat = await store.put(new TextEncoder().encode("hello"), "text/plain");
+		expect(await store.list()).toEqual([{ digest: stat.digest, mimeType: "text/plain", size: 5 }]);
 		expect(await store.verify()).toMatchObject({ ok: true, blobs: 1, bytes: 5, errors: [] });
 		await writeFile(join(directory, `${stat.digest}.blob`), "corrupt");
 		await expect(store.read(stat.digest)).rejects.toThrow("content digest mismatch");

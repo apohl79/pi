@@ -21,6 +21,7 @@ import { InMemoryV2AppRegistry, type V2App, type V2AppRegistry } from "./apps.ts
 import { InMemoryV2BlobStore, type V2BlobStore } from "./blobs.ts";
 import type { ByteConnection, ByteConnectionHandler } from "./connection.ts";
 import {
+	type DiagnosticBundleProjections,
 	type DiagnosticCapsule,
 	type DiagnosticContentStore,
 	type DiagnosticIntegrityProvider,
@@ -39,7 +40,12 @@ import { InMemoryV2PluginRegistry, type V2PluginRegistry } from "./plugins.ts";
 import { InMemoryV2ProcessRegistry, type V2ProcessRegistry } from "./processes.ts";
 import { toProtocolJsonValue } from "./protocol.ts";
 import type { MaybePromise } from "./types.ts";
-import { InMemoryV2UsageLedger, type V2UsageFilter, type V2UsageLedger } from "./usage-ledger.ts";
+import {
+	aggregateV2UsageEntries,
+	InMemoryV2UsageLedger,
+	type V2UsageFilter,
+	type V2UsageLedger,
+} from "./usage-ledger.ts";
 import { UnavailableV2WebService, type V2WebOperation, type V2WebService } from "./web.ts";
 
 function fileReferencePayload(file: Awaited<ReturnType<V2FileReferenceService["resolve"]>>): Record<string, unknown> {
@@ -967,10 +973,12 @@ export class PiServerV2 {
 				? allCapsules
 				: allCapsules.filter((capsule) => capsuleEventIds.has(capsule.eventId));
 		const integrity = this.integrity === undefined ? undefined : await this.integrity();
+		const projections = await this.diagnosticProjections(sessionId, operationId);
 		const decryptedCapsules =
 			payload.decryptContent === true ? await this.diagnosticCapsulesForDecryption(capsules) : undefined;
 		const serializedEvents = JSON.stringify(events);
 		const serializedCapsules = JSON.stringify(capsules);
+		const serializedProjections = JSON.stringify(projections);
 		const manifest = {
 			schemaVersion: 1,
 			eventCount: events.length,
@@ -978,6 +986,7 @@ export class PiServerV2 {
 			lastSeq: events.at(-1)?.seq ?? 0,
 			eventsSha256: createHash("sha256").update(serializedEvents).digest("hex"),
 			capsulesSha256: createHash("sha256").update(serializedCapsules).digest("hex"),
+			projectionsSha256: createHash("sha256").update(serializedProjections).digest("hex"),
 			...(sessionId === undefined && operationId === undefined
 				? {}
 				: {
@@ -996,6 +1005,7 @@ export class PiServerV2 {
 			bundle: {
 				manifest,
 				runtimeManifest: this.runtimeManifest,
+				projections,
 				...(integrity === undefined ? {} : { integrity }),
 				...(state.clientDiagnostics === undefined ? {} : { clientDiagnostics: state.clientDiagnostics }),
 				events,
@@ -1005,6 +1015,42 @@ export class PiServerV2 {
 			...(decryptedCapsules === undefined ? {} : { decryptedCapsules }),
 			...(integrity === undefined ? {} : { integrity }),
 		});
+	}
+
+	private async diagnosticProjections(
+		sessionId: string | undefined,
+		operationId: string | undefined,
+	): Promise<DiagnosticBundleProjections> {
+		const [allSessions, operationState, allUsageEntries, marketplaces, plugins, blobs] = await Promise.all([
+			this.service.listSessions(),
+			this.operationStore.load(),
+			this.usage.read(sessionId === undefined ? {} : { sessionId }),
+			this.plugins.listMarketplaces(),
+			this.plugins.listPlugins(),
+			this.blobs.list(),
+		]);
+		const sessions =
+			sessionId === undefined ? allSessions : allSessions.filter((session) => session.id === sessionId);
+		const operations = operationState.operations.filter(
+			(operation) =>
+				(sessionId === undefined || operation.sessionId === sessionId) &&
+				(operationId === undefined || operation.operationId === operationId),
+		);
+		const usageEntries =
+			operationId === undefined
+				? allUsageEntries
+				: allUsageEntries.filter((entry) => entry.operationId === operationId);
+		const usageAggregate =
+			operationId === undefined
+				? await this.usage.aggregate(sessionId === undefined ? {} : { sessionId })
+				: aggregateV2UsageEntries(usageEntries);
+		return {
+			sessions: sessions.map((session) => toProtocolJsonValue(session)),
+			operations: operations.map((operation) => toProtocolJsonValue(operation)),
+			usage: toProtocolJsonValue({ aggregate: usageAggregate, entries: usageEntries }),
+			plugins: toProtocolJsonValue({ marketplaces, plugins }),
+			blobs: blobs.map((blob) => toProtocolJsonValue(blob)),
+		};
 	}
 
 	private async diagnosticsVerify(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

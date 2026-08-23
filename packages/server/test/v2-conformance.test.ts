@@ -328,7 +328,16 @@ describe("PiServer v2 operation acceptance", () => {
 			result: {
 				format: "json",
 				events: [{ seq: 1 }, { seq: 2 }, { seq: 3 }],
-				bundle: { manifest: { unavailable: ["client-diagnostic-spool"] } },
+				bundle: {
+					manifest: { unavailable: ["client-diagnostic-spool"], projectionsSha256: expect.any(String) },
+					projections: {
+						sessions: [],
+						operations: [],
+						usage: { aggregate: { responses: 0 }, entries: [] },
+						plugins: { marketplaces: [], plugins: [] },
+						blobs: [],
+					},
+				},
 			},
 		});
 		expect(scopedExport).toMatchObject({

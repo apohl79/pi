@@ -121,6 +121,10 @@ function aggregateEntries(entries: readonly V2UsageLedgerEntry[]): V2UsageAggreg
 	};
 }
 
+export function aggregateV2UsageEntries(entries: readonly V2UsageLedgerEntry[]): V2UsageAggregate {
+	return aggregateEntries(entries);
+}
+
 export class InMemoryV2UsageLedger implements V2UsageLedger {
 	private readonly entries = new Map<string, V2UsageLedgerEntry>();
 
