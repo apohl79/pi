@@ -165,4 +165,39 @@ describe("PiServerV2 replay expiry", () => {
 		expect(sent.filter((message) => message.type === "event").map((message) => message.seq)).toEqual([2, 3]);
 		await server.close();
 	});
+
+	test("serializes concurrent live event delivery per connection", async () => {
+		const server = new PiServerV2(new Service(), { listeners: [] });
+		const sent: ServerMessageV2[] = [];
+		const runtime = new Runtime();
+		const state = {
+			connection: {
+				closed: false,
+				send: async (chunk: Uint8Array) => {
+					const message = parseServerMessageV2(decodeCbor(chunk.subarray(4)));
+					if (message.type === "event" && message.seq === 301)
+						await new Promise((resolve) => setTimeout(resolve, 20));
+					sent.push(message);
+				},
+				close: async () => {},
+			},
+			sessions: new Map([[snapshot.id, runtime]]),
+		};
+		const internals = server as unknown as {
+			connections: Set<typeof state>;
+			broadcastEvent: (
+				sessionId: string,
+				runtime: PiSessionRuntimeV2,
+				payload: Record<string, unknown>,
+				operationId: string | undefined,
+				eventName: EventEnvelopeV2["event"],
+			) => Promise<void>;
+		};
+		internals.connections.add(state);
+		await Promise.all([
+			internals.broadcastEvent(snapshot.id, runtime, { seq: 1 }, undefined, "usage_updated"),
+			internals.broadcastEvent(snapshot.id, runtime, { seq: 2 }, undefined, "usage_updated"),
+		]);
+		expect(sent.filter((message) => message.type === "event").map((message) => message.seq)).toEqual([301, 302]);
+	});
 });

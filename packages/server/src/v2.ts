@@ -182,6 +182,7 @@ export class PiServerV2 {
 	private readonly controls = new Map<string, string>();
 	private readonly runtimes = new Set<PiSessionRuntimeV2>();
 	private readonly eventHistory = new Map<string, EventEnvelopeV2[]>();
+	private readonly eventDeliveryTails = new WeakMap<V2ConnectionState, Promise<void>>();
 	private readonly agentWatches = new Set<string>();
 	private readonly operations = new Map<string, OperationRecordV2>();
 	private readonly pendingRequests = new Map<string, CommandV2>();
@@ -1746,7 +1747,7 @@ export class PiServerV2 {
 		await Promise.all(
 			Array.from(this.connections)
 				.filter((connection) => connection.sessions.get(sessionId) === runtime)
-				.map((connection) => this.send(connection, event)),
+				.map((connection) => this.sendEvent(connection, event)),
 		);
 	}
 
@@ -1803,6 +1804,13 @@ export class PiServerV2 {
 
 	private send(state: V2ConnectionState, message: ServerMessageV2): Promise<void> {
 		return state.connection.send(encodeServerMessageV2(message));
+	}
+
+	private sendEvent(state: V2ConnectionState, event: ServerMessageV2): Promise<void> {
+		const previous = this.eventDeliveryTails.get(state) ?? Promise.resolve();
+		const next = previous.catch(() => {}).then(() => this.send(state, event));
+		this.eventDeliveryTails.set(state, next);
+		return next;
 	}
 
 	private async failProtocol(state: V2ConnectionState, code: string, message: string): Promise<void> {
