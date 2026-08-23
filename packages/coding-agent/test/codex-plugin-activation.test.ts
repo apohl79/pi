@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -102,5 +103,43 @@ describe("CodexPluginActivationStore", () => {
 				manifest: source.manifest,
 			}),
 		).rejects.toMatchObject({ code: "invalid_manifest" });
+	});
+
+	test("rolls back a failed first activation and removes staged state", async () => {
+		const source = await createPlugin("1.0.0");
+		const cache = await mkdtemp(join(tmpdir(), "pi-codex-activation-rollback-"));
+		const store = new CodexPluginActivationStore(cache);
+		const activation = await store.activate({
+			id: "reviewer@local",
+			version: source.manifest.version,
+			sourceRoot: source.root,
+			manifest: source.manifest,
+		});
+		await store.rollback(activation);
+		await expect(access(activation.root)).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(access(join(cache, "anything"))).rejects.toMatchObject({ code: "ENOENT" });
+	});
+
+	test("restores the previous pointer when an upgrade cannot be persisted", async () => {
+		const first = await createPlugin("1.0.0");
+		const second = await createPlugin("2.0.0");
+		const cache = await mkdtemp(join(tmpdir(), "pi-codex-activation-rollback-upgrade-"));
+		const store = new CodexPluginActivationStore(cache);
+		await store.activate({
+			id: "reviewer@local",
+			version: "1.0.0",
+			sourceRoot: first.root,
+			manifest: first.manifest,
+		});
+		const upgrade = await store.activate({
+			id: "reviewer@local",
+			version: "2.0.0",
+			sourceRoot: second.root,
+			manifest: second.manifest,
+		});
+		await store.rollback(upgrade);
+		const key = createHash("sha256").update("reviewer@local").digest("hex");
+		expect(JSON.parse(await readFile(join(cache, key, "active.json"), "utf8"))).toEqual({ version: "1.0.0" });
+		await expect(access(upgrade.root)).rejects.toMatchObject({ code: "ENOENT" });
 	});
 });

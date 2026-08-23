@@ -39,7 +39,7 @@ export class ActivatingV2PluginRegistry implements V2PluginRegistry {
 		return this.delegate.readPlugin(id);
 	}
 	uninstallPlugin(id: string): Promise<void> {
-		return this.delegate.uninstallPlugin(id);
+		return this.delegate.uninstallPlugin(id).then(() => this.activation.remove(id));
 	}
 	setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin> {
 		return this.delegate.setEnabled(id, enabled, scope);
@@ -63,7 +63,12 @@ export class ActivatingV2PluginRegistry implements V2PluginRegistry {
 			input.root,
 			input.manifest,
 		);
-		return this.delegate.installPlugin({ ...input, root: activation.root });
+		try {
+			return await this.delegate.installPlugin({ ...input, root: activation.root });
+		} catch (error) {
+			await this.activation.rollback(activation);
+			throw error;
+		}
 	}
 
 	async upgradePlugin(
@@ -74,7 +79,12 @@ export class ActivatingV2PluginRegistry implements V2PluginRegistry {
 	): Promise<V2Plugin> {
 		if (manifest === undefined || root === undefined) return this.delegate.upgradePlugin(id, version, manifest, root);
 		const activation = await this.activate(id, version, root, manifest);
-		return this.delegate.upgradePlugin(id, version, manifest, activation.root);
+		try {
+			return await this.delegate.upgradePlugin(id, version, manifest, activation.root);
+		} catch (error) {
+			await this.activation.rollback(activation);
+			throw error;
+		}
 	}
 
 	private activate(name: string, version: string, root: string, manifest: Record<string, unknown>) {
