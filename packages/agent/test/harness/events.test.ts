@@ -62,4 +62,20 @@ describe("HarnessEventBus", () => {
 		events.emit(runStartEvent);
 		expect(received).toEqual([runStartEvent, runEndEvent]);
 	});
+
+	it("buffers events while asynchronously capturing a snapshot", async () => {
+		const events = new HarnessEventBus();
+		let resolveSnapshot: ((snapshot: { leafId: null }) => void) | undefined;
+		const watchPromise = events.watchAsync(
+			() => new Promise<{ leafId: null }>((resolve) => {
+				resolveSnapshot = resolve;
+			}),
+		);
+		events.emit(runStartEvent);
+		resolveSnapshot?.({ leafId: null });
+		const watch = await watchPromise;
+		const received: HarnessEvent[] = [];
+		watch.start((event) => received.push(event));
+		expect(received).toEqual([runStartEvent]);
+	});
 });
