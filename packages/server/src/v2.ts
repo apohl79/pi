@@ -278,6 +278,7 @@ export class PiServerV2 {
 	private readonly completionControllers = new Map<string, AbortController>();
 	private readonly disposedRuntimes = new WeakSet<PiSessionRuntimeV2>();
 	private readonly runtimeEventUnsubscribers = new WeakMap<PiSessionRuntimeV2, () => void>();
+	private diagnosticsDegradedNotified = false;
 	private closing = false;
 	private started = false;
 	private restored = false;
@@ -291,20 +292,20 @@ export class PiServerV2 {
 		this.onError = options.onError;
 		this.daemonInstanceId = options.daemonInstanceId;
 		const diagnostics = options.diagnostics ?? new InMemoryForensicRecorder();
-		this.diagnostics =
-			this.daemonInstanceId === undefined
-				? diagnostics
-				: {
-						record: (event: Parameters<ForensicRecorder["record"]>[0]) =>
-							diagnostics.record({
-								...event,
-								...(event.daemonInstanceId === undefined ? { daemonInstanceId: this.daemonInstanceId } : {}),
-							}),
-						read: (afterSeq?: number) => diagnostics.read(afterSeq),
-						...(diagnostics.isDegraded === undefined
-							? {}
-							: { isDegraded: () => diagnostics.isDegraded?.() === true }),
-					};
+		this.diagnostics = {
+			record: async (event: Parameters<ForensicRecorder["record"]>[0]) => {
+				const recorded = await diagnostics.record({
+					...event,
+					...(event.daemonInstanceId === undefined && this.daemonInstanceId !== undefined
+						? { daemonInstanceId: this.daemonInstanceId }
+						: {}),
+				});
+				this.notifyDiagnosticsDegraded(event);
+				return recorded;
+			},
+			read: (afterSeq?: number) => diagnostics.read(afterSeq),
+			...(diagnostics.isDegraded === undefined ? {} : { isDegraded: () => diagnostics.isDegraded?.() === true }),
+		};
 		this.diagnosticContent = options.diagnosticContent;
 		this.integrity = options.integrity;
 		this.repairSafe = options.repairSafe;
@@ -2430,5 +2431,26 @@ export class PiServerV2 {
 
 	private reportError(error: Error): void {
 		this.onError?.(error);
+	}
+
+	private notifyDiagnosticsDegraded(event: Parameters<ForensicRecorder["record"]>[0]): void {
+		if (this.diagnosticsDegradedNotified || this.diagnostics.isDegraded?.() !== true) return;
+		const sessions = new Map<string, PiSessionRuntimeV2>();
+		for (const connection of this.connections) {
+			for (const [sessionId, runtime] of connection.sessions) {
+				if (event.sessionId === undefined || event.sessionId === sessionId) sessions.set(sessionId, runtime);
+			}
+		}
+		if (sessions.size === 0) return;
+		this.diagnosticsDegradedNotified = true;
+		for (const [sessionId, runtime] of sessions) {
+			void this.broadcastEvent(
+				sessionId,
+				runtime,
+				{ degraded: true },
+				event.operationId,
+				"diagnostics_degraded",
+			).catch((error) => this.reportError(error instanceof Error ? error : new Error(String(error))));
+		}
 	}
 }
