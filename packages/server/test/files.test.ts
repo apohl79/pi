@@ -18,6 +18,11 @@ describe("LocalV2FileReferenceService", () => {
 		await writeFile(join(root, "README.md"), "hello");
 		await writeFile(join(root, "notes.ts"), "export const answer = 42;");
 		const service = new LocalV2FileReferenceService({ projectRoot: root, homeDirectory: root });
+		expect(await service.resolve("session-1", "@server:README.md")).toMatchObject({
+			reference: "server:README.md",
+			path: await realpath(join(root, "README.md")),
+			kind: "file",
+		});
 
 		expect(await service.complete("session-1", "@project:n")).toEqual([
 			{ reference: "project:notes.ts", path: join(root, "notes.ts"), kind: "file" },
