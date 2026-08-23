@@ -718,6 +718,33 @@ describe("AgentHarness v2 scaffold", () => {
 		await harness.close();
 	});
 
+	it("signals active runs so abort owns the terminal outcome", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "active-abort-faux",
+			models: [{ id: "active-abort-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("should not complete")]);
+		const session = createSession("active-abort");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			drive: "manual",
+		});
+
+		const run = harness.prompt("abort me");
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(await harness.abort()).toMatchObject({ ok: true });
+		expect(await harness.executeAction()).toMatchObject({ kind: "stream_assistant" });
+		expect(await run).toMatchObject({ ok: true, value: { kind: "aborted" } });
+		expect((await session.findRecords({ type: "operation_finished" })).map((record) => record.outcome)).toEqual([
+			"aborted",
+		]);
+		await harness.close();
+	});
+
 	it("keeps scaffold-safe configuration as defensive copies", async () => {
 		const harness = await createHarness();
 		const model = getModel("anthropic", "claude-sonnet-4-5");
