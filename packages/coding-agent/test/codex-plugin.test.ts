@@ -3,9 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
+	loadCodexMarketplaceManifest,
+	loadCodexPluginManifest,
 	parseCodexMarketplaceManifest,
 	parseCodexPluginManifest,
 	resolveCodexPluginResource,
+	resolveCodexPluginResourceOnDisk,
+	resolveLocalCodexMarketplacePlugin,
 } from "../src/core/codex-plugin.ts";
 
 describe("Codex plugin manifest compatibility", () => {
@@ -93,6 +97,46 @@ describe("Codex plugin manifest compatibility", () => {
 				],
 			},
 			diagnostics: [],
+		});
+	});
+
+	test("discovers supported marketplace and plugin manifests from disk", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-codex-marketplace-"));
+		const pluginRoot = join(root, "plugins", "reviewer");
+		await mkdir(join(pluginRoot, ".codex-plugin"), { recursive: true });
+		await mkdir(join(pluginRoot, "skills"), { recursive: true });
+		await writeFile(
+			join(pluginRoot, ".codex-plugin", "plugin.json"),
+			JSON.stringify({
+				name: "reviewer",
+				version: "1.0.0",
+				skills: ["skills"],
+			}),
+		);
+		await mkdir(join(root, ".agents", "plugins"), { recursive: true });
+		await writeFile(
+			join(root, ".agents", "plugins", "marketplace.json"),
+			JSON.stringify({
+				plugins: [{ name: "reviewer", source: "./plugins/reviewer" }],
+			}),
+		);
+
+		const marketplace = await loadCodexMarketplaceManifest(root);
+		expect(marketplace.manifest?.plugins).toEqual([
+			{ name: "reviewer", source: { kind: "local", value: "./plugins/reviewer" } },
+		]);
+		const plugin = await resolveLocalCodexMarketplacePlugin(root, marketplace.manifest!.plugins[0]!);
+		expect(plugin.manifest).toMatchObject({ name: "reviewer", version: "1.0.0" });
+		expect((await loadCodexPluginManifest(plugin.root)).manifest?.name).toBe("reviewer");
+	});
+
+	test("rejects disk resources that escape through symlinks", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-codex-plugin-root-"));
+		const outside = await mkdtemp(join(tmpdir(), "pi-codex-plugin-outside-"));
+		await symlink(outside, join(root, "linked"));
+		expect(await resolveCodexPluginResourceOnDisk(root, "linked")).toMatchObject({
+			ok: false,
+			code: "symlink_escape",
 		});
 	});
 });
