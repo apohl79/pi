@@ -5,7 +5,7 @@ import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-work
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import { afterEach, describe, expect, test } from "vitest";
-import { type RemoteV2CommandResult, RemoteV2InteractiveAttachment, RemoteV2SessionSelector } from "../../src/index.ts";
+import { RemoteV2InteractiveAttachment, type RemoteV2Session, RemoteV2SessionSelector } from "../../src/index.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemon-runtime.ts";
 
 const directories: string[] = [];
@@ -13,11 +13,6 @@ const directories: string[] = [];
 afterEach(async () => {
 	await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
-
-function operationId(result: RemoteV2CommandResult): string {
-	if (result.kind !== "operation") throw new Error("Expected a remote operation result");
-	return result.operationId;
-}
 
 describe("production remote v2 follow-up", () => {
 	test("runs a queued follow-up turn through /follow-up", async () => {
@@ -29,7 +24,13 @@ describe("production remote v2 follow-up", () => {
 			models: [{ id: "remote-follow-up-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
 		});
 		models.setProvider(faux.provider);
-		faux.setResponses([fauxAssistantMessage("initial answer"), fauxAssistantMessage("follow-up answer")]);
+		faux.setResponses([
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 1_000));
+				return fauxAssistantMessage("initial answer");
+			},
+			fauxAssistantMessage("follow-up answer"),
+		]);
 		const runtime = await createConfiguredCodingAgentDaemonRuntime({
 			agentDir: directory,
 			cwd: directory,
@@ -51,12 +52,11 @@ describe("production remote v2 follow-up", () => {
 			const adapter = new RemoteV2InteractiveAttachment(attachment);
 			try {
 				const initial = await adapter.submit("start the work");
-				await attachment.session.waitForOperation(initial);
+				await waitForPhase(attachment.session, "turn");
 				const followUp = await adapter.execute("/follow-up continue with verification");
-				await attachment.session.waitForOperation(operationId(followUp));
-				expect(attachment.session.snapshot?.transcript).toEqual(
-					expect.arrayContaining([expect.objectContaining({ role: "assistant", text: "follow-up answer" })]),
-				);
+				expect(followUp.kind).toBe("operation");
+				await attachment.session.waitForOperation(initial);
+				await waitForTranscript(attachment.session, "follow-up answer");
 			} finally {
 				await adapter.dispose();
 			}
@@ -66,3 +66,27 @@ describe("production remote v2 follow-up", () => {
 		}
 	});
 });
+
+async function waitForTranscript(session: RemoteV2Session, text: string): Promise<void> {
+	for (let attempt = 0; attempt < 100; attempt++) {
+		await session.refresh();
+		if (
+			session.snapshot?.transcript.some(
+				(item) =>
+					item.role === "assistant" && item.content.some((part) => part.type === "text" && part.text === text),
+			)
+		)
+			return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(`Timed out waiting for assistant text: ${text}`);
+}
+
+async function waitForPhase(session: RemoteV2Session, phase: "turn"): Promise<void> {
+	for (let attempt = 0; attempt < 100; attempt++) {
+		await session.refresh();
+		if (session.snapshot?.phase === phase) return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(`Timed out waiting for session phase: ${phase}`);
+}

@@ -798,6 +798,8 @@ export class AgentHarness implements AgentLane {
 					...this.streamOptions,
 					model: this.model,
 					samplingInput,
+					getSteeringMessages: async () => this.consumeQueuedMessages("steer", runId),
+					getFollowUpMessages: async () => this.consumeQueuedMessages("followUp", runId),
 					transformContext: async (messages) => {
 						const result = await this.runLifecycleHook("transform_context", {
 							operationId: runId,
@@ -1635,6 +1637,35 @@ export class AgentHarness implements AgentLane {
 	async followUp(input: string | AgentMessage, images?: ImageContent[]): Promise<QueueResult> {
 		return this.enqueue(input, images, "followUp", true);
 	}
+	private async consumeQueuedMessages(queue: "steer" | "followUp", runId: string): Promise<AgentMessage[]> {
+		const [queued, cancelled] = await Promise.all([
+			this.durableSession.findRecords({ type: "queue_enqueued", lane: this.name, order: "oldestFirst" }),
+			this.durableSession.findRecords({ type: "queue_cancelled", lane: this.name }),
+		]);
+		const cancelledIds = new Set(cancelled.map((record) => record.entryId));
+		const pending = queued.filter(
+			(record) =>
+				record.queue === queue &&
+				record.runId === runId &&
+				!cancelledIds.has(record.target.id) &&
+				record.target.type === "message",
+		);
+		const selected =
+			this[queue === "steer" ? "steeringMode" : "followUpMode"] === "all" ? pending : pending.slice(0, 1);
+		const messages: AgentMessage[] = [];
+		for (const record of selected) {
+			await this.durableSession.appendRecord({
+				type: "queue_cancelled",
+				id: this.durableSession.idGenerator.next(),
+				lane: this.name,
+				runId,
+				entryId: record.target.id,
+				disposition: "consumed",
+			});
+			if (record.target.type === "message") messages.push(durableClone(record.target.message));
+		}
+		return messages;
+	}
 	async nextRun(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
 	async nextRun(_message: AgentMessage): Promise<QueueResult>;
 	async nextRun(input: string | AgentMessage, images?: ImageContent[]): Promise<QueueResult> {
@@ -1647,10 +1678,13 @@ export class AgentHarness implements AgentLane {
 		);
 		if (!enqueued)
 			return ResultValue.err(new UnknownQueueItem({ lane: this.name, entryId, message: "Queued item not found" }));
-		const cancelled = (await this.durableSession.findRecords({ type: "queue_cancelled", lane: this.name })).some(
+		const cancellation = (await this.durableSession.findRecords({ type: "queue_cancelled", lane: this.name })).find(
 			(record) => record.entryId === entryId,
 		);
-		if (cancelled) return ResultValue.ok({ outcome: "already_cleared" });
+		if (cancellation !== undefined)
+			return ResultValue.ok({
+				outcome: cancellation.disposition === "consumed" ? "already_consumed" : "already_cleared",
+			});
 		const record: NewRecord<QueueCancelledRecord> =
 			enqueued.queue === "nextRun"
 				? { type: "queue_cancelled", id: this.durableSession.idGenerator.next(), lane: this.name, entryId }

@@ -188,6 +188,7 @@ export interface QueueCancelledRecord extends RecordBase {
 	type: "queue_cancelled";
 	runId?: string;
 	entryId: string;
+	disposition?: "cancelled" | "consumed";
 }
 
 export interface WriteDeferredRecord extends RecordBase {

@@ -333,6 +333,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	private model: Model<string>;
 	private nameRevision = 0;
 	private autoName = true;
+	private readonly queuedTurnOperations = new Set<string>();
 	private sessionName: string | undefined;
 	private nameSource: "explicit" | "generated" | "derived" | undefined;
 	private phase: SessionPhaseV2 = "idle";
@@ -792,8 +793,23 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		};
 	}
 
-	async accept(_operationId: string): Promise<OperationAccepted> {
+	async accept(_operationId: string, command?: CommandV2): Promise<OperationAccepted> {
 		const policy = await this.compactionPolicySnapshot();
+		if (
+			(command?.command === "turn/followUp" || command?.command === "turn/steer") &&
+			(this.activeOperation?.state === "accepted" || this.activeOperation?.state === "running")
+		) {
+			this.revision += 1;
+			this.eventSeq += 1;
+			this.queuedTurnOperations.add(_operationId);
+			return {
+				operationId: _operationId,
+				sessionRevision: this.revision,
+				eventSeq: this.eventSeq,
+				model: { provider: this.model.provider, id: this.model.id },
+				compactionPolicy: policy,
+			};
+		}
 		this.revision += 1;
 		this.eventSeq += 1;
 		this.phase = "turn";
@@ -845,6 +861,9 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const extensionOperationModel = { id: operationModel.id, provider: operationModel.provider };
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
+		const queuedTurnOperation =
+			(runCommand === "turn/followUp" || runCommand === "turn/steer") &&
+			this.queuedTurnOperations.delete(_operationId);
 		const usageBefore = (await harness.session.getStats()).totalTokens;
 		const beforeEntryIds = new Set(
 			(await harness.session.findEntriesOnBranch({ order: "oldestFirst" })).map((entry) => entry.id),
@@ -852,16 +871,18 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		let goalUsageRecorded = false;
 		let generateNameAfterTurn = false;
 		const extensionHost = this.definition.extensionHost;
-		this.phase = "turn";
-		this.activeOperation = {
-			operationId: _operationId,
-			kind: runCommand,
-			state: "running",
-			acceptedSeq: this.activeOperation?.acceptedSeq ?? this.eventSeq,
-			...(this.activeOperation?.compactionPolicy === undefined
-				? {}
-				: { compactionPolicy: this.activeOperation.compactionPolicy }),
-		};
+		if (!queuedTurnOperation) {
+			this.phase = "turn";
+			this.activeOperation = {
+				operationId: _operationId,
+				kind: runCommand,
+				state: "running",
+				acceptedSeq: this.activeOperation?.acceptedSeq ?? this.eventSeq,
+				...(this.activeOperation?.compactionPolicy === undefined
+					? {}
+					: { compactionPolicy: this.activeOperation.compactionPolicy }),
+			};
+		}
 		this.recordExtensionHookResults(
 			_operationId,
 			"accepted",
@@ -1002,12 +1023,14 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 					// Usage attribution must not hide the original operation failure.
 				}
 			}
-			this.phase = "failed";
-			this.activeOperation = {
-				...this.activeOperation!,
-				state: "failed",
-				terminalSeq: this.eventSeq + 1,
-			};
+			if (!queuedTurnOperation) {
+				this.phase = "failed";
+				this.activeOperation = {
+					...this.activeOperation!,
+					state: "failed",
+					terminalSeq: this.eventSeq + 1,
+				};
+			}
 			this.recordExtensionHookResults(
 				_operationId,
 				"terminal",
@@ -1027,14 +1050,16 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				"completed",
 			),
 		);
-		this.revision += 1;
-		this.eventSeq += 1;
-		this.phase = "idle";
-		this.activeOperation = {
-			...this.activeOperation!,
-			state: "complete",
-			terminalSeq: this.eventSeq,
-		};
+		if (!queuedTurnOperation) {
+			this.revision += 1;
+			this.eventSeq += 1;
+			this.phase = "idle";
+			this.activeOperation = {
+				...this.activeOperation!,
+				state: "complete",
+				terminalSeq: this.eventSeq,
+			};
+		}
 		if (generateNameAfterTurn) this.scheduleNameGeneration(_operationId);
 		if (runCommand === "turn/start" || runCommand === "turn/resume" || runCommand === "turn/followUp")
 			void this.definition.goalContinuation?.schedule().catch(() => undefined);
