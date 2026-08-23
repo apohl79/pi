@@ -688,6 +688,20 @@ export interface ContextEvent {
 	messages: AgentMessage[];
 }
 
+/** Request-only context contributed immediately before provider serialization. */
+export interface SamplingInputContext {
+	readonly model: Model<Api> | undefined;
+	readonly messages: readonly AgentMessage[];
+	readonly signal?: AbortSignal;
+}
+
+export interface SamplingInputRegistration {
+	readonly id: string;
+	contribute(
+		context: SamplingInputContext,
+	): AgentMessage | readonly AgentMessage[] | undefined | Promise<AgentMessage | readonly AgentMessage[] | undefined>;
+}
+
 /** Fired before a provider request is sent. Can replace the payload. */
 export interface BeforeProviderRequestEvent {
 	type: "before_provider_request";
@@ -1269,6 +1283,9 @@ export interface ExtensionAPI {
 		tool: ToolDefinition<TParams, TDetails, TState>,
 	): void;
 
+	/** Register bounded, request-only provider context. */
+	registerSamplingInput(registration: SamplingInputRegistration): void;
+
 	// =========================================================================
 	// Command, Shortcut, Flag Registration
 	// =========================================================================
@@ -1722,6 +1739,7 @@ export interface Extension {
 	hidden?: boolean;
 	sourceInfo: SourceInfo;
 	handlers: Map<string, HandlerFn[]>;
+	samplingInputs?: Map<string, SamplingInputRegistration>;
 	tools: Map<string, RegisteredTool>;
 	messageRenderers: Map<string, MessageRenderer>;
 	markdownTransformer?: MarkdownTransformer;

@@ -590,6 +590,34 @@ describe("ExtensionRunner", () => {
 			expect(errors[0].error).toContain("Handler error!");
 			expect(errors[0].event).toBe("context");
 		});
+
+		it("collects bounded request-only sampling input and isolates failures", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.registerSamplingInput({
+						id: "reminder",
+						contribute: ({ messages }) => ({ role: "user", content: "request-only", timestamp: messages.length }),
+					});
+					pi.registerSamplingInput({
+						id: "failing",
+						contribute: () => { throw new Error("sampling failure"); },
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "sampling.ts"), extCode);
+
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			const errors: Array<{ event: string; error: string }> = [];
+			runner.onError((error) => errors.push({ event: error.event, error: error.error }));
+			const source = [{ role: "user" as const, content: "canonical", timestamp: 0 }];
+
+			const contributed = await runner.emitSamplingInput(source);
+
+			expect(contributed).toEqual([{ role: "user", content: "request-only", timestamp: 1 }]);
+			expect(source).toEqual([{ role: "user", content: "canonical", timestamp: 0 }]);
+			expect(errors).toEqual([{ event: "sampling:failing", error: "sampling failure" }]);
+		});
 	});
 
 	describe("message and entry renderers", () => {
