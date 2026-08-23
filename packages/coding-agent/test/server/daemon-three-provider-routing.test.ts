@@ -123,4 +123,77 @@ describe("production daemon three-provider routing", () => {
 			await runtime.close();
 		}
 	});
+
+	test("publishes the child-agent tool contract to three provider harnesses", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-three-tools-"));
+		directories.push(directory);
+		const models = createModels();
+		const providers = [
+			fauxProvider({
+				provider: "coding-agent-daemon-agent-tools-root-faux",
+				models: [{ id: "root-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			}),
+			fauxProvider({
+				provider: "coding-agent-daemon-agent-tools-child-faux",
+				models: [{ id: "child-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			}),
+			fauxProvider({
+				provider: "coding-agent-daemon-agent-tools-reviewer-faux",
+				models: [{ id: "reviewer-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			}),
+		];
+		for (const provider of providers) models.setProvider(provider.provider);
+		const toolNames = new Map<string, string[]>();
+		const capture =
+			(label: string, message: string): FauxResponseFactory =>
+			(context, _options, _state, _model) => {
+				toolNames.set(
+					label,
+					(context.tools ?? []).map((tool) => tool.name),
+				);
+				return fauxAssistantMessage(message);
+			};
+		providers[0]!.setResponses([capture("root", "root response")]);
+		providers[1]!.setResponses([capture("child", "child response")]);
+		providers[2]!.setResponses([capture("reviewer", "reviewer response")]);
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: providers[0]!.getModel()!,
+			socketPath: join(directory, "server.sock"),
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const session = await RemoteV2Session.create(client, { cwd: directory }, { mode: "control" });
+			try {
+				await session.setAutoName(false);
+				const rootOperation = await session.submit("root request");
+				await session.waitForOperation(rootOperation);
+				const child = await session.spawnAgent("child", "child request", {
+					model: { provider: providers[1]!.provider.id, id: "child-model" },
+				});
+				await session.waitAgent(child.id);
+				const reviewer = await session.spawnAgent("reviewer", "review request", {
+					model: { provider: providers[2]!.provider.id, id: "reviewer-model" },
+				});
+				await session.waitAgent(reviewer.id);
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+
+		const expected = ["spawn_agent", "list_agents", "wait_agent", "send_message", "followup_task", "interrupt_agent"];
+		for (const label of ["root", "child", "reviewer"]) {
+			expect(toolNames.get(label)).toEqual(expect.arrayContaining(expected));
+		}
+	});
 });
