@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, test } from "vitest";
 import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemon-runtime.ts";
@@ -135,6 +135,62 @@ describe("production daemon server-default RPC", () => {
 					thinkingLevel: "high",
 				}),
 			);
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	test("preserves server-default model and thinking options across new_session", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-rpc-new-session-options-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-rpc-new-session-options-faux",
+			models: [
+				{ id: "default-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+				{ id: "selected-model", reasoning: true, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		const input = new PassThrough();
+		const output: unknown[] = [];
+		const followUp = new Map([["new_session", () => input.end('{"id":"state-after-new","type":"get_state"}\n')]]);
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel("default-model")!,
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+			rpcInput: input,
+			rpcOutput: (value) => {
+				output.push(value);
+				followUp.get(String((value as { command?: unknown }).command))?.();
+			},
+		});
+		try {
+			const runRpc = runtime.cli.runRpc({
+				provider: "coding-agent-daemon-rpc-new-session-options-faux",
+				model: "selected-model",
+				thinking: "high",
+				messages: [],
+				fileArgs: [],
+				unknownFlags: new Map(),
+				diagnostics: [],
+			});
+			input.write('{"id":"new-1","type":"new_session"}\n');
+			await runRpc;
+			expect(output).toContainEqual({
+				id: "state-after-new",
+				type: "response",
+				command: "get_state",
+				success: true,
+				data: expect.objectContaining({
+					model: { provider: "coding-agent-daemon-rpc-new-session-options-faux", id: "selected-model" },
+					thinkingLevel: "high",
+				}),
+			});
 		} finally {
 			await runtime.close();
 		}
