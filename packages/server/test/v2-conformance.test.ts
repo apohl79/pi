@@ -1288,6 +1288,7 @@ describe("PiServer v2 operation acceptance", () => {
 			expect(malformed).toMatchObject({ ok: false, error: { code: "request_failed", message } });
 		}
 		for (const [command, payload, message] of [
+			["goal/create", { objective: "   " }, "goal/create objective must not be empty"],
 			["goal/create", { objective: "ship", tokenBudget: "100" }, "goal/create tokenBudget must be a number"],
 			["goal/update", { status: "invalid" }, "goal/update status is invalid"],
 			["goal/update", { tokensUsed: 1.5 }, "goal/update tokensUsed must be a non-negative safe integer"],
