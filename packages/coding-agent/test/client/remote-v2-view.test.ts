@@ -172,6 +172,47 @@ describe("formatRemoteV2Session", () => {
 		expect(output).toMatch(/Agent \/root\/worker · running · anthropic\/sonnet · 01:4[12] · ↓38000 ↑4200 \$0\.71/);
 	});
 
+	test("renders overflow rows for capped agents and plan items", () => {
+		const output = formatRemoteV2Session(
+			{
+				lifecycle: { status: "ready" },
+				snapshot: {
+					...snapshot,
+					agents: [
+						{
+							id: "agent-1",
+							path: "/root/one",
+							taskName: "one",
+							state: "running",
+							model: snapshot.model,
+						},
+						{
+							id: "agent-2",
+							path: "/root/two",
+							taskName: "two",
+							state: "idle",
+							model: snapshot.model,
+						},
+					],
+					plan: {
+						version: 1,
+						items: [
+							{ step: "first", status: "in_progress" },
+							{ step: "second", status: "pending" },
+						],
+					},
+				},
+			},
+			{ maxAgentItems: 1, maxPlanItems: 1 },
+		);
+		expect(output).toContain("Agent /root/one");
+		expect(output).not.toContain("Agent /root/two");
+		expect(output).toContain("Agents +1 more");
+		expect(output).toContain("Plan in_progress · first");
+		expect(output).not.toContain("Plan pending · second");
+		expect(output).toContain("Tasks +1 more");
+	});
+
 	test("renders authoritative goal and plan state", () => {
 		const output = formatRemoteV2Session({
 			lifecycle: { status: "ready" },

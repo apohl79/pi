@@ -201,7 +201,8 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	);
 	if (snapshot.persistence.recoveryState !== "clean") lines.push(`Persistence ${snapshot.persistence.recoveryState}`);
 	if (snapshot.diagnostics.degraded) lines.push("Diagnostics degraded");
-	for (const agent of snapshot.agents.slice(0, options.maxAgentItems ?? 12)) {
+	const maxAgentItems = options.maxAgentItems ?? 12;
+	for (const agent of snapshot.agents.slice(0, maxAgentItems)) {
 		const usage = agent.usage;
 		const duration = agent.startedAt === undefined ? "" : ` · ${formatAgentDuration(agent.startedAt)}`;
 		const usageText =
@@ -212,14 +213,17 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 			`Agent ${agent.path} · ${agent.state} · ${agent.model.provider}/${agent.model.id}${duration}${usageText}`,
 		);
 	}
+	if (snapshot.agents.length > maxAgentItems) lines.push(`Agents +${snapshot.agents.length - maxAgentItems} more`);
 	if (snapshot.goal) {
 		const maxGoalCharacters = options.maxGoalCharacters ?? 240;
 		lines.push(`Goal ${snapshot.goal.status} · ${snapshot.goal.objective.slice(0, maxGoalCharacters)}`);
 	}
 	if (snapshot.plan) {
 		lines.push(`Plan v${snapshot.plan.version}`);
-		for (const item of snapshot.plan.items.slice(0, options.maxPlanItems ?? 12))
-			lines.push(`Plan ${item.status} · ${item.step}`);
+		const maxPlanItems = options.maxPlanItems ?? 12;
+		for (const item of snapshot.plan.items.slice(0, maxPlanItems)) lines.push(`Plan ${item.status} · ${item.step}`);
+		if (snapshot.plan.items.length > maxPlanItems)
+			lines.push(`Tasks +${snapshot.plan.items.length - maxPlanItems} more`);
 	}
 	if (snapshot.queues.pendingInputRequestId !== undefined)
 		lines.push(`Input request pending · ${snapshot.queues.pendingInputRequestId}`);
