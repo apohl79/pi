@@ -188,7 +188,8 @@ export async function createCodingAgentV2SqliteService(
 		const inputRegistry = options.inputs;
 		let disposing = false;
 		const extensionHost =
-			options.serverExtensions === undefined || options.serverExtensions.length === 0
+			(options.serverExtensions === undefined || options.serverExtensions.length === 0) &&
+			(options.piExtensions === undefined || options.piExtensions.length === 0)
 				? undefined
 				: new ServerRuntimeExtensionHost({
 						resolveModel: () => ({ id: model.id, provider: model.provider }),
