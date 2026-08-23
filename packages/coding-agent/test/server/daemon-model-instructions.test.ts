@@ -75,6 +75,17 @@ async function createModelInstructionFixture(directory: string, rootPrompts: str
 }
 
 describe("production daemon model instruction profiles", () => {
+	test("resolves an alias and dated model ID to the same instruction profile", async () => {
+		const resolver = new ModelInstructionResolver(
+			[{ id: "luna", provider: "google", model: "gemini-2.5-flash", mode: "append", text: "Use Luna style." }],
+			{ cwd: "/workspace" },
+		);
+		expect(await resolver.resolve({ provider: "google", id: "gemini-2.5-flash-20250101" })).toMatchObject({
+			id: "luna",
+		});
+		expect(await resolver.resolve({ provider: "google", id: "gemini-2.5-pro" })).toBeUndefined();
+	});
+
 	test("resolves root and child profiles independently in provider requests", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-model-instructions-"));
 		directories.push(directory);
