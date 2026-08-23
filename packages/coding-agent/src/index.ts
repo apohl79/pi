@@ -437,6 +437,11 @@ export {
 	type ThemeColor,
 } from "./modes/interactive/theme/theme.ts";
 export {
+	type CodingAgentDaemonRuntime,
+	type CodingAgentDaemonRuntimeOptions,
+	createCodingAgentDaemonRuntime,
+} from "./server/daemon-runtime.ts";
+export {
 	type ServerRuntimeExtension,
 	type ServerRuntimeExtensionContext,
 	ServerRuntimeExtensionHost,

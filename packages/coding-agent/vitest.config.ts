@@ -27,12 +27,20 @@ export default mergeConfig(
 					replacement: fileURLToPath(new URL("../client/src/index.ts", import.meta.url)),
 				},
 				{
+					find: /^@earendil-works\/pi-client\/unix$/,
+					replacement: fileURLToPath(new URL("../client/src/unix.ts", import.meta.url)),
+				},
+				{
 					find: /^@earendil-works\/pi-protocol$/,
 					replacement: fileURLToPath(new URL("../protocol/src/index.ts", import.meta.url)),
 				},
 				{
 					find: /^@earendil-works\/pi-session-backend-sqlite-node$/,
 					replacement: fileURLToPath(new URL("../session-backends/sqlite-node/src/index.ts", import.meta.url)),
+				},
+				{
+					find: /^@earendil-works\/pi-server$/,
+					replacement: fileURLToPath(new URL("../server/src/index.ts", import.meta.url)),
 				},
 				{ find: /^@mariozechner\/pi-ai$/, replacement: workspaceSourcePaths.aiIndex },
 				{ find: /^@mariozechner\/pi-ai\/oauth$/, replacement: workspaceSourcePaths.aiOAuth },
