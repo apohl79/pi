@@ -363,7 +363,6 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	private readonly fastModelResolver: ((model: Model<string>) => Model<string> | undefined) | undefined;
 	private autoNameLoaded = false;
 	private nameStateLoaded = false;
-	private nameGeneration: Promise<void> | undefined;
 
 	constructor(
 		definition: CodingAgentV2SessionDefinition,
@@ -594,15 +593,6 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			source: this.nameSource ?? null,
 			revision: this.nameRevision,
 		});
-	}
-
-	private scheduleNameGeneration(operationId: string): void {
-		if (this.nameGeneration !== undefined) return;
-		this.nameGeneration = this.generateName(operationId)
-			.catch(() => undefined)
-			.finally(() => {
-				this.nameGeneration = undefined;
-			});
 	}
 
 	private async recordCurrentGoalUsage(beforeTokens: number): Promise<void> {
@@ -1148,7 +1138,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				terminalSeq: this.eventSeq,
 			};
 		}
-		if (generateNameAfterTurn) this.scheduleNameGeneration(_operationId);
+		if (generateNameAfterTurn) await this.generateName(_operationId);
 		if (runCommand === "turn/start" || runCommand === "turn/resume" || runCommand === "turn/followUp")
 			void this.definition.goalContinuation?.schedule().catch(() => undefined);
 		this.activeOperationId = undefined;
