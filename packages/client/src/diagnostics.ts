@@ -96,6 +96,7 @@ export class ClientDiagnosticSpool {
 				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
 				throw error;
 			}
+			await chmod(filePath, 0o600);
 			if (index === 0) this.currentBytes = Buffer.byteLength(text);
 			this.records.push(
 				...text
