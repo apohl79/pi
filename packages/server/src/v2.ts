@@ -42,7 +42,7 @@ import type { PiServerListener } from "./listener.ts";
 import { InMemoryV2OperationStore, type V2OperationStore } from "./operation-store.ts";
 import { InMemoryV2PlanRegistry, type V2PlanRegistry } from "./plans.ts";
 import { InMemoryV2PluginRegistry, type V2PluginRegistry } from "./plugins.ts";
-import { InMemoryV2ProcessRegistry, type V2ProcessRegistry } from "./processes.ts";
+import { InMemoryV2ProcessRegistry, type V2ProcessChange, type V2ProcessRegistry } from "./processes.ts";
 import { toProtocolJsonValue } from "./protocol.ts";
 import type { MaybePromise } from "./types.ts";
 import {
@@ -218,6 +218,7 @@ export class PiServerV2 {
 	private readonly diagnosticCapsules = new Map<string, DiagnosticCapsule>();
 	private readonly operationStore: V2OperationStore;
 	private readonly processes: V2ProcessRegistry;
+	private readonly unsubscribeProcessChanges: (() => void) | undefined;
 	private readonly blobs: V2BlobStore;
 	private readonly agents: V2AgentRegistry;
 	private readonly apps: V2AppRegistry;
@@ -276,6 +277,9 @@ export class PiServerV2 {
 		};
 		this.operationStore = options.operationStore ?? new InMemoryV2OperationStore();
 		this.processes = options.processes ?? new InMemoryV2ProcessRegistry();
+		this.unsubscribeProcessChanges = this.processes.onChange?.((change) => {
+			void this.broadcastProcessChange(change);
+		});
 		this.blobs = options.blobs ?? new InMemoryV2BlobStore();
 		this.agents = options.agents ?? new InMemoryV2AgentRegistry();
 		this.apps = options.apps ?? new InMemoryV2AppRegistry();
@@ -368,12 +372,29 @@ export class PiServerV2 {
 		if (this.closing) return;
 		this.closing = true;
 		this.unsubscribeInputChanges?.();
+		this.unsubscribeProcessChanges?.();
 		await Promise.all(this.listeners.map((listener) => listener.close()));
 		await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state)));
 		await Promise.all(Array.from(this.runtimes, (runtime) => this.disposeRuntime(runtime)));
 		this.runtimes.clear();
 		await this.agents.dispose?.();
 		this.started = false;
+	}
+
+	private async broadcastProcessChange(change: V2ProcessChange): Promise<void> {
+		try {
+			const runtime = await this.service.openSession(change.process.sessionId);
+			this.trackRuntime(runtime);
+			await this.broadcastEvent(
+				change.process.sessionId,
+				runtime,
+				{ process: change.process },
+				undefined,
+				change.kind === "output" ? "process_output" : "process_terminal",
+			);
+		} catch (error) {
+			this.onError?.(error instanceof Error ? error : new Error(String(error)));
+		}
 	}
 
 	private createConnectionState(connection: ByteConnection): V2ConnectionState {

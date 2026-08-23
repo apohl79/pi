@@ -1705,6 +1705,7 @@ describe("PiServer v2 operation acceptance", () => {
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
 		const started = await client.request({
 			command: "process/start",
 			sessionId: "session-1",
@@ -1730,6 +1731,10 @@ describe("PiServer v2 operation acceptance", () => {
 			sessionId: "session-1",
 			payload: { processId, input: "abcdef" },
 		});
+		const outputEvent = await client.next(
+			(message) => message.type === "event" && message.event === "process_output",
+		);
+		expect(outputEvent).toMatchObject({ event: "process_output", payload: { process: { processId, cursor: 6 } } });
 		const output = await client.request({
 			command: "process/read",
 			sessionId: "session-1",
@@ -1756,6 +1761,13 @@ describe("PiServer v2 operation acceptance", () => {
 			sessionId: "session-1",
 			payload: { processId },
 		});
+		const terminalEvent = await client.next(
+			(message) => message.type === "event" && message.event === "process_terminal",
+		);
+		expect(terminalEvent).toMatchObject({
+			event: "process_terminal",
+			payload: { process: { processId, state: "terminated" } },
+		});
 		expect(terminated).toMatchObject({ ok: true, result: { process: { state: "terminated", exitCode: 143 } } });
 		const waited = await client.request({ command: "process/wait", sessionId: "session-1", payload: { processId } });
 		expect(waited).toMatchObject({ ok: true, result: { process: { state: "terminated", exitCode: 143 } } });
@@ -1768,8 +1780,8 @@ describe("PiServer v2 operation acceptance", () => {
 			"process_terminated",
 			"process_waited",
 		]);
-		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_received")).toHaveLength(9);
-		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_completed")).toHaveLength(9);
+		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_received")).toHaveLength(10);
+		expect(diagnosticEvents.filter((event) => event.kind === "protocol_command_completed")).toHaveLength(10);
 		const inputEvent = diagnosticEvents.find((event) => event.kind === "process_input_written");
 		expect(inputEvent).toMatchObject({
 			processInstanceId: processId,
