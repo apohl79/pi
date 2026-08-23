@@ -2280,6 +2280,19 @@ export class PiServerV2 {
 				operationId,
 				"model_instruction_profile_changed",
 			);
+		const delta: Record<string, unknown> = {};
+		if (before.name !== after.name) delta.name = after.name ?? null;
+		if (before.nameSource !== after.nameSource) delta.nameSource = after.nameSource ?? null;
+		if (before.nameRevision !== after.nameRevision) delta.nameRevision = after.nameRevision;
+		if (before.phase !== after.phase) delta.phase = after.phase;
+		if (JSON.stringify(before.usage) !== JSON.stringify(after.usage)) delta.usage = after.usage;
+		if (JSON.stringify(before.goal) !== JSON.stringify(after.goal)) delta.goal = after.goal ?? null;
+		if (JSON.stringify(before.compactionPolicy) !== JSON.stringify(after.compactionPolicy))
+			delta.compactionPolicy = after.compactionPolicy;
+		if (JSON.stringify(before.instructionProfile) !== JSON.stringify(after.instructionProfile))
+			delta.instructionProfile = after.instructionProfile ?? null;
+		if (Object.keys(delta).length > 0)
+			await this.broadcastEvent(sessionId, runtime, { delta }, operationId, "session_delta");
 	}
 
 	private async readOperation(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

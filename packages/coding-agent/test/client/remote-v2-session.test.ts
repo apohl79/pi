@@ -804,6 +804,48 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("applies bounded session deltas without a refresh", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 2,
+			revision: 2,
+			event: "session_delta",
+			payload: {
+				delta: {
+					name: "Delta name",
+					nameRevision: 2,
+					phase: "turn",
+					usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, costUsd: 0, pricingState: "known" },
+					goal: null,
+					compactionPolicy: {
+						enabled: false,
+						contextWindow: 16_000,
+						reserveTokens: 1_000,
+						keepRecentTokens: 2_000,
+						triggerTokens: 15_000,
+						source: "model",
+					},
+					instructionProfile: null,
+				},
+			},
+		});
+		expect(session.snapshot).toMatchObject({
+			name: "Delta name",
+			nameRevision: 2,
+			phase: "turn",
+			usage: { input: 1, output: 2 },
+			compactionPolicy: { enabled: false, source: "model" },
+		});
+		expect(session.snapshot).not.toHaveProperty("goal");
+		expect(session.snapshot).not.toHaveProperty("instructionProfile");
+		await session.dispose();
+	});
+
 	test("restores busy lifecycle from an expired-cursor active operation", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });
