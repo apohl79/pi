@@ -405,6 +405,12 @@ export class AgentHarness implements AgentLane {
 	private suspendedOperations: SuspendedOperation[] = [];
 	private readonly lifecycle: LifecycleRegistry;
 	private readonly watchBus = new HarnessEventBus();
+	private readonly driveMode: "automatic" | "manual";
+	private manualAction?: {
+		info: ActionInfo;
+		resolve: () => void;
+		reject: (error: Error) => void;
+	};
 	private closed = false;
 
 	private constructor(options: AgentHarnessOptions) {
@@ -416,6 +422,7 @@ export class AgentHarness implements AgentLane {
 		this.samplingInputFactory = options.samplingInputFactory;
 		this.session = options.session;
 		this.lifecycle = new LifecycleRegistry(() => this.closed);
+		this.driveMode = options.drive ?? "automatic";
 		this.hooks = this.lifecycle;
 		this.events = { on: (type, listener) => this.lifecycle.onEvent(type, listener) };
 		this.model = options.model;
@@ -532,6 +539,7 @@ export class AgentHarness implements AgentLane {
 					: (this.systemPromptSource ?? "");
 			const activeTools = this.tools.filter((tool) => this.activeToolNames.includes(tool.name));
 			const samplingInput = this.samplingInputFactory ? await this.samplingInputFactory() : this.samplingInput;
+			await this.park({ kind: "stream_assistant", step: "assistant", attempt: 1 });
 			const newMessages = await runAgentLoop(
 				prompts,
 				{ systemPrompt, messages: persisted.messages, tools: activeTools },
@@ -1149,13 +1157,25 @@ export class AgentHarness implements AgentLane {
 		await callback();
 	}
 	async peekAction(): Promise<ActionInfo | undefined> {
-		return this.unavailable("peekAction");
+		if (this.closed) throw new HarnessClosed();
+		return this.manualAction?.info;
 	}
 	async executeAction(): Promise<ActionInfo | undefined> {
-		return this.unavailable("executeAction");
+		if (this.closed) throw new HarnessClosed();
+		const action = this.manualAction;
+		if (action === undefined) return undefined;
+		this.manualAction = undefined;
+		action.resolve();
+		return action.info;
 	}
 	async runToCompletion(): Promise<void> {
-		return this.unavailable("runToCompletion");
+		if (this.closed) throw new HarnessClosed();
+		while (true) {
+			if (await this.executeAction()) continue;
+			const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+			if (open.length === 0) return;
+			await new Promise<void>((resolve) => setTimeout(resolve, 5));
+		}
 	}
 	async getModel(): Promise<Model<Api>> {
 		return this.model;
@@ -1293,7 +1313,17 @@ export class AgentHarness implements AgentLane {
 		return this.watchBus.watch(() => snapshot);
 	}
 	async close(): Promise<void> {
+		this.manualAction?.reject(new HarnessClosed());
+		this.manualAction = undefined;
 		this.closed = true;
+	}
+
+	private async park(info: ActionInfo): Promise<void> {
+		if (this.driveMode !== "manual") return;
+		if (this.manualAction !== undefined) throw new Error("AgentHarness manual drive already has a parked action");
+		await new Promise<void>((resolve, reject) => {
+			this.manualAction = { info, resolve, reject };
+		});
 	}
 
 	private async laneSnapshot(lane: string): Promise<LaneSnapshot> {
