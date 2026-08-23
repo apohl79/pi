@@ -57,6 +57,10 @@ describe("AgentHarness manual tool drive", () => {
 		});
 		expect(executed).toEqual([]);
 		expect(await harness.executeAction()).toEqual({ kind: "execute_tool", toolCallId: "tool-1", toolName: "echo" });
+		await vi.waitFor(async () => {
+			expect(await harness.peekAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 2 });
+		});
+		expect(await harness.executeAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 2 });
 		expect(await run).toMatchObject({ ok: true, value: { kind: "completed" } });
 		expect(executed).toEqual(["hello"]);
 		await harness.close();

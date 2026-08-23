@@ -322,6 +322,7 @@ export type EntryProjector = (entry: Entry) => AgentMessage[] | Promise<AgentMes
 
 export interface AgentHarnessOptions {
 	session: Session;
+	lane?: string;
 	models: Models;
 	model: Model<Api>;
 	thinkingLevel?: ThinkingLevel;
@@ -386,11 +387,12 @@ export interface AgentLane {
 }
 
 export class AgentHarness implements AgentLane {
-	readonly name = "main";
+	readonly name: string;
 	readonly session: SessionTree;
 	readonly hooks: Hooks;
 	readonly events: Events;
 	private readonly durableSession: Session;
+	private readonly harnessOptions: AgentHarnessOptions;
 	private readonly models: Models;
 	private readonly systemPromptSource: AgentHarnessOptions["systemPrompt"];
 	private readonly toProviderMessages: AgentHarnessOptions["toProviderMessages"];
@@ -418,13 +420,15 @@ export class AgentHarness implements AgentLane {
 	private closed = false;
 
 	private constructor(options: AgentHarnessOptions) {
+		this.name = options.lane ?? "main";
+		this.harnessOptions = { ...options };
 		this.durableSession = options.session;
 		this.models = options.models;
 		this.systemPromptSource = options.systemPrompt;
 		this.toProviderMessages = options.toProviderMessages;
 		this.samplingInput = options.samplingInput;
 		this.samplingInputFactory = options.samplingInputFactory;
-		this.session = options.session;
+		this.session = options.session.view(this.name);
 		this.lifecycle = new LifecycleRegistry(() => this.closed);
 		this.driveMode = options.drive ?? "automatic";
 		this.hooks = this.lifecycle;
@@ -452,7 +456,7 @@ export class AgentHarness implements AgentLane {
 		options: AgentHarnessOptions,
 	): Promise<{ harness: AgentHarness; suspended: SuspendedOperation[] }> {
 		const harness = new AgentHarness(options);
-		const branchEntries = await options.session.findEntriesOnBranch({ order: "newestFirst" });
+		const branchEntries = await options.session.view(harness.name).findEntriesOnBranch({ order: "newestFirst" });
 		const persistedModel = branchEntries.find((entry) => entry.type === "model_change");
 		const missingModels: string[] = [];
 		if (persistedModel?.type === "model_change") {
@@ -471,7 +475,7 @@ export class AgentHarness implements AgentLane {
 		if (persistedTools?.type === "active_tools_change") harness.activeToolNames = [...persistedTools.activeToolNames];
 		const lanes = await options.session.getLanes();
 		const suspended: SuspendedOperation[] = [];
-		for (const lane of lanes) {
+		for (const lane of lanes.filter((candidate) => candidate.lane === harness.name)) {
 			const operations = await options.session.findOpenOperations(lane.lane);
 			for (const operation of operations) {
 				const intent = operation.intent;
@@ -490,23 +494,19 @@ export class AgentHarness implements AgentLane {
 		return { harness, suspended };
 	}
 
-	private unavailable<T>(operation: string): Promise<T> {
-		return Promise.reject(this.closed ? new HarnessClosed() : new HarnessNotImplemented(operation));
-	}
-
 	async getLeafId(): Promise<string | null> {
-		return this.durableSession.getLeafId();
+		return this.session.getLeafId();
 	}
 
 	async prompt(text: string, images?: ImageContent[]): Promise<RunResult>;
 	async prompt(message: AgentMessage | AgentMessage[]): Promise<RunResult>;
 	async prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<RunResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+		const open = await this.durableSession.findOpenOperations(this.name, { limit: 1 });
 		if (open.length > 0) {
 			return ResultValue.err(
 				new LaneBusy({
-					lane: "main",
+					lane: this.name,
 					operationId: open[0]!.id,
 					operationKind: open[0]!.intent.kind,
 					message: "Lane is busy",
@@ -518,8 +518,8 @@ export class AgentHarness implements AgentLane {
 		const started: NewRecord<OperationStartedRecord> = {
 			type: "operation_started",
 			id: runId,
-			lane: "main",
-			sourceLeafId: await this.durableSession.getLeafId(),
+			lane: this.name,
+			sourceLeafId: await this.session.getLeafId(),
 			intent: {
 				kind: "run",
 				originalPrompt: durableClone(prompts),
@@ -532,10 +532,10 @@ export class AgentHarness implements AgentLane {
 		};
 		await this.durableSession.appendRecord(started);
 		this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
-		this.watchBus.emit({ type: "run_start", lane: "main", runId });
+		this.watchBus.emit({ type: "run_start", lane: this.name, runId });
 		try {
 			await this.runLifecycleHook("before_run", { operationId: runId, prompts: durableClone(prompts) });
-			const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
+			const entries = await this.session.findEntriesOnBranch({ order: "oldestFirst" });
 			const persisted = buildSessionContext(entries);
 			const systemPrompt =
 				typeof this.systemPromptSource === "function"
@@ -543,7 +543,7 @@ export class AgentHarness implements AgentLane {
 					: (this.systemPromptSource ?? "");
 			const activeTools = this.tools.filter((tool) => this.activeToolNames.includes(tool.name));
 			const samplingInput = this.samplingInputFactory ? await this.samplingInputFactory() : this.samplingInput;
-			await this.park({ kind: "stream_assistant", step: "assistant", attempt: 1 });
+			let assistantAttempt = 0;
 			const newMessages = await runAgentLoop(
 				prompts,
 				{ systemPrompt, messages: persisted.messages, tools: activeTools },
@@ -552,6 +552,10 @@ export class AgentHarness implements AgentLane {
 					model: this.model,
 					samplingInput,
 					reasoning: this.thinkingLevel === "off" ? undefined : this.thinkingLevel,
+					beforeAssistantResponse: async () => {
+						assistantAttempt += 1;
+						await this.park({ kind: "stream_assistant", step: "assistant", attempt: assistantAttempt });
+					},
 					beforeToolCall: async ({ toolCall }) => {
 						await this.park({ kind: "execute_tool", toolCallId: toolCall.id, toolName: toolCall.name });
 						return undefined;
@@ -570,12 +574,12 @@ export class AgentHarness implements AgentLane {
 			);
 			let finalEntryId: string | undefined;
 			for (const message of newMessages) {
-				finalEntryId = await this.durableSession.appendMessage(durableClone(message));
+				finalEntryId = await this.session.appendMessage(durableClone(message));
 				if (message.role === "assistant" && message.stopReason !== "pending") {
 					await this.durableSession.appendRecord({
 						type: "usage",
 						id: this.durableSession.idGenerator.next(),
-						lane: "main",
+						lane: this.name,
 						usage: durableClone(message.usage),
 						cause: "assistant",
 						runId,
@@ -592,7 +596,7 @@ export class AgentHarness implements AgentLane {
 			await this.durableSession.appendRecord({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
-				lane: "main",
+				lane: this.name,
 				runId,
 				outcome: "completed",
 			});
@@ -600,15 +604,15 @@ export class AgentHarness implements AgentLane {
 			this.lifecycle.emit("operation_finished", { operationId: runId, outcome: "completed" });
 			this.watchBus.emit({
 				type: "run_end",
-				lane: "main",
+				lane: this.name,
 				runId,
 				outcome: "completed",
-				leafId: (await this.durableSession.getLeafId()) ?? "",
+				leafId: (await this.session.getLeafId()) ?? "",
 			});
 			return ResultValue.ok({
 				runId,
 				kind: "completed",
-				leafId: (await this.durableSession.getLeafId()) ?? "",
+				leafId: (await this.session.getLeafId()) ?? "",
 				finalEntryId,
 				finalMessage,
 			});
@@ -617,22 +621,22 @@ export class AgentHarness implements AgentLane {
 			await this.durableSession.appendRecord({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
-				lane: "main",
+				lane: this.name,
 				runId,
 				outcome: "failed",
 				error: { code: "run_failed", message },
 			});
 			this.watchBus.emit({
 				type: "run_end",
-				lane: "main",
+				lane: this.name,
 				runId,
 				outcome: "failed",
-				leafId: (await this.durableSession.getLeafId()) ?? "",
+				leafId: (await this.session.getLeafId()) ?? "",
 			});
 			return ResultValue.ok({
 				kind: "failed",
 				runId,
-				leafId: (await this.durableSession.getLeafId()) ?? "",
+				leafId: (await this.session.getLeafId()) ?? "",
 				error: { code: "run_failed", message },
 			});
 		}
@@ -660,38 +664,38 @@ export class AgentHarness implements AgentLane {
 	}
 	async compact(_options?: { customInstructions?: string }): Promise<CompactionResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+		const open = await this.durableSession.findOpenOperations(this.name, { limit: 1 });
 		if (open.length > 0) {
 			return ResultValue.err(
 				new LaneBusy({
-					lane: "main",
+					lane: this.name,
 					operationId: open[0]!.id,
 					operationKind: open[0]!.intent.kind,
 					message: "Lane is busy",
 				}),
 			);
 		}
-		const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
+		const entries = await this.session.findEntriesOnBranch({ order: "oldestFirst" });
 		const settings = resolveCompactionSettings(this.compactionSettings, this.model.provider, this.model.id);
 		const preparation = prepareCompaction(entries, settings);
 		if (!preparation.ok) {
 			return ResultValue.ok({
 				runId: this.durableSession.idGenerator.next(),
 				kind: "failed",
-				leafId: (await this.durableSession.getLeafId()) ?? "",
+				leafId: (await this.session.getLeafId()) ?? "",
 				error: { code: preparation.error.code, message: preparation.error.message },
 			});
 		}
 		if (!preparation.value)
-			return ResultValue.err(new NothingToCompact({ lane: "main", message: "Nothing to compact" }));
+			return ResultValue.err(new NothingToCompact({ lane: this.name, message: "Nothing to compact" }));
 		const runId = this.durableSession.idGenerator.next();
 		const resultEntryId = this.durableSession.idGenerator.next();
 		await this.runLifecycleHook("before_compaction", { operationId: runId, model: this.model });
 		await this.durableSession.appendRecord({
 			type: "operation_started",
 			id: runId,
-			lane: "main",
-			sourceLeafId: await this.durableSession.getLeafId(),
+			lane: this.name,
+			sourceLeafId: await this.session.getLeafId(),
 			intent: { kind: "compaction", resultEntryId, customInstructions: _options?.customInstructions },
 		});
 		try {
@@ -709,7 +713,7 @@ export class AgentHarness implements AgentLane {
 				await this.durableSession.appendRecord({
 					type: "operation_finished",
 					id: this.durableSession.idGenerator.next(),
-					lane: "main",
+					lane: this.name,
 					runId,
 					outcome: result.error.code === "aborted" ? "aborted" : "failed",
 					error: { code: result.error.code, message: result.error.message },
@@ -718,13 +722,13 @@ export class AgentHarness implements AgentLane {
 					return ResultValue.ok({
 						runId,
 						kind: "aborted",
-						leafId: (await this.durableSession.getLeafId()) ?? "",
+						leafId: (await this.session.getLeafId()) ?? "",
 					});
 				}
 				return ResultValue.ok({
 					runId,
 					kind: "failed",
-					leafId: (await this.durableSession.getLeafId()) ?? "",
+					leafId: (await this.session.getLeafId()) ?? "",
 					error: { code: result.error.code, message: result.error.message },
 				});
 			}
@@ -738,19 +742,19 @@ export class AgentHarness implements AgentLane {
 					...(result.value.details === undefined ? {} : { details: durableClone(result.value.details) }),
 					...(result.value.usage === undefined ? {} : { usage: durableClone(result.value.usage) }),
 				},
-				"main",
+				this.name,
 			);
 			await this.durableSession.appendRecord({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
-				lane: "main",
+				lane: this.name,
 				runId,
 				outcome: "completed",
 			});
 			return ResultValue.ok({
 				runId,
 				kind: "completed",
-				leafId: (await this.durableSession.getLeafId()) ?? "",
+				leafId: (await this.session.getLeafId()) ?? "",
 				entry,
 			});
 		} catch (error) {
@@ -758,7 +762,7 @@ export class AgentHarness implements AgentLane {
 			await this.durableSession.appendRecord({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
-				lane: "main",
+				lane: this.name,
 				runId,
 				outcome: "failed",
 				error: { code: "compaction_failed", message },
@@ -766,18 +770,18 @@ export class AgentHarness implements AgentLane {
 			return ResultValue.ok({
 				runId,
 				kind: "failed",
-				leafId: (await this.durableSession.getLeafId()) ?? "",
+				leafId: (await this.session.getLeafId()) ?? "",
 				error: { code: "compaction_failed", message },
 			});
 		}
 	}
 	async navigateTree(_targetId: string | null, _options?: NavigateOptions): Promise<NavigationResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+		const open = await this.durableSession.findOpenOperations(this.name, { limit: 1 });
 		if (open.length > 0) {
 			return ResultValue.err(
 				new LaneBusy({
-					lane: "main",
+					lane: this.name,
 					operationId: open[0]!.id,
 					operationKind: open[0]!.intent.kind,
 					message: "Lane is busy",
@@ -788,7 +792,7 @@ export class AgentHarness implements AgentLane {
 		if (targetId !== null && !(await this.durableSession.getEntry(targetId))) {
 			return ResultValue.err(new UnknownTarget({ targetId, message: `Unknown navigation target: ${targetId}` }));
 		}
-		const oldLeafId = await this.durableSession.getLeafId();
+		const oldLeafId = await this.session.getLeafId();
 		if (oldLeafId === targetId) {
 			return ResultValue.ok({
 				runId: this.durableSession.idGenerator.next(),
@@ -803,7 +807,7 @@ export class AgentHarness implements AgentLane {
 		await this.durableSession.appendRecord({
 			type: "operation_started",
 			id: runId,
-			lane: "main",
+			lane: this.name,
 			sourceLeafId: oldLeafId,
 			intent: {
 				kind: "navigation",
@@ -820,7 +824,7 @@ export class AgentHarness implements AgentLane {
 				const collected =
 					targetId === null
 						? {
-								entries: await this.durableSession.findEntriesOnBranch({
+								entries: await this.session.findEntriesOnBranch({
 									start: oldLeafId,
 									order: "oldestFirst",
 								}),
@@ -839,7 +843,7 @@ export class AgentHarness implements AgentLane {
 					await this.durableSession.appendRecord({
 						type: "operation_finished",
 						id: this.durableSession.idGenerator.next(),
-						lane: "main",
+						lane: this.name,
 						runId,
 						outcome: generated.error.code === "aborted" ? "aborted" : "failed",
 						error: { code: generated.error.code, message: generated.error.message },
@@ -857,7 +861,7 @@ export class AgentHarness implements AgentLane {
 				}
 				summary = generated.value;
 			}
-			await this.durableSession.moveLane("main", targetId);
+			await this.durableSession.moveLane(this.name, targetId);
 			let summaryEntry: BranchSummaryEntry | undefined;
 			if (summary && summaryEntryId) {
 				summaryEntry = await this.durableSession.appendEntry<BranchSummaryEntry>(
@@ -869,7 +873,7 @@ export class AgentHarness implements AgentLane {
 						details: { readFiles: summary.readFiles, modifiedFiles: summary.modifiedFiles },
 						...(summary.usage === undefined ? {} : { usage: structuredClone(summary.usage) }),
 					},
-					"main",
+					this.name,
 				);
 			}
 			if (_options?.label !== undefined && targetId !== null)
@@ -877,7 +881,7 @@ export class AgentHarness implements AgentLane {
 			await this.durableSession.appendRecord({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
-				lane: "main",
+				lane: this.name,
 				runId,
 				outcome: "completed",
 			});
@@ -887,7 +891,7 @@ export class AgentHarness implements AgentLane {
 			await this.durableSession.appendRecord({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
-				lane: "main",
+				lane: this.name,
 				runId,
 				outcome: "failed",
 				error: { code: "navigation_failed", message },
@@ -904,14 +908,14 @@ export class AgentHarness implements AgentLane {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
 		if (!Number.isInteger(turns) || turns < 1) {
 			return ResultValue.err(
-				new InvalidRollback({ lane: "main", message: "Rollback requires a positive turn count" }),
+				new InvalidRollback({ lane: this.name, message: "Rollback requires a positive turn count" }),
 			);
 		}
-		const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+		const open = await this.durableSession.findOpenOperations(this.name, { limit: 1 });
 		if (open.length > 0) {
 			return ResultValue.err(
 				new LaneBusy({
-					lane: "main",
+					lane: this.name,
 					operationId: open[0]!.id,
 					operationKind: open[0]!.intent.kind,
 					message: "Lane is busy",
@@ -919,36 +923,36 @@ export class AgentHarness implements AgentLane {
 			);
 		}
 		const lanes = await this.durableSession.getLanes();
-		if (lanes.some((lane) => lane.lane !== "main" && lane.leafId !== null)) {
+		if (lanes.some((lane) => lane.lane !== this.name && lane.leafId !== null)) {
 			return ResultValue.err(
-				new InvalidRollback({ lane: "main", message: "Rollback requires no active descendant lanes" }),
+				new InvalidRollback({ lane: this.name, message: "Rollback requires no active descendant lanes" }),
 			);
 		}
-		const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
+		const entries = await this.session.findEntriesOnBranch({ order: "oldestFirst" });
 		const userEntries = entries.filter(
 			(entry): entry is Extract<Entry, { type: "message" }> =>
 				entry.type === "message" && entry.message.role === "user",
 		);
 		if (turns > userEntries.length) {
 			return ResultValue.err(
-				new InvalidRollback({ lane: "main", message: "Rollback exceeds surviving user turns" }),
+				new InvalidRollback({ lane: this.name, message: "Rollback exceeds surviving user turns" }),
 			);
 		}
 		const target = turns === userEntries.length ? null : userEntries[userEntries.length - turns]!.parentId;
-		await this.durableSession.moveLane("main", target);
-		await this.durableSession.appendCustomEntry("conversation_rollback", { removedTurns: turns, targetId: target });
+		await this.durableSession.moveLane(this.name, target);
+		await this.session.appendCustomEntry("conversation_rollback", { removedTurns: turns, targetId: target });
 		return ResultValue.ok({ targetId: target, removedTurns: turns });
 	}
 	async resume(): Promise<ResumeResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+		const open = await this.durableSession.findOpenOperations(this.name, { limit: 1 });
 		const operation = open[0];
-		if (!operation) return ResultValue.err(new NothingToResume({ lane: "main", message: "Nothing to resume" }));
+		if (!operation) return ResultValue.err(new NothingToResume({ lane: this.name, message: "Nothing to resume" }));
 		const suspended = this.suspendedOperations.find((candidate) => candidate.id === operation.id);
 		if (suspended && (suspended.missing.models.length > 0 || suspended.missing.tools.length > 0)) {
 			return ResultValue.err(
 				new MissingIdentities({
-					lane: "main",
+					lane: this.name,
 					tools: [...suspended.missing.tools],
 					models: [...suspended.missing.models],
 					message: "Resume requires missing tools or models",
@@ -958,7 +962,7 @@ export class AgentHarness implements AgentLane {
 		await this.durableSession.appendRecord({
 			type: "operation_finished",
 			id: this.durableSession.idGenerator.next(),
-			lane: "main",
+			lane: this.name,
 			runId: operation.id,
 			outcome: "failed",
 			error: { code: "recovered_by_resume", message: "Suspended operation was reopened by resume" },
@@ -970,7 +974,7 @@ export class AgentHarness implements AgentLane {
 					operation: "run",
 					runId: operation.id,
 					kind: "failed",
-					leafId: (await this.durableSession.getLeafId()) ?? "",
+					leafId: (await this.session.getLeafId()) ?? "",
 					error: { code: result.error.name, message: result.error.message },
 				});
 			const { runId, ...outcome } = result.value;
@@ -983,7 +987,7 @@ export class AgentHarness implements AgentLane {
 					operation: "compaction",
 					runId: operation.id,
 					kind: "failed",
-					leafId: (await this.durableSession.getLeafId()) ?? "",
+					leafId: (await this.session.getLeafId()) ?? "",
 					error: { code: result.error.name, message: result.error.message },
 				});
 			const { runId, ...outcome } = result.value;
@@ -999,7 +1003,7 @@ export class AgentHarness implements AgentLane {
 				operation: "navigation",
 				runId: operation.id,
 				kind: "failed",
-				leafId: await this.durableSession.getLeafId(),
+				leafId: await this.session.getLeafId(),
 				error: { code: result.error.name, message: result.error.message },
 			});
 		const { runId, ...outcome } = result.value;
@@ -1007,17 +1011,17 @@ export class AgentHarness implements AgentLane {
 	}
 	async abort(): Promise<AbortResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		const openRun = (await this.durableSession.findOpenOperations("main", { limit: 1 })).find(
+		const openRun = (await this.durableSession.findOpenOperations(this.name, { limit: 1 })).find(
 			(operation) => operation.intent.kind === "run",
 		);
-		if (!openRun) return ResultValue.err(new NoActiveOperation({ lane: "main", message: "No active operation" }));
+		if (!openRun) return ResultValue.err(new NoActiveOperation({ lane: this.name, message: "No active operation" }));
 		const queued = await this.durableSession.findRecords({
 			type: "queue_enqueued",
-			lane: "main",
+			lane: this.name,
 			order: "oldestFirst",
 		});
 		const cancelled = new Set(
-			(await this.durableSession.findRecords({ type: "queue_cancelled", lane: "main" })).map(
+			(await this.durableSession.findRecords({ type: "queue_cancelled", lane: this.name })).map(
 				(record) => record.entryId,
 			),
 		);
@@ -1035,7 +1039,7 @@ export class AgentHarness implements AgentLane {
 			const cancellation: NewRecord<QueueCancelledRecord> = {
 				type: "queue_cancelled",
 				id: this.durableSession.idGenerator.next(),
-				lane: "main",
+				lane: this.name,
 				runId: openRun.id,
 				entryId: item.target.id,
 			};
@@ -1044,24 +1048,24 @@ export class AgentHarness implements AgentLane {
 		const requested: NewRecord<AbortRequestedRecord> = {
 			type: "abort_requested",
 			id: this.durableSession.idGenerator.next(),
-			lane: "main",
+			lane: this.name,
 			runId: openRun.id,
 		};
 		await this.durableSession.appendRecord(requested);
 		const finished: NewRecord<OperationFinishedRecord> = {
 			type: "operation_finished",
 			id: this.durableSession.idGenerator.next(),
-			lane: "main",
+			lane: this.name,
 			runId: openRun.id,
 			outcome: "aborted",
 		};
 		await this.durableSession.appendRecord(finished);
 		this.watchBus.emit({
 			type: "run_end",
-			lane: "main",
+			lane: this.name,
 			runId: openRun.id,
 			outcome: "aborted",
-			leafId: (await this.durableSession.getLeafId()) ?? "",
+			leafId: (await this.session.getLeafId()) ?? "",
 		});
 		return ResultValue.ok({ runId: openRun.id, ...recalled });
 	}
@@ -1082,22 +1086,22 @@ export class AgentHarness implements AgentLane {
 	}
 	async cancelQueued(entryId: string): Promise<CancelQueuedResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		const enqueued = (await this.durableSession.findRecords({ type: "queue_enqueued", lane: "main" })).find(
+		const enqueued = (await this.durableSession.findRecords({ type: "queue_enqueued", lane: this.name })).find(
 			(record) => record.target.id === entryId,
 		);
 		if (!enqueued)
-			return ResultValue.err(new UnknownQueueItem({ lane: "main", entryId, message: "Queued item not found" }));
-		const cancelled = (await this.durableSession.findRecords({ type: "queue_cancelled", lane: "main" })).some(
+			return ResultValue.err(new UnknownQueueItem({ lane: this.name, entryId, message: "Queued item not found" }));
+		const cancelled = (await this.durableSession.findRecords({ type: "queue_cancelled", lane: this.name })).some(
 			(record) => record.entryId === entryId,
 		);
 		if (cancelled) return ResultValue.ok({ outcome: "already_cleared" });
 		const record: NewRecord<QueueCancelledRecord> =
 			enqueued.queue === "nextRun"
-				? { type: "queue_cancelled", id: this.durableSession.idGenerator.next(), lane: "main", entryId }
+				? { type: "queue_cancelled", id: this.durableSession.idGenerator.next(), lane: this.name, entryId }
 				: {
 						type: "queue_cancelled",
 						id: this.durableSession.idGenerator.next(),
-						lane: "main",
+						lane: this.name,
 						runId: enqueued.runId,
 						entryId,
 					};
@@ -1112,10 +1116,11 @@ export class AgentHarness implements AgentLane {
 		requiresRun: boolean,
 	): Promise<QueueResult> {
 		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
-		const openRun = (await this.durableSession.findOpenOperations("main", { limit: 1 })).find(
+		const openRun = (await this.durableSession.findOpenOperations(this.name, { limit: 1 })).find(
 			(operation) => operation.intent.kind === "run",
 		);
-		if (requiresRun && !openRun) return ResultValue.err(new NoActiveRun({ lane: "main", message: "No active run" }));
+		if (requiresRun && !openRun)
+			return ResultValue.err(new NoActiveRun({ lane: this.name, message: "No active run" }));
 		const message: AgentMessage =
 			typeof input === "string"
 				? { role: "user", content: [{ type: "text", text: input }, ...(images ?? [])], timestamp: Date.now() }
@@ -1123,11 +1128,11 @@ export class AgentHarness implements AgentLane {
 		const target: ProvisionedEntry = { type: "message", id: this.durableSession.idGenerator.next(), message };
 		const record: NewRecord<QueueEnqueuedRecord> =
 			queue === "nextRun"
-				? { type: "queue_enqueued", id: this.durableSession.idGenerator.next(), lane: "main", queue, target }
+				? { type: "queue_enqueued", id: this.durableSession.idGenerator.next(), lane: this.name, queue, target }
 				: {
 						type: "queue_enqueued",
 						id: this.durableSession.idGenerator.next(),
-						lane: "main",
+						lane: this.name,
 						queue,
 						runId: openRun!.id,
 						target,
@@ -1141,7 +1146,7 @@ export class AgentHarness implements AgentLane {
 			const record: NewRecord<UsageRecord> = {
 				type: "usage",
 				id: this.durableSession.idGenerator.next(),
-				lane: "main",
+				lane: this.name,
 				usage: structuredClone(usage),
 				cause: "adjustment",
 				...(options?.entryId === undefined ? {} : { entryId: options.entryId }),
@@ -1156,7 +1161,7 @@ export class AgentHarness implements AgentLane {
 	async waitForIdle(): Promise<void> {
 		while (true) {
 			if (this.closed) throw new HarnessClosed();
-			const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+			const open = await this.durableSession.findOpenOperations(this.name, { limit: 1 });
 			if (open.length === 0) return;
 			await new Promise<void>((resolve) => setTimeout(resolve, 5));
 		}
@@ -1182,7 +1187,7 @@ export class AgentHarness implements AgentLane {
 		if (this.closed) throw new HarnessClosed();
 		while (true) {
 			if (await this.executeAction()) continue;
-			const open = await this.durableSession.findOpenOperations("main", { limit: 1 });
+			const open = await this.durableSession.findOpenOperations(this.name, { limit: 1 });
 			if (open.length === 0) return;
 			await new Promise<void>((resolve) => setTimeout(resolve, 5));
 		}
@@ -1200,7 +1205,7 @@ export class AgentHarness implements AgentLane {
 				provider: model.provider,
 				modelId: model.id,
 			},
-			"main",
+			this.name,
 		);
 	}
 	async getThinkingLevel(): Promise<ThinkingLevel> {
@@ -1211,7 +1216,7 @@ export class AgentHarness implements AgentLane {
 		this.thinkingLevel = level;
 		await this.durableSession.appendEntry(
 			{ type: "thinking_level_change", id: this.durableSession.idGenerator.next(), thinkingLevel: level },
-			"main",
+			this.name,
 		);
 	}
 	async getActiveTools(): Promise<string[]> {
@@ -1222,21 +1227,41 @@ export class AgentHarness implements AgentLane {
 		this.activeToolNames = [...names];
 		await this.durableSession.appendEntry(
 			{ type: "active_tools_change", id: this.durableSession.idGenerator.next(), activeToolNames: [...names] },
-			"main",
+			this.name,
 		);
 	}
 	async watch(): Promise<WatchHandle<LaneSnapshot>> {
-		const snapshot = await this.laneSnapshot("main");
+		const snapshot = await this.laneSnapshot(this.name);
 		return this.watchBus.watch(() => snapshot);
 	}
 
 	async lane(name: string): Promise<AgentLane | undefined> {
 		if (this.closed) throw new HarnessClosed();
 		const lane = (await this.durableSession.getLanes()).find((candidate) => candidate.lane === name);
-		return lane?.lane === "main" ? this : undefined;
+		if (!lane) return undefined;
+		if (lane.lane === this.name) return this;
+		const result = await AgentHarness.create({ ...this.harnessOptions, lane: lane.lane });
+		return result.harness;
 	}
-	async createLane(_name: string, _at: string | null): Promise<CreateLaneResult> {
-		return this.unavailable("createLane");
+	async createLane(name: string, at: string | null): Promise<CreateLaneResult> {
+		if (this.closed) return ResultValue.err(new Closed({ message: "AgentHarness is closed" }));
+		try {
+			await this.durableSession.createLane(name, at);
+			const result = await AgentHarness.create({ ...this.harnessOptions, lane: name });
+			return ResultValue.ok(result.harness);
+		} catch (error) {
+			if (!(error instanceof Error) || !("code" in error)) throw error;
+			const code = error.code;
+			if (code === "already_exists")
+				return ResultValue.err(new LaneExists({ lane: name, message: `Lane already exists: ${name}` }));
+			if (code === "not_found")
+				return ResultValue.err(
+					new UnknownTarget({ targetId: at ?? "", message: `Unknown lane target: ${at ?? ""}` }),
+				);
+			return ResultValue.err(
+				new InvalidLane({ lane: name, reason: String(code), message: `Invalid lane: ${name}` }),
+			);
+		}
 	}
 	async lanes(): Promise<LaneInfo[]> {
 		if (this.closed) throw new HarnessClosed();
@@ -1273,7 +1298,7 @@ export class AgentHarness implements AgentLane {
 				id: this.durableSession.idGenerator.next(),
 				activeToolNames: [...this.activeToolNames],
 			},
-			"main",
+			this.name,
 		);
 	}
 	async getResources(): Promise<Resources> {
@@ -1343,9 +1368,10 @@ export class AgentHarness implements AgentLane {
 	}
 
 	private async laneSnapshot(lane: string): Promise<LaneSnapshot> {
+		const laneSession = this.durableSession.view(lane);
 		const [leafId, transcript, open, queued, cancelled] = await Promise.all([
-			this.durableSession.getLeafId(),
-			this.durableSession.findEntriesOnBranch({ order: "oldestFirst" }),
+			laneSession.getLeafId(),
+			laneSession.findEntriesOnBranch({ order: "oldestFirst" }),
 			this.durableSession.findOpenOperations(lane, { limit: 1 }),
 			this.durableSession.findRecords({ type: "queue_enqueued", lane, order: "oldestFirst" }),
 			this.durableSession.findRecords({ type: "queue_cancelled", lane, order: "oldestFirst" }),
