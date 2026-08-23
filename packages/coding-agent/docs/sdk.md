@@ -62,6 +62,19 @@ await handle.session.waitForOperation(operationId);
 await handle.close();
 ```
 
+Persist the session ID before closing when the host may restart. Reopen the
+same durable session through the SDK after the daemon starts again:
+
+```typescript
+import { openServerAgentSession } from "@earendil-works/pi-coding-agent/client";
+
+const reopened = await openServerAgentSession(sessionId, {
+  agentDir: "/tmp/pi-agent",
+  cwd: process.cwd(),
+});
+await reopened.close();
+```
+
 Use the CLI or `createConfiguredCodingAgentDaemonRuntime()` when the daemon
 lifecycle is managed by the host. Use `createAgentSession()` only as the
 explicit direct-runtime compatibility escape hatch when server ownership is
