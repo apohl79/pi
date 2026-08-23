@@ -1570,36 +1570,39 @@ export class AgentHarness implements AgentLane {
 			(operation) => operation.intent.kind === "run",
 		);
 		if (!openRun) return ResultValue.err(new NoActiveOperation({ lane: this.name, message: "No active operation" }));
-		const queued = await this.durableSession.findRecords({
-			type: "queue_enqueued",
-			lane: this.name,
-			order: "oldestFirst",
-		});
-		const cancelled = new Set(
-			(await this.durableSession.findRecords({ type: "queue_cancelled", lane: this.name })).map(
-				(record) => record.entryId,
-			),
-		);
-		const recalled = { steer: [] as AgentMessage[], followUp: [] as AgentMessage[] };
-		for (const item of queued) {
-			if (
-				item.queue === "nextRun" ||
-				item.runId !== openRun.id ||
-				cancelled.has(item.target.id) ||
-				item.target.type !== "message"
-			)
-				continue;
-			recalled[item.queue].push(structuredClone(item.target.message));
-			cancelled.add(item.target.id);
-			const cancellation: NewRecord<QueueCancelledRecord> = {
-				type: "queue_cancelled",
-				id: this.durableSession.idGenerator.next(),
+		const recalled = await this.serializeQueueMutation(async () => {
+			const queued = await this.durableSession.findRecords({
+				type: "queue_enqueued",
 				lane: this.name,
-				runId: openRun.id,
-				entryId: item.target.id,
-			};
-			await this.durableSession.appendRecord(cancellation);
-		}
+				order: "oldestFirst",
+			});
+			const cancelled = new Set(
+				(await this.durableSession.findRecords({ type: "queue_cancelled", lane: this.name })).map(
+					(record) => record.entryId,
+				),
+			);
+			const recalled = { steer: [] as AgentMessage[], followUp: [] as AgentMessage[] };
+			for (const item of queued) {
+				if (
+					item.queue === "nextRun" ||
+					item.runId !== openRun.id ||
+					cancelled.has(item.target.id) ||
+					item.target.type !== "message"
+				)
+					continue;
+				recalled[item.queue].push(structuredClone(item.target.message));
+				cancelled.add(item.target.id);
+				const cancellation: NewRecord<QueueCancelledRecord> = {
+					type: "queue_cancelled",
+					id: this.durableSession.idGenerator.next(),
+					lane: this.name,
+					runId: openRun.id,
+					entryId: item.target.id,
+				};
+				await this.durableSession.appendRecord(cancellation);
+			}
+			return recalled;
+		});
 		const requested: NewRecord<AbortRequestedRecord> = {
 			type: "abort_requested",
 			id: this.durableSession.idGenerator.next(),
