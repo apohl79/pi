@@ -6,6 +6,7 @@ import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-work
 import { InMemoryV2AgentRegistry, InMemoryV2PluginRegistry, InMemoryV2UsageLedger } from "@earendil-works/pi-server";
 import { createNodeSqliteFactory, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import { afterEach, describe, expect, test } from "vitest";
+import type { ServerRuntimeExtension } from "../../src/server/extension-host.ts";
 import { ModelInstructionResolver } from "../../src/server/model-instructions.ts";
 import { createCodingAgentV2SqliteService } from "../../src/server/sqlite-service.ts";
 
@@ -16,6 +17,72 @@ afterEach(async () => {
 });
 
 describe("coding-agent SQLite v2 service", () => {
+	test("persists server extension state across service reopen", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-v2-extension-state-"));
+		directories.push(directory);
+		const env = new NodeExecutionEnv({ cwd: directory });
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-extension-state-faux",
+			models: [{ id: "model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		let observed: unknown = "unset";
+		const extension: ServerRuntimeExtension = {
+			id: "state-check",
+			onOperationAccepted: async (context) => {
+				observed = await context.state.get("lastOperation");
+				await context.state.set("lastOperation", context.operation.id);
+			},
+		};
+		const createRepository = () =>
+			new SqliteSessionRepository({
+				env,
+				sqlite: createNodeSqliteFactory(),
+				databasePath: "sessions.sqlite",
+			});
+		const repository = createRepository();
+		const service = await createCodingAgentV2SqliteService({
+			repository,
+			models,
+			env,
+			model: faux.getModel(),
+			serverExtensions: [extension],
+			harness: { tools: [], activeToolNames: [] },
+		});
+		try {
+			const created = await service.createSession!({ id: "extension-state-session", cwd: directory });
+			await created.runtime.run("operation-1", {
+				command: "session/name/auto/set",
+				sessionId: created.sessionId,
+				payload: { enabled: true },
+			});
+			expect(observed).toBeUndefined();
+			await repository.close();
+
+			const reopenedRepository = createRepository();
+			const reopened = await createCodingAgentV2SqliteService({
+				repository: reopenedRepository,
+				models,
+				env,
+				model: faux.getModel(),
+				serverExtensions: [extension],
+				harness: { tools: [], activeToolNames: [] },
+			});
+			const reopenedSession = await reopened.openSession("extension-state-session");
+			await reopenedSession.run("operation-2", {
+				command: "session/name/auto/set",
+				sessionId: "extension-state-session",
+				payload: { enabled: false },
+			});
+			expect(observed).toBe("operation-1");
+			await reopenedRepository.close();
+		} catch (error) {
+			await repository.close().catch(() => {});
+			throw error;
+		}
+	});
+
 	test("creates, lists, lazily opens, and deletes a durable session", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-v2-sqlite-"));
 		directories.push(directory);

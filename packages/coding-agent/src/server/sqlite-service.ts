@@ -1,6 +1,7 @@
 import {
 	type AgentHarness,
 	type CompactionSettings,
+	type Entry,
 	type ExecutionEnv,
 	type GoalContinuationScheduler,
 	GoalManager,
@@ -36,6 +37,7 @@ import {
 	type CreateCodingAgentHarnessOptions,
 	createCodingAgentHarness,
 } from "./create-harness.ts";
+import { type ServerRuntimeExtension, ServerRuntimeExtensionHost } from "./extension-host.ts";
 import { importLegacySessions, type LegacySessionImportOptions } from "./legacy-session-import.ts";
 import { createPluginSamplingInput } from "./plugin-sampling.ts";
 import {
@@ -44,6 +46,18 @@ import {
 	type CodingAgentV2SessionStore,
 	createCodingAgentV2ServiceFromStore,
 } from "./v2-service.ts";
+
+const SERVER_EXTENSION_STATE = "server_extension_state";
+
+function persistedExtensionState(entries: readonly Entry[], extensionId: string, key: string): unknown {
+	for (const entry of [...entries].reverse()) {
+		if (entry.type !== "custom" || entry.customType !== SERVER_EXTENSION_STATE) continue;
+		if (typeof entry.data !== "object" || entry.data === null || Array.isArray(entry.data)) continue;
+		const data = entry.data as Record<string, unknown>;
+		if (data.extensionId === extensionId && data.key === key) return data.value;
+	}
+	return undefined;
+}
 
 export interface CodingAgentV2SqliteServiceOptions {
 	repository: SqliteSessionRepository;
@@ -69,6 +83,7 @@ export interface CodingAgentV2SqliteServiceOptions {
 	images?: V2ImageService;
 	blobs?: V2BlobStore;
 	plans?: V2PlanRegistry;
+	serverExtensions?: readonly ServerRuntimeExtension[];
 	agentRegistry?: V2AgentRegistry | (() => V2AgentRegistry | undefined);
 	harness?: Omit<CreateCodingAgentHarnessOptions, "session" | "models" | "model" | "env" | "sessionFile">;
 }
@@ -167,6 +182,23 @@ export async function createCodingAgentV2SqliteService(
 		const compaction = options.compaction?.(model);
 		const inputRegistry = options.inputs;
 		let disposing = false;
+		const extensionHost =
+			options.serverExtensions === undefined || options.serverExtensions.length === 0
+				? undefined
+				: new ServerRuntimeExtensionHost({
+						resolveModel: () => ({ id: model.id, provider: model.provider }),
+						loadState: async (extensionId, key) =>
+							persistedExtensionState(
+								await session.findEntries({ customType: SERVER_EXTENSION_STATE }),
+								extensionId,
+								key,
+							),
+						persistState: (extensionId, key, value) =>
+							session.appendCustomEntry(SERVER_EXTENSION_STATE, { extensionId, key, value }),
+					});
+		if (extensionHost !== undefined) {
+			for (const extension of options.serverExtensions ?? []) await extensionHost.register(extension);
+		}
 		const usageLedger = options.usage;
 		const aggregateSessionUsage = async (): Promise<V2UsageAggregate> => {
 			if (usageLedger === undefined) return aggregateUsageEntries([]);
@@ -492,6 +524,7 @@ export async function createCodingAgentV2SqliteService(
 			...(inputRegistry === undefined ? {} : { inputs: inputRegistry }),
 			...(scopedUsageLedger === undefined ? {} : { usage: scopedUsageLedger }),
 			...(options.diagnostics === undefined ? {} : { forensicRecorder: options.diagnostics }),
+			...(extensionHost === undefined ? {} : { extensionHost }),
 		};
 	};
 	const store: CodingAgentV2SessionStore = {
