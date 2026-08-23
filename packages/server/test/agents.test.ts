@@ -85,6 +85,44 @@ describe("InMemoryV2AgentRegistry", () => {
 		await expect(registry.followUp(first.id, "must wait")).rejects.toThrow("active limit 1");
 	});
 
+	test("preserves registry invariants across a deterministic lifecycle state machine", async () => {
+		const registry = new InMemoryV2AgentRegistry({ maxActive: 2, maxActivePerParent: 2 });
+		const model = { provider: "test", id: "small" };
+		const spawn = (taskName: string) =>
+			registry.spawn({
+				sessionId: "session-1",
+				parentPath: "/root",
+				taskName,
+				taskMessage: `work:${taskName}`,
+				model,
+			});
+		const first = await spawn("first");
+		const second = await spawn("second");
+		const assertInvariants = async (expectedActive: number) => {
+			const snapshots = await registry.list("session-1");
+			expect(new Set(snapshots.map((agent) => agent.path)).size).toBe(snapshots.length);
+			expect(snapshots.filter((agent) => agent.state === "running")).toHaveLength(expectedActive);
+			expect(snapshots.every((agent) => agent.path.startsWith("/root/"))).toBe(true);
+		};
+
+		await assertInvariants(2);
+		await expect(spawn("third")).rejects.toThrow("active limit 2");
+		await registry.complete(first.id);
+		await assertInvariants(1);
+		await expect(registry.followUp(first.id, "resume while second runs")).resolves.toMatchObject({
+			state: "running",
+		});
+		await assertInvariants(2);
+		await registry.interrupt(second.id);
+		await assertInvariants(1);
+		await registry.complete(first.id);
+		await assertInvariants(0);
+		await expect(registry.followUp(first.id, "resume first")).resolves.toMatchObject({ state: "running" });
+		await assertInvariants(1);
+		await registry.interrupt(first.id);
+		await assertInvariants(0);
+	});
+
 	test("does not share a parent quota between paths in one session", async () => {
 		const registry = new InMemoryV2AgentRegistry({ maxDepth: 2, maxActive: 4, maxActivePerParent: 1 });
 		const spawn = (parentPath: string, taskName: string) =>
