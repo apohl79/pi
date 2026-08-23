@@ -7,6 +7,7 @@
  */
 import { join } from "node:path";
 import { DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-agent-core";
+import { parseArgs } from "./cli/args.ts";
 import { isExperimentalCommand } from "./cli/experimental/dispatch.ts";
 import { APP_NAME, getAgentDir } from "./config.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
@@ -25,7 +26,8 @@ configureHttpDispatcher();
 
 async function runCli(): Promise<void> {
 	const args = process.argv.slice(2);
-	if (!isExperimentalCommand(args)) {
+	const serverDefaultPrint = !args.includes("--no-server") && (args.includes("--print") || args.includes("-p"));
+	if (!isExperimentalCommand(args) && !serverDefaultPrint) {
 		await main(args);
 		return;
 	}
@@ -49,9 +51,11 @@ async function runCli(): Promise<void> {
 		},
 		socketPath: join(agentDir, "pi.sock"),
 		write: (value) => console.log(JSON.stringify(value)),
+		writeText: (value) => process.stdout.write(`${value}\n`),
 	});
 	try {
-		await main(args, { experimentalCliContext: runtime.cli });
+		if (serverDefaultPrint) await runtime.cli.runPi({ command: "pi", options: parseArgs(args) });
+		else await main(args, { experimentalCliContext: runtime.cli });
 	} finally {
 		await runtime.close();
 	}
