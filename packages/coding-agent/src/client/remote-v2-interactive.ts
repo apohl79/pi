@@ -8,6 +8,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/agent-interrupt",
 	"/agent-message",
 	"/compact",
+	"/dequeue",
 	"/detach",
 	"/follow-up",
 	"/goal",
@@ -38,6 +39,7 @@ export type RemoteV2Command =
 	| { readonly name: "interrupt-child"; readonly agentId: string }
 	| { readonly name: "agent-message"; readonly agentId: string; readonly text: string }
 	| { readonly name: "compact"; readonly instructions?: string }
+	| { readonly name: "dequeue"; readonly entryId: string }
 	| { readonly name: "detach" }
 	| { readonly name: "follow-up"; readonly text: string }
 	| { readonly name: "goal"; readonly objective: string }
@@ -100,6 +102,10 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 	if (name === "/compact") {
 		const instructions = arguments_.join(" ").trim();
 		return instructions.length === 0 ? { name: "compact" } : { name: "compact", instructions };
+	}
+	if (name === "/dequeue") {
+		if (arguments_.length !== 1 || !arguments_[0]) throw new Error("/dequeue requires <entry-id>");
+		return { name: "dequeue", entryId: arguments_[0] };
 	}
 	if (name === "/goal") {
 		const objective = arguments_.join(" ").trim();
@@ -254,6 +260,9 @@ export class RemoteV2InteractiveAttachment implements Component {
 				return { kind: "status", text: "agent message sent" };
 			case "compact":
 				return operation(await this.session.compact(command.instructions));
+			case "dequeue":
+				await this.session.cancelQueued(command.entryId);
+				return { kind: "status", text: "queued message recalled" };
 			case "detach":
 				await this.dispose();
 				return { kind: "detached" };

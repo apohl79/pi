@@ -72,7 +72,7 @@ function clientWithRequests(): { client: PiClientV2; commands: string[] } {
 			}
 			commands.push(message.request.command);
 			const isOperation =
-				message.request.command.startsWith("turn/") ||
+				(message.request.command.startsWith("turn/") && message.request.command !== "turn/queue/cancel") ||
 				message.request.command === "session/model/set" ||
 				message.request.command === "session/thinking/set" ||
 				message.request.command.startsWith("goal/");
@@ -143,6 +143,7 @@ describe("remote v2 interactive command boundary", () => {
 			text: "inspect the logs",
 		});
 		expect(parseRemoteV2Command("/compact")).toEqual({ name: "compact" });
+		expect(parseRemoteV2Command("/dequeue queued-image")).toEqual({ name: "dequeue", entryId: "queued-image" });
 		expect(parseRemoteV2Command("/compact preserve the API contract")).toEqual({
 			name: "compact",
 			instructions: "preserve the API contract",
@@ -213,6 +214,10 @@ describe("remote v2 interactive command boundary", () => {
 		expect(await adapter.execute("/compact preserve context")).toEqual({
 			kind: "operation",
 			operationId: "operation-1",
+		});
+		expect(await adapter.execute("/dequeue queued-image")).toEqual({
+			kind: "status",
+			text: "queued message recalled",
 		});
 		expect(await adapter.execute("/release-control")).toEqual({ kind: "control", mode: "observer" });
 		await adapter.execute("/take-control");
