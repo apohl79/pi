@@ -19,6 +19,7 @@ import type {
 	V2ImageService,
 	V2InputRegistry,
 	V2PlanRegistry,
+	V2Plugin,
 	V2PluginRegistry,
 	V2ProcessRegistry,
 	V2UsageAggregate,
@@ -243,13 +244,14 @@ export async function createCodingAgentV2SqliteService(
 		const activePlugins = options.pluginRegistry
 			? (await options.pluginRegistry.listPlugins(true)).filter((plugin) => plugin.enabled)
 			: [];
-		const lifecycleHooks: CodingAgentLifecycleHook[] = activePlugins.flatMap((plugin) =>
-			(plugin.hookDescriptors ?? []).flatMap((hook) =>
-				hook.enabled && hook.command && (hook.event === "turn/accepted" || hook.event === "turn/completed")
-					? [{ id: hook.id, event: hook.event, command: hook.command }]
-					: [],
-			),
-		);
+		const resolveLifecycleHooks = (plugins: readonly V2Plugin[]): CodingAgentLifecycleHook[] =>
+			plugins.flatMap((plugin) =>
+				(plugin.hookDescriptors ?? []).flatMap((hook) =>
+					hook.enabled && hook.command && (hook.event === "turn/accepted" || hook.event === "turn/completed")
+						? [{ id: hook.id, event: hook.event, command: hook.command }]
+						: [],
+				),
+			);
 		const pluginSkills = (
 			await Promise.all(
 				activePlugins.flatMap((plugin) =>
@@ -437,7 +439,12 @@ export async function createCodingAgentV2SqliteService(
 						viewImage: async (reference) => imageService.view(metadata.id, reference),
 						generateImage: async (request) => imageService.generate(metadata.id, request),
 					}),
-			...(lifecycleHooks.length === 0 ? {} : { lifecycleHooks }),
+			lifecycleHooksFactory: async () =>
+				resolveLifecycleHooks(
+					options.pluginRegistry === undefined
+						? []
+						: (await options.pluginRegistry.listPlugins(true)).filter((plugin) => plugin.enabled),
+				),
 			...(lifecycleHookOutcome === undefined ? {} : { lifecycleHookOutcome }),
 			...(planRegistry === undefined
 				? {}
