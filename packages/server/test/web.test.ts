@@ -48,6 +48,22 @@ describe("AdapterV2WebService", () => {
 		);
 	});
 
+	test("rejects malformed result provenance", async () => {
+		const service = new AdapterV2WebService({
+			execute: async () => [
+				{
+					id: "",
+					title: "Missing identity",
+					source: "fake",
+					retrievedAt: 1,
+					url: "https://example.test/result",
+				},
+			],
+		});
+
+		await expect(service.execute("session-1", { operation: "search_query" })).rejects.toThrow("result id");
+	});
+
 	test("bounds extracts in UTF-8 bytes without splitting code points", async () => {
 		const adapter: V2WebAdapter = {
 			execute: async () => [
