@@ -693,6 +693,7 @@ export class PiServerV2 {
 		const payload = objectPayload(command);
 		const processId = processIdFrom(command, payload);
 		const snapshot = await this.processes.getSnapshot(processId);
+		this.requireProcessSession(state, command, snapshot.sessionId);
 		this.requireControl(state, snapshot.sessionId);
 		if (payload.eof !== undefined && typeof payload.eof !== "boolean")
 			throw new Error("process/write eof must be a boolean");
@@ -720,6 +721,8 @@ export class PiServerV2 {
 	private async readProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const processId = processIdFrom(command, payload);
+		const snapshot = await this.processes.getSnapshot(processId);
+		this.requireProcessSession(state, command, snapshot.sessionId);
 		if (payload.cursor !== undefined && typeof payload.cursor !== "number")
 			throw new Error("process/read cursor must be a number");
 		if (typeof payload.cursor === "number" && (!Number.isSafeInteger(payload.cursor) || payload.cursor < 0))
@@ -744,6 +747,8 @@ export class PiServerV2 {
 	private async waitProcess(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const payload = objectPayload(command);
 		const processId = processIdFrom(command, payload);
+		const snapshot = await this.processes.getSnapshot(processId);
+		this.requireProcessSession(state, command, snapshot.sessionId);
 		const process = await this.processes.wait(processId);
 		await this.diagnostics.record({
 			kind: "process_waited",
@@ -765,6 +770,7 @@ export class PiServerV2 {
 		const payload = objectPayload(command);
 		const processId = processIdFrom(command, payload);
 		const snapshot = await this.processes.getSnapshot(processId);
+		this.requireProcessSession(state, command, snapshot.sessionId);
 		this.requireControl(state, snapshot.sessionId);
 		const process = await this.processes.terminate(processId);
 		await this.diagnostics.record({
@@ -2017,6 +2023,14 @@ export class PiServerV2 {
 			return;
 		}
 		throw new Error(`Session ${sessionId} requires a control lease`);
+	}
+
+	private requireProcessSession(state: V2ConnectionState, command: CommandV2, sessionId: string): void {
+		if (command.sessionId === undefined) throw new Error(`${command.command} requires sessionId`);
+		if (command.sessionId !== sessionId)
+			throw new Error(`${command.command} sessionId does not match process session`);
+		if (!state.sessions.has(sessionId) && this.controls.get(sessionId) !== state.id)
+			throw new Error(`Session ${sessionId} is not attached`);
 	}
 
 	private releaseControlFor(state: V2ConnectionState, sessionId: string): void {

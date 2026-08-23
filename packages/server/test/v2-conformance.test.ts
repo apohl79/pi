@@ -1406,22 +1406,39 @@ describe("PiServer v2 operation acceptance", () => {
 			}),
 		).toMatchObject({ ok: false, error: { message: "process/start pty must be a boolean" } });
 		const processId = (started as unknown as { result: { process: { processId: string } } }).result.process.processId;
-		await client.request({ command: "process/write", payload: { processId, input: "abcdef" } });
-		const output = await client.request({ command: "process/read", payload: { processId, cursor: 0 } });
+		await client.request({
+			command: "process/write",
+			sessionId: "session-1",
+			payload: { processId, input: "abcdef" },
+		});
+		const output = await client.request({
+			command: "process/read",
+			sessionId: "session-1",
+			payload: { processId, cursor: 0 },
+		});
 		expect(output).toMatchObject({ ok: true, result: { output: { output: "bcdef", cursor: 6, truncated: true } } });
-		const malformedCursor = await client.request({ command: "process/read", payload: { processId, cursor: "0" } });
+		const malformedCursor = await client.request({
+			command: "process/read",
+			sessionId: "session-1",
+			payload: { processId, cursor: "0" },
+		});
 		expect(malformedCursor).toMatchObject({ ok: false, error: { message: "process/read cursor must be a number" } });
 		const unsafeCursor = await client.request({
 			command: "process/read",
+			sessionId: "session-1",
 			payload: { processId, cursor: -1 },
 		});
 		expect(unsafeCursor).toMatchObject({
 			ok: false,
 			error: { message: "process/read cursor must be a non-negative safe integer" },
 		});
-		const terminated = await client.request({ command: "process/terminate", payload: { processId } });
+		const terminated = await client.request({
+			command: "process/terminate",
+			sessionId: "session-1",
+			payload: { processId },
+		});
 		expect(terminated).toMatchObject({ ok: true, result: { process: { state: "terminated", exitCode: 143 } } });
-		const waited = await client.request({ command: "process/wait", payload: { processId } });
+		const waited = await client.request({ command: "process/wait", sessionId: "session-1", payload: { processId } });
 		expect(waited).toMatchObject({ ok: true, result: { process: { state: "terminated", exitCode: 143 } } });
 		const diagnosticEvents = await diagnostics.read();
 		expect(new Set(diagnosticEvents.map((event) => event.daemonInstanceId))).toEqual(new Set(["daemon-v2-test"]));
@@ -1462,11 +1479,13 @@ describe("PiServer v2 operation acceptance", () => {
 		const processId = (started as unknown as { result: { process: { processId: string } } }).result.process.processId;
 		const closed = await client.request({
 			command: "process/write",
+			sessionId: "session-1",
 			payload: { processId, input: "input", eof: true },
 		});
 		expect(closed).toMatchObject({ ok: true, result: { output: { output: "input", cursor: 5 } } });
 		const rejected = await client.request({
 			command: "process/write",
+			sessionId: "session-1",
 			payload: { processId, input: "later" },
 		});
 		expect(rejected).toMatchObject({ ok: false, error: { message: expect.stringContaining("input is closed") } });
@@ -1479,6 +1498,7 @@ describe("PiServer v2 operation acceptance", () => {
 			.processId;
 		const emptyClosed = await client.request({
 			command: "process/write",
+			sessionId: "session-1",
 			payload: { processId: emptyProcessId, eof: true },
 		});
 		expect(emptyClosed).toMatchObject({ ok: true, result: { output: { output: "", cursor: 0 } } });
@@ -1496,24 +1516,49 @@ describe("PiServer v2 operation acceptance", () => {
 		await server.start();
 		const controller = await connectUnixTestClientV2(server.addresses[0]!);
 		const observer = await connectUnixTestClientV2(server.addresses[0]!);
+		const outsider = await connectUnixTestClientV2(server.addresses[0]!);
 		await controller.hello();
 		await observer.hello();
+		await outsider.hello();
 		await controller.request({ command: "session/attach", sessionId: "session-1" });
 		await observer.request({ command: "session/attach", sessionId: "session-1", payload: { mode: "observer" } });
+		await outsider.request({ command: "session/attach", sessionId: "session-2", payload: { mode: "observer" } });
 		const started = await controller.request({
 			command: "process/start",
 			sessionId: "session-1",
 			payload: { command: "demo" },
 		});
 		const processId = (started as unknown as { result: { process: { processId: string } } }).result.process.processId;
-		const read = await observer.request({ command: "process/read", payload: { processId, cursor: 0 } });
+		const read = await observer.request({
+			command: "process/read",
+			sessionId: "session-1",
+			payload: { processId, cursor: 0 },
+		});
 		expect(read).toMatchObject({ ok: true, result: { output: { cursor: 0 } } });
-		const write = await observer.request({ command: "process/write", payload: { processId, input: "blocked" } });
+		const crossSessionRead = await outsider.request({
+			command: "process/read",
+			sessionId: "session-2",
+			payload: { processId, cursor: 0 },
+		});
+		expect(crossSessionRead).toMatchObject({
+			ok: false,
+			error: { message: "process/read sessionId does not match process session" },
+		});
+		const write = await observer.request({
+			command: "process/write",
+			sessionId: "session-1",
+			payload: { processId, input: "blocked" },
+		});
 		expect(write).toMatchObject({ ok: false, error: { message: "Session session-1 requires a control lease" } });
-		const terminate = await observer.request({ command: "process/terminate", payload: { processId } });
+		const terminate = await observer.request({
+			command: "process/terminate",
+			sessionId: "session-1",
+			payload: { processId },
+		});
 		expect(terminate).toMatchObject({ ok: false, error: { message: "Session session-1 requires a control lease" } });
 		await controller.close();
 		await observer.close();
+		await outsider.close();
 	});
 
 	test("forwards process environment deltas to the node process registry", async () => {
@@ -1536,8 +1581,12 @@ describe("PiServer v2 operation acceptance", () => {
 			},
 		});
 		const processId = (started as unknown as { result: { process: { processId: string } } }).result.process.processId;
-		await client.request({ command: "process/wait", payload: { processId } });
-		const output = await client.request({ command: "process/read", payload: { processId, cursor: 0 } });
+		await client.request({ command: "process/wait", sessionId: "session-1", payload: { processId } });
+		const output = await client.request({
+			command: "process/read",
+			sessionId: "session-1",
+			payload: { processId, cursor: 0 },
+		});
 		expect(output).toMatchObject({ ok: true, result: { output: { output: "forwarded", truncated: false } } });
 		await client.close();
 	});
