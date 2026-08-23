@@ -122,6 +122,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	compactionPolicyUpdated = false;
 	instructionProfileUpdated = false;
 	emitLifecycleEvents = false;
+	emitPluginDiagnostics = false;
 	private current: SessionSnapshotV2;
 	private readonly eventListeners = new Set<(event: PiSessionRuntimeEventV2) => void>();
 
@@ -149,6 +150,14 @@ class TestRuntime implements PiSessionRuntimeV2 {
 		await this.release.promise;
 		this.started.resolve(undefined);
 		if (this.emitLifecycleEvents) {
+			if (this.emitPluginDiagnostics) {
+				this.emit({
+					sessionId: this.current.id,
+					event: "plugin_diagnostic",
+					operationId,
+					payload: { hook: "accepted", extensionId: "test-extension", status: "rejected", reason: "bounded" },
+				});
+			}
 			this.emit({
 				sessionId: this.current.id,
 				event: "item_completed",
@@ -2333,12 +2342,16 @@ describe("PiServer v2 operation acceptance", () => {
 		directories.push(directory);
 		const service = new TestService();
 		service.sessions.get("session-1")!.emitLifecycleEvents = true;
+		service.sessions.get("session-1")!.emitPluginDiagnostics = true;
 		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
 		servers.push(server);
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
 		await client.hello();
 		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const pluginDiagnostic = client.next(
+			(message) => message.type === "event" && message.event === "plugin_diagnostic",
+		);
 		const itemCompleted = client.next((message) => message.type === "event" && message.event === "item_completed");
 		const started = client.next((message) => message.type === "event" && message.event === "tool_started");
 		const completed = client.next((message) => message.type === "event" && message.event === "tool_completed");
@@ -2349,6 +2362,11 @@ describe("PiServer v2 operation acceptance", () => {
 		});
 		const operationId = (accepted as { accepted: OperationAccepted }).accepted.operationId;
 		service.sessions.get("session-1")!.release.resolve(undefined);
+		expect(await pluginDiagnostic).toMatchObject({
+			event: "plugin_diagnostic",
+			operationId,
+			payload: { hook: "accepted", extensionId: "test-extension", status: "rejected", reason: "bounded" },
+		});
 		expect(await itemCompleted).toMatchObject({
 			event: "item_completed",
 			operationId,
