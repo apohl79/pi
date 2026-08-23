@@ -66,6 +66,11 @@ describe("coding-agent v2 service adapter", () => {
 				},
 			]);
 			const runtime = await service.openSession("completion-queue-session");
+			await runtime.run("disable-auto-name", {
+				command: "session/name/auto/set",
+				sessionId: "completion-queue-session",
+				payload: { enabled: false },
+			});
 			await runtime.run("completion-turn-1", {
 				command: "turn/start",
 				sessionId: "completion-queue-session",

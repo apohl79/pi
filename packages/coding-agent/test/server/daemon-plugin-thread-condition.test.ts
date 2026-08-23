@@ -86,9 +86,19 @@ describe("coding-agent daemon plugin thread conditions", () => {
 			});
 			await writeFile(marker, "enabled");
 			const enabledSession = await createSession(client, directory);
+			await client.request({
+				command: "session/name/auto/set",
+				sessionId: enabledSession,
+				payload: { enabled: false },
+			});
 			await startAndWait(client, enabledSession, "enabled");
 			await rm(marker);
 			const disabledSession = await createSession(client, directory);
+			await client.request({
+				command: "session/name/auto/set",
+				sessionId: disabledSession,
+				payload: { enabled: false },
+			});
 			await startAndWait(client, disabledSession, "disabled");
 			expect(systemPrompts[0]).toContain("conditional thread context");
 			expect(systemPrompts[1]).not.toContain("conditional thread context");
