@@ -236,7 +236,7 @@ export async function mergeClientDiagnosticBundle(
 			: undefined;
 	const remoteClientInstanceId =
 		typeof remoteManifest?.clientInstanceId === "string" ? remoteManifest.clientInstanceId : undefined;
-	let unavailableFromSpool = remoteClientInstanceId !== undefined && remoteClientInstanceId !== spool.clientInstanceId;
+	let unavailableFromSpool = remoteClientInstanceId !== spool.clientInstanceId;
 	if (!unavailableFromSpool) {
 		try {
 			records = await spool.read(afterSeq);
