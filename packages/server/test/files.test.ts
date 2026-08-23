@@ -23,6 +23,9 @@ describe("LocalV2FileReferenceService", () => {
 			path: await realpath(join(root, "README.md")),
 			kind: "file",
 		});
+		expect(await service.complete("session-1", "@server:R")).toEqual([
+			{ reference: "server:README.md", path: join(root, "README.md"), kind: "file" },
+		]);
 
 		expect(await service.complete("session-1", "@project:n")).toEqual([
 			{ reference: "project:notes.ts", path: join(root, "notes.ts"), kind: "file" },
