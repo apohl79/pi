@@ -17,6 +17,7 @@ import type {
 	EventEnvelopeV2 as ProtocolEvent,
 	SessionSnapshotV2 as ProtocolSnapshot,
 	ThinkingLevel as ProtocolThinkingLevel,
+	SessionPhaseV2,
 } from "@earendil-works/pi-protocol";
 import { AgentSummarySchema, PlanSnapshotSchema, SessionSnapshotV2Schema } from "@earendil-works/pi-protocol";
 import { Check } from "typebox/value";
@@ -1052,6 +1053,27 @@ export class RemoteV2Session {
 						? { status: "ready" }
 						: { status: "busy", operationId: operation.operationId, command: "turn/start" };
 			}
+		} else if (event.event === "session_name_updated" && this.#snapshot) {
+			const payload = asRecord(event.payload);
+			const nameRevision = payload?.nameRevision;
+			const name = payload?.name;
+			const nameSource = payload?.nameSource;
+			if (
+				isSafeNonNegativeInteger(nameRevision) &&
+				(name === null || typeof name === "string") &&
+				(nameSource === null || nameSource === "explicit" || nameSource === "generated" || nameSource === "derived")
+			) {
+				const { name: _name, nameSource: _nameSource, ...snapshot } = this.#snapshot;
+				this.#snapshot = {
+					...snapshot,
+					...(name === null ? {} : { name }),
+					...(nameSource === null ? {} : { nameSource }),
+					nameRevision,
+				};
+			}
+		} else if (event.event === "session_phase_changed" && this.#snapshot) {
+			const phase = asRecord(event.payload)?.phase;
+			if (isSessionPhase(phase)) this.#snapshot = { ...this.#snapshot, phase };
 		} else if (event.event === "plan_updated" && this.#snapshot) {
 			const plan = asRecord(event.payload)?.plan;
 			if (plan === null) {
@@ -1119,6 +1141,17 @@ function records(value: unknown, command: string): readonly Record<string, unkno
 
 function isSafeNonNegativeInteger(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isSessionPhase(value: unknown): value is SessionPhaseV2 {
+	return (
+		value === "idle" ||
+		value === "turn" ||
+		value === "compaction" ||
+		value === "awaitingInput" ||
+		value === "suspended" ||
+		value === "failed"
+	);
 }
 
 function isSnapshot(value: unknown): value is ProtocolSnapshot {
