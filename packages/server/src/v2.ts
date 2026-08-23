@@ -1945,8 +1945,12 @@ export class PiServerV2 {
 					command.command === "turn/resume"
 				)
 					await this.broadcastEvent(sessionId, runtime, { command: command.command }, operationId, "turn_started");
+				if (command.command === "turn/compact")
+					await this.broadcastEvent(sessionId, runtime, {}, operationId, "compaction_started");
 			}
 			await runtime.run(operationId, command);
+			if (command.command === "turn/compact")
+				await this.broadcastEvent(sessionId, runtime, {}, operationId, "compaction_completed");
 			const completedSnapshot = await runtime.snapshot();
 			await this.broadcastSnapshotChanges(sessionId, runtime, operationId, beforeSnapshot, completedSnapshot);
 			const record = this.operations.get(operationId);

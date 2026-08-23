@@ -337,6 +337,27 @@ describe("PiServer v2 operation acceptance", () => {
 		service.sessions.get("session-1")!.release.resolve(undefined);
 	});
 
+	test("brackets an explicit compaction operation with lifecycle events", async () => {
+		const service = new TestService();
+		const server = new PiServerV2(service, { listeners: [], serverId: "compaction-events" });
+		await server.start();
+		servers.push(server);
+		const client = connectInMemoryTestClientV2(server.accept.bind(server));
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const accepted = await client.request({ command: "turn/compact", sessionId: "session-1" });
+		expect(accepted).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+		const started = await client.next(
+			(message) => message.type === "event" && message.event === "compaction_started",
+		);
+		expect(started).toMatchObject({ event: "compaction_started", operationId: expect.any(String) });
+		service.sessions.get("session-1")!.release.resolve(undefined);
+		const completed = await client.next(
+			(message) => message.type === "event" && message.event === "compaction_completed",
+		);
+		expect(completed).toMatchObject({ event: "compaction_completed", operationId: expect.any(String) });
+	});
+
 	test("emits an input-request event when the registry creates a request", async () => {
 		const service = new TestService();
 		const inputs = new InMemoryV2InputRegistry();
