@@ -917,11 +917,12 @@ export class PiServerV2 {
 
 	private async diagnosticsStatus(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		const events = await this.diagnosticEvents();
+		const critical = events.filter((event) => event.severity === "error");
 		await this.sendResponse(state, id, {
 			command: command.command,
 			capture: "metadata",
-			degraded: false,
-			lastCriticalEventSeq: events.at(-1)?.seq ?? 0,
+			degraded: critical.length > 0,
+			lastCriticalEventSeq: critical.at(-1)?.seq ?? 0,
 			eventCount: events.length,
 		});
 	}

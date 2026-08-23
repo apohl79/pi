@@ -253,7 +253,12 @@ describe("PiServer v2 operation acceptance", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-diagnostics-"));
 		directories.push(directory);
 		const diagnostics = new InMemoryForensicRecorder();
-		await diagnostics.record({ kind: "boot", sessionId: "session-1", payload: { token: "secret" } });
+		await diagnostics.record({
+			kind: "boot",
+			severity: "error",
+			sessionId: "session-1",
+			payload: { token: "secret" },
+		});
 		const server = createUnixServerV2(new TestService(), {
 			path: join(directory, "server.sock"),
 			diagnostics,
@@ -288,7 +293,10 @@ describe("PiServer v2 operation acceptance", () => {
 		const exported = await client.request({ command: "diagnostics/export" });
 		const verified = await client.request({ command: "diagnostics/verify" });
 		const doctor = await client.request({ command: "diagnostics/doctor" });
-		expect(status).toMatchObject({ ok: true, result: { capture: "metadata", eventCount: 1 } });
+		expect(status).toMatchObject({
+			ok: true,
+			result: { capture: "metadata", eventCount: 1, degraded: true, lastCriticalEventSeq: 1 },
+		});
 		expect(timeline).toMatchObject({
 			ok: true,
 			result: { events: [{ kind: "boot", payload: { token: "[REDACTED]" } }] },
