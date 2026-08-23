@@ -100,6 +100,41 @@ describe("formatRemoteV2Session", () => {
 		expect(output).not.toContain("user: old");
 	});
 
+	test("renders server-owned process output with bounded overflow", () => {
+		const output = formatRemoteV2Session(
+			{
+				lifecycle: { status: "ready" },
+				snapshot,
+				processes: [
+					{
+						processId: "process-1",
+						sessionId: "session-1",
+						command: "echo hi",
+						pty: false,
+						state: "running",
+						output: "hi\n",
+						cursor: 3,
+						truncated: false,
+					},
+					{
+						processId: "process-2",
+						sessionId: "session-1",
+						command: "sleep 1",
+						pty: true,
+						state: "exited",
+						output: "done",
+						cursor: 4,
+						truncated: false,
+					},
+				],
+			},
+			{ maxProcessItems: 1, maxProcessOutputCharacters: 2 },
+		);
+		expect(output).toContain("Process process-1 · running · echo hi");
+		expect(output).toContain("  hi");
+		expect(output).toContain("Processes +1 more");
+	});
+
 	test("renders detached state without fabricating a snapshot", () => {
 		expect(formatRemoteV2Session({ lifecycle: { status: "detached" } }, options)).toBe("Session detached");
 	});

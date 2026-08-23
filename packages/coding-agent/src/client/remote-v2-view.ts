@@ -7,6 +7,8 @@ export interface RemoteV2SessionViewOptions {
 	readonly maxTranscriptItems?: number;
 	readonly maxTranscriptCharacters?: number;
 	readonly maxAgentItems?: number;
+	readonly maxProcessItems?: number;
+	readonly maxProcessOutputCharacters?: number;
 	readonly maxPlanItems?: number;
 	readonly maxGoalCharacters?: number;
 	readonly onUpdated?: () => void;
@@ -148,6 +150,8 @@ export class RemoteV2SessionView implements Component {
 			maxTranscriptItems: options.maxTranscriptItems ?? 48,
 			maxTranscriptCharacters: options.maxTranscriptCharacters ?? 6_000,
 			maxAgentItems: options.maxAgentItems ?? 12,
+			maxProcessItems: options.maxProcessItems ?? 8,
+			maxProcessOutputCharacters: options.maxProcessOutputCharacters ?? 240,
 			maxPlanItems: options.maxPlanItems ?? 12,
 			maxGoalCharacters: options.maxGoalCharacters ?? 240,
 		};
@@ -201,6 +205,19 @@ export function formatRemoteV2Session(state: RemoteV2SessionState, options: Remo
 	);
 	if (snapshot.persistence.recoveryState !== "clean") lines.push(`Persistence ${snapshot.persistence.recoveryState}`);
 	if (snapshot.diagnostics.degraded) lines.push("Diagnostics degraded");
+	const maxProcessItems = options.maxProcessItems ?? 8;
+	const maxProcessOutputCharacters = options.maxProcessOutputCharacters ?? 240;
+	const processes = state.processes ?? [];
+	for (const process of processes.slice(0, maxProcessItems)) {
+		lines.push(`Process ${process.processId} · ${process.state} · ${process.command}`);
+		if (process.output) {
+			const output = process.output.replaceAll("\n", "\\n");
+			lines.push(
+				`  ${output.slice(0, maxProcessOutputCharacters)}${output.length > maxProcessOutputCharacters ? "…" : ""}`,
+			);
+		}
+	}
+	if (processes.length > maxProcessItems) lines.push(`Processes +${processes.length - maxProcessItems} more`);
 	const maxAgentItems = options.maxAgentItems ?? 12;
 	for (const agent of snapshot.agents.slice(0, maxAgentItems)) {
 		const usage = agent.usage;

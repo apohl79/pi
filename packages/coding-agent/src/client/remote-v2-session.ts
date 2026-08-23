@@ -42,6 +42,7 @@ export type RemoteV2SessionLifecycle =
 export interface RemoteV2SessionState {
 	readonly lifecycle: RemoteV2SessionLifecycle;
 	readonly snapshot?: ProtocolSnapshot;
+	readonly processes?: readonly RemoteV2ProcessSnapshot[];
 	readonly lastEvent?: ProtocolEvent;
 }
 
@@ -224,6 +225,7 @@ export class RemoteV2Session {
 	#handle: PiSessionV2Handle | undefined;
 	#unsubscribe: (() => void) | undefined;
 	#snapshot: ProtocolSnapshot | undefined;
+	#processes: readonly RemoteV2ProcessSnapshot[] = [];
 	#lastEvent: ProtocolEvent | undefined;
 	#lifecycle: RemoteV2SessionLifecycle = { status: "unbound" };
 
@@ -271,7 +273,12 @@ export class RemoteV2Session {
 		return this.#handle?.sessionId;
 	}
 	get state(): RemoteV2SessionState {
-		return { lifecycle: this.#lifecycle, snapshot: this.#snapshot, lastEvent: this.#lastEvent };
+		return {
+			lifecycle: this.#lifecycle,
+			snapshot: this.#snapshot,
+			processes: structuredClone(this.#processes),
+			lastEvent: this.#lastEvent,
+		};
 	}
 	get snapshot(): ProtocolSnapshot | undefined {
 		return this.#snapshot;
@@ -1158,6 +1165,12 @@ export class RemoteV2Session {
 			if (isAgentSummary(agent)) {
 				const current = this.#snapshot.agents.filter((item) => item.id !== agent.id);
 				this.#snapshot = { ...this.#snapshot, agents: [...current, structuredClone(agent)] };
+			}
+		} else if (event.event === "process_output" || event.event === "process_terminal") {
+			const process = asRecord(event.payload)?.process;
+			if (isProcessSnapshot(process)) {
+				const current = this.#processes.filter((item) => item.processId !== process.processId);
+				this.#processes = [...current, structuredClone(process)];
 			}
 		}
 		this.#emit();
