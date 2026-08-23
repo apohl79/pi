@@ -767,6 +767,8 @@ describe("RemoteV2Session", () => {
 		const process = await session.startProcess("echo hi");
 		expect(process.processId).toBe("process-1");
 		expect(await session.writeProcess(process.processId, "input")).toMatchObject({ output: "hi", cursor: 2 });
+		await session.writeProcess(process.processId, undefined, { eof: true });
+		expect(pair.requests.at(-1)?.payload).toEqual({ processId: "process-1", eof: true });
 		expect(await session.readProcess(process.processId, 2)).toMatchObject({ output: "hi", cursor: 2 });
 		expect(await session.waitProcess(process.processId)).toMatchObject({ state: "running" });
 		expect(await session.terminateProcess(process.processId)).toMatchObject({ state: "running" });

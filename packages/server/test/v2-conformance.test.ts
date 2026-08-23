@@ -1271,6 +1271,18 @@ describe("PiServer v2 operation acceptance", () => {
 			payload: { processId, input: "later" },
 		});
 		expect(rejected).toMatchObject({ ok: false, error: { message: expect.stringContaining("input is closed") } });
+		const emptyStarted = await client.request({
+			command: "process/start",
+			sessionId: "session-1",
+			payload: { command: "demo" },
+		});
+		const emptyProcessId = (emptyStarted as unknown as { result: { process: { processId: string } } }).result.process
+			.processId;
+		const emptyClosed = await client.request({
+			command: "process/write",
+			payload: { processId: emptyProcessId, eof: true },
+		});
+		expect(emptyClosed).toMatchObject({ ok: true, result: { output: { output: "", cursor: 0 } } });
 		await client.close();
 	});
 
