@@ -133,6 +133,7 @@ describe("RemoteV2Session", () => {
 		const operation = session.submit("hello");
 		expect(await operation).toBe("operation-1");
 		expect(session.state.lifecycle).toMatchObject({ status: "busy", operationId: "operation-1" });
+		const completed = session.waitForOperation("operation-1");
 		expect(pair.requests.find((request) => request.command === "session/thinking/set")?.payload).toEqual({
 			level: "high",
 		});
@@ -146,6 +147,7 @@ describe("RemoteV2Session", () => {
 			payload: { state: "complete", snapshot: snapshot({ revision: 3, eventSeq: 3, phase: "idle" }) },
 		});
 		expect(session.state).toMatchObject({ lifecycle: { status: "ready" }, snapshot: { revision: 3 } });
+		expect(await completed).toMatchObject({ revision: 3, phase: "idle" });
 		await session.dispose();
 	});
 
