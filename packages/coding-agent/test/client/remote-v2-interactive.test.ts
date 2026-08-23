@@ -89,7 +89,9 @@ function clientWithRequests(): { client: PiClientV2; commands: string[] } {
 						ok: true as const,
 						result: (message.request.command === "session/read"
 							? { session: snapshot() }
-							: { command: message.request.command }) as JsonValue,
+							: message.request.command === "plan/update"
+								? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
+								: { command: message.request.command }) as JsonValue,
 					};
 			handlers?.onData(encodeServerMessageV2(response));
 		},
@@ -130,8 +132,14 @@ describe("remote v2 interactive command boundary", () => {
 		expect(parseRemoteV2Command("/name --clear")).toEqual({ name: "name", clear: true });
 		expect(parseRemoteV2Command("/name --generate")).toEqual({ name: "name", generate: true });
 		expect(parseRemoteV2Command("/name-auto off")).toEqual({ name: "name-auto", enabled: false });
+		expect(parseRemoteV2Command('/plan [{"step":"ship","status":"pending"}]')).toEqual({
+			name: "plan",
+			items: [{ step: "ship", status: "pending" }],
+		});
+		expect(parseRemoteV2Command("/plan-clear")).toEqual({ name: "plan-clear" });
 		expect(() => parseRemoteV2Command("/rollback 0")).toThrow("positive integer");
 		expect(() => parseRemoteV2Command('/input request-1 {"choice":true}')).toThrow("only strings");
+		expect(() => parseRemoteV2Command('/plan [{"step":"ship","status":"bad"}]')).toThrow("valid status");
 	});
 
 	test("dispatches remote actions through the attached controller and shares cleanup", async () => {
@@ -159,6 +167,11 @@ describe("remote v2 interactive command boundary", () => {
 			kind: "status",
 			text: "input cancelled",
 		});
+		expect(await adapter.execute('/plan [{"step":"ship","status":"pending"}]')).toEqual({
+			kind: "status",
+			text: "plan updated",
+		});
+		expect(await adapter.execute("/plan-clear")).toEqual({ kind: "status", text: "plan cleared" });
 		expect(await adapter.execute("/detach")).toEqual({ kind: "detached" });
 		expect(commands).toEqual([
 			"session/attach",
@@ -171,6 +184,8 @@ describe("remote v2 interactive command boundary", () => {
 			"goal/create",
 			"input/request/respond",
 			"input/request/cancel",
+			"plan/update",
+			"plan/clear",
 			"session/detach",
 		]);
 		await adapter.dispose();

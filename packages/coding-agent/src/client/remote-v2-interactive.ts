@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "@earendil-works/pi-protocol";
+import type { PlanItem, ThinkingLevel } from "@earendil-works/pi-protocol";
 import type { Component } from "@earendil-works/pi-tui";
 import type { RemoteV2SessionAttachment } from "./remote-v2-selector.ts";
 
@@ -15,6 +15,8 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/model",
 	"/name",
 	"/name-auto",
+	"/plan",
+	"/plan-clear",
 	"/release-control",
 	"/resume",
 	"/rollback",
@@ -35,6 +37,8 @@ export type RemoteV2Command =
 	| { readonly name: "model"; readonly provider: string; readonly id: string }
 	| { readonly name: "name"; readonly value?: string; readonly clear?: boolean; readonly generate?: boolean }
 	| { readonly name: "name-auto"; readonly enabled: boolean }
+	| { readonly name: "plan"; readonly items: readonly PlanItem[] }
+	| { readonly name: "plan-clear" }
 	| { readonly name: "release-control" }
 	| { readonly name: "resume" }
 	| { readonly name: "rollback"; readonly turns: number }
@@ -117,6 +121,32 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		if (arguments_.length !== 1 || (arguments_[0] !== "on" && arguments_[0] !== "off"))
 			throw new Error("/name-auto requires on or off");
 		return { name: "name-auto", enabled: arguments_[0] === "on" };
+	}
+	if (name === "/plan") {
+		if (arguments_.length === 0) throw new Error("/plan requires an items JSON array");
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(arguments_.join(" "));
+		} catch {
+			throw new Error("/plan items must be valid JSON");
+		}
+		if (!Array.isArray(parsed)) throw new Error("/plan items must be a JSON array");
+		const items: PlanItem[] = parsed.map((item) => {
+			if (typeof item !== "object" || item === null || Array.isArray(item))
+				throw new Error("/plan items must be objects");
+			const candidate = item as { step?: unknown; status?: unknown };
+			if (
+				typeof candidate.step !== "string" ||
+				!(["pending", "in_progress", "completed"] as const).includes(candidate.status as never)
+			)
+				throw new Error("/plan items require step and valid status");
+			return { step: candidate.step, status: candidate.status } as PlanItem;
+		});
+		return { name: "plan", items };
+	}
+	if (name === "/plan-clear") {
+		if (arguments_.length > 0) throw new Error("/plan-clear does not accept arguments");
+		return { name: "plan-clear" };
 	}
 	if (name === "/rollback") {
 		const turns = arguments_.length === 0 ? 1 : Number(arguments_[0]);
@@ -202,6 +232,12 @@ export class RemoteV2InteractiveAttachment implements Component {
 				return operation(await this.session.setName(command.value));
 			case "name-auto":
 				return operation(await this.session.setAutoName(command.enabled));
+			case "plan":
+				await this.session.updatePlan(command.items);
+				return { kind: "status", text: "plan updated" };
+			case "plan-clear":
+				await this.session.clearPlan();
+				return { kind: "status", text: "plan cleared" };
 			case "release-control":
 				await this.session.relinquishControl();
 				return { kind: "control", mode: "observer" };
