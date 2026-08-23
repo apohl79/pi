@@ -15,7 +15,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { InMemoryV2AgentRegistry } from "../src/agents.ts";
 import { InMemoryV2AppRegistry } from "../src/apps.ts";
 import { InMemoryV2BlobStore } from "../src/blobs.ts";
-import { InMemoryForensicRecorder } from "../src/diagnostics.ts";
+import { InMemoryForensicRecorder, LocalDiagnosticCapsuleStore } from "../src/diagnostics.ts";
 import { LocalV2FileReferenceService } from "../src/files.ts";
 import { BlobV2ImageService } from "../src/images.ts";
 import { InMemoryV2InputRegistry } from "../src/inputs.ts";
@@ -470,7 +470,12 @@ describe("PiServer v2 operation acceptance", () => {
 		directories.push(directory);
 		const service = new TestService();
 		const diagnostics = new InMemoryForensicRecorder();
-		const server = createUnixServerV2(service, { path: join(directory, "server.sock"), diagnostics });
+		const diagnosticContent = new LocalDiagnosticCapsuleStore(join(directory, "diagnostic-keys.json"));
+		const server = createUnixServerV2(service, {
+			path: join(directory, "server.sock"),
+			diagnostics,
+			diagnosticContent,
+		});
 		servers.push(server);
 		await server.start();
 		const client = await connectUnixTestClientV2(server.addresses[0]!);
@@ -509,6 +514,17 @@ describe("PiServer v2 operation acceptance", () => {
 			"operation_accepted",
 			"operation_terminal",
 		]);
+		const acceptedEvent = (await diagnostics.read())[0]!;
+		expect(acceptedEvent.payload).toMatchObject({
+			command: "turn/start",
+			contentRef: { eventId: operationId, kind: "turn/start", truncated: false },
+		});
+		expect(acceptedEvent.payload).not.toHaveProperty("text");
+		const exported = await client.request({ command: "diagnostics/export" });
+		expect(exported).toMatchObject({
+			ok: true,
+			result: { capsules: [{ eventId: operationId, kind: "turn/start" }] },
+		});
 		await client.close();
 	});
 
