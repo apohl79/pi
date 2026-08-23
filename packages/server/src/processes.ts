@@ -24,6 +24,7 @@ export type V2ProcessSnapshot = V2ProcessOutput & Readonly<{
 
 export interface V2ProcessRegistry {
 	start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot>;
+	getSnapshot(processId: string): Promise<V2ProcessSnapshot>;
 	write(processId: string, input: string): Promise<V2ProcessOutput>;
 	read(processId: string, cursor: number): Promise<V2ProcessOutput>;
 	wait(processId: string): Promise<V2ProcessSnapshot>;
@@ -133,6 +134,8 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 		appendOutput(process, Buffer.from(input), this.maxOutputBytes);
 		return outputView(process, cursor);
 	}
+
+	getSnapshot(processId: string): Promise<V2ProcessSnapshot> { return Promise.resolve(snapshot(this.get(processId))); }
 
 	async read(processId: string, cursor: number): Promise<V2ProcessOutput> { return outputView(this.get(processId), cursor); }
 
@@ -251,6 +254,8 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		return outputView(process, cursor);
 	}
+
+	getSnapshot(processId: string): Promise<V2ProcessSnapshot> { return Promise.resolve(snapshot(this.get(processId))); }
 
 	async read(processId: string, cursor: number): Promise<V2ProcessOutput> { return outputView(this.get(processId), cursor); }
 

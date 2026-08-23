@@ -12,6 +12,7 @@ import type {
 } from "@earendil-works/pi-protocol";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { InMemoryV2AgentRegistry } from "../src/agents.ts";
+import { InMemoryV2AppRegistry } from "../src/apps.ts";
 import { InMemoryV2BlobStore } from "../src/blobs.ts";
 import { InMemoryForensicRecorder } from "../src/diagnostics.ts";
 import { LocalV2FileReferenceService } from "../src/files.ts";
@@ -81,10 +82,12 @@ function sessionSnapshot(id: string): SessionSnapshotV2 {
 
 class TestRuntime implements PiSessionRuntimeV2 {
 	readonly accepted: OperationAccepted[] = [];
+	readonly commands: CommandV2[] = [];
 	readonly started = new Deferred<void>();
 	readonly release = new Deferred<void>();
 	runEntered = false;
 	disposed = false;
+	disposeCount = 0;
 	private current: SessionSnapshotV2;
 
 	constructor(id: string) {
@@ -102,6 +105,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	}
 
 	async run(operationId: string, _command: CommandV2): Promise<void> {
+		this.commands.push(structuredClone(_command));
 		this.runEntered = true;
 		await this.release.promise;
 		this.started.resolve(undefined);
@@ -114,6 +118,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	}
 
 	dispose(): Promise<void> {
+		this.disposeCount += 1;
 		this.disposed = true;
 		return Promise.resolve();
 	}
@@ -205,6 +210,18 @@ class TestService implements PiServerServiceV2 {
 		if (!runtime) return Promise.reject(new Error(`Unknown session ${sessionId}`));
 		runtimes.push(runtime);
 		return Promise.resolve(runtime);
+	}
+
+	async createSession(options: Record<string, unknown>): Promise<{ sessionId: string; runtime: PiSessionRuntimeV2 }> {
+		const sessionId = typeof options.id === "string" ? options.id : "created-session";
+		if (this.sessions.has(sessionId)) throw new Error(`Session ${sessionId} already exists`);
+		const runtime = new TestRuntime(sessionId);
+		this.sessions.set(sessionId, runtime);
+		return { sessionId, runtime };
+	}
+
+	async deleteSession(sessionId: string): Promise<void> {
+		if (!this.sessions.delete(sessionId)) throw new Error(`Unknown session ${sessionId}`);
 	}
 }
 
@@ -332,6 +349,84 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(doctor).toMatchObject({ ok: true, result: { ok: true } });
 	});
 
+	test("resolves blob-backed turn content before durable acceptance", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-turn-content-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const stored = await client.request({ command: "blob/put", payload: { data: "aGVsbG8=", encoding: "base64", mimeType: "image/png" } });
+		const digest = (stored as unknown as { result: { blob: { digest: string } } }).result.blob.digest;
+		const accepted = await client.request({ command: "turn/start", sessionId: "session-1", payload: { content: [{ type: "text", text: "inspect" }, { type: "image", digest, mimeType: "image/png" }] } });
+		expect(accepted).toMatchObject({ ok: true, accepted: { sessionRevision: 2 } });
+		const runtime = service.sessions.get("session-1")!;
+		runtime.release.resolve(undefined);
+		await runtime.started.promise;
+		expect(runtime.commands[0]).toMatchObject({ payload: { content: [{ type: "text", text: "inspect" }, { type: "image", data: "aGVsbG8=", mimeType: "image/png" }] } });
+		await client.close();
+	});
+
+	test("delegates session creation and deletion through the v2 service boundary", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-session-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const created = await client.request({
+			command: "session/create",
+			payload: { id: "created-session", cwd: "/tmp" },
+		});
+		expect(created).toMatchObject({
+			ok: true,
+			result: { command: "session/create", session: { id: "created-session" } },
+		});
+		const deleted = await client.request({ command: "session/delete", sessionId: "created-session" });
+		expect(deleted).toMatchObject({ ok: true, result: { command: "session/delete", sessionId: "created-session" } });
+		expect(service.sessions.has("created-session")).toBe(false);
+	});
+
+	test("serves app metadata and starts auth through the injected app registry", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-app-"));
+		directories.push(directory);
+		const apps = new InMemoryV2AppRegistry({
+			apps: [
+				{
+					id: "calendar",
+					name: "Calendar",
+					description: "Calendar connector",
+					auth: "unauthenticated",
+					enabled: true,
+				},
+			],
+		});
+		const server = createUnixServerV2(new TestService(), { path: join(directory, "server.sock"), apps });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		const listed = await client.request({ command: "app/list" });
+		const read = await client.request({ command: "app/read", payload: { id: "calendar" } });
+		const auth = await client.request({
+			command: "app/auth/start",
+			payload: { id: "calendar", authorizationUrl: "https://auth.example.test/start" },
+		});
+		expect(listed).toMatchObject({ ok: true, result: { apps: [{ id: "calendar", auth: "unauthenticated" }] } });
+		expect(read).toMatchObject({ ok: true, result: { app: { id: "calendar", name: "Calendar" } } });
+		expect(auth).toMatchObject({
+			ok: true,
+			result: { auth: { appId: "calendar", state: "pending", authorizationUrl: "https://auth.example.test/start" } },
+		});
+		const pending = await client.request({ command: "app/read", payload: { id: "calendar" } });
+		expect(pending).toMatchObject({ ok: true, result: { app: { id: "calendar", auth: "pending" } } });
+	});
+
 	test("acknowledges a turn before starting runtime execution", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
@@ -412,6 +507,77 @@ describe("PiServer v2 operation acceptance", () => {
 		);
 		expect(terminal).toMatchObject({ type: "event", sessionId: "session-1", payload: { state: "complete" } });
 		await secondClient.close();
+	});
+
+	test("disposes detached runtimes when the server closes", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-shutdown-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const client = await connectUnixTestClientV2(server.addresses[0]!);
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const runtime = service.sessions.get("session-1")!;
+
+		await client.close();
+		expect(runtime.disposeCount).toBe(0);
+
+		await server.close();
+		expect(runtime.disposeCount).toBe(1);
+	});
+
+	test("allows one controller and observer lease per session", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-leases-"));
+		directories.push(directory);
+		const service = new TestService();
+		const server = createUnixServerV2(service, { path: join(directory, "server.sock") });
+		servers.push(server);
+		await server.start();
+		const controller = await connectUnixTestClientV2(server.addresses[0]!);
+		const observer = await connectUnixTestClientV2(server.addresses[0]!);
+		await controller.hello();
+		await observer.hello();
+		await controller.request({ command: "session/attach", sessionId: "session-1" });
+		const observed = await observer.request({
+			command: "session/attach",
+			sessionId: "session-1",
+			payload: { mode: "observer" },
+		});
+		expect(observed).toMatchObject({ ok: true, result: { lease: "observer" } });
+		const rejected = await observer.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { text: "no" },
+		});
+		expect(rejected).toMatchObject({
+			ok: false,
+			error: { code: "request_failed" },
+		});
+		const released = await controller.request({
+			command: "session/attach",
+			sessionId: "session-1",
+			payload: { mode: "observer" },
+		});
+		expect(released).toMatchObject({ ok: true, result: { lease: "observer" } });
+		const acquired = await observer.request({
+			command: "session/attach",
+			sessionId: "session-1",
+			payload: { mode: "control" },
+		});
+		expect(acquired).toMatchObject({ ok: true, result: { lease: "control" } });
+		const controllerMutation = await controller.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { text: "still blocked" },
+		});
+		expect(controllerMutation).toMatchObject({
+			ok: false,
+			error: { code: "request_failed", message: "Session session-1 requires a control lease" },
+		});
+		await controller.close();
+		await observer.close();
 	});
 
 	test("retains a runtime while accepting an operation across detach", async () => {
@@ -628,6 +794,30 @@ describe("PiServer v2 operation acceptance", () => {
 		await client.close();
 	});
 
+	test("keeps process writes and termination under the session controller", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
+		directories.push(directory);
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			processes: new InMemoryV2ProcessRegistry(),
+		});
+		servers.push(server);
+		await server.start();
+		const controller = await connectUnixTestClientV2(server.addresses[0]!);
+		const observer = await connectUnixTestClientV2(server.addresses[0]!);
+		await controller.hello();
+		await observer.hello();
+		await controller.request({ command: "session/attach", sessionId: "session-1" });
+		await observer.request({ command: "session/attach", sessionId: "session-1", payload: { mode: "observer" } });
+		const started = await controller.request({ command: "process/start", sessionId: "session-1", payload: { command: "demo" } });
+		const processId = (started as unknown as { result: { process: { processId: string } } }).result.process.processId;
+		await expect(observer.request({ command: "process/read", payload: { processId, cursor: 0 } })).resolves.toMatchObject({ ok: true });
+		await expect(observer.request({ command: "process/write", payload: { processId, input: "x" } })).resolves.toMatchObject({ ok: false, error: { code: "request_failed" } });
+		await expect(observer.request({ command: "process/terminate", payload: { processId } })).resolves.toMatchObject({ ok: false, error: { code: "request_failed" } });
+		await controller.close();
+		await observer.close();
+	});
+
 	test("transports content-addressed blobs without embedding binary bytes in CBOR", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pis-v2-"));
 		directories.push(directory);
@@ -682,6 +872,37 @@ describe("PiServer v2 operation acceptance", () => {
 		const interrupted = await client.request({ command: "agent/interrupt", payload: { agentId: agent.id } });
 		expect(interrupted).toMatchObject({ ok: true, result: { agent: { id: agent.id, state: "interrupted" } } });
 		await client.close();
+	});
+
+	test("keeps agent mutations under the session controller", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-v2-agent-leases-"));
+		directories.push(directory);
+		const server = createUnixServerV2(new TestService(), {
+			path: join(directory, "server.sock"),
+			agents: new InMemoryV2AgentRegistry(),
+		});
+		servers.push(server);
+		await server.start();
+		const controller = await connectUnixTestClientV2(server.addresses[0]!);
+		const observer = await connectUnixTestClientV2(server.addresses[0]!);
+		await controller.hello();
+		await observer.hello();
+		await controller.request({ command: "session/attach", sessionId: "session-1" });
+		await observer.request({ command: "session/attach", sessionId: "session-1", payload: { mode: "observer" } });
+		const spawned = await controller.request({
+			command: "agent/spawn",
+			sessionId: "session-1",
+			payload: { taskName: "lease-test", taskMessage: "inspect ownership" },
+		});
+		const agentId = (spawned as unknown as { result: { agent: { id: string } } }).result.agent.id;
+		const responses = await Promise.all([
+			observer.request({ command: "agent/message", payload: { agentId, message: "blocked" } }),
+			observer.request({ command: "agent/followUp", payload: { agentId, message: "blocked" } }),
+			observer.request({ command: "agent/interrupt", payload: { agentId } }),
+		]);
+		for (const response of responses) expect(response).toMatchObject({ ok: false, error: { code: "request_failed" } });
+		await controller.close();
+		await observer.close();
 	});
 
 	test("serves versioned plan state through the session snapshot", async () => {

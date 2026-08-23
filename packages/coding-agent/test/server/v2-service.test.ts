@@ -5,9 +5,94 @@ import { Check } from "typebox/value";
 import { describe, expect, test } from "vitest";
 import { SessionSnapshotV2Schema } from "@earendil-works/pi-protocol";
 import { createCodingAgentHarness } from "../../src/server/create-harness.ts";
-import { createCodingAgentV2Service } from "../../src/server/v2-service.ts";
+import { createCodingAgentV2Service, createCodingAgentV2ServiceFromStore } from "../../src/server/v2-service.ts";
 
 describe("coding-agent v2 service adapter", () => {
+	test("backs v2 session lifecycle with injected durable factories", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-session-faux",
+			models: [{ id: "coding-agent-v2-session-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const session = new Session(new InMemorySessionStorage({ id: "factory-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		let deleted = false;
+		try {
+			const service = createCodingAgentV2Service(models, [], {
+				createSession: async (payload) => ({
+					metadata: { id: String(payload.id), createdAt: 1, updatedAt: 1 },
+					harness: created.harness,
+				}),
+				deleteSession: async (sessionId) => {
+					deleted = sessionId === "factory-session";
+				},
+			});
+			const createdSession = await service.createSession!({ id: "factory-session" });
+			expect(createdSession.sessionId).toBe("factory-session");
+			expect((await service.listSessions()).map((item) => item.id)).toEqual(["factory-session"]);
+			await service.deleteSession!("factory-session");
+			expect(deleted).toBe(true);
+			expect(await service.listSessions()).toEqual([]);
+		} finally {
+			if (!deleted) await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("opens catalogued sessions lazily through a durable store", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-store-faux",
+			models: [{ id: "coding-agent-v2-store-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const session = new Session(new InMemorySessionStorage({ id: "stored-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		let opened = 0;
+		let deleted = false;
+		const definition = { metadata: { id: "stored-session", createdAt: 1, updatedAt: 1 }, harness: created.harness };
+		const store = {
+			list: async () => [definition.metadata],
+			open: async () => {
+				opened += 1;
+				return definition;
+			},
+			create: async () => definition,
+			delete: async () => {
+				deleted = true;
+			},
+		};
+		try {
+			const service = await createCodingAgentV2ServiceFromStore(models, store);
+			expect(await service.listSessions()).toMatchObject([{ id: "stored-session" }]);
+			expect(opened).toBe(0);
+			await service.openSession("stored-session");
+			expect(opened).toBe(1);
+			await service.deleteSession!("stored-session");
+			expect(deleted).toBe(true);
+		} finally {
+			if (!deleted) await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("maps a durable harness to an accepted and executable turn runtime", async () => {
 		const models = createModels();
 		const faux = fauxProvider({

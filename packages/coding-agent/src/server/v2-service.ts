@@ -11,6 +11,7 @@ import type {
 	SessionPhaseV2,
 } from "@earendil-works/pi-protocol";
 import { MAX_V2_ARRAY_ITEMS, MAX_V2_JSON_DEPTH, MAX_V2_STRING_LENGTH } from "@earendil-works/pi-protocol";
+import type { ServerRuntimeExtensionHost } from "./extension-host.ts";
 
 const OPERATION_ENTRY = "v2_operation";
 type PersistedOperation = {
@@ -225,12 +226,37 @@ export interface CodingAgentV2SessionDefinition {
 	metadata: SessionMetadataV2;
 	harness: AgentHarness;
 	goals?: GoalManager;
+	extensionHost?: ServerRuntimeExtensionHost;
 }
 
 export interface CodingAgentV2Service {
 	listSessions(): Promise<SessionMetadataV2[]>;
 	listModels(): Promise<ModelMetadata[]>;
 	openSession(sessionId: string): Promise<CodingAgentV2Runtime>;
+	createSession?(options: Record<string, unknown>): Promise<{ sessionId: string; runtime: CodingAgentV2Runtime }>;
+	deleteSession?(sessionId: string): Promise<void>;
+}
+
+export interface CodingAgentV2ServiceOptions {
+	/** Provider-local fast model used only for side-band automatic naming. */
+	fastModel?: Model<string>;
+	/** Durable owner creates a fully initialized session definition. */
+	createSession?: (options: Record<string, unknown>) => Promise<CodingAgentV2SessionDefinition>;
+	/** Durable owner removes a session after the adapter disposes its runtime. */
+	deleteSession?: (sessionId: string) => Promise<void>;
+	/** Durable catalog used when definitions are opened lazily. */
+	listSessions?: () => Promise<SessionMetadataV2[]>;
+	/** Durable owner opens a definition for a catalogued session. */
+	openSession?: (sessionId: string) => Promise<CodingAgentV2SessionDefinition>;
+	/** Catalog entries known before their harness is opened. */
+	initialSessions?: readonly SessionMetadataV2[];
+}
+
+export interface CodingAgentV2SessionStore {
+	list(): Promise<SessionMetadataV2[]>;
+	open(sessionId: string): Promise<CodingAgentV2SessionDefinition>;
+	create(options: Record<string, unknown>): Promise<CodingAgentV2SessionDefinition>;
+	delete(sessionId: string): Promise<void>;
 }
 
 export interface CodingAgentV2Runtime {
@@ -284,6 +310,20 @@ function requireText(command: CommandV2, payload: Record<string, unknown>): stri
 	if (typeof payload.text !== "string" || payload.text.trim().length === 0 || payload.text.length > MAX_V2_STRING_LENGTH)
 		throw new Error(`${command.command} requires bounded non-empty text`);
 	return payload.text;
+}
+
+function commandInput(command: CommandV2): AgentMessage {
+	const payload = requirePayload(command);
+	if (payload.content === undefined) return { role: "user", content: [{ type: "text", text: requireText(command, payload) }], timestamp: Date.now() };
+	if (!Array.isArray(payload.content) || payload.content.length === 0) throw new Error("turn content must be a non-empty array");
+	const content = payload.content.map((part, index) => {
+		if (typeof part !== "object" || part === null || Array.isArray(part)) throw new Error(`turn content item ${index} must be an object`);
+		const item = part as Record<string, unknown>;
+		if (item.type === "text" && typeof item.text === "string") return { type: "text", text: item.text };
+		if (item.type === "image" && typeof item.data === "string" && typeof item.mimeType === "string" && item.mimeType.startsWith("image/")) return { type: "image", data: item.data, mimeType: item.mimeType };
+		throw new Error(`turn content item ${index} must be text or resolved image data`);
+	});
+	return { role: "user", content, timestamp: Date.now() };
 }
 
 function requireBoundedNonEmptyString(command: CommandV2, value: unknown, field: string): string {
@@ -546,19 +586,51 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		const harness = this.definition.harness;
 		const runCommand: CommandNameV2 = command.command;
 		const payload = commandPayload(command);
+		const extensionHost = this.definition.extensionHost;
+		let terminalNotified = false;
+		let terminalOutcome = "completed";
+		const notifyTerminal = async (outcome: string): Promise<void> => {
+			if (terminalNotified) return;
+			try {
+				await extensionHost?.onOperationTerminal({ id: operationId, type: runCommand }, outcome);
+				terminalNotified = true;
+			} catch (error) {
+				if (outcome !== "completed") terminalNotified = true;
+				throw error;
+			}
+		};
+		try {
+			await extensionHost?.onOperationAccepted({ id: operationId, type: runCommand });
+		} catch (error) {
+			terminalOutcome = "failed";
+			await notifyTerminal("failed");
+			throw error;
+		}
+		try {
 		const unwrap = <T>(result: { ok: boolean; value?: T; error?: unknown }): T => {
 			if (!result.ok) throw result.error instanceof Error ? result.error : new Error(String(result.error));
 			return result.value as T;
 		};
 		if (runCommand === "turn/start") {
-			const outcome = unwrap(await harness.prompt(requireText(command, requirePayload(command))));
-			if ("kind" in outcome && outcome.kind === "failed") throw new Error(outcome.error.message);
+			const outcome = unwrap(await harness.prompt(commandInput(command)));
+			if ("kind" in outcome) {
+				if (outcome.kind === "failed") { terminalOutcome = "failed"; throw new Error(outcome.error.message); }
+				if (outcome.kind === "aborted") terminalOutcome = "aborted";
+				if (outcome.kind === "suspended") terminalOutcome = "suspended";
+			}
 		} else if (runCommand === "turn/resume") {
 			const outcome = unwrap(await harness.resume());
-			if ("kind" in outcome && outcome.kind === "failed") throw new Error(outcome.error.message);
-		} else if (runCommand === "turn/steer") unwrap(await harness.steer(requireText(command, requirePayload(command))));
-		else if (runCommand === "turn/followUp") unwrap(await harness.followUp(requireText(command, requirePayload(command))));
-		else if (runCommand === "turn/abort") unwrap(await harness.abort());
+			if ("kind" in outcome) {
+				if (outcome.kind === "failed") { terminalOutcome = "failed"; throw new Error(outcome.error.message); }
+				if (outcome.kind === "aborted") terminalOutcome = "aborted";
+				if (outcome.kind === "suspended") terminalOutcome = "suspended";
+			}
+		} else if (runCommand === "turn/steer") unwrap(await harness.steer(commandInput(command)));
+		else if (runCommand === "turn/followUp") unwrap(await harness.followUp(commandInput(command)));
+		else if (runCommand === "turn/abort") {
+			unwrap(await harness.abort());
+			terminalOutcome = "aborted";
+		}
 		else if (runCommand === "turn/rollback") {
 			const turns = typeof payload.turns === "number" ? payload.turns : 1;
 			unwrap(await harness.rollback(turns));
@@ -622,23 +694,34 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			if (typeof payload.enabled !== "boolean") throw new Error("session/name/auto/set requires enabled");
 			this.autoName = payload.enabled;
 		}
+		} catch (error) {
+			terminalOutcome = "failed";
+			await notifyTerminal("failed");
+			throw error;
+		}
 		void this.autoName;
 		await this.withMutation(async () => {
 			const operation = this.operations.get(operationId);
 			if (!operation) return;
-			const state = runCommand === "turn/abort" ? "aborted" : "complete";
+			const state = runCommand === "turn/abort" ? "aborted" : terminalOutcome === "suspended" ? "suspended" : terminalOutcome === "aborted" ? "aborted" : "complete";
 			await this.persistOperation({ ...operation, state, revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
 			this.operationId = undefined;
 			this.freshOperationId = undefined;
 		});
+		await notifyTerminal(terminalOutcome);
 		} catch (error) {
-			await this.withMutation(async () => {
+			try {
+				await this.withMutation(async () => {
 				const operation = this.operations.get(operationId);
 				if (operation && (operation.state === "accepted" || operation.state === "running"))
 					await this.persistOperation({ ...operation, state: "failed", revision: this.revision + 1, eventSeq: this.eventSeq + 1 });
 				this.operationId = undefined;
 				this.freshOperationId = undefined;
-			});
+				});
+			} finally {
+				terminalOutcome = "failed";
+				await notifyTerminal("failed").catch(() => undefined);
+			}
 			throw error;
 		}
 	}
@@ -654,15 +737,87 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 export function createCodingAgentV2Service(
 	models: Models,
 	definitions: readonly CodingAgentV2SessionDefinition[],
+	options?: CodingAgentV2ServiceOptions,
 ): CodingAgentV2Service {
 	const byId = new Map(definitions.map((definition) => [definition.metadata.id, definition]));
+	const knownIds = new Set(
+		[...(options?.initialSessions ?? []), ...definitions.map((definition) => definition.metadata)].map((item) => item.id),
+	);
 	const runtimes = new Map<string, CodingAgentV2RuntimeImpl>();
 	const opening = new Map<string, Promise<CodingAgentV2RuntimeImpl>>();
+	const creatingIds = new Set<string>();
+	const sessionLocks = new Map<string, Promise<void>>();
+	const withSessionLock = async <T>(sessionId: string, operation: () => Promise<T>): Promise<T> => {
+		const previous = sessionLocks.get(sessionId) ?? Promise.resolve();
+		let release!: () => void;
+		const current = new Promise<void>((resolve) => (release = resolve));
+		sessionLocks.set(sessionId, current);
+		await previous;
+		try {
+			return await operation();
+		} finally {
+			release();
+			if (sessionLocks.get(sessionId) === current) sessionLocks.delete(sessionId);
+		}
+	};
+	const sessionFactory = options?.createSession;
+	const sessionDeleter = options?.deleteSession;
 	return {
-		listSessions: async () => definitions.map((definition) => structuredClone(definition.metadata)),
+		listSessions: async () =>
+			options?.listSessions
+				? structuredClone(await options.listSessions())
+				: [...byId.values()].map((definition) => structuredClone(definition.metadata)),
 		listModels: async () => Promise.all(models.getModels().map((model) => modelMetadata(models, model))),
-		openSession: async (sessionId) => {
-			const definition = byId.get(sessionId);
+		createSession: sessionFactory
+			? async (payload) => withSessionLock("__create__", async () => {
+					if (typeof payload.id === "string" && knownIds.has(payload.id))
+						throw new Error(`Session ${payload.id} already exists`);
+					const definition = await sessionFactory(payload);
+					if (creatingIds.has(definition.metadata.id)) throw new Error(`Session ${definition.metadata.id} is being created`);
+					if (byId.has(definition.metadata.id) || knownIds.has(definition.metadata.id)) {
+						await definition.harness.close().catch(() => undefined);
+						throw new Error(`Session ${definition.metadata.id} already exists`);
+					}
+					creatingIds.add(definition.metadata.id);
+					try {
+					const model = await definition.harness.getModel();
+					let runtime!: CodingAgentV2RuntimeImpl;
+					runtime = new CodingAgentV2RuntimeImpl(definition, models, model, () => {
+						if (runtimes.get(definition.metadata.id) === runtime) runtimes.delete(definition.metadata.id);
+					});
+					byId.set(definition.metadata.id, definition);
+					knownIds.add(definition.metadata.id);
+					runtimes.set(definition.metadata.id, runtime);
+					return { sessionId: definition.metadata.id, runtime };
+					} finally {
+						creatingIds.delete(definition.metadata.id);
+					}
+				})
+			: undefined,
+		deleteSession: sessionDeleter
+			? async (sessionId) => withSessionLock(sessionId, async () => {
+					if (creatingIds.has(sessionId)) throw new Error(`Session ${sessionId} is being created`);
+					if (!byId.has(sessionId) && !knownIds.has(sessionId)) throw new Error(`Unknown session ${sessionId}`);
+					await sessionDeleter(sessionId);
+					const runtime = runtimes.get(sessionId);
+					try {
+						if (runtime) await runtime.dispose();
+					} finally {
+						runtimes.delete(sessionId);
+						byId.delete(sessionId);
+						knownIds.delete(sessionId);
+					}
+				})
+			: undefined,
+		openSession: (sessionId) => withSessionLock(sessionId, async () => {
+			if (creatingIds.has(sessionId)) throw new Error(`Session ${sessionId} is being created`);
+			let definition = byId.get(sessionId);
+			if (!definition && options?.openSession) {
+				definition = await options.openSession(sessionId);
+				if (definition.metadata.id !== sessionId) throw new Error(`Opened session id mismatch: ${sessionId}`);
+				byId.set(sessionId, definition);
+				knownIds.add(sessionId);
+			}
 			if (!definition) throw new Error(`Unknown session ${sessionId}`);
 			const existing = runtimes.get(sessionId);
 			if (existing) return existing;
@@ -670,6 +825,7 @@ export function createCodingAgentV2Service(
 			if (pending) return pending;
 			const promise = (async () => {
 				const model = await definition.harness.getModel();
+				if (byId.get(sessionId) !== definition) throw new Error(`Session ${sessionId} was deleted while opening`);
 				let runtime!: CodingAgentV2RuntimeImpl;
 				runtime = new CodingAgentV2RuntimeImpl(definition, models, model, () => {
 					if (runtimes.get(sessionId) === runtime) runtimes.delete(sessionId);
@@ -683,6 +839,22 @@ export function createCodingAgentV2Service(
 			} finally {
 				opening.delete(sessionId);
 			}
-		},
+		}),
 	};
+}
+
+export async function createCodingAgentV2ServiceFromStore(
+	models: Models,
+	store: CodingAgentV2SessionStore,
+	options?: Pick<CodingAgentV2ServiceOptions, "fastModel">,
+): Promise<CodingAgentV2Service> {
+	const initialSessions = await store.list();
+	return createCodingAgentV2Service(models, [], {
+		...options,
+		initialSessions,
+		listSessions: () => store.list(),
+		openSession: (sessionId) => store.open(sessionId),
+		createSession: (payload) => store.create(payload),
+		deleteSession: (sessionId) => store.delete(sessionId),
+	});
 }
