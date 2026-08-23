@@ -1300,9 +1300,9 @@ describe("AgentHarness v2 scaffold", () => {
 			session,
 			models,
 			model: faux.getModel(),
-		});
-		harness.hooks.on("before_run", () => {
-			throw new Error('request failed: {"api_key":"secret-value"} Bearer bearer-secret');
+			toProviderMessages: () => {
+				throw new Error('request failed: {"api_key":"secret-value"} Bearer bearer-secret');
+			},
 		});
 
 		await harness.prompt("hello");
