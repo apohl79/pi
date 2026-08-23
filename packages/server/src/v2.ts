@@ -576,6 +576,7 @@ export class PiServerV2 {
 			// The connection now has a committed attachment. A concurrent attach
 			// request must not let its failure remove this shared runtime reference.
 			state.attachedSessions.add(command.sessionId);
+			if (mode === "observer") this.releaseControlFor(state, command.sessionId);
 		} catch (error) {
 			if (claimedControl && !state.attachedSessions.has(command.sessionId)) {
 				this.releaseControlFor(state, command.sessionId);
