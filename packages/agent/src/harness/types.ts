@@ -238,6 +238,8 @@ export interface FileSystem {
 	joinPath(parts: string[], abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
 	/** Read a UTF-8 text file. */
 	readTextFile(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
+	/** Read a file beneath root through pinned, no-follow directory descriptors. */
+	readTextFileWithinRoot(root: string, path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>>;
 	/** Read UTF-8 text lines. Implementations should stop once `maxLines` lines have been read. */
 	readTextLines(
 		path: string,
@@ -251,6 +253,19 @@ export interface FileSystem {
 	appendFile(path: string, content: string | Uint8Array, abortSignal?: AbortSignal): Promise<Result<void, FileError>>;
 	/** Atomically rename a file, replacing the destination when it exists. Does not copy across filesystems. */
 	renameFile(sourcePath: string, destinationPath: string, abortSignal?: AbortSignal): Promise<Result<void, FileError>>;
+	/**
+	 * Replace a file beneath root using a backend primitive that pins the parent
+	 * directory and does not follow symlinks. Implementations must reject
+	 * unsupported platforms rather than falling back to path-based check-then-use.
+	 */
+	atomicReplaceFileWithinRoot(
+		root: string,
+		targetPath: string,
+		content: string | Uint8Array,
+		abortSignal?: AbortSignal,
+	): Promise<Result<void, FileError>>;
+	/** Remove a file beneath root without following a swapped parent path. */
+	removeFileWithinRoot(root: string, targetPath: string, abortSignal?: AbortSignal): Promise<Result<void, FileError>>;
 	/** Return metadata for the addressed path without following symlinks. */
 	fileInfo(path: string, abortSignal?: AbortSignal): Promise<Result<FileInfo, FileError>>;
 	/** List direct children of a directory without following symlinks. */
