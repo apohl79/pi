@@ -180,10 +180,13 @@ describe("protocol v2 contract", () => {
 			taskName: "worker",
 			state: "running",
 			model: { provider: "test", id: "small" },
+			startedAt: 1_700_000_000_000,
 			usage: { input: 12, output: 4, cacheRead: 2, cacheWrite: 0, costUsd: 0.12, pricingState: "known" },
 		} as const;
 		expect(Check(SessionSnapshotV2Schema, { ...snapshot, agents: [agent] })).toBe(true);
+		expect(decodeCbor(encodeCbor({ ...snapshot, agents: [agent] }))).toEqual({ ...snapshot, agents: [agent] });
 		expect(Check(SessionSnapshotV2Schema, { ...snapshot, agents: [{ ...agent, usage: { input: -1 } }] })).toBe(false);
+		expect(Check(SessionSnapshotV2Schema, { ...snapshot, agents: [{ ...agent, startedAt: -1 }] })).toBe(false);
 	});
 
 	test("accepts an operation request and durable acceptance response", () => {
