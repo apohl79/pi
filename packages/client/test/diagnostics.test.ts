@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -43,6 +43,20 @@ describe("ClientDiagnosticSpool", () => {
 		await first.append({ event: "three", fields: { value: "third" } });
 		const reopened = new ClientDiagnosticSpool({ path, clientInstanceId: "client-1", maxBytes: 180, maxFiles: 3 });
 		expect((await reopened.read()).map((record) => record.event)).toEqual(["one", "two", "three"]);
+	});
+
+	test("reasserts owner-only permissions on rotated files after restart", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-client-diagnostics-permissions-"));
+		const path = join(directory, "client.jsonl");
+		const first = new ClientDiagnosticSpool({ path, clientInstanceId: "client-1", maxBytes: 180, maxFiles: 3 });
+		await first.append({ event: "one", fields: { value: "first" } });
+		await first.append({ event: "two", fields: { value: "second" } });
+		await first.append({ event: "three", fields: { value: "third" } });
+		await chmod(`${path}.1`, 0o644);
+
+		const reopened = new ClientDiagnosticSpool({ path, clientInstanceId: "client-1", maxBytes: 180, maxFiles: 3 });
+		await reopened.read();
+		expect((await stat(`${path}.1`)).mode & 0o077).toBe(0);
 	});
 
 	test("merges matching local records and clears the unavailable marker", async () => {
