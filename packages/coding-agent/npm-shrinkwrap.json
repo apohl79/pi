@@ -556,6 +556,7 @@
 			"license": "MIT",
 			"dependencies": {
 				"@earendil-works/pi-ai": "^0.84.2",
+				"@earendil-works/pi-web-tools": "^0.84.2",
 				"@earendil-works/pi-protocol": "^0.84.2"
 			},
 			"engines": {
@@ -610,6 +611,14 @@
 				"get-east-asian-width": "1.6.0",
 				"marked": "18.0.5"
 			},
+			"engines": {
+				"node": ">=22.19.0"
+			}
+		},
+		"node_modules/@earendil-works/pi-web-tools": {
+			"version": "0.84.2",
+			"resolved": "https://registry.npmjs.org/@earendil-works/pi-web-tools/-/pi-web-tools-0.84.2.tgz",
+			"license": "MIT",
 			"engines": {
 				"node": ">=22.19.0"
 			}
