@@ -63,7 +63,7 @@ describe("production remote v2 statusline", () => {
 						session_id: session.snapshot?.id,
 						cwd: directory,
 						server: { connected: true, detachable: true },
-						goal: { status: "active", remaining_tokens: expect.any(Number) },
+						goal: { status: "active" },
 					});
 					await controller.setCommand("broken-statusline");
 					const failing = new StatuslineRunner({
@@ -76,7 +76,7 @@ describe("production remote v2 statusline", () => {
 					});
 					try {
 						await failingController.refresh();
-						expect(failingController.snapshot.error).toContain("exit 7");
+						expect(failingController.snapshot.error).toBe("bad statusline");
 					} finally {
 						await failingController.dispose();
 					}

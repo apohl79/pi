@@ -745,7 +745,6 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	}
 
 	async snapshot(): Promise<SessionSnapshotV2> {
-		await this.nameGeneration;
 		await this.ensureAutoNameLoaded();
 		await this.ensureNameStateLoaded();
 		const [

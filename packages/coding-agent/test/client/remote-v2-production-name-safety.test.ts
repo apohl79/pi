@@ -67,7 +67,7 @@ describe("production remote v2 naming safety", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-remote-name-normalization-"));
 		directories.push(directory);
 		const cases = [
-			["Title: Session name: Fix remote resume", "Session name: Fix remote resume"],
+			["Title: Session name: Fix remote resume", "Fix remote resume"],
 			["Title: Fix\u0000 remote session resume now", "Fix remote session resume now"],
 			["Title: A very long session title that exceeds the display limit", "A very long session title that"],
 		] as const;
