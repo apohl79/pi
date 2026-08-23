@@ -6,7 +6,7 @@ import type { CodingAgentV2Runtime, CodingAgentV2Service } from "./v2-service.ts
 interface ChildAgent {
 	readonly summary: AgentSummary;
 	readonly parentSessionId: string;
-	readonly sessionId: string;
+	readonly childSessionId: string;
 	readonly runtime: CodingAgentV2Runtime;
 	state: AgentSummary["state"];
 	messages: string[];
@@ -86,7 +86,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		const agent: ChildAgent = {
 			summary,
 			parentSessionId: request.sessionId,
-			sessionId: created.sessionId,
+			childSessionId: created.sessionId,
 			runtime: created.runtime,
 			state: "running",
 			messages: [request.taskMessage],
@@ -120,7 +120,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 
 	async getSnapshot(agentId: string): Promise<V2AgentSnapshot> {
 		const agent = this.get(agentId);
-		return { ...this.snapshot(agent), sessionId: agent.sessionId };
+		return { ...this.snapshot(agent), sessionId: agent.parentSessionId };
 	}
 
 	async wait(agentId: string, timeoutMs?: number): Promise<AgentSummary> {
@@ -181,7 +181,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			}
 			await agent.runtime.run(operationId, {
 				command,
-				sessionId: agent.sessionId,
+				sessionId: agent.childSessionId,
 				payload: { text },
 			});
 			if (agent.state !== "interrupted") agent.state = "complete";

@@ -7,6 +7,7 @@ import {
 } from "@earendil-works/pi-protocol";
 import { expect, test, vi } from "vitest";
 import type { ByteConnection } from "../src/connection.ts";
+import type { V2AgentRegistry } from "../src/agents.ts";
 import { InMemoryForensicRecorder } from "../src/diagnostics.ts";
 import { InMemoryV2OperationStore } from "../src/operation-store.ts";
 import { ProtocolTestClientV2 } from "../src/testing/client.ts";
@@ -88,6 +89,24 @@ test("stops replay encoding after the byte cap", async () => {
 	expect(finalMessages).toEqual([
 		{ type: "hello_error", error: { code: "invalid_request", message: "Replay exceeds configured limit" } },
 	]);
+});
+
+test("does not dispose caller-injected agent registries", async () => {
+	const dispose = vi.fn(async () => {});
+	const agents: V2AgentRegistry = {
+		spawn: async () => { throw new Error("unused"); },
+		list: async () => [],
+		getSnapshot: async () => { throw new Error("unused"); },
+		wait: async () => { throw new Error("unused"); },
+		message: async () => {},
+		followUp: async () => { throw new Error("unused"); },
+		interrupt: async () => { throw new Error("unused"); },
+		complete: async () => { throw new Error("unused"); },
+		dispose,
+	};
+	const server = new PiServerV2(service, { listeners: [], agents });
+	await expect(server.close()).resolves.toBeUndefined();
+	expect(dispose).not.toHaveBeenCalled();
 });
 
 test("validates bounded v2 options", () => {

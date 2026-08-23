@@ -177,6 +177,7 @@ export class PiServerV2 {
 	private readonly inputs: V2InputRegistry;
 	private readonly files: V2FileReferenceService;
 	private readonly plugins: V2PluginRegistry;
+	private readonly ownsAgents: boolean;
 	private readonly connections = new Set<V2ConnectionState>();
 	private readonly controls = new Map<string, string>();
 	private readonly runtimes = new Set<PiSessionRuntimeV2>();
@@ -218,6 +219,7 @@ export class PiServerV2 {
 		this.files =
 			options.files ?? new LocalV2FileReferenceService({ projectRoot: process.cwd(), allowAbsolute: false });
 		this.plugins = options.plugins ?? new InMemoryV2PluginRegistry();
+		this.ownsAgents = options.agents === undefined;
 	}
 
 	get addresses(): readonly string[] {
@@ -291,20 +293,33 @@ export class PiServerV2 {
 		if (this.closePromise) return this.closePromise;
 		this.closing = true;
 		this.closePromise = (async () => {
-			await this.startPromise?.catch(() => undefined);
-			const listenerResults = await Promise.allSettled(this.listeners.map((listener) => listener.close()));
-			for (const result of listenerResults)
-				if (result.status === "rejected")
-					this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
-			await Promise.all(Array.from(this.connections, (state) => this.closeConnection(state, undefined, true)));
-			await this.disposeActiveOperationRuntimes();
-			const runtimeResults = await Promise.allSettled(Array.from(this.runtimes, (runtime) => this.disposeRuntime(runtime)));
-			for (const result of runtimeResults)
-				if (result.status === "rejected")
-					this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
-			this.runtimes.clear();
-			await this.agents.dispose?.();
-			this.started = false;
+			try {
+				await this.startPromise?.catch(() => undefined);
+				const listenerResults = await Promise.allSettled(this.listeners.map((listener) => listener.close()));
+				for (const result of listenerResults)
+					if (result.status === "rejected")
+						this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
+				const connectionResults = await Promise.allSettled(
+					Array.from(this.connections, (state) => this.closeConnection(state, undefined, true)),
+				);
+				for (const result of connectionResults)
+					if (result.status === "rejected")
+						this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
+				await this.disposeActiveOperationRuntimes();
+				const runtimeResults = await Promise.allSettled(Array.from(this.runtimes, (runtime) => this.disposeRuntime(runtime)));
+				for (const result of runtimeResults)
+					if (result.status === "rejected")
+						this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
+				this.runtimes.clear();
+				if (this.ownsAgents) {
+					const agentResult = await Promise.allSettled([this.agents.dispose?.()]);
+					for (const result of agentResult)
+						if (result.status === "rejected")
+							this.reportError(result.reason instanceof Error ? result.reason : new Error(String(result.reason)));
+				}
+			} finally {
+				this.started = false;
+			}
 		})();
 		return this.closePromise;
 	}
