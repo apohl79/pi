@@ -203,4 +203,17 @@ describe("InMemoryV2AgentRegistry", () => {
 		expect(() => new InMemoryV2AgentRegistry({ maxActivePerParent: 0 })).toThrow("maxActivePerParent");
 		expect(() => new InMemoryV2AgentRegistry({ maxActivePerParent: 9 })).toThrow("maxActivePerParent");
 	});
+
+	test("interrupts running children during disposal", async () => {
+		const registry = new InMemoryV2AgentRegistry();
+		const child = await registry.spawn({
+			sessionId: "session-1",
+			parentPath: "/root",
+			taskName: "worker",
+			taskMessage: "long task",
+			model: { provider: "test", id: "small" },
+		});
+		await registry.dispose!();
+		expect(await registry.wait(child.id)).toMatchObject({ state: "interrupted" });
+	});
 });

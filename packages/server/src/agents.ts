@@ -123,6 +123,12 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 		return this.snapshot(agent);
 	}
 
+	async dispose(): Promise<void> {
+		for (const agent of this.agents.values()) {
+			if (agent.state === "running" || agent.state === "awaitingInput") agent.state = "interrupted";
+		}
+	}
+
 	async complete(agentId: string): Promise<AgentSummary> {
 		const agent = this.get(agentId);
 		agent.state = "complete";

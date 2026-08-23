@@ -203,6 +203,13 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		this.disposed = true;
 		const agents = [...this.agents.values()];
 		this.agents.clear();
+		await Promise.all(
+			agents.map(async (agent) => {
+				if (agent.state !== "running" && agent.state !== "awaitingInput") return;
+				agent.state = "interrupted";
+				await this.persist(agent);
+			}),
+		);
 		await Promise.allSettled(agents.map((agent) => agent.runtime.dispose()));
 		for (const agent of agents) this.resolveWaiters(agent);
 	}

@@ -245,4 +245,18 @@ describe("CodingAgentV2AgentRegistry", () => {
 		);
 		expect(() => new CodingAgentV2AgentRegistry(service, { maxActivePerParent: 0 })).toThrow("maxActivePerParent");
 	});
+
+	test("persists interruption when the daemon disposes running children", async () => {
+		const { registry, runtime } = fixture();
+		runtime.blocked = true;
+		await registry.spawn({
+			sessionId: "parent-session",
+			parentPath: "root",
+			taskName: "worker",
+			taskMessage: "long task",
+			model: { provider: "inherit", id: "inherit" },
+		});
+		await registry.dispose();
+		expect(runtime.customEntries[0]).toMatchObject({ data: { state: "interrupted" } });
+	});
 });
