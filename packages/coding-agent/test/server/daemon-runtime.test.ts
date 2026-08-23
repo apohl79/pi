@@ -970,6 +970,52 @@ describe("coding-agent daemon runtime", () => {
 		}
 	});
 
+	test("resolves a provider-only server-default request to that provider's model", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-prov-"));
+		directories.push(directory);
+		const models = createModels();
+		const defaultProvider = fauxProvider({
+			provider: "coding-agent-daemon-provider-default-a-faux",
+			models: [{ id: "provider-default-a-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		const requestedProvider = fauxProvider({
+			provider: "coding-agent-daemon-provider-default-b-faux",
+			models: [{ id: "provider-default-b-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(defaultProvider.provider);
+		models.setProvider(requestedProvider.provider);
+		defaultProvider.setResponses([fauxAssistantMessage("wrong provider")]);
+		requestedProvider.setResponses([fauxAssistantMessage("requested provider")]);
+		const output: string[] = [];
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: defaultProvider.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: (value) => output.push(String(value)),
+			writeText: (value) => output.push(value),
+		});
+		try {
+			await runtime.cli.runPi({
+				command: "pi",
+				options: {
+					print: true,
+					provider: requestedProvider.getModel().provider,
+					messages: ["hello"],
+					fileArgs: [],
+					unknownFlags: new Map(),
+					diagnostics: [],
+				},
+			});
+			expect(output).toContain("requested provider");
+			expect(output).not.toContain("wrong provider");
+		} finally {
+			await runtime.close();
+		}
+	});
+
 	test("runs server-default JSON mode through the production daemon", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-daemon-json-e2e-"));
 		directories.push(directory);
