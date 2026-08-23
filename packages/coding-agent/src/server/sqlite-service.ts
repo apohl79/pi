@@ -316,6 +316,18 @@ export async function createCodingAgentV2SqliteService(
 				: async () => hashV2PluginSet(await options.pluginRegistry!.listPlugins(true));
 		const agents = agentRegistry === undefined ? undefined : async () => agentRegistry.list(metadata.id);
 		const plan = planRegistry === undefined ? undefined : async () => planRegistry.read(metadata.id);
+		const diagnostics =
+			options.diagnostics === undefined
+				? undefined
+				: async () => {
+						const events = await options.diagnostics!.read();
+						const critical = events.filter((event) => event.severity === "error");
+						return {
+							capture: "metadata" as const,
+							degraded: critical.length > 0,
+							lastCriticalEventSeq: critical.at(-1)?.seq ?? 0,
+						};
+					};
 		const queues = async () => created.harness.getQueueSnapshot();
 		return {
 			metadata: sessionMetadata(metadata),
@@ -324,6 +336,7 @@ export async function createCodingAgentV2SqliteService(
 			...(pluginSetHash === undefined ? {} : { pluginSetHash }),
 			...(agents === undefined ? {} : { agents }),
 			...(plan === undefined ? {} : { plan }),
+			...(diagnostics === undefined ? {} : { diagnostics }),
 			queues,
 			goals,
 			...(goalContinuation === undefined ? {} : { goalContinuation }),

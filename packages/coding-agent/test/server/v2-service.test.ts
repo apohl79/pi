@@ -2,7 +2,7 @@ import { GoalContinuationScheduler, GoalManager, InMemorySessionStorage, Session
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
-import { InMemoryV2InputRegistry, InMemoryV2PlanRegistry } from "@earendil-works/pi-server";
+import { InMemoryForensicRecorder, InMemoryV2InputRegistry, InMemoryV2PlanRegistry } from "@earendil-works/pi-server";
 import { describe, expect, test } from "vitest";
 import { createCodingAgentHarness } from "../../src/server/create-harness.ts";
 import { ServerRuntimeExtensionHost } from "../../src/server/extension-host.ts";
@@ -35,6 +35,8 @@ describe("coding-agent v2 service adapter", () => {
 		});
 		const inputs = new InMemoryV2InputRegistry();
 		const plans = new InMemoryV2PlanRegistry();
+		const diagnostics = new InMemoryForensicRecorder();
+		await diagnostics.record({ kind: "turn_failed", sessionId: "awaiting-input-session", severity: "error" });
 		await plans.update("awaiting-input-session", { items: [{ step: "Inspect queue", status: "in_progress" }] });
 		const service = createCodingAgentV2Service(models, [
 			{
@@ -42,6 +44,14 @@ describe("coding-agent v2 service adapter", () => {
 				harness: created.harness,
 				inputs,
 				plan: async () => plans.read("awaiting-input-session"),
+				diagnostics: async () => {
+					const events = await diagnostics.read();
+					return {
+						capture: "metadata",
+						degraded: events.some((event) => event.severity === "error"),
+						lastCriticalEventSeq: events.at(-1)?.seq ?? 0,
+					};
+				},
 				queues: async () => ({
 					steer: [
 						{
@@ -57,6 +67,7 @@ describe("coding-agent v2 service adapter", () => {
 		try {
 			expect(await (await service.openSession("awaiting-input-session")).snapshot()).toMatchObject({
 				phase: "awaitingInput",
+				diagnostics: { capture: "metadata", degraded: true, lastCriticalEventSeq: 1 },
 				plan: { version: 1, items: [{ step: "Inspect queue", status: "in_progress" }] },
 				queues: { steer: [{ id: "queued-steer", content: [{ type: "text", text: "queued" }] }] },
 			});
