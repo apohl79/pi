@@ -36,6 +36,10 @@ function assertMimeType(mimeType: string): void {
 		throw new Error("Blob MIME type is invalid");
 }
 
+function assertLimit(name: string, value: number): void {
+	if (!Number.isSafeInteger(value) || value < 0) throw new Error(`Blob ${name} must be a non-negative safe integer`);
+}
+
 export class InMemoryV2BlobStore implements V2BlobStore {
 	private readonly maxBytes: number;
 	private readonly maxTotalBytes: number;
@@ -46,6 +50,9 @@ export class InMemoryV2BlobStore implements V2BlobStore {
 		this.maxBytes = options.maxBytes ?? 16 * 1024 * 1024;
 		this.maxTotalBytes = options.maxTotalBytes ?? 256 * 1024 * 1024;
 		this.maxBlobs = options.maxBlobs ?? 1024;
+		assertLimit("maxBytes", this.maxBytes);
+		assertLimit("maxTotalBytes", this.maxTotalBytes);
+		assertLimit("maxBlobs", this.maxBlobs);
 	}
 
 	async put(data: Uint8Array, mimeType: string): Promise<V2BlobStat> {
@@ -94,6 +101,9 @@ export class FileV2BlobStore implements V2BlobStore {
 		this.maxBytes = options.maxBytes ?? 256 * 1024 * 1024;
 		this.maxTotalBytes = options.maxTotalBytes ?? 512 * 1024 * 1024;
 		this.maxBlobs = options.maxBlobs ?? 4096;
+		assertLimit("maxBytes", this.maxBytes);
+		assertLimit("maxTotalBytes", this.maxTotalBytes);
+		assertLimit("maxBlobs", this.maxBlobs);
 	}
 
 	async put(data: Uint8Array, mimeType: string): Promise<V2BlobStat> {
@@ -135,7 +145,8 @@ export class FileV2BlobStore implements V2BlobStore {
 		let bytes = 0;
 		for (const entry of entries) {
 			const metadata = JSON.parse(await readFile(join(this.root, entry), "utf8")) as V2BlobStat;
-			if (typeof metadata.size !== "number" || metadata.size < 0) throw new Error("Blob metadata size is invalid");
+			if (!Number.isSafeInteger(metadata.size) || metadata.size < 0)
+				throw new Error("Blob metadata size is invalid");
 			bytes += metadata.size;
 		}
 		return { blobs: entries.length, bytes };
@@ -174,6 +185,7 @@ export class FileV2BlobStore implements V2BlobStore {
 
 	/** Verifies bounded on-disk blob metadata and content-addressed bytes without repairing them. */
 	async verify(maxEntries = 1024): Promise<V2BlobIntegrityReport> {
+		assertLimit("verify maxEntries", maxEntries);
 		let entries: string[];
 		try {
 			entries = (await readdir(this.root)).filter((entry) => entry.endsWith(".json"));

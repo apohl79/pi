@@ -781,6 +781,12 @@ export class PiServerV2 {
 			throw new Error("blob/put requires data and mimeType");
 		const encoding = payload.encoding === "base64" ? "base64" : payload.encoding === "utf8" ? "utf8" : undefined;
 		if (!encoding) throw new Error("blob/put encoding must be utf8 or base64");
+		if (
+			encoding === "base64" &&
+			(!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(payload.data) ||
+				Buffer.from(payload.data, "base64").toString("base64") !== payload.data)
+		)
+			throw new Error("blob/put base64 data is invalid");
 		const data = encoding === "base64" ? Buffer.from(payload.data, "base64") : Buffer.from(payload.data, "utf8");
 		await this.sendResponse(state, id, {
 			command: command.command,

@@ -11,6 +11,12 @@ const legacyBlobStore: V2BlobStore = {
 };
 
 describe("InMemoryV2BlobStore", () => {
+	test("rejects invalid quota options", () => {
+		expect(() => new InMemoryV2BlobStore({ maxBytes: -1 })).toThrow("maxBytes");
+		expect(() => new InMemoryV2BlobStore({ maxTotalBytes: Number.POSITIVE_INFINITY })).toThrow("maxTotalBytes");
+		expect(() => new InMemoryV2BlobStore({ maxBlobs: 1.5 })).toThrow("maxBlobs");
+	});
+
 	test("keeps inventory optional for protocol-compatible custom stores", async () => {
 		expect(legacyBlobStore.list).toBeUndefined();
 		expect(await legacyBlobStore.stat("a".repeat(64))).toMatchObject({ mimeType: "text/plain" });
@@ -37,6 +43,13 @@ describe("InMemoryV2BlobStore", () => {
 });
 
 describe("FileV2BlobStore", () => {
+	test("rejects invalid quota and verification limits", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-blobs-limits-"));
+		expect(() => new FileV2BlobStore(directory, { maxBytes: -1 })).toThrow("maxBytes");
+		const store = new FileV2BlobStore(directory);
+		await expect(store.verify(-1)).rejects.toThrow("verify maxEntries");
+	});
+
 	test("verifies content-addressed files and reports corruption without repair", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-blobs-integrity-"));
 		const store = new FileV2BlobStore(directory);
