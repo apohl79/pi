@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, realpath } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 
 export interface ModelInstructionProfile {
@@ -89,6 +89,15 @@ export class ModelInstructionResolver {
 		}
 		if (!this.isTrusted(path))
 			throw new Error(`Model profile ${profileId} file resolves outside trusted roots: ${file}`);
+		let size: number;
+		try {
+			size = (await stat(path)).size;
+		} catch (error) {
+			throw new Error(
+				`Model profile ${profileId} file cannot be read: ${file} (${error instanceof Error ? error.message : String(error)})`,
+			);
+		}
+		if (size > this.maxBytes) throw new Error(`Model profile ${profileId} exceeds ${this.maxBytes}-byte limit`);
 		try {
 			return await readFile(path, "utf8");
 		} catch (error) {
