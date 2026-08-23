@@ -846,6 +846,34 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("surfaces transient server events without mutating the authoritative snapshot", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		const initial = session.snapshot;
+
+		for (const [seq, event, payload] of [
+			[2, "bundle_progress", { phase: "started", completed: 0, total: 1 }],
+			[3, "connector_auth_changed", { appId: "calendar", state: "authenticated" }],
+			[4, "diagnostics_degraded", { reason: "recorder unavailable" }],
+			[5, "store_integrity_changed", { healthy: false }],
+		] as const) {
+			pair.deliver({
+				type: "event",
+				sessionId: "session-1",
+				seq,
+				revision: seq,
+				event,
+				payload,
+			});
+			expect(session.snapshot).toEqual(initial);
+			expect(session.state.lastEvent).toMatchObject({ event, payload });
+		}
+
+		await session.dispose();
+	});
+
 	test("restores busy lifecycle from an expired-cursor active operation", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });
