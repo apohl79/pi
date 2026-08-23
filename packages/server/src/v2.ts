@@ -20,7 +20,13 @@ import { InMemoryV2AgentRegistry, type V2AgentRegistry } from "./agents.ts";
 import { InMemoryV2AppRegistry, type V2AppRegistry } from "./apps.ts";
 import { InMemoryV2BlobStore, type V2BlobStore } from "./blobs.ts";
 import type { ByteConnection, ByteConnectionHandler } from "./connection.ts";
-import { type ForensicRecorder, InMemoryForensicRecorder } from "./diagnostics.ts";
+import {
+	type DiagnosticCapsule,
+	type DiagnosticContentStore,
+	type ForensicRecorder,
+	InMemoryForensicRecorder,
+	verifyDiagnosticBundle,
+} from "./diagnostics.ts";
 import { LocalV2FileReferenceService, type V2FileReferenceService } from "./files.ts";
 import { BlobV2ImageService, type V2ImageService } from "./images.ts";
 import { InMemoryV2InputRegistry, type V2InputRegistry } from "./inputs.ts";
@@ -56,6 +62,7 @@ export interface PiServerV2Options {
 	serverId?: string;
 	onError?: (error: Error) => void;
 	diagnostics?: ForensicRecorder;
+	diagnosticContent?: DiagnosticContentStore;
 	operationStore?: V2OperationStore;
 	processes?: V2ProcessRegistry;
 	blobs?: V2BlobStore;
@@ -121,6 +128,8 @@ export class PiServerV2 {
 	private readonly handshakeTimeoutMs: number;
 	private readonly onError: ((error: Error) => void) | undefined;
 	private readonly diagnostics: ForensicRecorder;
+	private readonly diagnosticContent: DiagnosticContentStore | undefined;
+	private readonly diagnosticCapsules = new Map<string, DiagnosticCapsule>();
 	private readonly operationStore: V2OperationStore;
 	private readonly processes: V2ProcessRegistry;
 	private readonly blobs: V2BlobStore;
@@ -152,6 +161,7 @@ export class PiServerV2 {
 		this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
 		this.onError = options.onError;
 		this.diagnostics = options.diagnostics ?? new InMemoryForensicRecorder();
+		this.diagnosticContent = options.diagnosticContent;
 		this.operationStore = options.operationStore ?? new InMemoryV2OperationStore();
 		this.processes = options.processes ?? new InMemoryV2ProcessRegistry();
 		this.blobs = options.blobs ?? new InMemoryV2BlobStore();
@@ -874,7 +884,8 @@ export class PiServerV2 {
 			command: command.command,
 			format: "json",
 			events,
-			bundle: { manifest, events },
+			capsules: await this.diagnosticCapsulesForExport(),
+			bundle: { manifest, events, capsules: await this.diagnosticCapsulesForExport() },
 		});
 	}
 
@@ -882,20 +893,12 @@ export class PiServerV2 {
 		const payload = objectPayload(command);
 		const bundle = payload.bundle;
 		if (typeof bundle === "object" && bundle !== null && !Array.isArray(bundle)) {
-			const candidate = bundle as Record<string, unknown>;
-			const events = candidate.events;
-			const manifest = candidate.manifest;
-			if (!Array.isArray(events) || typeof manifest !== "object" || manifest === null || Array.isArray(manifest))
-				throw new Error("diagnostics/verify bundle requires events and manifest");
-			const fields = manifest as Record<string, unknown>;
-			const serializedEvents = JSON.stringify(events);
-			const digest = createHash("sha256").update(serializedEvents).digest("hex");
-			const valid =
-				fields.schemaVersion === 1 && fields.eventCount === events.length && fields.eventsSha256 === digest;
+			const verification = verifyDiagnosticBundle(bundle);
+			if (verification.reason === "diagnostics/verify bundle requires events and manifest")
+				throw new Error(verification.reason);
 			await this.sendResponse(state, id, {
 				command: command.command,
-				valid,
-				...(valid ? {} : { reason: "Diagnostic bundle manifest does not match its events" }),
+				...verification,
 			});
 			return;
 		}
@@ -1081,6 +1084,17 @@ export class PiServerV2 {
 		if (!runtime) throw new Error(`Session ${command.sessionId} is not attached`);
 		const resolvedCommand = await this.resolveTurnContent(command);
 		const operationId = randomUUID();
+		const capsule = this.diagnosticContent
+			? await this.diagnosticContent.encrypt({
+					eventId: operationId,
+					kind: command.command,
+					content: JSON.stringify(resolvedCommand.payload ?? {}),
+				})
+			: undefined;
+		if (capsule !== undefined) {
+			await this.diagnosticContent?.save?.(capsule);
+			this.diagnosticCapsules.set(capsule.eventId, capsule);
+		}
 		const accepted = await runtime.accept(operationId);
 		this.operations.set(operationId, {
 			operationId,
@@ -1102,9 +1116,29 @@ export class PiServerV2 {
 			kind: "operation_accepted",
 			sessionId: command.sessionId,
 			operationId,
-			payload: { command: command.command, payload: command.payload },
+			payload: {
+				command: command.command,
+				...(capsule === undefined
+					? {}
+					: {
+							contentRef: {
+								eventId: capsule.eventId,
+								kind: capsule.kind,
+								keyId: capsule.keyId,
+								plaintextSha256: capsule.plaintextSha256,
+								byteLength: capsule.byteLength,
+								originalByteLength: capsule.originalByteLength,
+								truncated: capsule.truncated,
+							},
+						}),
+			},
 		});
 		void this.runOperation(runtime, command.sessionId, operationId, resolvedCommand);
+	}
+
+	private async diagnosticCapsulesForExport(): Promise<readonly DiagnosticCapsule[]> {
+		const persisted = await this.diagnosticContent?.list?.();
+		return persisted === undefined ? [...this.diagnosticCapsules.values()] : persisted;
 	}
 
 	private async resolveTurnContent(command: CommandV2): Promise<CommandV2> {

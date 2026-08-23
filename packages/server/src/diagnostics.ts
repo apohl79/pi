@@ -45,6 +45,8 @@ export interface DiagnosticCapsuleInput {
 
 export interface DiagnosticContentStore {
 	encrypt(input: DiagnosticCapsuleInput): Promise<DiagnosticCapsule>;
+	save?(capsule: DiagnosticCapsule): Promise<void>;
+	list?(): Promise<readonly DiagnosticCapsule[]>;
 }
 
 export interface DiagnosticBundleVerification {
@@ -126,17 +128,27 @@ interface DiagnosticKeyFile {
 	keys: Record<string, string>;
 }
 
+interface DiagnosticCapsuleFile {
+	capsules: DiagnosticCapsule[];
+}
+
 /** Local authenticated evidence store; key material stays in its owner-only key file, never in capsules. */
 export class LocalDiagnosticCapsuleStore {
 	private readonly keyPath: string;
+	private readonly capsulePath: string;
 	private readonly defaultMaxBytes: number;
+	private readonly maxCapsules: number;
 	private loaded = false;
 	private currentKeyId = "";
 	private readonly keys = new Map<string, Buffer>();
+	private capsules: DiagnosticCapsule[] = [];
+	private capsulesLoaded = false;
 
-	constructor(keyPath: string, options: { maxBytes?: number } = {}) {
+	constructor(keyPath: string, options: { maxBytes?: number; capsulePath?: string; maxCapsules?: number } = {}) {
 		this.keyPath = keyPath;
+		this.capsulePath = options.capsulePath ?? `${keyPath}.capsules`;
 		this.defaultMaxBytes = options.maxBytes ?? 64 * 1024;
+		this.maxCapsules = options.maxCapsules ?? 256;
 	}
 
 	async encrypt(input: DiagnosticCapsuleInput): Promise<DiagnosticCapsule> {
@@ -201,6 +213,18 @@ export class LocalDiagnosticCapsuleStore {
 		return new Uint8Array(plaintext);
 	}
 
+	async save(capsule: DiagnosticCapsule): Promise<void> {
+		await this.ensureCapsulesLoaded();
+		this.capsules.push(capsule);
+		if (this.capsules.length > this.maxCapsules) this.capsules.splice(0, this.capsules.length - this.maxCapsules);
+		await this.persistCapsules();
+	}
+
+	async list(): Promise<readonly DiagnosticCapsule[]> {
+		await this.ensureCapsulesLoaded();
+		return this.capsules.map((capsule) => structuredClone(capsule));
+	}
+
 	async rotateKey(): Promise<string> {
 		await this.ensureLoaded();
 		this.currentKeyId = randomUUID();
@@ -237,6 +261,24 @@ export class LocalDiagnosticCapsuleStore {
 		};
 		await writeFile(temporary, `${JSON.stringify(file)}\n`, { mode: 0o600 });
 		await rename(temporary, this.keyPath);
+	}
+
+	private async ensureCapsulesLoaded(): Promise<void> {
+		if (this.capsulesLoaded) return;
+		this.capsulesLoaded = true;
+		try {
+			const file = JSON.parse(await readFile(this.capsulePath, "utf8")) as DiagnosticCapsuleFile;
+			if (Array.isArray(file.capsules)) this.capsules = file.capsules.slice(-this.maxCapsules);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
+
+	private async persistCapsules(): Promise<void> {
+		await mkdir(dirname(this.capsulePath), { recursive: true, mode: 0o700 });
+		const temporary = `${this.capsulePath}.${process.pid}.tmp`;
+		await writeFile(temporary, `${JSON.stringify({ capsules: this.capsules })}\n`, { mode: 0o600 });
+		await rename(temporary, this.capsulePath);
 	}
 }
 
