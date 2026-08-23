@@ -88,6 +88,36 @@ export class InMemorySessionStorage implements SessionStorage {
 		return structuredClone(record);
 	}
 
+	async appendRecords<TRecord extends LaneRecord>(newRecords: readonly NewRecord<TRecord>[]): Promise<TRecord[]> {
+		if (newRecords.length === 0) return [];
+		const ids = new Set<string>();
+		const records: TRecord[] = [];
+		let nextSequence = this.state.nextSequence;
+		const openLanes = new Set<string>();
+		for (const newRecord of newRecords) {
+			this.state.requireLane(newRecord.lane);
+			this.state.validateUnusedId(newRecord.id);
+			if (ids.has(newRecord.id)) throw new SessionError("already_exists", `ID already exists: ${newRecord.id}`);
+			ids.add(newRecord.id);
+			const currentOpenOperationId = this.state.findOpenOperations(newRecord.lane, { limit: 1 })[0]?.id;
+			if (
+				newRecord.type === "operation_started" &&
+				(currentOpenOperationId !== undefined || openLanes.has(newRecord.lane))
+			) {
+				throw new SessionError("storage", `Lane ${newRecord.lane} already has an open operation`);
+			}
+			if (newRecord.type === "operation_started") openLanes.add(newRecord.lane);
+			const record = {
+				...structuredClone(newRecord),
+				seq: nextSequence++,
+				timestamp: Date.now(),
+			} as unknown as TRecord;
+			records.push(record);
+		}
+		for (const record of records) this.state.applyMutation({ kind: "record", record });
+		return structuredClone(records);
+	}
+
 	async getEntry(id: string): Promise<Entry | undefined> {
 		const entry = this.state.getEntry(id);
 		return entry === undefined ? undefined : structuredClone(entry);
