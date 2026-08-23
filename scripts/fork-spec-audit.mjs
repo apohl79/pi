@@ -99,6 +99,11 @@ export function auditForkSpec() {
 			failures.push(`missing evidence pattern (${label}): ${path}`);
 		}
 	}
+	for (const line of readFileSync(join(root, "FORK_DELTA.md"), "utf8").split("\n")) {
+		if (line.startsWith("|") && line.includes("| Fork core |") && !line.includes("Compatibility is covered")) {
+			failures.push(`fork-core ledger row lacks compatibility evidence: ${line}`);
+		}
+	}
 	const manifest = JSON.parse(readFileSync(join(root, "PACKAGE_COMPATIBILITY.json"), "utf8"));
 	for (const [path, entry] of Object.entries(manifest.packages ?? {})) {
 		if (!entry.classification || !entry.rationale || !Array.isArray(entry.tests) || entry.tests.length === 0) {
