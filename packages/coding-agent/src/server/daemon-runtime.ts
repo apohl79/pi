@@ -5,6 +5,7 @@ import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import {
 	FileV2BlobStore,
 	InMemoryForensicRecorder,
+	InMemoryV2InputRegistry,
 	InMemoryV2PlanRegistry,
 	JsonlForensicRecorder,
 	JsonlV2OperationStore,
@@ -97,14 +98,16 @@ export async function createCodingAgentDaemonRuntime(
 	const diagnosticContent =
 		options.diagnosticKeyPath === undefined ? undefined : new LocalDiagnosticCapsuleStore(options.diagnosticKeyPath);
 	const processes = options.processes ?? new NodeV2ProcessRegistry();
+	const inputs = options.inputs ?? new InMemoryV2InputRegistry();
 	const service = await createCodingAgentV2SqliteService(
 		options.agentRegistry === undefined
 			? {
 					...options,
+					inputs,
 					plans,
 					agentRegistry: () => createdAgents,
 				}
-			: { ...options, plans },
+			: { ...options, inputs, plans },
 	);
 	const agents = options.agents ?? (service.createSession ? createCodingAgentV2AgentRegistry(service) : undefined);
 	createdAgents = agents;
@@ -113,7 +116,7 @@ export async function createCodingAgentDaemonRuntime(
 		socketPath: options.socketPath,
 		...(options.serverId === undefined ? {} : { serverId: options.serverId }),
 		...(agents === undefined ? {} : { agents }),
-		...(options.inputs === undefined ? {} : { inputs: options.inputs }),
+		inputs,
 		processes,
 		...(options.web === undefined ? {} : { web: options.web }),
 		...(options.images === undefined ? {} : { images: options.images }),
@@ -171,6 +174,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			...options,
 			repository,
 			env,
+			inputs: options.inputs ?? new InMemoryV2InputRegistry(),
 			files:
 				options.files ??
 				new LocalV2FileReferenceService({ projectRoot: options.cwd, cwd: options.cwd, allowAbsolute: true }),

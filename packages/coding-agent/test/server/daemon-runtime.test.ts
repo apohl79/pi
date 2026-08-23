@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import { AdapterV2WebService, InMemoryV2AppRegistry, InMemoryV2PluginRegistry } from "@earendil-works/pi-server";
@@ -613,6 +613,69 @@ describe("coding-agent daemon runtime", () => {
 		} finally {
 			secondClient.dispose();
 			await second.close();
+		}
+	});
+
+	test("bridges structured user input through the production daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-input-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-input-faux",
+			models: [{ id: "coding-agent-daemon-input-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage(
+				fauxToolCall("request_user_input", {
+					questions: [{ id: "choice", prompt: "Choose", options: [{ label: "Yes" }] }],
+				}),
+			),
+			fauxAssistantMessage("input handled"),
+		]);
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { activeToolNames: ["request_user_input"] },
+			write: () => {},
+		});
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			if (!created.ok || !("result" in created)) throw new Error("Session creation failed");
+			const sessionId = (created.result as { session: { id: string } }).session.id;
+			await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			const accepted = await client.request({ command: "turn/start", sessionId, payload: { text: "ask me" } });
+			expect(accepted).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+			let requestId: string | undefined;
+			for (let attempt = 0; attempt < 50; attempt++) {
+				const read = await client.request({ command: "session/read", sessionId });
+				if (read.ok && "result" in read) {
+					const session = (read.result as { session: { queues: { pendingInputRequestId?: string } } }).session;
+					requestId = session.queues.pendingInputRequestId;
+					if (requestId) break;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			expect(requestId).toEqual(expect.any(String));
+			if (!requestId) throw new Error("Input request was not created");
+			const request = await client.request({ command: "input/request/read", payload: { requestId } });
+			expect(request).toMatchObject({ ok: true, result: { request: { status: "pending" } } });
+			const response = await client.request({
+				command: "input/request/respond",
+				payload: { requestId, answers: { choice: "Yes" } },
+			});
+			expect(response).toMatchObject({ ok: true, result: { request: { status: "responded" } } });
+		} finally {
+			client.dispose();
+			await runtime.close();
 		}
 	});
 });
