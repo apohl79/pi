@@ -449,6 +449,10 @@ export class LocalDiagnosticCapsuleStore {
 		this.capsulePath = options.capsulePath ?? `${keyPath}.capsules`;
 		this.defaultMaxBytes = options.maxBytes ?? 64 * 1024;
 		this.maxCapsules = options.maxCapsules ?? 256;
+		if (!Number.isSafeInteger(this.defaultMaxBytes) || this.defaultMaxBytes < 1)
+			throw new TypeError("Diagnostic capsule maxBytes must be positive");
+		if (!Number.isSafeInteger(this.maxCapsules) || this.maxCapsules < 1)
+			throw new TypeError("Diagnostic capsule maxCapsules must be positive");
 	}
 
 	async encrypt(input: DiagnosticCapsuleInput): Promise<DiagnosticCapsule> {
