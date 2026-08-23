@@ -110,7 +110,9 @@ export class BlobV2ImageService implements V2ImageService {
 			size: blob.size,
 			provider: generated.provider,
 			model: generated.model,
-			...(request.sourceOperationId === undefined ? {} : { sourceOperationId: request.sourceOperationId }),
+			...(request.sourceOperationId === undefined && generated.sourceOperationId === undefined
+				? {}
+				: { sourceOperationId: request.sourceOperationId ?? generated.sourceOperationId }),
 			...(generated.dimensions ? { dimensions: generated.dimensions } : {}),
 			promptHash: promptHash(request.prompt),
 			...(generated.costUsd === undefined ? {} : { costUsd: generated.costUsd }),
