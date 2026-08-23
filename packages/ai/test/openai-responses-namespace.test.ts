@@ -1,7 +1,11 @@
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
-import { convertResponsesMessages, processResponsesStream } from "../src/api/openai-responses-shared.ts";
-import type { Api, AssistantMessage, Model, ToolCall } from "../src/types.ts";
+import {
+	convertResponsesMessages,
+	convertResponsesTools,
+	processResponsesStream,
+} from "../src/api/openai-responses-shared.ts";
+import type { Api, AssistantMessage, Model, Tool, ToolCall } from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
 
 const model: Model<"openai-responses"> = {
@@ -110,6 +114,34 @@ function getToolCall(output: AssistantMessage): ToolCall {
 }
 
 describe("OpenAI Responses tool-call namespaces", () => {
+	it("namespaces request tools and maps returned names back to canonical names", async () => {
+		const namespacedModel = { ...model, compat: { toolNamespace: "codex" } };
+		const tools = [
+			{
+				name: "lookup",
+				description: "Look up a value",
+				parameters: { type: "object", properties: {} },
+			},
+		] satisfies Tool[];
+		expect(convertResponsesTools(tools, { toolNamespace: "codex" })[0]).toMatchObject({ name: "codex.lookup" });
+
+		const output = createOutput();
+		const events = createFunctionCallEvents();
+		const prefixedEvents = (async function* () {
+			for await (const event of events) {
+				if (event.type === "response.output_item.added" || event.type === "response.output_item.done") {
+					const item = event.item as { name?: string };
+					if (item.name) item.name = `codex.${item.name}`;
+				}
+				yield event;
+			}
+		})();
+		await processResponsesStream(prefixedEvents, output, new AssistantMessageEventStream(), namespacedModel, {
+			toolNamespace: "codex",
+		});
+		expect(getToolCall(output).name).toBe("lookup");
+	});
+
 	it("round-trips a function namespace received only on output_item.done", async () => {
 		const output = createOutput();
 		await processResponsesStream(createFunctionCallEvents(), output, new AssistantMessageEventStream(), model);

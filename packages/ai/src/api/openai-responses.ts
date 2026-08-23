@@ -75,6 +75,7 @@ function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCo
 		supportsAdditionalTools: model.compat?.supportsAdditionalTools ?? false,
 		supportsToolSearch: model.compat?.supportsToolSearch ?? false,
 		supportsExplicitPromptCacheMode: model.compat?.supportsExplicitPromptCacheMode ?? false,
+		toolNamespace: model.compat?.toolNamespace ?? "",
 	};
 }
 
@@ -162,6 +163,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 			await processResponsesStream(openaiStream, output, stream, model, {
 				serviceTier: options?.serviceTier,
 				grammarToolInputProperties,
+				toolNamespace: compat.toolNamespace,
 				applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
 			});
 
@@ -282,6 +284,7 @@ function buildParams(
 		toolOptions: {
 			supportsStrictMode: compat.supportsStrictMode,
 			supportsOpenAIGrammarTools: compat.supportsOpenAIGrammarTools,
+			toolNamespace: compat.toolNamespace,
 		},
 	});
 
@@ -313,6 +316,7 @@ function buildParams(
 		params.tools = convertResponsesTools(toolPlacement.immediate, {
 			supportsStrictMode: compat.supportsStrictMode,
 			supportsOpenAIGrammarTools: compat.supportsOpenAIGrammarTools,
+			toolNamespace: compat.toolNamespace,
 		});
 	}
 
