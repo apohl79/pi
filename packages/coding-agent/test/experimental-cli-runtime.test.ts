@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ByteTransport, ByteTransportHandlers } from "@earendil-works/pi-client";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import {
@@ -36,9 +40,57 @@ function clientFactory() {
 							snapshot,
 						}),
 					);
+				} else if (message.request.command === "session/create") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: { session: { id: "session-1", revision: 1, phase: "idle", transcript: [] } },
+						}),
+					);
+				} else if (message.request.command === "session/read") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: { session: { id: "session-1", revision: 1, phase: "idle", transcript: [] } },
+						}),
+					);
+				} else if (message.request.command === "session/detach") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: { command: "session/detach" },
+						}),
+					);
 				} else if (message.request.command === "session/list") {
 					handlers?.onData(
 						encodeServerMessageV2({ type: "response", id: message.id, ok: true, result: { sessions: [] } }),
+					);
+				} else if (message.request.command === "diagnostics/status") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: { command: "diagnostics/status", eventCount: 2 },
+						}),
+					);
+				} else if (message.request.command === "diagnostics/export") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: {
+								command: "diagnostics/export",
+								bundle: { manifest: { schemaVersion: 1 }, events: [] },
+							},
+						}),
 					);
 				} else if (message.request.command === "session/attach") {
 					handlers?.onData(
@@ -47,6 +99,34 @@ function clientFactory() {
 							id: message.id,
 							ok: true,
 							result: { command: "session/attach" },
+						}),
+					);
+				} else if (message.request.command === "turn/start") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							accepted: { operationId: "operation-1", sessionRevision: 2, eventSeq: 2 },
+						}),
+					);
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "event",
+							sessionId: "session-1",
+							seq: 2,
+							revision: 2,
+							operationId: "operation-1",
+							event: "operation_terminal",
+							payload: {
+								state: "complete",
+								snapshot: {
+									id: "session-1",
+									revision: 2,
+									phase: "idle",
+									transcript: [{ role: "assistant", content: [{ type: "text", text: "remote reply" }] }],
+								},
+							},
 						}),
 					);
 				}
@@ -99,6 +179,108 @@ describe("experimental CLI runtime", () => {
 		});
 		await runtime.runAttach({ command: "attach", sessionId: "session-1" });
 		expect(attached).toHaveBeenCalledTimes(1);
+		runtime.close();
+	});
+
+	test("runs diagnostics through the injected client", async () => {
+		const server = clientFactory();
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: (value) => output.push(value),
+		});
+		await runtime.runDiagnostics({ command: "diagnostics", action: "status" });
+		expect(output).toEqual([{ command: "diagnostics/status", eventCount: 2 }]);
+		runtime.close();
+	});
+
+	test("writes the exported bundle rather than the RPC envelope", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-cli-diagnostics-export-"));
+		const outputPath = join(directory, "bundle.json");
+		const server = clientFactory();
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: (value) => output.push(value),
+		});
+		await runtime.runDiagnostics({ command: "diagnostics", action: "export", output: outputPath });
+		expect(JSON.parse(await readFile(outputPath, "utf8"))).toEqual({
+			manifest: { schemaVersion: 1 },
+			events: [],
+		});
+		expect(output).toMatchObject([{ command: "diagnostics/export" }]);
+		runtime.close();
+	});
+
+	test("verifies a bundle file without connecting to a daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-cli-diagnostics-"));
+		const events = [{ seq: 1, kind: "boot" }];
+		const eventsSha256 = createHash("sha256").update(JSON.stringify(events)).digest("hex");
+		const bundle = {
+			manifest: {
+				schemaVersion: 1,
+				eventCount: 1,
+				firstSeq: 1,
+				lastSeq: 1,
+				eventsSha256,
+			},
+			events,
+		};
+		await writeFile(join(directory, "bundle.json"), JSON.stringify(bundle));
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: () => {
+				throw new Error("offline verification must not create a client");
+			},
+			write: (value) => output.push(value),
+		});
+		await runtime.runDiagnostics({
+			command: "diagnostics",
+			action: "verify",
+			bundle: join(directory, "bundle.json"),
+		});
+		expect(output).toEqual([{ valid: true }]);
+		runtime.close();
+	});
+
+	test("runs print mode through a server-owned remote session", async () => {
+		const server = clientFactory();
+		const output: string[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: () => {},
+			writeText: (value) => output.push(value),
+		});
+		await runtime.runPi({
+			command: "pi",
+			options: { print: true, messages: ["hello"], fileArgs: [], unknownFlags: new Map(), diagnostics: [] },
+		});
+		expect(output).toEqual(["remote reply"]);
+		runtime.close();
+	});
+
+	test("returns the authoritative snapshot for JSON mode", async () => {
+		const server = clientFactory();
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: (value) => output.push(value),
+		});
+		await runtime.runPi({
+			command: "pi",
+			options: { mode: "json", messages: ["hello"], fileArgs: [], unknownFlags: new Map(), diagnostics: [] },
+		});
+		expect(output).toMatchObject([{ id: "session-1", phase: "idle", revision: 2 }]);
 		runtime.close();
 	});
 

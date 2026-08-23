@@ -115,4 +115,70 @@ describe("coding-agent daemon runtime", () => {
 			await runtime.close();
 		}
 	});
+
+	test("runs server-default print mode through the production daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-daemon-print-e2e-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-print-faux",
+			models: [{ id: "coding-agent-daemon-print-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("server default response")]);
+		const output: string[] = [];
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+			writeText: (value) => output.push(value),
+		});
+		try {
+			await runtime.cli.runPi({
+				command: "pi",
+				options: { print: true, messages: ["hello"], fileArgs: [], unknownFlags: new Map(), diagnostics: [] },
+			});
+			expect(output).toEqual(["server default response"]);
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	test("runs server-default JSON mode through the production daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-coding-agent-daemon-json-e2e-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-json-faux",
+			models: [{ id: "coding-agent-daemon-json-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("json response")]);
+		const output: unknown[] = [];
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: (value) => output.push(value),
+		});
+		try {
+			await runtime.cli.runPi({
+				command: "pi",
+				options: { mode: "json", messages: ["hello"], fileArgs: [], unknownFlags: new Map(), diagnostics: [] },
+			});
+			expect(output).toHaveLength(1);
+			const snapshot = output[0] as { phase: string; transcript: readonly { role: string }[] };
+			expect(snapshot.phase).toBe("idle");
+			expect(snapshot.transcript.some((item) => item.role === "assistant")).toBe(true);
+		} finally {
+			await runtime.close();
+		}
+	});
 });
