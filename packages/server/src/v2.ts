@@ -1292,6 +1292,10 @@ export class PiServerV2 {
 			"find",
 			"screenshot",
 			"image_query",
+			"finance",
+			"weather",
+			"sports",
+			"time",
 		];
 		if (typeof operation !== "string" || !operations.includes(operation as V2WebOperation))
 			throw new Error("web operation is invalid");
@@ -1299,6 +1303,30 @@ export class PiServerV2 {
 		const url = payload.url;
 		const refId = payload.refId;
 		const pattern = payload.pattern;
+		const optionalString = (name: string): string | undefined => {
+			const value = payload[name];
+			if (value !== undefined && typeof value !== "string") throw new Error(`web ${name} must be a string`);
+			return value;
+		};
+		const optionalPositiveInteger = (name: string): number | undefined => {
+			const value = payload[name];
+			if (value !== undefined && (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1))
+				throw new Error(`web ${name} must be a positive integer`);
+			return value;
+		};
+		const ticker = optionalString("ticker");
+		const market = optionalString("market");
+		const location = optionalString("location");
+		const duration = optionalPositiveInteger("duration");
+		const start = optionalString("start");
+		const dateFrom = optionalString("dateFrom");
+		const dateTo = optionalString("dateTo");
+		const league = optionalString("league");
+		const team = optionalString("team");
+		const opponent = optionalString("opponent");
+		const numGames = optionalPositiveInteger("numGames");
+		const locale = optionalString("locale");
+		const utcOffset = optionalString("utcOffset");
 		if (query !== undefined && typeof query !== "string") throw new Error("web query must be a string");
 		if (url !== undefined && typeof url !== "string") throw new Error("web url must be a string");
 		if (refId !== undefined && typeof refId !== "string") throw new Error("web refId must be a string");
@@ -1309,6 +1337,19 @@ export class PiServerV2 {
 			...(url === undefined ? {} : { url }),
 			...(refId === undefined ? {} : { refId }),
 			...(pattern === undefined ? {} : { pattern }),
+			...(ticker === undefined ? {} : { ticker }),
+			...(market === undefined ? {} : { market }),
+			...(location === undefined ? {} : { location }),
+			...(duration === undefined ? {} : { duration }),
+			...(start === undefined ? {} : { start }),
+			...(dateFrom === undefined ? {} : { dateFrom }),
+			...(dateTo === undefined ? {} : { dateTo }),
+			...(league === undefined ? {} : { league }),
+			...(team === undefined ? {} : { team }),
+			...(opponent === undefined ? {} : { opponent }),
+			...(numGames === undefined ? {} : { numGames }),
+			...(locale === undefined ? {} : { locale }),
+			...(utcOffset === undefined ? {} : { utcOffset }),
 		};
 		await this.sendResponse(state, id, {
 			command: command.command,

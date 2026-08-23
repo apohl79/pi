@@ -44,7 +44,17 @@ export interface CodingAgentInputRequest {
 
 export type CodingAgentInputResponse = Readonly<Record<string, string>>;
 
-export type CodingAgentWebOperation = "search_query" | "open" | "click" | "find" | "screenshot" | "image_query";
+export type CodingAgentWebOperation =
+	| "search_query"
+	| "open"
+	| "click"
+	| "find"
+	| "screenshot"
+	| "image_query"
+	| "finance"
+	| "weather"
+	| "sports"
+	| "time";
 
 export interface CodingAgentWebRequest {
 	operation: CodingAgentWebOperation;
@@ -52,6 +62,19 @@ export interface CodingAgentWebRequest {
 	url?: string;
 	refId?: string;
 	pattern?: string;
+	ticker?: string;
+	market?: string;
+	location?: string;
+	duration?: number;
+	start?: string;
+	dateFrom?: string;
+	dateTo?: string;
+	league?: string;
+	team?: string;
+	opponent?: string;
+	numGames?: number;
+	locale?: string;
+	utcOffset?: string;
 }
 
 export interface CodingAgentWebResult {
@@ -151,11 +174,28 @@ const webSchema = Type.Object({
 		Type.Literal("find"),
 		Type.Literal("screenshot"),
 		Type.Literal("image_query"),
+		Type.Literal("finance"),
+		Type.Literal("weather"),
+		Type.Literal("sports"),
+		Type.Literal("time"),
 	]),
 	query: Type.Optional(Type.String()),
 	url: Type.Optional(Type.String()),
 	refId: Type.Optional(Type.String()),
 	pattern: Type.Optional(Type.String()),
+	ticker: Type.Optional(Type.String()),
+	market: Type.Optional(Type.String()),
+	location: Type.Optional(Type.String()),
+	duration: Type.Optional(Type.Integer({ minimum: 1 })),
+	start: Type.Optional(Type.String()),
+	dateFrom: Type.Optional(Type.String()),
+	dateTo: Type.Optional(Type.String()),
+	league: Type.Optional(Type.String()),
+	team: Type.Optional(Type.String()),
+	opponent: Type.Optional(Type.String()),
+	numGames: Type.Optional(Type.Integer({ minimum: 1 })),
+	locale: Type.Optional(Type.String()),
+	utcOffset: Type.Optional(Type.String()),
 });
 
 const viewImageSchema = Type.Object({ reference: Type.String({ minLength: 1 }) });
