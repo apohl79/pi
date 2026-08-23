@@ -25,6 +25,7 @@ async function createAgentRuntime(directory: string) {
 	});
 	models.setProvider(parent.provider);
 	models.setProvider(child.provider);
+	parent.setResponses([fauxAssistantMessage("inherited child completed")]);
 	child.setResponses([fauxAssistantMessage("child completed")]);
 	return createConfiguredCodingAgentDaemonRuntime({
 		agentDir: directory,
@@ -87,6 +88,46 @@ describe("coding-agent daemon child agents", () => {
 			expect(listed).toMatchObject({
 				ok: true,
 				result: { agents: [{ id: agentId, path: "/root/specialist", state: "complete" }] },
+			});
+		} finally {
+			client.dispose();
+			await runtime.close();
+		}
+	});
+
+	test("inherits the parent provider and model when a child override is omitted", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-agents-inherit-"));
+		directories.push(directory);
+		const runtime = await createAgentRuntime(directory);
+		const client = new PiClientV2({
+			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
+		});
+		try {
+			await runtime.daemon.start();
+			await client.connect();
+			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
+			const sessionId = (created as unknown as { result: { session: { id: string } } }).result.session.id;
+			await client.request({ command: "session/attach", sessionId, payload: { mode: "control" } });
+			const spawned = await client.request({
+				command: "agent/spawn",
+				sessionId,
+				payload: { taskName: "inherited", taskMessage: "use the parent model" },
+			});
+			expect(spawned).toMatchObject({
+				ok: true,
+				result: {
+					agent: {
+						path: "/root/inherited",
+						model: { provider: "coding-agent-daemon-parent-faux", id: "parent-model" },
+					},
+				},
+			});
+			const agentId = (spawned as unknown as { result: { agent: { id: string } } }).result.agent.id;
+			expect(await client.request({ command: "agent/wait", payload: { agentId } })).toMatchObject({
+				ok: true,
+				result: {
+					agent: { id: agentId, state: "complete", model: { provider: "coding-agent-daemon-parent-faux" } },
+				},
 			});
 		} finally {
 			client.dispose();
