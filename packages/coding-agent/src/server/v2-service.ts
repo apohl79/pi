@@ -632,9 +632,10 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		]);
 		const queues = await this.definition.queues?.();
 		const effectiveName = persistedName ?? this.sessionName;
-		const cacheRead = Math.max(0, stats.cachedTokens);
-		const input = Math.max(0, stats.uncachedTokens);
-		const output = Math.max(0, stats.totalTokens - stats.cachedTokens - stats.uncachedTokens);
+		const cacheRead = usageAggregate?.cacheRead ?? Math.max(0, stats.cachedTokens);
+		const input = usageAggregate?.input ?? Math.max(0, stats.uncachedTokens);
+		const output =
+			usageAggregate?.output ?? Math.max(0, stats.totalTokens - stats.cachedTokens - stats.uncachedTokens);
 		const costUsd =
 			usageAggregate?.costUsd ?? (usageAggregate === undefined && stats.costTotal > 0 ? stats.costTotal : undefined);
 		const contextWindow = Math.max(1, this.model.contextWindow);
@@ -680,7 +681,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				input,
 				output,
 				cacheRead,
-				cacheWrite: 0,
+				cacheWrite: usageAggregate?.cacheWrite ?? 0,
 				imageUnits: usageAggregate?.imageUnits ?? 0,
 				...(costUsd === undefined ? {} : { costUsd }),
 				pricingState: usageAggregate?.pricingState ?? "known",
