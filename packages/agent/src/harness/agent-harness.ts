@@ -1660,6 +1660,7 @@ export class AgentHarness implements AgentLane {
 				lane: this.name,
 				runId,
 				entryId: record.target.id,
+				disposition: "consumed",
 			});
 			if (record.target.type === "message") messages.push(durableClone(record.target.message));
 		}
@@ -1677,10 +1678,13 @@ export class AgentHarness implements AgentLane {
 		);
 		if (!enqueued)
 			return ResultValue.err(new UnknownQueueItem({ lane: this.name, entryId, message: "Queued item not found" }));
-		const cancelled = (await this.durableSession.findRecords({ type: "queue_cancelled", lane: this.name })).some(
+		const cancellation = (await this.durableSession.findRecords({ type: "queue_cancelled", lane: this.name })).find(
 			(record) => record.entryId === entryId,
 		);
-		if (cancelled) return ResultValue.ok({ outcome: "already_cleared" });
+		if (cancellation !== undefined)
+			return ResultValue.ok({
+				outcome: cancellation.disposition === "consumed" ? "already_consumed" : "already_cleared",
+			});
 		const record: NewRecord<QueueCancelledRecord> =
 			enqueued.queue === "nextRun"
 				? { type: "queue_cancelled", id: this.durableSession.idGenerator.next(), lane: this.name, entryId }

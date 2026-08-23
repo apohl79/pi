@@ -128,8 +128,14 @@ describe("AgentHarness v2 scaffold", () => {
 		const prompt = harness.prompt("start");
 		for (let attempt = 0; attempt < 100 && (await session.findOpenOperations("main")).length === 0; attempt++)
 			await new Promise((resolve) => setTimeout(resolve, 1));
-		await expect(harness.followUp("continue")).resolves.toMatchObject({ ok: true });
+		const followUp = await harness.followUp("continue");
+		expect(followUp).toMatchObject({ ok: true });
 		await expect(prompt).resolves.toMatchObject({ ok: true, value: { kind: "completed" } });
+		if (!followUp.ok) throw new Error("Expected follow-up admission");
+		expect(await harness.cancelQueued(followUp.value.entryId)).toEqual({
+			ok: true,
+			value: { outcome: "already_consumed" },
+		});
 		const messages = await session.findEntriesOnBranch({ order: "oldestFirst" });
 		expect(JSON.stringify(messages)).toContain("continue");
 		expect(JSON.stringify(messages)).toContain("follow-up");
