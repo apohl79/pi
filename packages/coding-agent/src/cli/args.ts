@@ -74,8 +74,6 @@ export function isServerDefaultCompatible(options: Args): boolean {
 	return (
 		!(options.provider !== undefined && options.model === undefined) &&
 		options.apiKey === undefined &&
-		options.systemPrompt === undefined &&
-		options.appendSystemPrompt === undefined &&
 		options.continue !== true &&
 		options.resume !== true &&
 		options.noSession !== true &&
