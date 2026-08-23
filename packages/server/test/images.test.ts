@@ -142,4 +142,23 @@ describe("BlobV2ImageService", () => {
 
 		await expect(service.generate("session-1", { prompt: "tree" })).rejects.toThrow("provider");
 	});
+
+	test("rejects empty request source operation provenance before invoking the generator", async () => {
+		let calls = 0;
+		const service = new BlobV2ImageService(
+			new LocalV2FileReferenceService({ projectRoot: "." }),
+			new InMemoryV2BlobStore(),
+			{
+				generate: async () => {
+					calls += 1;
+					return { data: new Uint8Array([1]), mimeType: "image/png", provider: "fake", model: "image-fast" };
+				},
+			},
+		);
+
+		await expect(service.generate("session-1", { prompt: "tree", sourceOperationId: " " })).rejects.toThrow(
+			"sourceOperationId",
+		);
+		expect(calls).toBe(0);
+	});
 });
