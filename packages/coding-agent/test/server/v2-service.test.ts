@@ -707,6 +707,49 @@ describe("coding-agent v2 service adapter", () => {
 		}
 	});
 
+	test("keeps the active turn projection when a steer is accepted", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-steer-acceptance-faux",
+			models: [{ id: "steer-acceptance-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const session = new Session(new InMemorySessionStorage({ id: "steer-acceptance-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		try {
+			const runtime = await createCodingAgentV2Service(models, [
+				{ metadata: { id: "steer-acceptance-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+			]).openSession("steer-acceptance-session");
+			await runtime.accept("active-turn", {
+				command: "turn/start",
+				sessionId: "steer-acceptance-session",
+				payload: {},
+			});
+			const accepted = await runtime.accept("queued-steer", {
+				command: "turn/steer",
+				sessionId: "steer-acceptance-session",
+				payload: { text: "interrupt" },
+			});
+			expect(accepted.operationId).toBe("queued-steer");
+			expect((await runtime.snapshot()).activeOperation).toMatchObject({
+				operationId: "active-turn",
+				state: "accepted",
+			});
+			expect((await runtime.snapshot()).phase).toBe("turn");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("maps a durable harness to an accepted and executable turn runtime", async () => {
 		const models = createModels();
 		const faux = fauxProvider({

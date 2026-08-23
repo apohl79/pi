@@ -162,7 +162,7 @@ export interface CodingAgentV2SessionStore {
 export interface CodingAgentV2Runtime {
 	snapshot(): Promise<SessionSnapshotV2>;
 	cancelQueued(entryId: string): Promise<void>;
-	accept(operationId: string): Promise<OperationAccepted>;
+	accept(operationId: string, command?: CommandV2): Promise<OperationAccepted>;
 	run(operationId: string, command: CommandV2): Promise<void>;
 	/** Attribute descendant provider usage to this session's durable goal. */
 	recordGoalUsage?(tokens: number): Promise<void>;
