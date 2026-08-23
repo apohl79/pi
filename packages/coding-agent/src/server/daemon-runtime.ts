@@ -69,6 +69,7 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	clientInstanceId?: string;
 	lifecycleMarkerPath?: string;
 	integrity?: ServerDaemonOptions["integrity"];
+	repairSafe?: ServerDaemonOptions["repairSafe"];
 	serverId?: string;
 	runtimeManifest?: ServerDaemonOptions["runtimeManifest"];
 	agents?: ServerDaemonOptions["agents"];
@@ -198,6 +199,18 @@ export async function createCodingAgentDaemonRuntime(
 		plans,
 		diagnostics,
 		...(options.integrity === undefined ? {} : { integrity: options.integrity }),
+		repairSafe:
+			options.repairSafe ??
+			(async () => {
+				const repairedSessions = await options.repository.repairDerivedIndexes();
+				return [
+					{
+						name: "session-branch-cache",
+						ok: true,
+						details: { sessions: repairedSessions.length },
+					},
+				];
+			}),
 		...(diagnosticContent === undefined ? {} : { diagnosticContent }),
 		...(options.createServer === undefined ? {} : { createServer: options.createServer }),
 	});
