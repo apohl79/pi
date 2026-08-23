@@ -31,6 +31,49 @@ type StoreRecord =
 	| { readonly kind: "operation"; readonly value: OperationRecordV2 }
 	| { readonly kind: "event"; readonly value: EventEnvelopeV2 };
 
+const OPERATION_STATES = new Set(["accepted", "running", "complete", "failed", "aborted", "suspended"]);
+
+function isNonNegativeInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function validateOperation(value: unknown): asserts value is OperationRecordV2 {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		throw new Error("Invalid operation store operation");
+	const operation = value as Record<string, unknown>;
+	if (typeof operation.operationId !== "string" || operation.operationId.length === 0)
+		throw new Error("Invalid operation store operation id");
+	if (typeof operation.sessionId !== "string" || operation.sessionId.length === 0)
+		throw new Error("Invalid operation store session id");
+	if (typeof operation.state !== "string" || !OPERATION_STATES.has(operation.state))
+		throw new Error("Invalid operation store operation state");
+	if (typeof operation.accepted !== "object" || operation.accepted === null || Array.isArray(operation.accepted))
+		throw new Error("Invalid operation store accepted record");
+	const accepted = operation.accepted as Record<string, unknown>;
+	if (accepted.operationId !== operation.operationId || typeof accepted.operationId !== "string")
+		throw new Error("Invalid operation store accepted operation id");
+	if (!isNonNegativeInteger(accepted.sessionRevision) || !isNonNegativeInteger(accepted.eventSeq))
+		throw new Error("Invalid operation store accepted cursor");
+	if (operation.terminalSeq !== undefined && !isNonNegativeInteger(operation.terminalSeq))
+		throw new Error("Invalid operation store terminal cursor");
+	if (operation.error !== undefined && typeof operation.error !== "string")
+		throw new Error("Invalid operation store error");
+}
+
+function validateEvent(value: unknown): asserts value is EventEnvelopeV2 {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		throw new Error("Invalid operation store event");
+	const event = value as Record<string, unknown>;
+	if (event.type !== "event" || typeof event.sessionId !== "string" || event.sessionId.length === 0)
+		throw new Error("Invalid operation store event identity");
+	if (!isNonNegativeInteger(event.seq) || !isNonNegativeInteger(event.revision))
+		throw new Error("Invalid operation store event cursor");
+	if (typeof event.event !== "string" || event.event.length === 0)
+		throw new Error("Invalid operation store event name");
+	if (event.operationId !== undefined && (typeof event.operationId !== "string" || event.operationId.length === 0))
+		throw new Error("Invalid operation store event operation id");
+}
+
 function parseStoreRecord(value: unknown): StoreRecord {
 	if (typeof value !== "object" || value === null || Array.isArray(value))
 		throw new Error("Invalid operation store record");
@@ -38,6 +81,8 @@ function parseStoreRecord(value: unknown): StoreRecord {
 	if (record.kind !== "operation" && record.kind !== "event") throw new Error("Invalid operation store record kind");
 	if (typeof record.value !== "object" || record.value === null || Array.isArray(record.value))
 		throw new Error("Invalid operation store record value");
+	if (record.kind === "operation") validateOperation(record.value);
+	else validateEvent(record.value);
 	return record as StoreRecord;
 }
 

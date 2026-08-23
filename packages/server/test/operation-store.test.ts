@@ -61,5 +61,12 @@ describe("JsonlV2OperationStore", () => {
 
 		await writeFile(path, `${encoded}\n{"kind":"event"}\n`, "utf8");
 		await expect(new JsonlV2OperationStore(path).load()).rejects.toThrow("Invalid operation store record value");
+
+		await writeFile(
+			path,
+			`${JSON.stringify({ kind: "operation", value: { ...operation, operationId: "" } })}\n`,
+			"utf8",
+		);
+		await expect(new JsonlV2OperationStore(path).load()).rejects.toThrow("Invalid operation store operation id");
 	});
 });
