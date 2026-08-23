@@ -3,13 +3,16 @@ import type { AgentSummary } from "@earendil-works/pi-protocol";
 import type { V2AgentRegistry, V2AgentRequest, V2AgentSnapshot } from "@earendil-works/pi-server";
 import type { CodingAgentV2Runtime, CodingAgentV2Service } from "./v2-service.ts";
 
+const MAX_AGENT_INBOX_MESSAGES = 32;
+const MAX_AGENT_INBOX_CHARACTERS = 16_000;
+
 interface ChildAgent {
 	readonly summary: AgentSummary;
 	readonly parentSessionId: string;
 	readonly childSessionId: string;
 	readonly runtime: CodingAgentV2Runtime;
 	state: AgentSummary["state"];
-	messages: string[];
+	inbox: string[];
 	followUps: string[];
 	waiters: Array<() => void>;
 }
@@ -63,7 +66,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			childSessionId: created.sessionId,
 			runtime: created.runtime,
 			state: "running",
-			messages: [request.taskMessage],
+			inbox: [],
 			followUps: [],
 			waiters: [],
 		};
@@ -99,13 +102,16 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 
 	async message(agentId: string, message: string): Promise<void> {
 		if (message.trim().length === 0) throw new Error("Agent message must not be empty");
-		this.get(agentId).messages.push(message);
+		const agent = this.get(agentId);
+		const characters = agent.inbox.reduce((total, item) => total + item.length, 0);
+		if (agent.inbox.length >= MAX_AGENT_INBOX_MESSAGES || characters + message.length > MAX_AGENT_INBOX_CHARACTERS)
+			throw new Error("Agent message inbox limit exceeded");
+		agent.inbox.push(message);
 	}
 
 	async followUp(agentId: string, message: string): Promise<AgentSummary> {
 		if (message.trim().length === 0) throw new Error("Agent message must not be empty");
 		const agent = this.get(agentId);
-		await this.message(agentId, message);
 		if (agent.state === "complete" || agent.state === "interrupted" || agent.state === "failed") {
 			agent.state = "running";
 			void this.run(agent, "turn/followUp", message);
@@ -143,13 +149,16 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 
 	private async run(agent: ChildAgent, command: "turn/start" | "turn/followUp", text: string): Promise<void> {
 		try {
+			const inbox = agent.inbox.slice();
+			const prompt = [...inbox, text].join("\n\n");
 			const operationId = randomUUID();
 			await agent.runtime.accept(operationId);
 			await agent.runtime.run(operationId, {
 				command,
 				sessionId: agent.childSessionId,
-				payload: { text },
+				payload: { text: prompt },
 			});
+			if (inbox.length > 0) agent.inbox.splice(0, inbox.length);
 			agent.state = "complete";
 			const next = agent.followUps.shift();
 			if (next !== undefined) {
@@ -207,7 +216,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				childSessionId: metadata.id,
 				runtime,
 				state: summary.state,
-				messages: [],
+				inbox: [],
 				followUps: [],
 				waiters: [],
 			});
