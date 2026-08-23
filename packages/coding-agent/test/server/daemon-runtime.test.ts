@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
@@ -214,6 +214,55 @@ describe("coding-agent daemon runtime", () => {
 				command: "pi",
 				options: { messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] },
 			});
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	test("exports and verifies a production-daemon diagnostic bundle offline", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-diagnostics-"));
+		directories.push(directory);
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-diagnostics-faux",
+			models: [
+				{ id: "coding-agent-daemon-diagnostics-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("diagnostic response")]);
+		const output: unknown[] = [];
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: (value) => output.push(value),
+			writeText: () => {},
+		});
+		const bundlePath = join(directory, "diagnostic-bundle.json");
+		try {
+			await runtime.cli.runPi({
+				command: "pi",
+				options: {
+					print: true,
+					messages: ["capture diagnostics"],
+					fileArgs: [],
+					unknownFlags: new Map(),
+					diagnostics: [],
+				},
+			});
+			await runtime.cli.runDiagnostics({ command: "diagnostics", action: "export", output: bundlePath });
+			const bundle = JSON.parse(await readFile(bundlePath, "utf8")) as {
+				events: readonly unknown[];
+				capsules?: readonly unknown[];
+			};
+			expect(bundle.events.length).toBeGreaterThan(0);
+			expect(bundle.capsules?.length).toBeGreaterThan(0);
+			await runtime.cli.runDiagnostics({ command: "diagnostics", action: "verify", bundle: bundlePath });
+			expect(output.at(-1)).toEqual({ valid: true });
 		} finally {
 			await runtime.close();
 		}
