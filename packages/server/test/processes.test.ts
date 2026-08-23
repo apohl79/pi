@@ -15,6 +15,12 @@ describe("InMemoryV2ProcessRegistry", () => {
 		expect(await registry.wait(started.processId)).toMatchObject({ state: "terminated" });
 	});
 
+	test("rejects unsafe output cursors", async () => {
+		const registry = new InMemoryV2ProcessRegistry();
+		const started = await registry.start({ sessionId: "session-unsafe-cursor", command: "demo" });
+		await expect(registry.read(started.processId, Number.MAX_SAFE_INTEGER + 1)).rejects.toThrow("cursor");
+	});
+
 	test("resolves in-memory waiters only after a terminal transition", async () => {
 		const registry = new InMemoryV2ProcessRegistry();
 		const started = await registry.start({ sessionId: "session-wait", command: "demo" });
