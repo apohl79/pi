@@ -50,6 +50,12 @@ export {
 	CodexPluginAcquisitionError,
 	type CodexPluginAcquisitionOptions,
 } from "./core/codex-plugin-acquisition.ts";
+export {
+	type CodexPluginActivation,
+	CodexPluginActivationError,
+	type CodexPluginActivationOptions,
+	CodexPluginActivationStore,
+} from "./core/codex-plugin-activation.ts";
 // Compaction
 export {
 	type BranchPreparation,
