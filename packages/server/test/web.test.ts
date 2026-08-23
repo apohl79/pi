@@ -67,4 +67,22 @@ describe("AdapterV2WebService", () => {
 			{ extract: "🙂" },
 		]);
 	});
+
+	test("rejects invalid safety limits and honors zero limits", async () => {
+		const adapter: V2WebAdapter = {
+			execute: async () => [
+				{ id: "r1", title: "One", source: "fake", retrievedAt: 1, url: "https://example.test/a" },
+			],
+		};
+
+		await expect(
+			new AdapterV2WebService(adapter, { maxResults: -1 }).execute("session-1", { operation: "search_query" }),
+		).rejects.toThrow("maxResults must be a non-negative safe integer");
+		await expect(
+			new AdapterV2WebService(adapter, { maxExtractBytes: 1.5 }).execute("session-1", { operation: "search_query" }),
+		).rejects.toThrow("maxExtractBytes must be a non-negative safe integer");
+		expect(
+			await new AdapterV2WebService(adapter, { maxResults: 0 }).execute("session-1", { operation: "search_query" }),
+		).toEqual([]);
+	});
 });

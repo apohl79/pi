@@ -98,10 +98,15 @@ export class AdapterV2WebService implements V2WebService {
 
 	async execute(sessionId: string, request: V2WebRequest): Promise<readonly V2WebResult[]> {
 		void sessionId;
+		const maxResults = nonNegativeLimit(this.policy.maxResults ?? DEFAULT_MAX_RESULTS, "maxResults");
+		const maxExtractBytes = nonNegativeLimit(
+			this.policy.maxExtractBytes ?? DEFAULT_MAX_EXTRACT_BYTES,
+			"maxExtractBytes",
+		);
 		const policy = {
 			...this.policy,
-			maxResults: this.policy.maxResults ?? DEFAULT_MAX_RESULTS,
-			maxExtractBytes: this.policy.maxExtractBytes ?? DEFAULT_MAX_EXTRACT_BYTES,
+			maxResults,
+			maxExtractBytes,
 		};
 		if (request.url) assertSafeWebUrl(request.url, policy);
 		const results = await this.adapter.execute(request, policy);
@@ -120,6 +125,11 @@ function truncateUtf8(value: string, maxBytes: number): string {
 	let end = maxBytes;
 	while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
 	return bytes.subarray(0, end).toString("utf8");
+}
+
+function nonNegativeLimit(value: number, name: string): number {
+	if (!Number.isSafeInteger(value) || value < 0) throw new TypeError(`${name} must be a non-negative safe integer`);
+	return value;
 }
 
 export class UnavailableV2WebService implements V2WebService {
