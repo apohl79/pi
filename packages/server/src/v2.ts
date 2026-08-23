@@ -153,6 +153,37 @@ function requestIdFrom(command: CommandV2, payload: Record<string, unknown>): st
 	return requestId;
 }
 
+const GOAL_STATUSES = new Set(["active", "paused", "blocked", "usageLimited", "budgetLimited", "complete"]);
+
+function validateGoalCommand(command: CommandV2, payload: Record<string, unknown>): void {
+	if (command.command === "goal/create") {
+		if (typeof payload.objective !== "string") throw new Error("goal/create objective must be a string");
+		if (payload.tokenBudget !== undefined) {
+			if (typeof payload.tokenBudget !== "number") throw new Error("goal/create tokenBudget must be a number");
+			if (!Number.isSafeInteger(payload.tokenBudget) || payload.tokenBudget < 0)
+				throw new Error("goal/create tokenBudget must be a non-negative safe integer");
+		}
+		return;
+	}
+	if (command.command !== "goal/update") return;
+	if (payload.status !== undefined) {
+		if (typeof payload.status !== "string") throw new Error("goal/update status must be a string");
+		if (!GOAL_STATUSES.has(payload.status)) throw new Error("goal/update status is invalid");
+	}
+	for (const field of ["tokensUsed", "tokenBudget"] as const) {
+		if (payload[field] === undefined) continue;
+		if (typeof payload[field] !== "number") throw new Error(`goal/update ${field} must be a number`);
+		if (!Number.isSafeInteger(payload[field]) || payload[field] < 0)
+			throw new Error(`goal/update ${field} must be a non-negative safe integer`);
+	}
+	if (payload.activeTimeSeconds !== undefined) {
+		if (typeof payload.activeTimeSeconds !== "number")
+			throw new Error("goal/update activeTimeSeconds must be a number");
+		if (!Number.isFinite(payload.activeTimeSeconds) || payload.activeTimeSeconds < 0)
+			throw new Error("goal/update activeTimeSeconds must be non-negative");
+	}
+}
+
 function referenceFrom(command: CommandV2, payload: Record<string, unknown>): string {
 	const reference = payload.reference ?? command.operationId;
 	if (typeof reference !== "string" || reference.length === 0) throw new Error("file reference is required");
@@ -1654,6 +1685,7 @@ export class PiServerV2 {
 		this.requireControl(state, command.sessionId);
 		const runtime = state.sessions.get(command.sessionId);
 		if (!runtime) throw new Error(`Session ${command.sessionId} is not attached`);
+		validateGoalCommand(command, objectPayload(command));
 		const resolvedCommand = await this.resolveTurnContent(command);
 		const operationId = randomUUID();
 		const capsule = this.diagnosticContent
