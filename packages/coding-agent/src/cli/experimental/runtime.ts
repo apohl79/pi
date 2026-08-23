@@ -59,6 +59,11 @@ export type ExperimentalCliRuntime = ExperimentalCliContext & {
 function resolveRemoteModel(options: Args, models: readonly ModelMetadata[]): ModelRef | undefined {
 	if (options.model === undefined && options.provider === undefined) return undefined;
 	const requested = options.model?.trim();
+	if (requested === undefined || requested.length === 0) {
+		const match = models.find((model) => model.provider === options.provider);
+		if (match === undefined) throw new Error(`No configured model found for provider: ${options.provider}`);
+		return { provider: match.provider, id: match.id };
+	}
 	const slash = requested?.indexOf("/") ?? -1;
 	const provider = options.provider ?? (slash > 0 ? requested?.slice(0, slash) : undefined);
 	const id = slash > 0 ? requested?.slice(slash + 1) : requested;
