@@ -179,6 +179,8 @@ describe("PiClientV2", () => {
 		pair.deliver({ type: "response", id: "v2-request-4", ok: true, result: { command: "session/detach" } });
 		await detached;
 		expect(() => handle.read()).toThrow("detached");
+		pair.deliver({ type: "event", sessionId: "session-1", seq: 3, revision: 2, event: "usage_updated", payload: {} });
+		expect(events).toEqual(["plan_updated"]);
 	});
 
 	test("commits a session handle detach only after server acknowledgement", async () => {
