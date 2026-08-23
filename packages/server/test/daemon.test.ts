@@ -176,4 +176,42 @@ describe("ServerDaemon", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+
+	test("clears the running marker when server startup fails", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-failed-start-"));
+		try {
+			const markerPath = join(directory, "daemon-state.json");
+			const first = new ServerDaemon({
+				service: service(),
+				socketPath: join(directory, "daemon.sock"),
+				lifecycleMarkerPath: markerPath,
+				createServer: () =>
+					fakeServer(
+						async () => {
+							throw new Error("bind failed");
+						},
+						async () => {},
+					),
+			});
+			await expect(first.start()).rejects.toThrow("bind failed");
+
+			const diagnostics = new InMemoryForensicRecorder();
+			const second = new ServerDaemon({
+				service: service(),
+				socketPath: join(directory, "daemon.sock"),
+				lifecycleMarkerPath: markerPath,
+				diagnostics,
+				createServer: () =>
+					fakeServer(
+						async () => {},
+						async () => {},
+					),
+			});
+			await second.start();
+			expect((await diagnostics.read()).map((event) => event.kind)).not.toContain("daemon_unclean_shutdown");
+			await second.stop();
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 });

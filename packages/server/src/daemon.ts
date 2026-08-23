@@ -170,6 +170,7 @@ export class ServerDaemon {
 			await server.start();
 		} catch (error) {
 			await server.close().catch(() => {});
+			await this.writeLifecycleMarker("clean").catch(() => {});
 			this.state = "stopped";
 			await this.recordDiagnostic(
 				"daemon_start_failed",
