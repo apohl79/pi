@@ -151,4 +151,29 @@ describe("ServerDaemon", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
+
+	test("diagnoses malformed lifecycle markers before replacing them", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-invalid-marker-"));
+		try {
+			const markerPath = join(directory, "daemon-state.json");
+			await writeFile(markerPath, "not-json");
+			const diagnostics = new InMemoryForensicRecorder();
+			const daemon = new ServerDaemon({
+				service: service(),
+				socketPath: join(directory, "daemon.sock"),
+				lifecycleMarkerPath: markerPath,
+				diagnostics,
+				createServer: () =>
+					fakeServer(
+						async () => {},
+						async () => {},
+					),
+			});
+			await daemon.start();
+			expect((await diagnostics.read()).map((event) => event.kind)).toContain("daemon_lifecycle_marker_invalid");
+			await daemon.stop();
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 });
