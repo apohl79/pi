@@ -1106,12 +1106,20 @@ export class PiServerV2 {
 		];
 		if (typeof operation !== "string" || !operations.includes(operation as V2WebOperation))
 			throw new Error("web operation is invalid");
+		const query = payload.query;
+		const url = payload.url;
+		const refId = payload.refId;
+		const pattern = payload.pattern;
+		if (query !== undefined && typeof query !== "string") throw new Error("web query must be a string");
+		if (url !== undefined && typeof url !== "string") throw new Error("web url must be a string");
+		if (refId !== undefined && typeof refId !== "string") throw new Error("web refId must be a string");
+		if (pattern !== undefined && typeof pattern !== "string") throw new Error("web pattern must be a string");
 		const request = {
 			operation: operation as V2WebOperation,
-			...(typeof payload.query === "string" ? { query: payload.query } : {}),
-			...(typeof payload.url === "string" ? { url: payload.url } : {}),
-			...(typeof payload.refId === "string" ? { refId: payload.refId } : {}),
-			...(typeof payload.pattern === "string" ? { pattern: payload.pattern } : {}),
+			...(query === undefined ? {} : { query }),
+			...(url === undefined ? {} : { url }),
+			...(refId === undefined ? {} : { refId }),
+			...(pattern === undefined ? {} : { pattern }),
 		};
 		await this.sendResponse(state, id, {
 			command: command.command,

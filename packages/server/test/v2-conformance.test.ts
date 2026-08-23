@@ -331,6 +331,17 @@ describe("PiServer v2 operation acceptance", () => {
 			payload: { operation: "search_query", query: "example" },
 		});
 		expect(response).toMatchObject({ ok: true, result: { results: [{ id: "result-1", source: "fake" }] } });
+		for (const field of ["query", "url", "refId", "pattern"] as const) {
+			const malformed = await client.request({
+				command: "web",
+				sessionId: "session-1",
+				payload: { operation: "search_query", [field]: 42 },
+			});
+			expect(malformed).toMatchObject({
+				ok: false,
+				error: { code: "request_failed", message: `web ${field} must be a string` },
+			});
+		}
 	});
 
 	test("serves diagnostic status, timeline, export, verify, and doctor", async () => {
