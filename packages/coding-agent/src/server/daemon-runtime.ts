@@ -189,6 +189,10 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			...options,
 			repository,
 			env,
+			legacySessionImport: {
+				fs: env,
+				sessionsRoot: join(options.agentDir, "sessions"),
+			},
 			inputs:
 				options.inputs ??
 				new JsonlV2InputRegistry(options.inputStorePath ?? join(options.agentDir, "inputs.jsonl")),

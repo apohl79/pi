@@ -25,6 +25,7 @@ import {
 	type CreateCodingAgentHarnessOptions,
 	createCodingAgentHarness,
 } from "./create-harness.ts";
+import { importLegacySessions, type LegacySessionImportOptions } from "./legacy-session-import.ts";
 import { createPluginSamplingInput } from "./plugin-sampling.ts";
 import {
 	type CodingAgentV2Service,
@@ -35,6 +36,7 @@ import {
 
 export interface CodingAgentV2SqliteServiceOptions {
 	repository: SqliteSessionRepository;
+	legacySessionImport?: Omit<LegacySessionImportOptions, "repository">;
 	models: Models;
 	env: ExecutionEnv | ((metadata: SqliteSessionMetadata) => ExecutionEnv | Promise<ExecutionEnv>);
 	model: Model<Api> | ((metadata: SqliteSessionMetadata) => Model<Api> | Promise<Model<Api>>);
@@ -69,6 +71,14 @@ export async function createCodingAgentV2SqliteService(
 	options: CodingAgentV2SqliteServiceOptions,
 ): Promise<CodingAgentV2Service> {
 	const metadataById = new Map<string, SqliteSessionMetadata>();
+	let legacyImport: Promise<void> | undefined;
+	const ensureLegacyImport = async (): Promise<void> => {
+		if (options.legacySessionImport === undefined) return;
+		legacyImport ??= importLegacySessions({ repository: options.repository, ...options.legacySessionImport }).then(
+			() => undefined,
+		);
+		await legacyImport;
+	};
 	const definition = async (
 		metadata: SqliteSessionMetadata,
 		session: Session<SqliteSessionMetadata>,
@@ -170,11 +180,13 @@ export async function createCodingAgentV2SqliteService(
 	};
 	const store: CodingAgentV2SessionStore = {
 		list: async () => {
+			await ensureLegacyImport();
 			const metadata = await options.repository.list();
 			for (const item of metadata) metadataById.set(item.id, item);
 			return metadata.map(sessionMetadata);
 		},
 		open: async (sessionId) => {
+			await ensureLegacyImport();
 			const metadata =
 				metadataById.get(sessionId) ?? (await options.repository.list()).find((item) => item.id === sessionId);
 			if (!metadata) throw new Error(`Unknown session: ${sessionId}`);
