@@ -83,7 +83,7 @@ describe("coding-agent daemon process tools", () => {
 				const sessionId = (toolResult.details as { session_id?: unknown }).session_id;
 				if (typeof sessionId !== "string") throw new Error("Expected exec_command session_id");
 				return fauxAssistantMessage(
-					fauxToolCall("write_stdin", { session_id: sessionId, chars: "hello\n", yield_time_ms: 10 }),
+					fauxToolCall("write_stdin", { session_id: sessionId, chars: "hello\n", yield_time_ms: 250 }),
 					{ stopReason: "toolUse" },
 				);
 			},
@@ -114,7 +114,7 @@ describe("coding-agent daemon process tools", () => {
 				const operationId = await session.submit("send input to the process");
 				const snapshot = await session.waitForOperation(operationId);
 				expect(snapshot.transcript.some((item) => item.role === "tool")).toBe(true);
-				expect(JSON.stringify(snapshot.transcript)).toContain("tool-pty:hello\\n");
+				expect(JSON.stringify(snapshot.transcript).replaceAll("\\r\\n", "\\n")).toContain("tool-pty:hello\\n");
 			} finally {
 				await session.dispose();
 			}
