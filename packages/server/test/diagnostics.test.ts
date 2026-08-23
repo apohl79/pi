@@ -178,6 +178,29 @@ describe("verifyDiagnosticBundle", () => {
 			valid: false,
 			reason: "Diagnostic bundle manifest contains invalid unavailable entries",
 		});
+		expect(
+			verifyDiagnosticBundle({
+				manifest,
+				events,
+				clientDiagnostics: {
+					afterSeq: 2,
+					records: [
+						{
+							schemaVersion: 1,
+							seq: 2,
+							clientInstanceId: "client-1",
+							event: "client.connected",
+							severity: "info",
+							timestamp: 1,
+						},
+					],
+				},
+			}),
+		).toEqual({ valid: true });
+		expect(verifyDiagnosticBundle({ manifest, events, clientDiagnostics: { afterSeq: -1, records: [] } })).toEqual({
+			valid: false,
+			reason: "Diagnostic bundle contains invalid client diagnostics",
+		});
 	});
 
 	test("rejects malformed encrypted capsule records during offline verification", () => {

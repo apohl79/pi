@@ -171,6 +171,7 @@ export async function createCodingAgentDaemonRuntime(
 			stop: () => daemon.stop(),
 		},
 		defaultConnect,
+		diagnosticsSpool: clientSpool,
 		createClient: (address) =>
 			new PiClientV2({
 				transportFactory: createUnixTransportFactory({ path: address.path }),
