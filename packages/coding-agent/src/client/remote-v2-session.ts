@@ -7,6 +7,10 @@ import type {
 	V2SessionLeaseMode,
 } from "@earendil-works/pi-client";
 import type {
+	RemoteV2DiagnosticsTimeline as DiagnosticsTimeline,
+	RemoteV2UsageRead as DiagnosticsUsageRead,
+} from "@earendil-works/pi-diagnostics";
+import type {
 	V2FileCompletion,
 	V2FileRead,
 	V2FileReference,
@@ -36,6 +40,7 @@ import {
 	SessionSnapshotV2Schema,
 	UsageAggregateSchema,
 } from "@earendil-works/pi-protocol";
+import type { V2WebResult } from "@earendil-works/pi-web-tools";
 import { Check } from "typebox/value";
 
 export type RemoteV2SessionLifecycle =
@@ -122,17 +127,8 @@ export interface RemoteV2DiagnosticsExportOptions {
 	readonly operationId?: string;
 }
 
-export interface RemoteV2DiagnosticsTimeline {
-	readonly events: readonly Record<string, unknown>[];
-	readonly operations: readonly Record<string, unknown>[];
-	readonly operationEvents: readonly Record<string, unknown>[];
-	readonly usage?: Record<string, unknown>;
-}
-
-export interface RemoteV2UsageRead {
-	readonly aggregate: Record<string, unknown>;
-	readonly entries: readonly Record<string, unknown>[];
-}
+export type RemoteV2DiagnosticsTimeline = DiagnosticsTimeline;
+export type RemoteV2UsageRead = DiagnosticsUsageRead;
 
 export interface RemoteV2PluginInstallOptions {
 	readonly name: string;
@@ -152,16 +148,7 @@ export interface RemoteV2AppAuthOptions extends Record<string, unknown> {
 	readonly id: string;
 }
 
-export interface RemoteV2WebResult {
-	readonly id: string;
-	readonly url: string;
-	readonly title: string;
-	readonly source: string;
-	readonly retrievedAt: number;
-	readonly extract?: string;
-	readonly mimeType?: string;
-	readonly blobDigest?: string;
-}
+export type RemoteV2WebResult = V2WebResult;
 
 export interface RemoteV2ImageView {
 	readonly digest: string;

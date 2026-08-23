@@ -35,6 +35,10 @@ export default mergeConfig(
 					replacement: fileURLToPath(new URL("../file-references/src/index.ts", import.meta.url)),
 				},
 				{
+					find: /^@earendil-works\/pi-diagnostics$/,
+					replacement: fileURLToPath(new URL("../diagnostics/src/index.ts", import.meta.url)),
+				},
+				{
 					find: /^@earendil-works\/pi-client\/unix$/,
 					replacement: fileURLToPath(new URL("../client/src/unix.ts", import.meta.url)),
 				},
