@@ -177,7 +177,20 @@ export async function createCodingAgentDaemonRuntime(
 export async function createConfiguredCodingAgentDaemonRuntime(
 	options: ConfiguredCodingAgentDaemonRuntimeOptions,
 ): Promise<ConfiguredCodingAgentDaemonRuntime> {
-	runMigrations(options.cwd, options.agentDir);
+	const diagnostics =
+		options.diagnostics ??
+		new JsonlForensicRecorder(options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"));
+	await diagnostics.record({ kind: "daemon_migration_started" });
+	try {
+		runMigrations(options.cwd, options.agentDir);
+		await diagnostics.record({ kind: "daemon_migration_completed" });
+	} catch (error) {
+		await diagnostics.record({
+			kind: "daemon_migration_failed",
+			payload: { error: error instanceof Error ? error.name : "unknown" },
+		});
+		throw error;
+	}
 	const env = new NodeExecutionEnv({ cwd: options.cwd });
 	const repository = new SqliteSessionRepository({
 		env,
@@ -189,6 +202,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			...options,
 			repository,
 			env,
+			diagnostics,
 			legacySessionImport: {
 				fs: env,
 				sessionsRoot: join(options.agentDir, "sessions"),
