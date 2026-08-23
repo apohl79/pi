@@ -25,6 +25,7 @@ describe("FileV2BlobStore", () => {
 		const stat = await store.put(new TextEncoder().encode("hello"), "text/plain");
 		expect(await store.verify()).toMatchObject({ ok: true, blobs: 1, bytes: 5, errors: [] });
 		await writeFile(join(directory, `${stat.digest}.blob`), "corrupt");
+		await expect(store.read(stat.digest)).rejects.toThrow("content digest mismatch");
 		expect(await store.verify()).toMatchObject({ ok: false, blobs: 1, errors: [`content_mismatch:${stat.digest}`] });
 	});
 
