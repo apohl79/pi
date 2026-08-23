@@ -373,11 +373,17 @@ export class RemoteV2Session {
 					return;
 				void finish();
 			});
-			void this.readOperation(operationId)
-				.then((operation) => {
-					if (["complete", "failed", "aborted", "suspended"].includes(operation.state)) void finish();
-				})
-				.catch(() => {});
+			const poll = async (): Promise<void> => {
+				while (!settled) {
+					const operation = await this.readOperation(operationId);
+					if (["complete", "failed", "aborted", "suspended"].includes(operation.state)) {
+						await finish();
+						return;
+					}
+					await new Promise<void>((resolve) => setTimeout(resolve, 25));
+				}
+			};
+			void poll().catch(() => {});
 		});
 	}
 
