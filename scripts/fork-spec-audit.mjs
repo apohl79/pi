@@ -81,6 +81,12 @@ export function auditForkSpec() {
 	for (const [path, entry] of Object.entries(manifest.packages ?? {})) {
 		if (!entry.classification || !entry.rationale || !Array.isArray(entry.tests) || entry.tests.length === 0) {
 			failures.push(`incomplete package compatibility entry: ${path}`);
+			continue;
+		}
+		for (const testPath of entry.tests) {
+			if (typeof testPath !== "string" || !existsSync(join(root, testPath))) {
+				failures.push(`missing compatibility test evidence: ${path} -> ${String(testPath)}`);
+			}
 		}
 	}
 	return { failures, checkedFiles: requiredFiles.length, checkedPatterns: requiredPatterns.length };
