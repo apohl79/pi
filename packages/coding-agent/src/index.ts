@@ -43,6 +43,13 @@ export {
 	resolveCodexPluginResourceOnDisk,
 	resolveLocalCodexMarketplacePlugin,
 } from "./core/codex-plugin.ts";
+export {
+	acquireCodexPlugin,
+	type CodexPluginAcquisition,
+	type CodexPluginAcquisitionAdapter,
+	CodexPluginAcquisitionError,
+	type CodexPluginAcquisitionOptions,
+} from "./core/codex-plugin-acquisition.ts";
 // Compaction
 export {
 	type BranchPreparation,
