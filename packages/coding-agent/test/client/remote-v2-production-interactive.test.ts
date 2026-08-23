@@ -124,8 +124,7 @@ describe("production remote v2 interactive attachment", () => {
 			try {
 				for (const character of "@README") adapter.handleInput(character);
 				adapter.handleInput("\t");
-				await new Promise((resolve) => setTimeout(resolve, 25));
-				expect(adapter.render(120).join("\n")).toContain("README.md");
+				await waitForRenderedText(adapter, "README.md");
 			} finally {
 				await adapter.dispose();
 			}
@@ -197,3 +196,11 @@ describe("production remote v2 interactive attachment", () => {
 		}
 	});
 });
+
+async function waitForRenderedText(adapter: RemoteV2InteractiveAttachment, text: string): Promise<void> {
+	for (let attempt = 0; attempt < 100; attempt++) {
+		if (adapter.render(120).join("\n").includes(text)) return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(`Timed out waiting for rendered text: ${text}`);
+}

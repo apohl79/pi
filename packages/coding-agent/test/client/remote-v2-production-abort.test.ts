@@ -25,10 +25,19 @@ describe("production remote v2 abort", () => {
 		});
 		models.setProvider(faux.provider);
 		let release!: (response: ReturnType<typeof fauxAssistantMessage>) => void;
-		const response = new Promise<ReturnType<typeof fauxAssistantMessage>>((resolve) => {
-			release = resolve;
-		});
-		faux.setResponses([() => response]);
+		faux.setResponses([
+			(_context, streamOptions) => {
+				return new Promise<ReturnType<typeof fauxAssistantMessage>>((resolve, reject) => {
+					release = resolve;
+					const signal = streamOptions?.signal;
+					if (signal?.aborted) {
+						reject(signal.reason);
+						return;
+					}
+					signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+				});
+			},
+		]);
 		const socketPath = join(directory, "server.sock");
 		const runtime = await createConfiguredCodingAgentDaemonRuntime({
 			agentDir: directory,

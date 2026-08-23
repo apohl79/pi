@@ -52,10 +52,10 @@ describe("production remote v2 model commands", () => {
 			const attachment = await new RemoteV2SessionSelector(client).attachView(sessionId, { mode: "control" });
 			const adapter = new RemoteV2InteractiveAttachment(attachment);
 			try {
-				const switched = await adapter.execute(`/model ${faux.provider}/remote-model-b`);
+				const switched = await adapter.execute(`/model ${faux.getModel().provider}/remote-model-b`);
 				await attachment.session.waitForOperation(operationId(switched));
 				expect(attachment.session.snapshot?.model).toEqual({
-					provider: faux.provider,
+					provider: faux.getModel().provider,
 					id: "remote-model-b",
 				});
 			} finally {

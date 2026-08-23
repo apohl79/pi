@@ -2160,6 +2160,15 @@ export class PiServerV2 {
 		command: CommandV2,
 	): Promise<void> {
 		const beforeSnapshot = await runtime.snapshot();
+		const abortedOperationId =
+			command.command === "turn/abort"
+				? [...this.operations.values()].find(
+						(record) =>
+							record.sessionId === sessionId &&
+							record.operationId !== operationId &&
+							(record.state === "accepted" || record.state === "running"),
+					)?.operationId
+				: undefined;
 		try {
 			const acceptedRecord = this.operations.get(operationId);
 			if (acceptedRecord?.state === "accepted") {
@@ -2177,12 +2186,21 @@ export class PiServerV2 {
 				if (command.command === "turn/compact")
 					await this.broadcastEvent(sessionId, runtime, {}, operationId, "compaction_started");
 			}
+			if (abortedOperationId !== undefined) {
+				const target = this.operations.get(abortedOperationId);
+				if (target !== undefined && (target.state === "accepted" || target.state === "running")) {
+					const aborted = { ...target, state: "aborted" as const };
+					this.operations.set(abortedOperationId, aborted);
+					await this.operationStore.putOperation(aborted);
+				}
+			}
 			await runtime.run(operationId, command);
 			if (command.command === "turn/compact")
 				await this.broadcastEvent(sessionId, runtime, {}, operationId, "compaction_completed");
 			const completedSnapshot = await runtime.snapshot();
 			await this.broadcastSnapshotChanges(sessionId, runtime, operationId, beforeSnapshot, completedSnapshot);
 			const record = this.operations.get(operationId);
+			if (record?.state === "aborted") return;
 			if (record) {
 				const updated = { ...record, state: "complete" as const };
 				this.operations.set(operationId, updated);
@@ -2195,6 +2213,22 @@ export class PiServerV2 {
 				operationId,
 				"operation_terminal",
 			);
+			if (abortedOperationId !== undefined) {
+				const target = this.operations.get(abortedOperationId);
+				if (target?.state === "aborted") {
+					const terminalSeq = (await runtime.snapshot()).eventSeq;
+					const terminal = { ...target, terminalSeq };
+					this.operations.set(abortedOperationId, terminal);
+					await this.operationStore.putOperation(terminal);
+					await this.broadcastEvent(
+						sessionId,
+						runtime,
+						{ state: "aborted", snapshot: toProtocolJsonValue(await runtime.snapshot()) },
+						abortedOperationId,
+						"operation_terminal",
+					);
+				}
+			}
 			const completed = this.operations.get(operationId);
 			if (completed) {
 				const updated = { ...completed, terminalSeq: (await runtime.snapshot()).eventSeq };
