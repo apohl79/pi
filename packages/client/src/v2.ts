@@ -28,6 +28,18 @@ export interface PiClientV2Options {
 
 type PendingResponse = { resolve: (message: ResponseEnvelopeV2) => void; reject: (error: Error) => void };
 
+export type V2SessionLeaseMode = "control" | "observer";
+
+export interface PiSessionV2Handle {
+	readonly sessionId: string;
+	readonly mode: V2SessionLeaseMode;
+	read(): Promise<SessionSnapshotV2>;
+	relinquishControl(): Promise<void>;
+	acquireControl(): Promise<void>;
+	detach(): Promise<void>;
+	onEvent(listener: (event: EventEnvelopeV2) => void): () => void;
+}
+
 /** Minimal transport-neutral v2 client used by remote daemon callers and the TUI adapter. */
 export class PiClientV2 {
 	private readonly options: PiClientV2Options;
@@ -85,6 +97,7 @@ export class PiClientV2 {
 		this.fail(new Error("PiClientV2 disconnected"));
 		this.transport?.close();
 		this.transport = undefined;
+		this.listeners.clear();
 	}
 
 	onEvent(listener: (event: EventEnvelopeV2) => void): () => void {
@@ -114,6 +127,11 @@ export class PiClientV2 {
 
 	async attachSession(sessionId: string, mode: "control" | "observer" = "control"): Promise<void> {
 		this.result(await this.request({ command: "session/attach", sessionId, payload: { mode } }));
+	}
+
+	async openSession(sessionId: string, mode: V2SessionLeaseMode = "control"): Promise<PiSessionV2Handle> {
+		await this.attachSession(sessionId, mode);
+		return new SessionHandle(this, sessionId, mode);
 	}
 
 	async readSession(sessionId: string): Promise<SessionSnapshotV2> {
@@ -186,5 +204,78 @@ export class PiClientV2 {
 		for (const pending of this.pending.values()) pending.reject(error);
 		this.pending.clear();
 		transport?.close();
+	}
+}
+
+class SessionHandle implements PiSessionV2Handle {
+	private leaseMode: V2SessionLeaseMode;
+	private detached = false;
+	private transition: Promise<void> = Promise.resolve();
+	private readonly subscriptions = new Set<() => void>();
+	private readonly client: PiClientV2;
+	readonly sessionId: string;
+
+	constructor(client: PiClientV2, sessionId: string, mode: V2SessionLeaseMode) {
+		this.client = client;
+		this.sessionId = sessionId;
+		this.leaseMode = mode;
+	}
+
+	get mode(): V2SessionLeaseMode {
+		return this.leaseMode;
+	}
+
+	read(): Promise<SessionSnapshotV2> {
+		this.assertAttached();
+		return this.client.readSession(this.sessionId);
+	}
+
+	relinquishControl(): Promise<void> {
+		return this.enqueue(async () => {
+			this.assertAttached();
+			if (this.leaseMode === "observer") return;
+			await this.client.attachSession(this.sessionId, "observer");
+			this.leaseMode = "observer";
+		});
+	}
+
+	acquireControl(): Promise<void> {
+		return this.enqueue(async () => {
+			this.assertAttached();
+			if (this.leaseMode === "control") return;
+			await this.client.attachSession(this.sessionId, "control");
+			this.leaseMode = "control";
+		});
+	}
+
+	detach(): Promise<void> {
+		return this.enqueue(async () => {
+			if (this.detached) return;
+			this.client.result(await this.client.request({ command: "session/detach", sessionId: this.sessionId }));
+			this.detached = true;
+			for (const unsubscribe of this.subscriptions) unsubscribe();
+			this.subscriptions.clear();
+		});
+	}
+
+	onEvent(listener: (event: EventEnvelopeV2) => void): () => void {
+		this.assertAttached();
+		const unsubscribe = this.client.onEvent((event) => {
+			if (event.sessionId === this.sessionId) listener(event);
+		});
+		this.subscriptions.add(unsubscribe);
+		return () => {
+			if (this.subscriptions.delete(unsubscribe)) unsubscribe();
+		};
+	}
+
+	private enqueue(operation: () => Promise<void>): Promise<void> {
+		const next = this.transition.then(operation, operation);
+		this.transition = next.catch(() => {});
+		return next;
+	}
+
+	private assertAttached(): void {
+		if (this.detached) throw new Error(`Session ${this.sessionId} is detached`);
 	}
 }
