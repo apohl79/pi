@@ -1,7 +1,12 @@
 // Core session management
 
 export { type Args, parseArgs } from "./cli/args.ts";
-
+export {
+	createExperimentalCliRuntime,
+	type ExperimentalCliRuntime,
+	type ExperimentalCliRuntimeOptions,
+	type ExperimentalDaemonController,
+} from "./cli/experimental/runtime.ts";
 // Config paths
 export {
 	CONFIG_DIR_NAME,
