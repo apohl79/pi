@@ -5,6 +5,26 @@ import type { CodingAgentV2Runtime, CodingAgentV2Service } from "./v2-service.ts
 
 const MAX_AGENT_INBOX_MESSAGES = 32;
 const MAX_AGENT_INBOX_CHARACTERS = 16_000;
+const AGENT_REGISTRY_STATE = "agent_registry_state";
+
+interface PersistedAgentState {
+	readonly version: 1;
+	readonly inbox: readonly string[];
+	readonly followUps: readonly string[];
+}
+
+function isPersistedAgentState(value: unknown): value is PersistedAgentState {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const state = value as Record<string, unknown>;
+	if (state.version !== 1 || !Array.isArray(state.inbox) || !Array.isArray(state.followUps)) return false;
+	if (![...state.inbox, ...state.followUps].every((item) => typeof item === "string" && item.length > 0)) return false;
+	const characters = [...state.inbox, ...state.followUps].reduce((total, item) => total + item.length, 0);
+	return (
+		state.inbox.length <= MAX_AGENT_INBOX_MESSAGES &&
+		state.followUps.length <= MAX_AGENT_INBOX_MESSAGES &&
+		characters <= MAX_AGENT_INBOX_CHARACTERS
+	);
+}
 
 interface ChildAgent {
 	readonly summary: AgentSummary;
@@ -15,6 +35,7 @@ interface ChildAgent {
 	inbox: string[];
 	followUps: string[];
 	waiters: Array<() => void>;
+	persistence: Promise<void>;
 }
 
 export interface CodingAgentV2AgentRegistryOptions {
@@ -69,8 +90,10 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			inbox: [],
 			followUps: [],
 			waiters: [],
+			persistence: Promise.resolve(),
 		};
 		this.agents.set(summary.id, agent);
+		await this.persist(agent);
 		void this.run(agent, "turn/start", request.taskMessage);
 		return this.snapshot(agent);
 	}
@@ -83,6 +106,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	async getSnapshot(agentId: string): Promise<V2AgentSnapshot> {
+		await this.ensureAgent(agentId);
 		const agent = this.get(agentId);
 		return { ...this.snapshot(agent), sessionId: agent.parentSessionId };
 	}
@@ -90,6 +114,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	async wait(agentId: string, timeoutMs?: number): Promise<AgentSummary> {
 		if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs < 0))
 			throw new Error("timeoutMs must be non-negative");
+		await this.ensureAgent(agentId);
 		const agent = this.get(agentId);
 		if (agent.state === "running" || agent.state === "awaitingInput") {
 			await new Promise<void>((resolve) => {
@@ -102,24 +127,38 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 
 	async message(agentId: string, message: string): Promise<void> {
 		if (message.trim().length === 0) throw new Error("Agent message must not be empty");
+		await this.ensureAgent(agentId);
 		const agent = this.get(agentId);
 		const characters = agent.inbox.reduce((total, item) => total + item.length, 0);
 		if (agent.inbox.length >= MAX_AGENT_INBOX_MESSAGES || characters + message.length > MAX_AGENT_INBOX_CHARACTERS)
 			throw new Error("Agent message inbox limit exceeded");
 		agent.inbox.push(message);
+		await this.persist(agent);
 	}
 
 	async followUp(agentId: string, message: string): Promise<AgentSummary> {
 		if (message.trim().length === 0) throw new Error("Agent message must not be empty");
+		await this.ensureAgent(agentId);
 		const agent = this.get(agentId);
 		if (agent.state === "complete" || agent.state === "interrupted" || agent.state === "failed") {
 			agent.state = "running";
+			await this.persist(agent);
 			void this.run(agent, "turn/start", message);
-		} else agent.followUps.push(message);
+		} else {
+			const characters = agent.followUps.reduce((total, item) => total + item.length, 0);
+			if (
+				agent.followUps.length >= MAX_AGENT_INBOX_MESSAGES ||
+				characters + message.length > MAX_AGENT_INBOX_CHARACTERS
+			)
+				throw new Error("Agent follow-up queue limit exceeded");
+			agent.followUps.push(message);
+			await this.persist(agent);
+		}
 		return this.snapshot(agent);
 	}
 
 	async interrupt(agentId: string): Promise<AgentSummary> {
+		await this.ensureAgent(agentId);
 		const agent = this.get(agentId);
 		if (agent.state === "running" || agent.state === "awaitingInput") {
 			try {
@@ -161,8 +200,10 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			if (inbox.length > 0) agent.inbox.splice(0, inbox.length);
 			agent.state = "complete";
 			const next = agent.followUps.shift();
+			await this.persist(agent);
 			if (next !== undefined) {
 				agent.state = "running";
+				await this.persist(agent);
 				void this.run(agent, "turn/start", next);
 			}
 		} catch {
@@ -194,6 +235,16 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		return [...this.agents.values()].filter((agent) => agent.state === "running").length;
 	}
 
+	private async ensureAgent(agentId: string): Promise<void> {
+		if (this.agents.has(agentId)) return;
+		const sessions = await this.service.listSessions();
+		for (const metadata of sessions) {
+			if (metadata.parentSessionId === undefined) continue;
+			await this.hydrate(metadata.parentSessionId);
+			if (this.agents.has(agentId)) return;
+		}
+	}
+
 	private async hydrate(parentSessionId: string): Promise<void> {
 		if (this.hydratedParents.has(parentSessionId)) return;
 		this.hydratedParents.add(parentSessionId);
@@ -202,6 +253,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 			if (metadata.parentSessionId !== parentSessionId || this.agents.has(metadata.id)) continue;
 			const runtime = await this.service.openSession(metadata.id);
 			const snapshot = await runtime.snapshot();
+			const persisted = await this.readState(runtime);
 			const taskName = metadata.sessionName ?? metadata.id;
 			const summary: AgentSummary = {
 				id: metadata.id,
@@ -216,11 +268,36 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				childSessionId: metadata.id,
 				runtime,
 				state: summary.state,
-				inbox: [],
-				followUps: [],
+				inbox: persisted?.inbox.slice() ?? [],
+				followUps: persisted?.followUps.slice() ?? [],
 				waiters: [],
+				persistence: Promise.resolve(),
 			});
 		}
+	}
+
+	private async persist(agent: ChildAgent): Promise<void> {
+		const append = agent.runtime.appendCustomEntry;
+		if (!append) return;
+		const state: PersistedAgentState = {
+			version: 1,
+			inbox: agent.inbox.slice(),
+			followUps: agent.followUps.slice(),
+		};
+		agent.persistence = agent.persistence.then(() =>
+			append.call(agent.runtime, AGENT_REGISTRY_STATE, state).then(() => undefined),
+		);
+		await agent.persistence;
+	}
+
+	private async readState(runtime: CodingAgentV2Runtime): Promise<PersistedAgentState | undefined> {
+		if (!runtime.readCustomEntries) return undefined;
+		const entries = await runtime.readCustomEntries(AGENT_REGISTRY_STATE);
+		for (const entry of entries) {
+			if (entry.type !== "custom" || !isPersistedAgentState(entry.data)) continue;
+			return entry.data;
+		}
+		return undefined;
 	}
 
 	private resolveWaiters(agent: ChildAgent): void {

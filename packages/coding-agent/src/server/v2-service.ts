@@ -79,6 +79,10 @@ export interface CodingAgentV2Runtime {
 	snapshot(): Promise<SessionSnapshotV2>;
 	accept(operationId: string): Promise<OperationAccepted>;
 	run(operationId: string, command: CommandV2): Promise<void>;
+	/** Optional append-only state seam for server-owned registries. */
+	appendCustomEntry?(customType: string, data?: unknown): Promise<string>;
+	/** Optional read seam for reconstructing server-owned registry projections. */
+	readCustomEntries?(customType: string): Promise<readonly Entry[]>;
 	dispose(): Promise<void>;
 }
 
@@ -791,6 +795,14 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	async dispose(): Promise<void> {
 		this.definition.goalContinuation?.close();
 		await this.definition.harness.close();
+	}
+
+	async appendCustomEntry(customType: string, data?: unknown): Promise<string> {
+		return this.definition.harness.session.appendCustomEntry(customType, data);
+	}
+
+	async readCustomEntries(customType: string): Promise<readonly Entry[]> {
+		return this.definition.harness.session.findEntries({ customType });
 	}
 }
 
