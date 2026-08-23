@@ -14,6 +14,7 @@ import {
 	JsonlV2InputRegistry,
 	JsonlV2PlanRegistry,
 	JsonlV2ProcessRegistry,
+	JsonV2AppCredentialStore,
 	JsonV2PluginRegistry,
 	LocalDiagnosticCapsuleStore,
 	LocalV2FileReferenceService,
@@ -21,6 +22,7 @@ import {
 	ServerDaemon,
 	type ServerDaemonOptions,
 	TeeForensicRecorder,
+	type V2AppCredentialStore,
 	type V2AppRegistry,
 	type V2BlobStore,
 	type V2FileReferenceService,
@@ -86,6 +88,7 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	pluginAcquisition?: CodexPluginAcquisitionOptions;
 	pluginActivationStore?: CodexPluginActivationStore;
 	apps?: V2AppRegistry;
+	appCredentials?: V2AppCredentialStore;
 	operationStore?: V2OperationStore;
 	operationStorePath?: string;
 	/** Bounds for the default server-owned child-agent registry. */
@@ -194,6 +197,7 @@ export async function createCodingAgentDaemonRuntime(
 		...(options.files === undefined ? {} : { files: options.files }),
 		...(options.pluginRegistry === undefined ? {} : { plugins: options.pluginRegistry }),
 		...(options.apps === undefined ? {} : { apps: options.apps }),
+		...(options.appCredentials === undefined ? {} : { appCredentials: options.appCredentials }),
 		...(options.operationStore === undefined ? {} : { operationStore: options.operationStore }),
 		...(options.blobs === undefined ? {} : { blobs: options.blobs }),
 		plans,
@@ -494,6 +498,8 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 				options.files ??
 				new LocalV2FileReferenceService({ projectRoot: options.cwd, cwd: options.cwd, allowAbsolute: true }),
 			pluginRegistry,
+			appCredentials:
+				options.appCredentials ?? new JsonV2AppCredentialStore(join(options.agentDir, "app-credentials.json")),
 			operationStore,
 			blobs,
 			integrity,

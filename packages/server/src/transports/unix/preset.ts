@@ -51,6 +51,7 @@ export function createUnixServerV2(service: PiServerServiceV2, options: UnixServ
 		blobs: options.blobs,
 		agents: options.agents,
 		apps: options.apps,
+		appCredentials: options.appCredentials,
 		plans: options.plans,
 		inputs: options.inputs,
 		files: options.files,

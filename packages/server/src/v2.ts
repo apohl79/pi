@@ -17,7 +17,13 @@ import {
 	type SessionSnapshotV2,
 } from "@earendil-works/pi-protocol";
 import { InMemoryV2AgentRegistry, type V2AgentRegistry } from "./agents.ts";
-import { InMemoryV2AppRegistry, type V2App, type V2AppRegistry } from "./apps.ts";
+import {
+	InMemoryV2AppCredentialStore,
+	InMemoryV2AppRegistry,
+	type V2App,
+	type V2AppCredentialStore,
+	type V2AppRegistry,
+} from "./apps.ts";
 import { InMemoryV2BlobStore, type V2BlobStore } from "./blobs.ts";
 import type { ByteConnection, ByteConnectionHandler } from "./connection.ts";
 import {
@@ -122,6 +128,7 @@ export interface PiServerV2Options {
 	blobs?: V2BlobStore;
 	agents?: V2AgentRegistry;
 	apps?: V2AppRegistry;
+	appCredentials?: V2AppCredentialStore;
 	plans?: V2PlanRegistry;
 	inputs?: V2InputRegistry;
 	files?: V2FileReferenceService;
@@ -241,6 +248,7 @@ export class PiServerV2 {
 	private readonly blobs: V2BlobStore;
 	private readonly agents: V2AgentRegistry;
 	private readonly apps: V2AppRegistry;
+	private readonly appCredentials: V2AppCredentialStore;
 	private readonly plans: V2PlanRegistry;
 	private readonly inputs: V2InputRegistry;
 	private readonly unsubscribeInputChanges: (() => void) | undefined;
@@ -304,6 +312,7 @@ export class PiServerV2 {
 		this.blobs = options.blobs ?? new InMemoryV2BlobStore();
 		this.agents = options.agents ?? new InMemoryV2AgentRegistry();
 		this.apps = options.apps ?? new InMemoryV2AppRegistry();
+		this.appCredentials = options.appCredentials ?? new InMemoryV2AppCredentialStore();
 		this.plans = options.plans ?? new InMemoryV2PlanRegistry();
 		this.inputs = options.inputs ?? new InMemoryV2InputRegistry();
 		this.unsubscribeInputChanges = this.inputs.onChange?.((request) => {
@@ -1790,16 +1799,26 @@ export class PiServerV2 {
 		if (typeof payload.id !== "string") throw new Error("app/auth/complete requires id");
 		const standalone = await this.apps.read(payload.id);
 		if (!standalone && this.plugins.completeAppAuth !== undefined) {
+			const auth = await this.plugins.completeAppAuth(payload.id, payload);
+			await this.saveAppCredentials(payload.id, payload);
 			await this.sendResponse(state, id, {
 				command: command.command,
-				auth: await this.plugins.completeAppAuth(payload.id, payload),
+				auth,
 			});
 			return;
 		}
+		const auth = await this.apps.completeAuth(payload.id, payload);
+		await this.saveAppCredentials(payload.id, payload);
 		await this.sendResponse(state, id, {
 			command: command.command,
-			auth: await this.apps.completeAuth(payload.id, payload),
+			auth,
 		});
+	}
+
+	private async saveAppCredentials(appId: string, payload: Record<string, unknown>): Promise<void> {
+		const credentials = payload.credentials;
+		if (credentials !== null && typeof credentials === "object" && !Array.isArray(credentials))
+			await this.appCredentials.save(appId, credentials as Record<string, unknown>);
 	}
 
 	private async readUsage(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
