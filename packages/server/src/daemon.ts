@@ -168,6 +168,12 @@ export class ServerDaemon {
 		} catch (error) {
 			await this.writeLifecycleMarker("clean").catch(() => {});
 			this.state = "stopped";
+			await this.recordDiagnostic(
+				"daemon_start_failed",
+				{ error: error instanceof Error ? error.message : String(error) },
+				"error",
+				"error",
+			);
 			throw error;
 		}
 		try {
