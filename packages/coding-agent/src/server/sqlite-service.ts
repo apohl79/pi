@@ -311,6 +311,7 @@ export async function createCodingAgentV2SqliteService(
 										entryId: diagnostic.entryId,
 										reason: diagnostic.reason,
 										...(diagnostic.characters === undefined ? {} : { characters: diagnostic.characters }),
+										...(diagnostic.contentHash === undefined ? {} : { contentHash: diagnostic.contentHash }),
 									},
 								})
 								.catch(() => {});

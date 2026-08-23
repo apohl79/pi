@@ -56,9 +56,23 @@ describe("plugin sampling adapter", () => {
 					message.role === "user" && typeof message.content === "string" ? message.content : "",
 				),
 			).toEqual(["first", "second"]);
-			expect(diagnostics).toHaveLength(1);
+			expect(diagnostics).toHaveLength(3);
 			expect(diagnostics[0]).toMatchObject({ pluginId: "first", entryId: "disabled", reason: "condition_failed" });
 			expect(diagnostics[0]?.durationMs).toEqual(expect.any(Number));
+			expect(diagnostics[1]).toMatchObject({
+				pluginId: "first",
+				entryId: "enabled",
+				reason: "included",
+				characters: 5,
+				contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+			});
+			expect(diagnostics[2]).toMatchObject({
+				pluginId: "second",
+				entryId: "enabled",
+				reason: "included",
+				characters: 6,
+				contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+			});
 		} finally {
 			await env.cleanup();
 		}
