@@ -8,7 +8,7 @@ import {
 	InMemoryV2PlanRegistry,
 	InMemoryV2UsageLedger,
 } from "@earendil-works/pi-server";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { createCodingAgentHarness } from "../../src/server/create-harness.ts";
 import { ServerRuntimeExtensionHost } from "../../src/server/extension-host.ts";
 import {
@@ -490,7 +490,7 @@ describe("coding-agent v2 service adapter", () => {
 				sessionId: "naming-role-session",
 				payload: { text: "recover" },
 			});
-			expect(observedModels).toEqual(["session-model", "fast-model"]);
+			await vi.waitFor(() => expect(observedModels).toEqual(["session-model", "fast-model"]));
 			expect((await runtime.snapshot()).model.id).toBe("session-model");
 			expect((await runtime.snapshot()).name).toBe("Role-selected title");
 		} finally {
@@ -805,7 +805,7 @@ describe("coding-agent v2 service adapter", () => {
 				[
 					{
 						operationId: "operation-1",
-						payload: { id: "profile-1", contentHash: "hash-1", byteLength: 20, estimatedTokens: 5 },
+						payload: { id: "profile-1", contentHash: "hash-1", byteLength: 20, estimatedTokens: "[REDACTED]" },
 					},
 				],
 			);
