@@ -1,4 +1,4 @@
-import type { StopReason, Usage } from "@earendil-works/pi-ai";
+import type { DeferredHandle, StopReason, Usage } from "@earendil-works/pi-ai";
 import "../messages.ts";
 import type { AgentMessage } from "../../types.ts";
 import type { Session } from "./session.ts";
@@ -116,10 +116,11 @@ export interface OperationStartedRecord extends RecordBase {
 export interface OperationState {
 	kind: OperationStartedRecord["intent"]["kind"];
 	status: "running" | "cancel_requested";
-	phase: "accepted" | "executing" | "assistant_request" | "tool_call";
+	phase: "accepted" | "executing" | "assistant_request" | "tool_call" | "deferred";
 	attempt?: number;
 	toolCallId?: string;
 	toolName?: string;
+	deferred?: DeferredHandle;
 }
 
 export interface AbortRequestedRecord extends RecordBase {

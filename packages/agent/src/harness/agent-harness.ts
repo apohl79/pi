@@ -1030,6 +1030,10 @@ export class AgentHarness implements AgentLane {
 			if (!finalEntryId || !finalMessage || finalMessage.role !== "assistant")
 				throw new Error("Agent loop produced no assistant message");
 			if (finalMessage.stopReason === "deferred" && finalMessage.deferred !== undefined) {
+				await this.setOperationState(runId, {
+					phase: "deferred",
+					deferred: structuredClone(finalMessage.deferred),
+				});
 				const suspended: SuspendedOperation = {
 					lane: this.name,
 					kind: "run",
@@ -1919,7 +1923,7 @@ export class AgentHarness implements AgentLane {
 					op: "set",
 					namespace: "op.state",
 					key: runId,
-					value: { kind: value.kind, status: value.status, ...patch } satisfies OperationState,
+					value: { kind: value.kind, status: value.status, ...patch } as unknown as JsonValue,
 				},
 			],
 		);

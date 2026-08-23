@@ -165,6 +165,10 @@ describe("AgentHarness v2 scaffold", () => {
 		const result = await harness.prompt("wait for me");
 
 		expect(result).toMatchObject({ ok: true, value: { kind: "suspended", deferred: { id: "response-1" } } });
+		const started = (await session.findRecords({ type: "operation_started" }))[0]!;
+		expect(await session.getRegister("op.state", started.id)).toMatchObject({
+			value: { kind: "run", status: "running", phase: "deferred", deferred: { id: "response-1" } },
+		});
 		expect(await session.findOpenOperations("main")).toHaveLength(1);
 		expect((await harness.lanes())[0]?.operation).toMatchObject({ status: "suspended" });
 		await harness.close();
