@@ -1,0 +1,14 @@
+{
+	"name": "reviewer",
+	"version": "1.2.3",
+	"description": "Golden Codex plugin fixture",
+	"skills": ["skills/review"],
+	"commands": ["commands/review.md"],
+	"apps": [{"id": "calendar", "name": "Calendar", "auth": "unauthenticated"}],
+	"hooks": [{"event": "turn/accepted", "command": "review-hook"}],
+	"context": {
+		"thread": [{"id": "policy", "slot": "developer_policy", "position": "preamble", "text": "Review carefully."}],
+		"sampling": [{"id": "reminder", "slot": "contextual_user", "position": "supplement", "text": "Keep the review bounded."}]
+	},
+	"mcpServers": {"local": {"command": "not-started"}}
+}
