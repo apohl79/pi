@@ -562,6 +562,7 @@ describe("PiServer v2 operation acceptance", () => {
 		const server = createUnixServerV2(new TestService(), {
 			path: join(directory, "server.sock"),
 			diagnostics,
+			daemonInstanceId: "daemon-degraded-test",
 		});
 		servers.push(server);
 		await server.start();
