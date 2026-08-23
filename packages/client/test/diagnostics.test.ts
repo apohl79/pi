@@ -33,4 +33,15 @@ describe("ClientDiagnosticSpool", () => {
 		const other = new ClientDiagnosticSpool({ path, clientInstanceId: "client-b" });
 		expect(await other.latestSeq()).toBe(0);
 	});
+
+	test("rotates bounded client logs and replays retained records after restart", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-client-diagnostics-rotating-"));
+		const path = join(directory, "client.jsonl");
+		const first = new ClientDiagnosticSpool({ path, clientInstanceId: "client-1", maxBytes: 180, maxFiles: 3 });
+		await first.append({ event: "one", fields: { value: "first" } });
+		await first.append({ event: "two", fields: { value: "second" } });
+		await first.append({ event: "three", fields: { value: "third" } });
+		const reopened = new ClientDiagnosticSpool({ path, clientInstanceId: "client-1", maxBytes: 180, maxFiles: 3 });
+		expect((await reopened.read()).map((record) => record.event)).toEqual(["one", "two", "three"]);
+	});
 });
