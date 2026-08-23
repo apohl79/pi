@@ -18,6 +18,7 @@ import {
 	type CodingAgentHarnessTool,
 	createCodingAgentHarness,
 } from "../../src/server/create-harness.ts";
+import { ModelInstructionResolver } from "../../src/server/model-instructions.ts";
 
 class CapturingExecutionEnv extends NodeExecutionEnv {
 	executionOverrides: Record<string, string> | undefined;
@@ -59,6 +60,35 @@ const defaultPromptTools = [
 ];
 
 describe("coding-agent Harness construction", () => {
+	test("resolves exact model instruction profiles with bounded provenance", async () => {
+		const resolver = new ModelInstructionResolver(
+			[{ id: "luna", provider: "google", model: "gemini-2.5-flash", mode: "append", text: "Use Luna style." }],
+			{ cwd: "/workspace" },
+		);
+		const resolved = await resolver.resolve({ provider: "google", id: "gemini-2.5-flash" });
+		expect(resolved).toMatchObject({ id: "luna", source: "text", mode: "append", text: "Use Luna style." });
+		expect(resolved?.contentHash).toMatch(/^[a-f0-9]{64}$/);
+		expect(await resolver.resolve({ provider: "openai", id: "gpt-5" })).toBeUndefined();
+	});
+
+	test("adds a model profile without changing the selected tool contract", () => {
+		const prompt = buildCodingAgentHarnessSystemPrompt({
+			cwd: "/workspace",
+			tools: defaultPromptTools,
+			activeToolNames: ["read", "bash"],
+			modelInstruction: {
+				id: "profile",
+				source: "text",
+				mode: "append",
+				text: "Prefer deterministic edits.",
+				contentHash: "hash",
+				byteLength: 25,
+			},
+		});
+		expect(prompt).toContain("Prefer deterministic edits.");
+		expect(prompt).toContain("- read: Read file contents");
+		expect(prompt).not.toContain("- edit: Edit files");
+	});
 	test("adds coding-agent policy to explicit Harness options", async () => {
 		const session = new Session(new InMemorySessionStorage({ id: "harness-session", createdAt: 1 }));
 		const env = new NodeExecutionEnv({ cwd: "/workspace" });

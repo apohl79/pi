@@ -20,6 +20,7 @@ import { bashToolSystemPromptContribution } from "../core/tools/bash.ts";
 import { editToolSystemPromptContribution } from "../core/tools/edit.ts";
 import { readToolSystemPromptContribution } from "../core/tools/read.ts";
 import { writeToolSystemPromptContribution } from "../core/tools/write.ts";
+import type { ModelInstructionResolver, ResolvedModelInstructionProfile } from "./model-instructions.ts";
 
 export interface CodingAgentHarnessTool extends HarnessTool {
 	promptSnippet?: string;
@@ -48,6 +49,7 @@ export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOption
 	sessionFile?: string;
 	tools?: CodingAgentHarnessTool[];
 	systemPromptOptions?: Omit<BuildSystemPromptOptions, "cwd" | "promptGuidelines" | "selectedTools" | "toolSnippets">;
+	modelInstructions?: { resolver: ModelInstructionResolver; scope?: "root" | "subagent" };
 }
 
 export interface BuildCodingAgentHarnessSystemPromptOptions {
@@ -55,6 +57,7 @@ export interface BuildCodingAgentHarnessSystemPromptOptions {
 	tools: readonly CodingAgentHarnessTool[];
 	activeToolNames: readonly string[];
 	systemPromptOptions?: CreateCodingAgentHarnessOptions["systemPromptOptions"];
+	modelInstruction?: ResolvedModelInstructionProfile;
 }
 
 export function buildCodingAgentHarnessSystemPrompt(options: BuildCodingAgentHarnessSystemPromptOptions): string {
@@ -72,13 +75,21 @@ export function buildCodingAgentHarnessSystemPrompt(options: BuildCodingAgentHar
 		}),
 	);
 	const promptGuidelines = activeTools.flatMap((tool) => tool.promptGuidelines ?? []);
-	return buildSystemPrompt({
+	const basePrompt = buildSystemPrompt({
 		...options.systemPromptOptions,
 		cwd: options.cwd,
 		selectedTools: activeTools.map((tool) => tool.name),
 		toolSnippets,
 		promptGuidelines,
 	});
+	const instruction = options.modelInstruction;
+	if (!instruction) return basePrompt;
+	if (instruction.mode === "append") return `${basePrompt}\n\n${instruction.text}`;
+	const defaultPersona =
+		"You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
+	return basePrompt.startsWith(defaultPersona)
+		? `${instruction.text}${basePrompt.slice(defaultPersona.length)}`
+		: `${instruction.text}\n\n${basePrompt}`;
 }
 
 export async function createCodingAgentHarness(options: CreateCodingAgentHarnessOptions) {
@@ -160,11 +171,18 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 				currentHarness.getTools(),
 				currentHarness.getActiveTools(),
 			]);
+			const modelInstruction = options.modelInstructions
+				? await options.modelInstructions.resolver.resolve(
+						await currentHarness.getModel(),
+						options.modelInstructions.scope,
+					)
+				: undefined;
 			return buildCodingAgentHarnessSystemPrompt({
 				cwd: env.cwd,
 				tools: currentTools,
 				activeToolNames: currentActiveToolNames,
 				systemPromptOptions,
+				modelInstruction,
 			});
 		});
 	const created = await AgentHarness.create({

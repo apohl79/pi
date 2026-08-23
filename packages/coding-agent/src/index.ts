@@ -479,6 +479,12 @@ export {
 	type ServerRuntimeOperation,
 } from "./server/extension-host.ts";
 export {
+	type ModelInstructionProfile,
+	ModelInstructionResolver,
+	type ModelInstructionResolverOptions,
+	type ResolvedModelInstructionProfile,
+} from "./server/model-instructions.ts";
+export {
 	type CodingAgentV2SqliteServiceOptions,
 	createCodingAgentV2SqliteService,
 } from "./server/sqlite-service.ts";
