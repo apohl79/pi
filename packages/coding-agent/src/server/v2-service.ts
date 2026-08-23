@@ -737,8 +737,10 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				this.nameRevision += 1;
 				await this.persistNameState();
 			} else if (runCommand === "session/name/generate") {
-				const generated =
-					typeof payload.name === "string" && payload.name.trim().length > 0 ? payload.name.trim() : undefined;
+				const requestedName = typeof payload.name === "string" ? payload.name : undefined;
+				const generated = requestedName === undefined ? undefined : normalizeGeneratedName(requestedName);
+				if (requestedName !== undefined && generated === undefined)
+					throw new Error("session/name/generate requires a safe bounded name");
 				if (generated === undefined) await this.generateName(_operationId);
 				if (this.nameSource !== "explicit") {
 					if (generated !== undefined) {
