@@ -2,6 +2,7 @@ import type { FileError, Result } from "@earendil-works/pi-agent-core";
 import {
 	type BranchBounds,
 	type Entry,
+	type EntryPlacement,
 	type EntryQuery,
 	type ForkOptions,
 	type LaneRecord,
@@ -559,6 +560,53 @@ class SqliteSessionStorage
 
 	async getRegister(namespace: string, key: string): Promise<SessionRegister | undefined> {
 		return readRegister(this.db, this.metadata.id, namespace, key);
+	}
+
+	async appendAtomicTransaction(
+		entries: readonly EntryPlacement[],
+		records: readonly NewRecord[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ entries: Entry[]; records: LaneRecord[]; registers: SessionRegister[] }> {
+		return this.enqueueWrite(() => {
+			const committedEntries: Entry[] = [];
+			for (const placement of entries) {
+				const parentId = readLaneHead(this.db, this.metadata.id, placement.lane).leafId;
+				assertUnusedId(this.db, this.metadata.id, placement.entry.id);
+				const seq = getNextSequence(this.db, this.metadata.id);
+				const committed = { ...placement.entry, parentId, seq, timestamp: Date.now() } as Entry;
+				insertEntryRow(this.db, this.metadata.id, {
+					seq,
+					id: committed.id,
+					parentId,
+					type: committed.type,
+					timestamp: committed.timestamp,
+					payload: JSON.stringify(entryPayload(committed)),
+				});
+				setLaneLeaf(this.db, this.metadata.id, placement.lane, committed.id);
+				appendEntryToBranchCache(
+					this.db,
+					this.metadata.id,
+					committed.id,
+					seq,
+					committed.type,
+					committed.type === "custom" ? committed.customType : null,
+					parentId,
+				);
+				if (committed.type === "message") incrementMessageCount(this.db, this.metadata.id);
+				advanceSequence(this.db, this.metadata.id, seq);
+				committedEntries.push(committed);
+			}
+			const committedRecords = this.appendRecordsInTransaction(records);
+			const registerValues: SessionRegister[] = [];
+			for (const write of writes) {
+				const seq = getNextSequence(this.db, this.metadata.id);
+				writeRegister(this.db, this.metadata.id, seq, write);
+				advanceSequence(this.db, this.metadata.id, seq);
+				const value = readRegister(this.db, this.metadata.id, write.namespace, write.key);
+				if (value) registerValues.push(value);
+			}
+			return { entries: committedEntries, records: committedRecords, registers: registerValues };
+		});
 	}
 
 	async getEntry(id: string): Promise<Entry | undefined> {

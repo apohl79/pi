@@ -117,6 +117,29 @@ describe("JSONL v4 persistence", () => {
 		expect(await reopened.getRegister("pending.entry", "queued-1")).toBeUndefined();
 	});
 
+	it("publishes entry placement and register state in one JSONL transaction", async () => {
+		const root = createTempDir();
+		const repository = createRepository(root);
+		const session = await repository.create({ id: "atomic", cwd: root });
+		const result = await session.appendAtomicTransaction(
+			[
+				{
+					lane: "main",
+					entry: {
+						type: "message",
+						id: "entry-1",
+						message: { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },
+					},
+				},
+			],
+			[],
+			[{ op: "set", namespace: "op.meta", key: "run-1", value: { kind: "run" } }],
+		);
+		expect(result.entries.map((entry) => entry.id)).toEqual(["entry-1"]);
+		expect(await session.getLeafId()).toBe("entry-1");
+		expect(await session.getRegister("op.meta", "run-1")).toMatchObject({ value: { kind: "run" } });
+	});
+
 	it("exposes the complete metadata contract", async () => {
 		const root = createTempDir();
 		const repository = createRepository(root);
