@@ -16,5 +16,5 @@ export type {
 	PiClientOptions,
 	Unsubscribe,
 } from "./types.ts";
-export type { CreateSessionV2Options, PiClientV2Options, PiSessionV2Handle, V2SessionLeaseMode } from "./v2.ts";
+export type { PiClientV2Options, PiSessionV2Handle, V2SessionLeaseMode } from "./v2.ts";
 export { PiClientV2 } from "./v2.ts";
