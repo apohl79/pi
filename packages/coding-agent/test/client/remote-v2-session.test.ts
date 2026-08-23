@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ByteTransport, ByteTransportHandlers } from "@earendil-works/pi-client";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import {
@@ -10,8 +13,14 @@ import {
 	type ServerMessageV2,
 	type SessionSnapshotV2,
 } from "@earendil-works/pi-protocol";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import { RemoteV2Session } from "../../src/client/remote-v2-session.ts";
+
+const directories: string[] = [];
+
+afterEach(async () => {
+	await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
 
 function snapshot(overrides: Partial<SessionSnapshotV2> = {}): SessionSnapshotV2 {
 	return {
@@ -623,6 +632,29 @@ describe("RemoteV2Session", () => {
 		});
 		expect(await session.readBlob("sha256:blob")).toMatchObject({ encoding: "base64", data: "aGk=" });
 		expect(await session.statBlob("sha256:blob")).toMatchObject({ mimeType: "text/plain", size: 2 });
+		await session.dispose();
+	});
+
+	test("uploads a bounded client-local file as a server-owned blob", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-local-upload-"));
+		directories.push(directory);
+		const path = join(directory, "note.txt");
+		await writeFile(path, "hi");
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		expect(await session.uploadLocalFile(path, "text/plain")).toEqual({
+			digest: "sha256:blob",
+			mimeType: "text/plain",
+			size: 2,
+		});
+		expect(pair.requests.at(-1)?.payload).toEqual({ data: "aGk=", encoding: "base64", mimeType: "text/plain" });
+		const oversizedPath = join(directory, "oversized.bin");
+		await writeFile(oversizedPath, Buffer.alloc(8 * 1024 * 1024 + 1));
+		await expect(session.uploadLocalFile(oversizedPath, "application/octet-stream")).rejects.toThrow(
+			"maximum upload size",
+		);
 		await session.dispose();
 	});
 

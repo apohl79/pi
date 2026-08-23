@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type {
 	CreateSessionV2Options,
 	PiClientV2,
@@ -90,6 +91,8 @@ export interface RemoteV2BlobRead {
 	readonly encoding: "base64";
 	readonly data: string;
 }
+
+const DEFAULT_MAX_LOCAL_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 export interface RemoteV2DiagnosticsStatus {
 	readonly capture: "metadata" | "encrypted";
@@ -604,6 +607,14 @@ export class RemoteV2Session {
 		const result = await this.#direct({ command: "blob/put", payload: { data, mimeType, encoding } });
 		if (!isBlobStat(result.blob)) throw new Error("Invalid blob/put response");
 		return structuredClone(result.blob);
+	}
+
+	async uploadLocalFile(path: string, mimeType: string): Promise<RemoteV2BlobStat> {
+		this.#assertNotDisposed();
+		const data = await readFile(path);
+		if (data.byteLength > DEFAULT_MAX_LOCAL_UPLOAD_BYTES)
+			throw new Error(`Local file exceeds maximum upload size of ${DEFAULT_MAX_LOCAL_UPLOAD_BYTES} bytes`);
+		return this.putBlob(data.toString("base64"), mimeType);
 	}
 
 	async readBlob(digest: string): Promise<RemoteV2BlobRead> {
