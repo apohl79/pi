@@ -1,4 +1,11 @@
-import type { AgentHarness, AgentMessage, Entry, GoalManager, LaneRecord } from "@earendil-works/pi-agent-core";
+import type {
+	AgentHarness,
+	AgentMessage,
+	Entry,
+	GoalContinuationScheduler,
+	GoalManager,
+	LaneRecord,
+} from "@earendil-works/pi-agent-core";
 import type { Model, Models, ThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import type {
 	CommandNameV2,
@@ -224,6 +231,8 @@ export interface CodingAgentV2SessionDefinition {
 	metadata: SessionMetadataV2;
 	harness: AgentHarness;
 	goals?: GoalManager;
+	goalContinuation?: GoalContinuationScheduler;
+	onRuntimeReady?: (runtime: CodingAgentV2Runtime) => void;
 	extensionHost?: ServerRuntimeExtensionHost;
 }
 
@@ -391,6 +400,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		this.sessionName = definition.metadata.sessionName;
 		this.nameSource = definition.metadata.nameSource;
 		this.onDispose = onDispose;
+		definition.onRuntimeReady?.(this);
 	}
 
 	async snapshot(): Promise<SessionSnapshotV2> {
@@ -758,6 +768,8 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			this.freshOperationId = undefined;
 		});
 		await notifyTerminal(terminalOutcome);
+		if (runCommand === "turn/start" || runCommand === "turn/resume" || runCommand === "turn/followUp")
+			void this.definition.goalContinuation?.schedule().catch(() => undefined);
 		} catch (error) {
 			try {
 				await this.withMutation(async () => {
@@ -778,6 +790,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	async dispose(): Promise<void> {
 		if (this.disposed) return;
 		this.disposed = true;
+		this.definition.goalContinuation?.close();
 		await this.definition.harness.close();
 		this.onDispose?.();
 	}

@@ -21,6 +21,56 @@ export interface GoalUpdate {
 	tokenBudget?: number;
 }
 
+export interface GoalContinuationSchedulerOptions {
+	readonly goals: GoalManager;
+	readonly waitForIdle: (callback: () => void | Promise<void>) => Promise<void>;
+	readonly continueGoal: (goal: GoalSnapshot) => Promise<void>;
+	readonly maxContinuations?: number;
+}
+
+/** Schedules one server-owned continuation after the durable lane becomes idle. */
+export class GoalContinuationScheduler {
+	private readonly options: GoalContinuationSchedulerOptions;
+	private readonly maxContinuations: number;
+	private scheduled = false;
+	private completed = 0;
+	private closed = false;
+
+	constructor(options: GoalContinuationSchedulerOptions) {
+		this.options = options;
+		if (
+			options.maxContinuations !== undefined &&
+			(!Number.isInteger(options.maxContinuations) || options.maxContinuations < 0)
+		)
+			throw new Error("maxContinuations must be a non-negative integer");
+		this.maxContinuations = options.maxContinuations ?? Number.POSITIVE_INFINITY;
+	}
+
+	async schedule(): Promise<boolean> {
+		if (this.closed || this.scheduled || this.completed >= this.maxContinuations) return false;
+		this.scheduled = true;
+		let continued = false;
+		try {
+			await this.options.waitForIdle(async () => {
+				if (this.closed) return;
+				const goal = await this.options.goals.read();
+				if (this.closed || !goal || goal.status !== "active" || this.completed >= this.maxContinuations) return;
+				this.completed += 1;
+				continued = true;
+				if (this.closed) return;
+				await this.options.continueGoal(goal);
+			});
+			return continued;
+		} finally {
+			this.scheduled = false;
+		}
+	}
+
+	close(): void {
+		this.closed = true;
+	}
+}
+
 const GOAL_ENTRY_TYPE = "goal";
 const GOAL_STATUSES = new Set<GoalStatus>(["active", "paused", "blocked", "usageLimited", "budgetLimited", "complete"]);
 

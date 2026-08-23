@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { GoalManager } from "../../src/harness/goals.ts";
+import { GoalContinuationScheduler, GoalManager } from "../../src/harness/goals.ts";
 import { InMemorySessionStorage, Session } from "../../src/harness/session/index.ts";
 import { createGoalTools } from "../../src/harness/tools/goals.ts";
 
@@ -59,5 +59,64 @@ describe("durable GoalManager", () => {
 		await expect(update.execute("update", { status: "complete" }, undefined, undefined)).resolves.toMatchObject({
 			details: { goal: { status: "complete" } },
 		});
+	});
+
+	test("schedules one continuation only while the goal is active", async () => {
+		const manager = new GoalManager(
+			new Session(new InMemorySessionStorage({ id: "goal-continuation", createdAt: 1 })),
+		);
+		const goal = await manager.create("Continue the implementation");
+		const callbacks: Array<() => void | Promise<void>> = [];
+		const continued: string[] = [];
+		let release!: () => void;
+		const scheduler = new GoalContinuationScheduler({
+			goals: manager,
+			waitForIdle: async (callback) => {
+				callbacks.push(callback);
+				await new Promise<void>((resolve) => {
+					release = resolve;
+				});
+			},
+			continueGoal: async (current) => {
+				continued.push(current.id);
+			},
+			maxContinuations: 1,
+		});
+		const first = scheduler.schedule();
+		expect(await scheduler.schedule()).toBe(false);
+		await callbacks[0]!();
+		release();
+		expect(await first).toBe(true);
+		expect(continued).toEqual([goal.id]);
+		expect(await scheduler.schedule()).toBe(false);
+		await manager.pause();
+		scheduler.close();
+	});
+
+	test("allows an unbounded scheduler and ignores a closed pending continuation", async () => {
+		const manager = new GoalManager(new Session(new InMemorySessionStorage({ id: "goal-unbounded", createdAt: 1 })));
+		await manager.create("Continue after idle");
+		let callback!: () => void | Promise<void>;
+		let release!: () => void;
+		let continued = false;
+		const scheduler = new GoalContinuationScheduler({
+			goals: manager,
+			waitForIdle: async (pending) => {
+				callback = pending;
+				await new Promise<void>((resolve) => {
+					release = resolve;
+				});
+			},
+			continueGoal: async () => {
+				continued = true;
+			},
+		});
+		const scheduled = scheduler.schedule();
+		await Promise.resolve();
+		scheduler.close();
+		await callback();
+		release();
+		expect(await scheduled).toBe(false);
+		expect(continued).toBe(false);
 	});
 });

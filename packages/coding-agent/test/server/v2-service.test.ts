@@ -1,4 +1,4 @@
-import { GoalManager, InMemorySessionStorage, Session } from "@earendil-works/pi-agent-core";
+import { GoalContinuationScheduler, GoalManager, InMemorySessionStorage, Session } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, test } from "vitest";
@@ -24,6 +24,60 @@ describe("coding-agent v2 service adapter", () => {
 		expect(normalizeGeneratedName("A very long session title that exceeds the display limit")).toBe(
 			"A very long session title that",
 		);
+	});
+
+	test("schedules an active goal continuation after a completed turn", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-goal-continuation-faux",
+			models: [{ id: "goal-continuation-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("turn response")]);
+		const session = new Session(new InMemorySessionStorage({ id: "goal-continuation-session", createdAt: 1 }));
+		const goals = new GoalManager(session);
+		await goals.create("Finish the task");
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+			systemPrompt: "continuation",
+		});
+		const continuations: string[] = [];
+		const scheduler = new GoalContinuationScheduler({
+			goals,
+			waitForIdle: async (callback) => callback(),
+			continueGoal: async (goal) => {
+				continuations.push(goal.objective);
+			},
+			maxContinuations: 1,
+		});
+		try {
+			const service = createCodingAgentV2Service(models, [
+				{
+					metadata: { id: "goal-continuation-session", createdAt: 1, updatedAt: 1 },
+					harness: created.harness,
+					goals,
+					goalContinuation: scheduler,
+				},
+			]);
+			const runtime = await service.openSession("goal-continuation-session");
+			await runtime.run("goal-turn", {
+				command: "turn/start",
+				sessionId: "goal-continuation-session",
+				payload: { text: "work" },
+			});
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(continuations).toEqual(["Finish the task"]);
+		} finally {
+			scheduler.close();
+			await created.harness.close();
+			await env.cleanup();
+		}
 	});
 
 	test("backs v2 session lifecycle with injected durable factories", async () => {
