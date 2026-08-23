@@ -193,6 +193,7 @@ describe("formatRemoteV2Session", () => {
 							taskName: "agent",
 							state: "running",
 							model: { provider: "faux", id: "model" },
+							usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, costUsd: 0.13, pricingState: "known" },
 						},
 					],
 				},
@@ -207,9 +208,32 @@ describe("formatRemoteV2Session", () => {
 			context_window: { total_input_tokens: 8, total_output_tokens: 3, remaining_percentage: 75 },
 			task_indicator: { text: "Tasks 1/2", completed: 1, total: 2 },
 			goal: { status: "active", remaining_tokens: 15 },
-			agents: { active: 1, total: 1 },
+			agents: { active: 1, total: 1, total_cost_usd: 0.13 },
 			server: { connected: true, phase: "turn", detachable: true },
 		});
+	});
+
+	test("omits aggregate child cost when any child price is unknown", () => {
+		const payload = createRemoteV2StatuslinePayload(
+			{
+				lifecycle: { status: "ready" },
+				snapshot: {
+					...snapshot,
+					agents: [
+						{
+							id: "agent",
+							path: "/root/agent",
+							taskName: "agent",
+							state: "complete",
+							model: { provider: "faux", id: "model" },
+							usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, pricingState: "unknown" },
+						},
+					],
+				},
+			},
+			{ cwd: "/work", transcriptPath: "/tmp/session.jsonl" },
+		);
+		expect(payload?.agents).toEqual({ active: 0, total: 1 });
 	});
 
 	test("executes the statusline locally from remote snapshot state", async () => {
