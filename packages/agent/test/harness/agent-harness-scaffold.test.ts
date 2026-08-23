@@ -1246,7 +1246,7 @@ describe("AgentHarness v2 scaffold", () => {
 		await new Promise<void>((resolve) => setTimeout(resolve, 0));
 		const started = (await session.findRecords({ type: "operation_started" }))[0]!;
 		expect(await session.getRegister("op.state", started.id)).toMatchObject({
-			value: { kind: "run", status: "running", phase: "executing" },
+			value: { kind: "run", status: "running", phase: "assistant_request", attempt: 1 },
 		});
 		expect(await harness.peekAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 1 });
 		expect(await harness.executeAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 1 });

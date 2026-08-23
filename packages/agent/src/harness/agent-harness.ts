@@ -884,6 +884,7 @@ export class AgentHarness implements AgentLane {
 							} = result.streamOptions as Partial<SimpleStreamOptions>;
 							requestOptionsPatch = safePatch;
 						}
+						await this.setOperationState(runId, { phase: "assistant_request", attempt: assistantAttempt });
 						await this.park({ kind: "stream_assistant", step: "assistant", attempt: assistantAttempt });
 					},
 					beforeToolCall: async ({ toolCall, args }) => {
@@ -916,6 +917,11 @@ export class AgentHarness implements AgentLane {
 						} catch {
 							return { block: true, reason: "Tool blocked by lifecycle hook", terminate: true };
 						}
+						await this.setOperationState(runId, {
+							phase: "tool_call",
+							toolCallId: toolCall.id,
+							toolName: toolCall.name,
+						});
 						await this.park({ kind: "execute_tool", toolCallId: toolCall.id, toolName: toolCall.name });
 						return undefined;
 					},
@@ -1867,6 +1873,13 @@ export class AgentHarness implements AgentLane {
 	}
 
 	private async setOperationPhase(runId: string, phase: OperationState["phase"]): Promise<void> {
+		await this.setOperationState(runId, { phase });
+	}
+
+	private async setOperationState(
+		runId: string,
+		patch: Pick<OperationState, "phase"> & Partial<OperationState>,
+	): Promise<void> {
 		const transaction = this.registerSession();
 		if (!transaction) return;
 		const register = await transaction.getRegister("op.state", runId);
@@ -1874,6 +1887,7 @@ export class AgentHarness implements AgentLane {
 			return;
 		const value = register.value as Partial<OperationState>;
 		if (value.kind === undefined || value.status === undefined) return;
+		if (value.status === "cancel_requested") return;
 		await transaction.appendTransaction(
 			[],
 			[
@@ -1881,7 +1895,7 @@ export class AgentHarness implements AgentLane {
 					op: "set",
 					namespace: "op.state",
 					key: runId,
-					value: { kind: value.kind, status: value.status, phase } satisfies OperationState,
+					value: { kind: value.kind, status: value.status, ...patch } satisfies OperationState,
 				},
 			],
 		);

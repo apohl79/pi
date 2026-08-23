@@ -116,7 +116,10 @@ export interface OperationStartedRecord extends RecordBase {
 export interface OperationState {
 	kind: OperationStartedRecord["intent"]["kind"];
 	status: "running" | "cancel_requested";
-	phase: "accepted" | "executing";
+	phase: "accepted" | "executing" | "assistant_request" | "tool_call";
+	attempt?: number;
+	toolCallId?: string;
+	toolName?: string;
 }
 
 export interface AbortRequestedRecord extends RecordBase {
