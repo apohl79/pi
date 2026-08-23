@@ -622,6 +622,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			env,
 			close: async () => {
 				await runtime.close();
+				await diagnostics.flush?.();
 				if (operationStore instanceof SqliteV2OperationStore) await operationStore.close();
 				if (usage instanceof SqliteV2UsageLedger) await usage.close();
 				if (plans instanceof SqliteV2PlanRegistry) await plans.close();

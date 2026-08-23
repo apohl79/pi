@@ -65,6 +65,8 @@ export function findDiagnosticClockDiscontinuities(
 export interface ForensicRecorder {
 	record(event: ForensicEventInput): Promise<ForensicEvent>;
 	read(afterSeq?: number): Promise<ForensicEvent[]>;
+	/** Waits until all accepted events are visible in the recorder's sinks. */
+	flush?(): Promise<void>;
 	/** Reports non-critical sink failures that make operational evidence incomplete. */
 	isDegraded?(): boolean;
 }

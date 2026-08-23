@@ -515,6 +515,87 @@ describe("coding-agent Harness construction", () => {
 		}
 	});
 
+	test("executes every child-agent tool for each configured provider/model", async () => {
+		const models = createModels();
+		const providers = [
+			fauxProvider({
+				provider: "coding-agent-harness-agent-exec-openai-faux",
+				models: [{ id: "openai-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			}),
+			fauxProvider({
+				provider: "coding-agent-harness-agent-exec-anthropic-faux",
+				models: [{ id: "anthropic-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			}),
+			fauxProvider({
+				provider: "coding-agent-harness-agent-exec-google-faux",
+				models: [{ id: "google-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			}),
+		];
+		for (const provider of providers) models.setProvider(provider.provider);
+
+		for (const [index, provider] of providers.entries()) {
+			const calls: string[] = [];
+			const session = new Session(new InMemorySessionStorage({ id: `agent-tools-exec-${index}`, createdAt: 1 }));
+			const env = new NodeExecutionEnv({ cwd: "/workspace" });
+			const created = await createCodingAgentHarness({
+				session,
+				models,
+				model: provider.getModel()!,
+				env,
+				agents: {
+					spawn: async (request) => {
+						calls.push("spawn");
+						return { id: "agent-1", ...request };
+					},
+					list: async () => {
+						calls.push("list");
+						return [{ id: "agent-1", state: "running" }];
+					},
+					wait: async (agentId) => {
+						calls.push(`wait:${agentId}`);
+						return { id: agentId, state: "complete" };
+					},
+					message: async (agentId) => {
+						calls.push(`message:${agentId}`);
+					},
+					followUp: async (agentId) => {
+						calls.push(`followUp:${agentId}`);
+						return { id: agentId, state: "running" };
+					},
+					interrupt: async (agentId) => {
+						calls.push(`interrupt:${agentId}`);
+						return { id: agentId, state: "interrupted" };
+					},
+				},
+			});
+			try {
+				const tools = await created.harness.getTools();
+				const tool = (name: string) => {
+					const candidate = tools.find((entry) => entry.name === name);
+					if (!candidate) throw new Error(`Expected ${name} tool`);
+					return candidate;
+				};
+				await tool("spawn_agent").execute("spawn", { taskName: "child", taskMessage: "inspect" });
+				await tool("list_agents").execute("list", {});
+				await tool("wait_agent").execute("wait", { agentId: "agent-1" });
+				await tool("send_message").execute("message", { agentId: "agent-1", message: "hello" });
+				await tool("followup_task").execute("follow-up", { agentId: "agent-1", message: "continue" });
+				await tool("interrupt_agent").execute("interrupt", { agentId: "agent-1" });
+				expect(calls).toEqual([
+					"spawn",
+					"list",
+					"wait:agent-1",
+					"message:agent-1",
+					"followUp:agent-1",
+					"interrupt:agent-1",
+				]);
+			} finally {
+				await created.harness.close();
+				await env.cleanup();
+			}
+		}
+	});
+
 	test("exposes update_plan through the injected server-owned plan boundary", async () => {
 		const session = new Session(new InMemorySessionStorage({ id: "plan-tool-session", createdAt: 1 }));
 		const env = new NodeExecutionEnv({ cwd: "/workspace" });

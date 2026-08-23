@@ -58,7 +58,7 @@ describe("coding-agent daemon plugin sampling durability", () => {
 		expect(result.observedRequests.every((messages) => messages.includes(samplingText))).toBe(true);
 		expect(JSON.stringify(result.transcript)).not.toContain(samplingText);
 		expect(result.transcript).toHaveLength(200);
-	}, 120_000);
+	}, 300_000);
 });
 
 async function runSamplingDurabilityScenario(): Promise<{

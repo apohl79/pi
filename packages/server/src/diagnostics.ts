@@ -570,6 +570,8 @@ export class InMemoryForensicRecorder implements ForensicRecorder {
 		return structuredClone(this.events.filter((event) => event.seq > afterSeq));
 	}
 
+	async flush(): Promise<void> {}
+
 	isDegraded(): boolean {
 		return false;
 	}
@@ -692,6 +694,10 @@ export class JsonlForensicRecorder implements ForensicRecorder {
 		await this.ensureLoaded();
 		return structuredClone(this.events.filter((event) => event.seq > afterSeq));
 	}
+
+	async flush(): Promise<void> {
+		await this.pendingWrite;
+	}
 }
 
 /** Mirrors critical events to a bounded operational log without making log failures block acceptance. */
@@ -741,6 +747,10 @@ export class TeeForensicRecorder implements ForensicRecorder {
 
 	read(afterSeq = 0): Promise<ForensicEvent[]> {
 		return this.primary.read(afterSeq);
+	}
+
+	async flush(): Promise<void> {
+		await Promise.all([this.primary.flush?.(), this.secondary.flush?.()]);
 	}
 
 	getOperationalLogFailureCount(): number {

@@ -59,6 +59,7 @@ const sessionSnapshot = {
 
 function clientFactory(requests?: Array<{ command: string; payload?: unknown }>, clientDiagnostics?: unknown) {
 	let handlers: ByteTransportHandlers | undefined;
+	let turnCompleted = false;
 	const factory = async (next: ByteTransportHandlers): Promise<ByteTransport> => {
 		handlers = next;
 		return {
@@ -89,7 +90,25 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>,
 							type: "response",
 							id: message.id,
 							ok: true,
-							result: { session: sessionSnapshot },
+							result: {
+								session: turnCompleted
+									? {
+											...sessionSnapshot,
+											revision: 2,
+											transcript: [
+												{
+													id: "assistant-1",
+													role: "assistant",
+													content: [{ type: "text", text: "remote reply" }],
+													model: { provider: "faux", id: "model" },
+													timestamp: 2,
+													status: "complete",
+													stopReason: "stop",
+												},
+											],
+										}
+									: sessionSnapshot,
+							},
 						}),
 					);
 				} else if (message.request.command === "session/detach") {
@@ -182,6 +201,7 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>,
 						}),
 					);
 				} else if (message.request.command === "turn/start") {
+					turnCompleted = true;
 					handlers?.onData(
 						encodeServerMessageV2({
 							type: "response",
@@ -201,10 +221,22 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>,
 							payload: {
 								state: "complete",
 								snapshot: {
+									...sessionSnapshot,
 									id: "session-1",
+									nameRevision: 0,
 									revision: 2,
-									phase: "idle",
-									transcript: [{ role: "assistant", content: [{ type: "text", text: "remote reply" }] }],
+									eventSeq: 3,
+									transcript: [
+										{
+											id: "assistant-1",
+											role: "assistant",
+											content: [{ type: "text", text: "remote reply" }],
+											model: { provider: "faux", id: "model" },
+											timestamp: 2,
+											status: "complete",
+											stopReason: "stop",
+										},
+									],
 								},
 							},
 						}),
@@ -216,6 +248,24 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>,
 							id: message.id,
 							ok: true,
 							accepted: { operationId: "operation-compact", sessionRevision: 2, eventSeq: 2 },
+						}),
+					);
+				} else if (message.request.command === "operation/read") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: {
+								operation: {
+									operationId:
+										(message.request as { operationId?: string }).operationId ?? "operation-compact",
+									sessionId: "session-1",
+									state: "complete",
+									accepted: { operationId: "operation-compact", sessionRevision: 2, eventSeq: 2 },
+									terminalSeq: 2,
+								},
+							},
 						}),
 					);
 				} else if (
@@ -241,6 +291,15 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>,
 							id: message.id,
 							ok: true,
 							result: { blob: { digest: "image-digest", mimeType: "image/png", size: 3 } },
+						}),
+					);
+				} else if (message.request.command === "process/list") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							result: { processes: [] },
 						}),
 					);
 				} else if (message.request.command === "process/start") {
@@ -351,6 +410,22 @@ describe("experimental CLI runtime", () => {
 		await runtime.runRpc({ messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] });
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(output).toContainEqual({ id: "prompt-1", type: "response", command: "prompt", success: true });
+		runtime.close();
+	});
+
+	test("resolves RPC when an injected input stream is already destroyed", async () => {
+		const server = clientFactory();
+		const input = Readable.from([]);
+		input.destroy();
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: server.create,
+			write: () => {},
+			rpcInput: input,
+			rpcOutput: () => {},
+		});
+		await runtime.runRpc({ messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] });
 		runtime.close();
 	});
 
@@ -604,7 +679,7 @@ describe("experimental CLI runtime", () => {
 	test("writes the exported bundle rather than the RPC envelope", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-cli-diagnostics-export-"));
 		const outputPath = join(directory, "bundle.json");
-		const server = clientFactory();
+		const server = clientFactory(undefined, { manifest: { clientInstanceId: "client-1" } });
 		const spool = new ClientDiagnosticSpool({ path: join(directory, "client.jsonl"), clientInstanceId: "client-1" });
 		await spool.append({ event: "client.pre_connect" });
 		const output: unknown[] = [];
@@ -838,14 +913,19 @@ describe("experimental CLI runtime", () => {
 			"session/create",
 			"session/attach",
 			"session/read",
+			"process/list",
 			"model/list",
 			"session/model/set",
+			"operation/read",
+			"session/read",
 			"session/thinking/set",
+			"operation/read",
+			"session/read",
 			"turn/start",
 			"session/detach",
 		]);
-		expect(requests[4]?.payload).toEqual({ provider: "faux", id: "model" });
-		expect(requests[5]?.payload).toEqual({ level: "high" });
+		expect(requests[5]?.payload).toEqual({ provider: "faux", id: "model" });
+		expect(requests[8]?.payload).toEqual({ level: "high" });
 		runtime.close();
 	});
 

@@ -52,11 +52,18 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 
 	const input = options.input ?? process.stdin;
 	const pendingLines = new Set<Promise<void>>();
+	let inputEndedResolved = false;
 	let resolveInputEnd!: () => void;
 	const inputEnded = new Promise<void>((resolve) => {
-		resolveInputEnd = resolve;
+		resolveInputEnd = () => {
+			if (inputEndedResolved) return;
+			inputEndedResolved = true;
+			resolve();
+		};
 	});
 	input.once("end", resolveInputEnd);
+	input.once("close", resolveInputEnd);
+	if (input.readableEnded || input.destroyed) resolveInputEnd();
 	const stopReading = attachJsonlLineReader(input, (line) => {
 		const pending = handleLine(line).catch((error: unknown) => {
 			output({ type: "error", error: error instanceof Error ? error.message : String(error) });
