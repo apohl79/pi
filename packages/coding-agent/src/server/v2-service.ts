@@ -91,6 +91,8 @@ function appendAgentCompletions(input: AgentMessage, completions: readonly Agent
 
 export interface CodingAgentV2SessionDefinition {
 	metadata: SessionMetadataV2;
+	/** Stable server-owned agent/thread path rendered by remote clients. */
+	agentPath?: string;
 	harness: AgentHarness;
 	/** Called before the runtime closes the harness so durable callbacks can preserve recoverable work. */
 	onDispose?: () => void;
@@ -733,6 +735,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			.slice(-200);
 		return {
 			id: this.definition.metadata.id,
+			agentPath: this.definition.agentPath ?? "/root",
 			...(effectiveName === undefined
 				? {}
 				: { name: effectiveName, ...(this.nameSource === undefined ? {} : { nameSource: this.nameSource }) }),

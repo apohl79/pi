@@ -211,6 +211,7 @@ export const SessionNameSourceSchema = Type.Union([
 
 export const SessionSnapshotV2Schema = StrictObject({
 	id: IdSchema,
+	agentPath: Type.Optional(IdSchema),
 	name: Type.Optional(Type.String()),
 	nameSource: Type.Optional(SessionNameSourceSchema),
 	nameRevision: NonNegativeIntegerSchema,

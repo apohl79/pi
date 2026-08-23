@@ -95,6 +95,12 @@ describe("formatRemoteV2Session", () => {
 			options,
 		);
 		expect(output).toContain("Session session-1 · phase=turn · model=faux/model operation=op-1");
+		expect(
+			formatRemoteV2Session({
+				lifecycle: { status: "ready" },
+				snapshot: { ...snapshot, agentPath: "/root/reviewer" },
+			}),
+		).toContain("Thread /root/reviewer");
 		expect(output).toContain("assistant: a long assistant");
 		expect(output).toContain("…");
 		expect(output).not.toContain("user: old");
