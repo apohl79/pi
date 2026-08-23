@@ -30,13 +30,13 @@ function invalidPayload(reason: string): never {
 }
 
 function assertValidLimit(limit: number | undefined): void {
-	if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+	if (limit !== undefined && (!Number.isSafeInteger(limit) || limit <= 0)) {
 		throw new SessionError("invalid_query", "limit must be a positive integer");
 	}
 }
 
 function assertValidCursor(afterSeq: number | undefined): void {
-	if (afterSeq !== undefined && (!Number.isInteger(afterSeq) || afterSeq < 0)) {
+	if (afterSeq !== undefined && (!Number.isSafeInteger(afterSeq) || afterSeq < 0)) {
 		throw new SessionError("invalid_query", "cursor sequence must be a non-negative integer");
 	}
 }
