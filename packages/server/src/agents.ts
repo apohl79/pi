@@ -116,8 +116,11 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 
 	async followUp(agentId: string, message: string): Promise<AgentSummary> {
 		const agent = this.get(agentId);
+		if (agent.state === "complete" || agent.state === "interrupted") {
+			this.ensureActiveCapacity(agent);
+			agent.state = "running";
+		}
 		await this.message(agentId, message);
-		if (agent.state === "complete" || agent.state === "interrupted") agent.state = "running";
 		return this.snapshot(agent);
 	}
 
@@ -146,6 +149,12 @@ export class InMemoryV2AgentRegistry implements V2AgentRegistry {
 	private activeCountForParent(parentPath: string): number {
 		return [...this.agents.values()].filter((agent) => agent.parentPath === parentPath && agent.state === "running")
 			.length;
+	}
+
+	private ensureActiveCapacity(agent: AgentState): void {
+		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
+		if (this.activeCountForParent(agent.parentPath) >= this.maxActivePerParent)
+			throw new Error(`Agent active limit ${this.maxActivePerParent} exceeded for parent ${agent.parentPath}`);
 	}
 
 	private snapshot(agent: AgentState): AgentSummary {

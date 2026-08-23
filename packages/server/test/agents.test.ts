@@ -203,6 +203,26 @@ describe("InMemoryV2AgentRegistry", () => {
 		await expect(spawn("parent-b", "b-two", "/other")).rejects.toThrow("active limit 3");
 	});
 
+	test("enforces the process limit when a terminal child receives a follow-up", async () => {
+		const registry = new InMemoryV2AgentRegistry({ maxActive: 1 });
+		const first = await registry.spawn({
+			sessionId: "session-1",
+			parentPath: "/root",
+			taskName: "first",
+			taskMessage: "finish first",
+			model: { provider: "test", id: "small" },
+		});
+		await registry.interrupt(first.id);
+		await registry.spawn({
+			sessionId: "session-1",
+			parentPath: "/root",
+			taskName: "second",
+			taskMessage: "keep the slot",
+			model: { provider: "test", id: "small" },
+		});
+		await expect(registry.followUp(first.id, "must wait")).rejects.toThrow("active limit 1");
+	});
+
 	test("does not share a parent quota between paths in one session", async () => {
 		const registry = new InMemoryV2AgentRegistry({ maxDepth: 2, maxActive: 4, maxActivePerParent: 1 });
 		const spawn = (parentPath: string, taskName: string) =>
