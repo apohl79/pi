@@ -3,6 +3,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
 import {
+	FileV2BlobStore,
 	InMemoryForensicRecorder,
 	InMemoryV2PlanRegistry,
 	JsonlForensicRecorder,
@@ -15,6 +16,7 @@ import {
 	ServerDaemon,
 	type ServerDaemonOptions,
 	type V2AppRegistry,
+	type V2BlobStore,
 	type V2FileReferenceService,
 	type V2ImageService,
 	type V2InputRegistry,
@@ -50,6 +52,8 @@ export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOpt
 	apps?: V2AppRegistry;
 	operationStore?: V2OperationStore;
 	operationStorePath?: string;
+	blobs?: V2BlobStore;
+	blobStorePath?: string;
 	diagnostics?: ServerDaemonOptions["diagnostics"];
 	createServer?: ServerDaemonOptions["createServer"];
 	write(value: unknown): void;
@@ -117,6 +121,7 @@ export async function createCodingAgentDaemonRuntime(
 		...(options.pluginRegistry === undefined ? {} : { plugins: options.pluginRegistry }),
 		...(options.apps === undefined ? {} : { apps: options.apps }),
 		...(options.operationStore === undefined ? {} : { operationStore: options.operationStore }),
+		...(options.blobs === undefined ? {} : { blobs: options.blobs }),
 		plans,
 		diagnostics,
 		...(diagnosticContent === undefined ? {} : { diagnosticContent }),
@@ -173,6 +178,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			operationStore:
 				options.operationStore ??
 				new JsonlV2OperationStore(options.operationStorePath ?? join(options.agentDir, "operations.jsonl")),
+			blobs: options.blobs ?? new FileV2BlobStore(options.blobStorePath ?? join(options.agentDir, "blobs")),
 			planStorePath: options.planStorePath ?? join(options.agentDir, "plans.jsonl"),
 			diagnosticStorePath: options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"),
 			diagnosticKeyPath: options.diagnosticKeyPath ?? join(options.agentDir, "diagnostic-keys.json"),
