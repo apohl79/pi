@@ -446,6 +446,15 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("recovers waitForOperation from a terminal operation record", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		expect(await session.waitForOperation("operation-1")).toMatchObject({ id: "session-1", phase: "idle" });
+		await session.dispose();
+	});
+
 	test("applies server plan updates without requiring a refresh", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });

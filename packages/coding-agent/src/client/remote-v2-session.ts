@@ -263,8 +263,19 @@ export class RemoteV2Session {
 		this.#assertNotDisposed();
 		if (this.#lifecycle.status === "ready" && this.#lastEvent?.operationId === operationId && this.#snapshot)
 			return structuredClone(this.#snapshot);
-		return new Promise<ProtocolSnapshot>((resolve) => {
+		return new Promise<ProtocolSnapshot>((resolve, reject) => {
+			let settled = false;
 			let unsubscribe = () => {};
+			const finish = async () => {
+				if (settled) return;
+				settled = true;
+				unsubscribe();
+				try {
+					resolve(await this.refresh());
+				} catch (error) {
+					reject(error instanceof Error ? error : new Error(String(error)));
+				}
+			};
 			unsubscribe = this.subscribe((state) => {
 				if (
 					state.lifecycle.status !== "ready" ||
@@ -272,9 +283,13 @@ export class RemoteV2Session {
 					state.snapshot === undefined
 				)
 					return;
-				unsubscribe();
-				resolve(structuredClone(state.snapshot));
+				void finish();
 			});
+			void this.readOperation(operationId)
+				.then((operation) => {
+					if (["complete", "failed", "aborted", "suspended"].includes(operation.state)) void finish();
+				})
+				.catch(() => {});
 		});
 	}
 
