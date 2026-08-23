@@ -2250,8 +2250,18 @@ describe("PiServer v2 operation acceptance", () => {
 			result: { agents: [{ id: agent.id, state: "running" }] },
 		});
 		await client.request({ command: "agent/message", payload: { agentId: agent.id, message: "continue" } });
+		const interruptEvent = client.next(
+			(message) =>
+				message.type === "event" &&
+				message.event === "agent_updated" &&
+				(message.payload as { agent?: { state?: string } }).agent?.state === "interrupted",
+		);
 		const interrupted = await client.request({ command: "agent/interrupt", payload: { agentId: agent.id } });
 		expect(interrupted).toMatchObject({ ok: true, result: { agent: { id: agent.id, state: "interrupted" } } });
+		expect(await interruptEvent).toMatchObject({
+			event: "agent_updated",
+			payload: { agent: { id: agent.id, state: "interrupted" } },
+		});
 		await client.close();
 	});
 
