@@ -148,4 +148,59 @@ describe("PiClientV2 resilience", () => {
 		expect(fixture.transports[0]?.close).toHaveBeenCalledOnce();
 		expect(client.connected).toBe(false);
 	});
+
+	test("rejects duplicate handshake messages after connection", async () => {
+		const fixture = transportFixture();
+		const client = new PiClientV2({ transportFactory: fixture.factory });
+		const connecting = client.connect();
+		await Promise.resolve();
+		const hello = { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot } as const;
+		fixture.deliver(0, hello);
+		await connecting;
+
+		fixture.deliver(0, hello);
+
+		expect(fixture.transports[0]?.close).toHaveBeenCalledOnce();
+		expect(client.connected).toBe(false);
+	});
+
+	test("invalidates the transport when a request send fails", async () => {
+		let rejectRequest: ((error: Error) => void) | undefined;
+		let handlers: ByteTransportHandlers | undefined;
+		let sendIndex = 0;
+		const sendPromises: [Promise<void>, Promise<void>] = [
+			Promise.resolve(),
+			new Promise<void>((_, reject) => {
+				rejectRequest = reject;
+			}),
+		];
+		const close = vi.fn();
+		const client = new PiClientV2({
+			transportFactory: async (next) => {
+				handlers = next;
+				return {
+					send: () => sendPromises[sendIndex++]!,
+					close,
+				};
+			},
+		});
+		const connecting = client.connect();
+		await Promise.resolve();
+		handlers?.onData(
+			encodeServerMessageV2({
+				type: "hello",
+				version: PROTOCOL_V2_VERSION,
+				connectionId: "connection-1",
+				snapshot,
+			}),
+		);
+		await connecting;
+		const request = client.request({ command: "session/list" });
+		await Promise.resolve();
+		expect(rejectRequest).toBeDefined();
+		rejectRequest?.(new Error("write failed"));
+		expect(await request.catch((error: unknown) => error)).toEqual(new Error("write failed"));
+		expect(close).toHaveBeenCalledOnce();
+		expect(client.connected).toBe(false);
+	});
 });

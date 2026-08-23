@@ -167,11 +167,15 @@ export class PiClientV2 {
 	request(command: CommandV2): Promise<ResponseEnvelopeV2> {
 		if (!this.connectedValue || this.disposed) return Promise.reject(new Error("PiClientV2 is not connected"));
 		const id = `v2-request-${++this.requestSequence}`;
+		const generation = this.transportGeneration;
+		const transport = this.transport;
 		const response = new Promise<ResponseEnvelopeV2>((resolve, reject) => this.pending.set(id, { resolve, reject }));
 		void this.send({ type: "request", id, request: command }).catch((error: unknown) => {
 			const pending = this.pending.get(id);
 			this.pending.delete(id);
-			pending?.reject(error instanceof Error ? error : new Error(String(error)));
+			const failure = error instanceof Error ? error : new Error(String(error));
+			pending?.reject(failure);
+			if (generation === this.transportGeneration && transport === this.transport) this.fail(failure, generation);
 		});
 		return response;
 	}
@@ -262,6 +266,10 @@ export class PiClientV2 {
 	}
 
 	private handle(message: ServerMessageV2): void {
+		if (this.connectedValue && (message.type === "hello" || message.type === "hello_error")) {
+			this.fail(new Error("PiClientV2 received an unexpected handshake message"));
+			return;
+		}
 		if (!this.connectedValue && message.type !== "hello" && message.type !== "hello_error") {
 			this.fail(new Error("PiClientV2 expected server hello before other messages"));
 			return;
