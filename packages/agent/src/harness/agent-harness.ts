@@ -1570,7 +1570,7 @@ export class AgentHarness implements AgentLane {
 			(operation) => operation.intent.kind === "run",
 		);
 		if (!openRun) return ResultValue.err(new NoActiveOperation({ lane: this.name, message: "No active operation" }));
-		const recalled = await this.serializeQueueMutation(async () => {
+		const { recalled } = await this.serializeQueueMutation(async () => {
 			const queued = await this.durableSession.findRecords({
 				type: "queue_enqueued",
 				lane: this.name,
@@ -1601,16 +1601,15 @@ export class AgentHarness implements AgentLane {
 					entryId: item.target.id,
 				});
 			}
-			await this.durableSession.appendRecords(cancellations);
-			return recalled;
+			const requested: NewRecord<AbortRequestedRecord> = {
+				type: "abort_requested",
+				id: this.durableSession.idGenerator.next(),
+				lane: this.name,
+				runId: openRun.id,
+			};
+			await this.durableSession.appendRecords([...cancellations, requested]);
+			return { recalled, requested };
 		});
-		const requested: NewRecord<AbortRequestedRecord> = {
-			type: "abort_requested",
-			id: this.durableSession.idGenerator.next(),
-			lane: this.name,
-			runId: openRun.id,
-		};
-		await this.durableSession.appendRecord(requested);
 		if (this.activeRun?.id === openRun.id) {
 			this.activeRun.controller.abort();
 			return ResultValue.ok({ runId: openRun.id, ...recalled });
