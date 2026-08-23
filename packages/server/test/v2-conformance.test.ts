@@ -100,6 +100,7 @@ class TestRuntime implements PiSessionRuntimeV2 {
 	usageUpdated = false;
 	goalUpdated = false;
 	compactionPolicyUpdated = false;
+	instructionProfileUpdated = false;
 	private current: SessionSnapshotV2;
 
 	constructor(id: string) {
@@ -158,6 +159,12 @@ class TestRuntime implements PiSessionRuntimeV2 {
 			this.current = {
 				...this.current,
 				compactionPolicy: { ...this.current.compactionPolicy, enabled: false, source: "model" },
+			};
+		}
+		if (this.instructionProfileUpdated) {
+			this.current = {
+				...this.current,
+				instructionProfile: { id: "profile-1", source: "text", contentHash: "sha256:profile" },
 			};
 		}
 		this.current = {
@@ -367,6 +374,31 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(policyEvent).toMatchObject({
 			event: "model_compaction_policy_changed",
 			payload: { compactionPolicy: { enabled: false, source: "model" } },
+		});
+	});
+
+	test("emits an instruction-profile event when an operation changes the profile", async () => {
+		const service = new TestService();
+		service.sessions.get("session-1")!.instructionProfileUpdated = true;
+		const server = new PiServerV2(service, { listeners: [], serverId: "instruction-profile-events" });
+		await server.start();
+		servers.push(server);
+		const client = connectInMemoryTestClientV2(server.accept.bind(server));
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const accepted = await client.request({
+			command: "turn/start",
+			sessionId: "session-1",
+			payload: { text: "hello" },
+		});
+		expect(accepted).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+		service.sessions.get("session-1")!.release.resolve(undefined);
+		const profileEvent = await client.next(
+			(message) => message.type === "event" && message.event === "model_instruction_profile_changed",
+		);
+		expect(profileEvent).toMatchObject({
+			event: "model_instruction_profile_changed",
+			payload: { instructionProfile: { id: "profile-1", source: "text" } },
 		});
 	});
 

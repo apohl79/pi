@@ -686,6 +686,14 @@ describe("RemoteV2Session", () => {
 				},
 			},
 		});
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 7,
+			revision: 7,
+			event: "model_instruction_profile_changed",
+			payload: { instructionProfile: { id: "profile-1", source: "text", contentHash: "sha256:profile" } },
+		});
 		expect(session.snapshot).toMatchObject({
 			name: "Renamed",
 			nameSource: "explicit",
@@ -694,6 +702,7 @@ describe("RemoteV2Session", () => {
 			usage: { output: 2 },
 			goal: { id: "goal-1", status: "active" },
 			compactionPolicy: { enabled: false, source: "model" },
+			instructionProfile: { id: "profile-1", source: "text" },
 		});
 		await session.dispose();
 	});
