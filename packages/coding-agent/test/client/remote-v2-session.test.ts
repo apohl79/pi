@@ -600,6 +600,29 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("does not replace state from a malformed recovery snapshot", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		const original = session.snapshot;
+		pair.deliver({
+			type: "event",
+			sessionId: "session-1",
+			seq: 44,
+			revision: 300,
+			event: "session_snapshot",
+			payload: {
+				reason: "event_cursor_expired",
+				requestedEventSeq: 1,
+				retainedFrom: 45,
+				snapshot: { id: "session-1", revision: 300, phase: "idle" },
+			},
+		});
+		expect(session.snapshot).toEqual(original);
+		await session.dispose();
+	});
+
 	test("applies server agent updates without requiring a refresh", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });
