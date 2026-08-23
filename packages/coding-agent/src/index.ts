@@ -503,6 +503,12 @@ export {
 	type ResolvedModelInstructionProfile,
 } from "./server/model-instructions.ts";
 export {
+	adaptPiExtensionSampling,
+	inspectPiExtensionServerCompatibility,
+	type PiExtensionServerCompatibilityReport,
+	type PiExtensionUnsupportedServerResource,
+} from "./server/pi-extension-adapter.ts";
+export {
 	AcquiringV2PluginRegistry,
 	ActivatingV2PluginRegistry,
 	type CodexPluginMarketplaceResolver,

@@ -429,6 +429,68 @@ describe("coding-agent daemon runtime", () => {
 		}
 	});
 
+	test("discovers Pi sampling extensions for the configured daemon", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-pi-extension-discovery-"));
+		directories.push(directory);
+		await mkdir(join(directory, "extensions"), { recursive: true });
+		await writeFile(
+			join(directory, "extensions", "sampling.ts"),
+			`export default function(pi) {
+	pi.registerCommand("local-only", { description: "local only", handler: async () => {} });
+	pi.registerSamplingInput({
+		id: "discovered-reminder",
+		contribute: () => ({ role: "user", content: "discovered reminder", timestamp: 0 }),
+	});
+}`,
+		);
+		const models = createModels();
+		const diagnostics = new InMemoryForensicRecorder();
+		const observedRequests: string[][] = [];
+		const faux = fauxProvider({
+			provider: "coding-agent-daemon-pi-extension-faux",
+			models: [{ id: "pi-extension-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			(context) => {
+				observedRequests.push(
+					context.messages.flatMap((message) =>
+						message.role === "user" && typeof message.content === "string" ? [message.content] : [],
+					),
+				);
+				return fauxAssistantMessage("completed");
+			},
+		]);
+		const runtime = await createConfiguredCodingAgentDaemonRuntime({
+			agentDir: directory,
+			cwd: directory,
+			models,
+			model: faux.getModel(),
+			diagnostics,
+			socketPath: join(directory, "server.sock"),
+			harness: { tools: [], activeToolNames: [] },
+			write: () => {},
+		});
+		try {
+			expect(await diagnostics.read()).toEqual([
+				expect.objectContaining({
+					kind: "pi_extension_compatibility",
+					severity: "warn",
+					payload: expect.objectContaining({ unsupported: ["commands"] }),
+				}),
+			]);
+			const created = await runtime.service.createSession!({ id: "pi-extension-session", cwd: directory });
+			await created.runtime.run("pi-extension-turn", {
+				command: "turn/start",
+				sessionId: created.sessionId,
+				payload: { text: "work" },
+			});
+			expect(observedRequests[0]).toContain("discovered reminder");
+		} finally {
+			await runtime.close();
+		}
+	});
+
 	test("rolls back a durable production daemon conversation and reloads it", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-rollback-"));
 		directories.push(directory);

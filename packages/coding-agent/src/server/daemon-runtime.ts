@@ -43,9 +43,11 @@ import {
 import type { TransportAddress } from "../cli/experimental/transport-address.ts";
 import { acquireCodexMarketplacePlugin, type CodexPluginAcquisitionOptions } from "../core/codex-plugin-acquisition.ts";
 import { CodexPluginActivationStore } from "../core/codex-plugin-activation.ts";
+import { DefaultResourceLoader } from "../core/resource-loader.ts";
 import { runMigrations } from "../migrations.ts";
 import { type CodingAgentV2AgentRegistryOptions, createCodingAgentV2AgentRegistry } from "./agent-registry.ts";
 import { createCodingAgentNativePtyLauncher } from "./native-pty.ts";
+import { inspectPiExtensionServerCompatibility } from "./pi-extension-adapter.ts";
 import {
 	AcquiringV2PluginRegistry,
 	ActivatingV2PluginRegistry,
@@ -304,6 +306,40 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			...(options.diagnosticLogMaxFiles === undefined ? {} : { maxFiles: options.diagnosticLogMaxFiles }),
 		}),
 	);
+	let discoveredPiExtensions = options.piExtensions;
+	let piExtensionLoadErrors: readonly { path: string; error: string }[] = [];
+	if (discoveredPiExtensions === undefined) {
+		const resourceLoader = new DefaultResourceLoader({ cwd: options.cwd, agentDir: options.agentDir });
+		try {
+			await resourceLoader.reload();
+		} catch (error) {
+			await diagnostics.record({
+				kind: "pi_extension_load",
+				severity: "error",
+				payload: { error: error instanceof Error ? error.message.slice(0, 500) : "unknown" },
+			});
+			throw error;
+		}
+		const extensionsResult = resourceLoader.getExtensions();
+		discoveredPiExtensions = extensionsResult.extensions;
+		piExtensionLoadErrors = extensionsResult.errors;
+	}
+	const piExtensionCompatibility = (discoveredPiExtensions ?? []).map(inspectPiExtensionServerCompatibility);
+	for (const report of piExtensionCompatibility) {
+		if (report.unsupported.length === 0) continue;
+		await diagnostics.record({
+			kind: "pi_extension_compatibility",
+			severity: "warn",
+			payload: { extensionPath: report.extensionPath, unsupported: [...report.unsupported] },
+		});
+	}
+	for (const error of piExtensionLoadErrors) {
+		await diagnostics.record({
+			kind: "pi_extension_load",
+			severity: "warn",
+			payload: { extensionPath: error.path, error: error.error.slice(0, 500) },
+		});
+	}
 	const migrationSpool =
 		options.diagnostics === undefined
 			? new JsonlForensicRecorder(options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.jsonl"))
@@ -487,6 +523,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			});
 		const runtime = await createCodingAgentDaemonRuntime({
 			...options,
+			piExtensions: discoveredPiExtensions,
 			repository,
 			env,
 			diagnostics,

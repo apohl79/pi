@@ -1,4 +1,5 @@
 import type { SessionSnapshotV2 } from "@earendil-works/pi-protocol";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test, vi } from "vitest";
 import type { RemoteV2SessionState } from "../../src/client/remote-v2-session.ts";
 import {
@@ -536,6 +537,24 @@ describe("formatRemoteV2Session", () => {
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		expect(component.render(80)).toEqual(["remote status"]);
 		expect(updates).toBe(1);
+		component.dispose();
+	});
+
+	test("keeps long local statusline output within the terminal width", async () => {
+		const source = {
+			state: { lifecycle: { status: "ready" as const }, snapshot },
+			subscribe: (callback: (state: RemoteV2SessionState) => void) => {
+				callback(source.state);
+				return () => {};
+			},
+		};
+		const runner = new StatuslineRunner({
+			command: "statusline.sh",
+			execute: async () => ({ stdout: "a very long statusline", stderr: "", exitCode: 0 }),
+		});
+		const component = new RemoteV2StatuslineComponent(source, runner, { cwd: "/work", transcriptPath: "" }, () => {});
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(visibleWidth(component.render(10)[0] ?? "")).toBe(10);
 		component.dispose();
 	});
 });
