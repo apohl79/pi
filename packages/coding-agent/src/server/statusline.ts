@@ -103,10 +103,10 @@ export class StatuslineRunner {
 	}
 
 	async update(payload: unknown, command = this.command): Promise<StatuslineSnapshot> {
-		const generation = ++this.generation;
 		const payloadHash = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 		const commandKey = JSON.stringify(command);
 		if (commandKey === this.commandKey && payloadHash === this.payloadHash) return this.inFlight ?? this.snapshot;
+		const generation = ++this.generation;
 		this.abortController?.abort();
 		this.command = command;
 		this.commandKey = commandKey;

@@ -53,6 +53,22 @@ describe("StatuslineRunner", () => {
 		expect(runner.snapshot).toMatchObject({ output: "new", command: "second.sh" });
 	});
 
+	test("coalesces identical in-flight updates without invalidating the original run", async () => {
+		let resolvePending: ((result: { stdout: string; stderr: string; exitCode: number }) => void) | undefined;
+		const runner = new StatuslineRunner({
+			command: "statusline.sh",
+			execute: async () =>
+				new Promise((resolve) => {
+					resolvePending = resolve;
+				}),
+		});
+		const first = runner.update({ session: "same" });
+		const duplicate = runner.update({ session: "same" });
+		resolvePending?.({ stdout: "stable", stderr: "", exitCode: 0 });
+		await expect(duplicate).resolves.toMatchObject({ output: "stable" });
+		await expect(first).resolves.toMatchObject({ output: "stable" });
+	});
+
 	test("does not restore output when a disposed command resolves late", async () => {
 		let resolvePending: ((result: { stdout: string; stderr: string; exitCode: number }) => void) | undefined;
 		const runner = new StatuslineRunner({
