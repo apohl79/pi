@@ -40,16 +40,29 @@ describe("production remote v2 web and image services", () => {
 			socketPath,
 			harness: { tools: [], activeToolNames: [] },
 			web: new AdapterV2WebService({
-				execute: async () => [
-					{
-						id: "remote-web-result",
-						title: "Remote result",
-						source: "fixture",
-						retrievedAt: 1,
-						url: "https://example.test/remote",
-						extract: "remote extract",
-					},
-				],
+					execute: async (request) =>
+						request.operation === "image_query"
+							? [
+									{
+										id: "remote-image-result",
+										title: "Remote image",
+										source: "fixture",
+										retrievedAt: 1,
+										url: "https://example.test/remote.png",
+										mimeType: "image/png",
+										blobDigest: "a".repeat(64),
+									},
+								]
+							: [
+									{
+										id: "remote-web-result",
+										title: "Remote result",
+										source: "fixture",
+										retrievedAt: 1,
+										url: "https://example.test/remote",
+										extract: "remote extract",
+									},
+								],
 			}),
 			images: new BlobV2ImageService(
 				new LocalV2FileReferenceService({ projectRoot: directory, cwd: directory, allowAbsolute: true }),
@@ -82,6 +95,14 @@ describe("production remote v2 web and image services", () => {
 				expect(await session.webRequest("search_query", { query: "remote" })).toEqual([
 					expect.objectContaining({ id: "remote-web-result", extract: "remote extract" }),
 				]);
+				expect(await session.webRequest("image_query", { query: "remote image" })).toEqual([
+					expect.objectContaining({
+					id: "remote-image-result",
+					url: "https://example.test/remote.png",
+					mimeType: "image/png",
+					blobDigest: "a".repeat(64),
+				}),
+			]);
 				expect(await session.viewImage("source.png")).toMatchObject({ mimeType: "image/png", size: 4 });
 				expect(await session.generateImage("a remote tree")).toMatchObject({
 					mimeType: "image/png",
