@@ -116,6 +116,15 @@ export function auditForkSpec() {
 			line.includes("| Fork core |");
 		if (line.startsWith("|") && classified && !line.includes("Compatibility is covered")) {
 			failures.push(`classified ledger row lacks compatibility evidence: ${line}`);
+			continue;
+		}
+		if (line.startsWith("|") && classified && line.includes("Compatibility is covered")) {
+			const coverage = line.slice(line.indexOf("Compatibility is covered"));
+			const paths = [...coverage.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+			if (paths.length === 0) failures.push(`classified ledger row lacks a concrete compatibility path: ${line}`);
+			for (const path of paths) {
+				if (!existsSync(join(root, path))) failures.push(`missing ledger compatibility path: ${path}`);
+			}
 		}
 	}
 	const manifest = JSON.parse(readFileSync(join(root, "PACKAGE_COMPATIBILITY.json"), "utf8"));
