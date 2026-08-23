@@ -90,7 +90,7 @@ function modelReferencesResolveToSameCatalogModel(
 
 export interface PiSessionRuntimeEventV2 {
 	readonly sessionId: string;
-	readonly event: "item_completed" | "tool_started" | "tool_completed";
+	readonly event: "item_completed" | "tool_started" | "tool_completed" | "plugin_diagnostic";
 	readonly payload: Record<string, unknown>;
 	readonly operationId?: string;
 }

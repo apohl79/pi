@@ -173,6 +173,7 @@ export interface CodingAgentV2SessionStore {
 
 export interface CodingAgentV2Runtime {
 	snapshot(): Promise<SessionSnapshotV2>;
+	onEvent?(listener: (event: PiSessionRuntimeEventV2) => void): () => void;
 	cancelQueued(entryId: string): Promise<void>;
 	accept(operationId: string, command?: CommandV2): Promise<OperationAccepted>;
 	run(operationId: string, command: CommandV2): Promise<void>;
@@ -616,6 +617,7 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		if (results === undefined || this.definition.forensicRecorder === undefined) return;
 		for (const result of results) {
 			const reason = result.reason instanceof Error ? result.reason.message : result.reason;
+			this.emitPluginDiagnostic(operationId, hook, result, reason);
 			void this.definition.forensicRecorder
 				.record({
 					kind: "server_extension_hook",
@@ -632,6 +634,27 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				})
 				.catch(() => undefined);
 		}
+	}
+
+	private emitPluginDiagnostic(
+		operationId: string,
+		hook: "accepted" | "terminal",
+		result: ServerRuntimeExtensionHookResult,
+		reason: unknown,
+	): void {
+		const payload = {
+			hook,
+			extensionId: result.extensionId,
+			status: result.status,
+			...(reason === undefined ? {} : { reason: String(reason).slice(0, 512) }),
+		};
+		const event: PiSessionRuntimeEventV2 = {
+			sessionId: this.definition.metadata.id,
+			event: "plugin_diagnostic",
+			operationId,
+			payload,
+		};
+		for (const listener of this.eventListeners) listener(event);
 	}
 
 	private async recordInstructionProfile(operationId: string): Promise<void> {
