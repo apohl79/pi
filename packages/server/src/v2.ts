@@ -416,6 +416,7 @@ export class PiServerV2 {
 				command.command === "turn/abort" ||
 				command.command === "turn/resume" ||
 				command.command === "turn/rollback" ||
+				command.command === "turn/compact" ||
 				command.command === "goal/create" ||
 				command.command === "goal/update" ||
 				command.command === "goal/pause" ||

@@ -168,6 +168,15 @@ function clientFactory(requests?: Array<{ command: string; payload?: unknown }>)
 							},
 						}),
 					);
+				} else if (message.request.command === "turn/compact") {
+					handlers?.onData(
+						encodeServerMessageV2({
+							type: "response",
+							id: message.id,
+							ok: true,
+							accepted: { operationId: "operation-compact", sessionRevision: 2, eventSeq: 2 },
+						}),
+					);
 				} else if (message.request.command === "blob/put") {
 					handlers?.onData(
 						encodeServerMessageV2({
@@ -394,6 +403,29 @@ describe("experimental CLI runtime", () => {
 			success: true,
 			data: { output: "hello", exitCode: 0, cancelled: false, truncated: false },
 		});
+		runtime.close();
+	});
+
+	test("maps RPC compact to the server-owned compaction operation", async () => {
+		const requests: Array<{ command: string; payload?: unknown }> = [];
+		const serverWithRequests = clientFactory(requests);
+		const output: unknown[] = [];
+		const runtime = createExperimentalCliRuntime({
+			daemon: daemon(),
+			defaultConnect: { transport: "unix", path: "/tmp/pi.sock" },
+			createClient: serverWithRequests.create,
+			write: () => {},
+			rpcInput: Readable.from(['{"id":"compact-1","type":"compact","customInstructions":"keep recent fixes"}\n']),
+			rpcOutput: (value) => output.push(value),
+		});
+		await runtime.runRpc({ messages: [], fileArgs: [], unknownFlags: new Map(), diagnostics: [] });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(requests).toContainEqual({
+			command: "turn/compact",
+			payload: { customInstructions: "keep recent fixes" },
+			sessionId: "session-1",
+		});
+		expect(output).toContainEqual({ id: "compact-1", type: "response", command: "compact", success: true });
 		runtime.close();
 	});
 

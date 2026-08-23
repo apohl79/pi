@@ -554,6 +554,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				const turns = typeof payload.turns === "number" ? payload.turns : 1;
 				const result = await harness.rollback(turns);
 				if (!result.ok) throw new Error(result.error.message);
+			} else if (runCommand === "turn/compact") {
+				const result = await harness.compact({
+					customInstructions:
+						typeof payload.customInstructions === "string" ? payload.customInstructions : undefined,
+				});
+				if (!result.ok) throw new Error(result.error.message);
 			} else if (runCommand === "goal/create") {
 				if (!this.definition.goals || typeof payload.objective !== "string")
 					throw new Error("goal/create requires an objective");

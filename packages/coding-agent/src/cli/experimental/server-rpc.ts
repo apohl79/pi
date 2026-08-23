@@ -101,6 +101,9 @@ export async function runServerRpc(options: ServerRpcRuntimeOptions): Promise<vo
 					activeBashProcessId = undefined;
 				}
 				return success(id, "abort_bash");
+			case "compact":
+				await session.compact(command.customInstructions);
+				return success(id, "compact");
 			case "get_state":
 				return success(id, "get_state", stateFor(session.snapshot));
 			case "set_model":
