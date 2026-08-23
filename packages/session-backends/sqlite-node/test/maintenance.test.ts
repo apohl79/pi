@@ -51,6 +51,46 @@ describe("SQLite maintenance", () => {
 		}
 	});
 
+	it("preserves and verifies a pre-migration database before upgrading it", async () => {
+		const root = createTempDir();
+		const databasePath = join(root, "sessions.sqlite");
+		const migrationBackupPath = join(root, "backups", "pre-migration.sqlite");
+		const sqlite = createNodeSqliteFactory();
+		const seed = await sqlite.open(databasePath);
+		try {
+			seed.exec("CREATE TABLE migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
+			seed
+				.prepare("INSERT INTO migrations (id, applied_at) VALUES (?, ?)")
+				.run("000_legacy.sql", "2026-01-01T00:00:00.000Z");
+		} finally {
+			seed.close();
+		}
+
+		const repository = new SqliteSessionRepository({
+			env: new NodeExecutionEnv({ cwd: root }),
+			sqlite,
+			databasePath,
+			migrationBackupPath,
+		});
+		try {
+			expect((await repository.inspect()).schemaVersion).toBe("001_initial.sql");
+		} finally {
+			await repository.close();
+		}
+
+		const backup = await sqlite.open(migrationBackupPath);
+		try {
+			expect(backup.prepare("SELECT id FROM migrations ORDER BY id").all<{ id: string }>()).toEqual([
+				{ id: "000_legacy.sql" },
+			]);
+			expect(
+				backup.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sessions'").all(),
+			).toEqual([]);
+		} finally {
+			backup.close();
+		}
+	});
+
 	it("repairs only derived branch caches after they are removed", async () => {
 		const root = createTempDir();
 		const databasePath = join(root, "sessions.sqlite");
