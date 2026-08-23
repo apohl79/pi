@@ -1831,13 +1831,14 @@ export class AgentHarness implements AgentLane {
 				lane: this.name,
 				runId: operation.id,
 				outcome,
-				error:
-					message.stopReason === "error"
-						? {
+				...(message.stopReason === "error"
+					? {
+							error: {
 								code: "deferred_error",
 								message: sanitizeErrorMessage(message.errorMessage, "Deferred provider failed"),
-							}
-						: undefined,
+							},
+						}
+					: {}),
 			});
 			this.suspendedOperations = this.suspendedOperations.filter((candidate) => candidate.id !== operation.id);
 			if (outcome === "failed")
