@@ -389,7 +389,9 @@ export class PiServerV2 {
 				},
 			});
 		}
-		await Promise.all(events.filter((event) => event.seq > cursor.eventSeq).map((event) => this.send(state, event)));
+		for (const event of events) {
+			if (event.seq > cursor.eventSeq) await this.send(state, event);
+		}
 	}
 
 	private async handleRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

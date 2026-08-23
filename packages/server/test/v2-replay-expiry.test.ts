@@ -1,4 +1,13 @@
-import type { EventEnvelopeV2, ModelMetadata, SessionSnapshotV2 } from "@earendil-works/pi-protocol";
+import {
+	decodeCbor,
+	type EventEnvelopeV2,
+	encodeClientMessageV2,
+	type ModelMetadata,
+	PROTOCOL_V2_VERSION,
+	parseServerMessageV2,
+	type ServerMessageV2,
+	type SessionSnapshotV2,
+} from "@earendil-works/pi-protocol";
 import { describe, expect, test } from "vitest";
 import { InMemoryV2OperationStore } from "../src/operation-store.ts";
 import { connectInMemoryTestClientV2 } from "../src/testing/index.ts";
@@ -112,6 +121,48 @@ describe("PiServerV2 replay expiry", () => {
 			seq: 45,
 		});
 		await client.close();
+		await server.close();
+	});
+
+	test("replays retained events in sequence order when transport sends complete out of order", async () => {
+		const store = new InMemoryV2OperationStore();
+		for (const seq of [1, 2, 3]) {
+			await store.appendEvent({
+				type: "event",
+				sessionId: snapshot.id,
+				seq,
+				revision: seq,
+				event: "usage_updated",
+				payload: { seq },
+			});
+		}
+		const server = new PiServerV2(new Service(), { listeners: [], operationStore: store });
+		await server.start();
+		const sent: ServerMessageV2[] = [];
+		let resolveEvents: (() => void) | undefined;
+		const eventsComplete = new Promise<void>((resolve) => {
+			resolveEvents = resolve;
+		});
+		const connection = {
+			closed: false,
+			send: async (chunk: Uint8Array) => {
+				const message = parseServerMessageV2(decodeCbor(chunk.subarray(4)));
+				if (message.type === "event" && message.seq === 2) await new Promise((resolve) => setTimeout(resolve, 20));
+				sent.push(message);
+				if (sent.filter((item) => item.type === "event").length === 2) resolveEvents?.();
+			},
+			close: async () => {},
+		};
+		const handler = server.accept(connection);
+		handler.onData(
+			encodeClientMessageV2({
+				type: "hello",
+				version: PROTOCOL_V2_VERSION,
+				lastEvent: { sessionId: snapshot.id, eventSeq: 1 },
+			}),
+		);
+		await eventsComplete;
+		expect(sent.filter((message) => message.type === "event").map((message) => message.seq)).toEqual([2, 3]);
 		await server.close();
 	});
 });
