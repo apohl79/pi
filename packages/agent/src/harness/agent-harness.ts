@@ -298,6 +298,10 @@ class LifecycleRegistry implements Hooks, Events {
 		for (const registration of this.hooks.get(name) ?? []) await registration.handler(event);
 	}
 
+	hasHook(name: HookName): boolean {
+		return (this.hooks.get(name)?.length ?? 0) > 0;
+	}
+
 	onEvent(type: string, listener: (event: unknown) => void | Promise<void>): () => void {
 		if (this.isClosed()) throw new HarnessClosed();
 		const listeners = this.events.get(type) ?? new Set();
@@ -530,7 +534,7 @@ export class AgentHarness implements AgentLane {
 		this.lifecycle.emit("operation_started", { operationId: runId, kind: "run" });
 		this.watchBus.emit({ type: "run_start", lane: "main", runId });
 		try {
-			await this.lifecycle.runHook("before_run", { operationId: runId, prompts: durableClone(prompts) });
+			await this.runLifecycleHook("before_run", { operationId: runId, prompts: durableClone(prompts) });
 			const entries = await this.durableSession.findEntriesOnBranch({ order: "oldestFirst" });
 			const persisted = buildSessionContext(entries);
 			const systemPrompt =
@@ -584,7 +588,7 @@ export class AgentHarness implements AgentLane {
 			const finalMessage = newMessages.at(-1);
 			if (!finalEntryId || !finalMessage || finalMessage.role !== "assistant")
 				throw new Error("Agent loop produced no assistant message");
-			await this.lifecycle.runHook("after_response", { operationId: runId, message: durableClone(finalMessage) });
+			await this.runLifecycleHook("after_response", { operationId: runId, message: durableClone(finalMessage) });
 			await this.durableSession.appendRecord({
 				type: "operation_finished",
 				id: this.durableSession.idGenerator.next(),
@@ -592,7 +596,7 @@ export class AgentHarness implements AgentLane {
 				runId,
 				outcome: "completed",
 			});
-			await this.lifecycle.runHook("before_run_end", { operationId: runId, outcome: "completed" });
+			await this.runLifecycleHook("before_run_end", { operationId: runId, outcome: "completed" });
 			this.lifecycle.emit("operation_finished", { operationId: runId, outcome: "completed" });
 			this.watchBus.emit({
 				type: "run_end",
@@ -682,7 +686,7 @@ export class AgentHarness implements AgentLane {
 			return ResultValue.err(new NothingToCompact({ lane: "main", message: "Nothing to compact" }));
 		const runId = this.durableSession.idGenerator.next();
 		const resultEntryId = this.durableSession.idGenerator.next();
-		await this.lifecycle.runHook("before_compaction", { operationId: runId, model: this.model });
+		await this.runLifecycleHook("before_compaction", { operationId: runId, model: this.model });
 		await this.durableSession.appendRecord({
 			type: "operation_started",
 			id: runId,
@@ -795,7 +799,7 @@ export class AgentHarness implements AgentLane {
 		const summarize = _options?.summarize === true;
 		const runId = this.durableSession.idGenerator.next();
 		const summaryEntryId = summarize ? this.durableSession.idGenerator.next() : undefined;
-		await this.lifecycle.runHook("before_navigation", { operationId: runId, targetId, summarize });
+		await this.runLifecycleHook("before_navigation", { operationId: runId, targetId, summarize });
 		await this.durableSession.appendRecord({
 			type: "operation_started",
 			id: runId,
@@ -1330,6 +1334,12 @@ export class AgentHarness implements AgentLane {
 		await new Promise<void>((resolve, reject) => {
 			this.manualAction = { info, resolve, reject };
 		});
+	}
+
+	private async runLifecycleHook(name: HookName, event: unknown): Promise<void> {
+		if (!this.lifecycle.hasHook(name)) return;
+		await this.park({ kind: "hook", name });
+		await this.lifecycle.runHook(name, event);
 	}
 
 	private async laneSnapshot(lane: string): Promise<LaneSnapshot> {
