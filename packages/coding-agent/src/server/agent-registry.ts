@@ -40,6 +40,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private readonly agents = new Map<string, ChildAgent>();
 	private readonly service: CodingAgentV2Service;
 	private spawnTail: Promise<void> = Promise.resolve();
+	private disposePromise?: Promise<void>;
 
 	constructor(service: CodingAgentV2Service, options: CodingAgentV2AgentRegistryOptions = {}) {
 		this.service = service;
@@ -50,6 +51,7 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	}
 
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
+		if (this.disposePromise) throw new Error("Agent registry is disposed");
 		const previous = this.spawnTail;
 		let release!: () => void;
 		this.spawnTail = new Promise<void>((resolve) => (release = resolve));
@@ -65,20 +67,21 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		this.validateRequest(request);
 		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
 		if (!this.service.createSession) throw new Error("Coding-agent service does not support child sessions");
+		const model = await this.resolveModel(request);
 		const path = `${request.parentPath.replace(/\/$/, "")}/${request.taskName}`;
 		if ([...this.agents.values()].some((agent) => agent.summary.path === path))
 			throw new Error(`Agent path ${path} already exists`);
 		const created = await this.service.createSession({
 			parentSessionId: request.sessionId,
 			name: request.taskName,
-			model: request.model,
+			model,
 		});
 		const summary: AgentSummary = {
 			id: randomUUID(),
 			path,
 			taskName: request.taskName,
 			state: "running",
-			model: request.model,
+			model,
 		};
 		const agent: ChildAgent = {
 			summary,
@@ -100,6 +103,19 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		return [...this.agents.values()]
 			.filter((agent) => agent.parentSessionId === sessionId)
 			.map((agent) => this.snapshot(agent));
+	}
+
+	async dispose(): Promise<void> {
+		if (this.disposePromise) return this.disposePromise;
+		this.disposePromise = (async () => {
+			await this.spawnTail;
+			const results = await Promise.allSettled([...this.agents.values()].map((agent) => agent.runtime.dispose()));
+			this.agents.clear();
+			const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+			if (failures.length === 1) throw failures[0]!.reason;
+			if (failures.length > 1) throw new AggregateError(failures.map((failure) => failure.reason), "Failed to dispose child agent runtimes");
+		})();
+		return this.disposePromise;
 	}
 
 	async getSnapshot(agentId: string): Promise<V2AgentSnapshot> {
@@ -195,6 +211,16 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private appendMessage(agent: ChildAgent, message: string): void {
 		if (agent.messages.length >= this.maxMessages) agent.messages.shift();
 		agent.messages.push(message);
+	}
+
+	private async resolveModel(request: V2AgentRequest): Promise<{ provider: string; id: string }> {
+		if (request.model.provider !== "inherit" && request.model.id !== "inherit") return request.model;
+		const parent = await this.service.openSession(request.sessionId);
+		const inherited = (await parent.snapshot()).model;
+		return {
+			provider: request.model.provider === "inherit" ? inherited.provider : request.model.provider,
+			id: request.model.id === "inherit" ? inherited.id : request.model.id,
+		};
 	}
 
 	private activeCount(): number {

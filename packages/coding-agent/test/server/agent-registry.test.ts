@@ -5,8 +5,9 @@ import type { CodingAgentV2Runtime, CodingAgentV2Service } from "../../src/serve
 
 class FixtureRuntime implements CodingAgentV2Runtime {
 	readonly commands: CommandV2[] = [];
+	disposeCount = 0;
 	async snapshot(): Promise<SessionSnapshotV2> {
-		return {} as SessionSnapshotV2;
+		return { model: { provider: "parent-provider", id: "parent-model" } } as SessionSnapshotV2;
 	}
 	async accept(operationId: string): Promise<OperationAccepted> {
 		return { operationId, sessionRevision: 1, eventSeq: 1 };
@@ -15,7 +16,9 @@ class FixtureRuntime implements CodingAgentV2Runtime {
 		this.commands.push(command);
 	}
 	async abort(_operationId: string): Promise<void> {}
-	async dispose(): Promise<void> {}
+	async dispose(): Promise<void> {
+		this.disposeCount += 1;
+	}
 }
 
 function fixture() {
@@ -37,12 +40,16 @@ describe("CodingAgentV2AgentRegistry", () => {
 			parentPath: "root",
 			taskName: "worker",
 			taskMessage: "inspect the repository",
-			model: { provider: "faux", id: "model" },
+			model: { provider: "inherit", id: "inherit" },
 		});
 		await expect(registry.followUp(agent.id, "premature follow-up")).rejects.toThrow("active agent");
 		expect(await registry.list("parent-session")).toEqual([agent]);
 		expect(await registry.list("child-session")).toEqual([]);
 		expect((await registry.wait(agent.id)).state).toBe("complete");
+		expect((await registry.getSnapshot(agent.id)).model).toEqual({
+			provider: "parent-provider",
+			id: "parent-model",
+		});
 		expect(runtime.commands[0]?.command).toBe("turn/start");
 		const followUp = registry.followUp(agent.id, "continue with the tests");
 		await expect(registry.followUp(agent.id, "duplicate follow-up")).rejects.toThrow("active agent");
@@ -77,5 +84,19 @@ describe("CodingAgentV2AgentRegistry", () => {
 			model: { provider: "faux", id: "model" },
 		});
 		await expect(registry.message(agent.id, "x".repeat(64 * 1024 + 1))).rejects.toThrow("maximum length");
+	});
+
+	test("disposes child runtimes exactly once", async () => {
+		const { registry, runtime } = fixture();
+		await registry.spawn({
+			sessionId: "parent",
+			parentPath: "root",
+			taskName: "worker",
+			taskMessage: "work",
+			model: { provider: "faux", id: "model" },
+		});
+		await registry.dispose();
+		await registry.dispose();
+		expect(runtime.disposeCount).toBe(1);
 	});
 });
