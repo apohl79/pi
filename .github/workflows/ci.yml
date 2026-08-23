@@ -70,3 +70,6 @@ jobs:
 
       - name: Test SQLite storage contracts
         run: npm test --workspace=@earendil-works/pi-session-backend-sqlite-node
+
+      - name: Test TUI contracts
+        run: npm test --workspace=@earendil-works/pi-tui

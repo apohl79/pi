@@ -63,6 +63,7 @@ const requiredPatterns = [
 	["MCP exclusion evidence", "packages/coding-agent/test/client/remote-v2-production-plugins.test.ts", "unsupported MCP"],
 	["rollback projection evidence", "packages/coding-agent/test/client/remote-v2-production-rollback.test.ts", "reconstructs"],
 	["terminal snapshot evidence", "packages/tui/test/editor.test.ts", "undo snapshots"],
+	["cross-platform TUI evidence", ".github/workflows/ci.yml", "@earendil-works/pi-tui"],
 ];
 
 export function auditForkSpec() {
