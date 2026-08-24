@@ -99,6 +99,8 @@ export interface PiSessionRuntimeEventV2 {
 
 export interface PiSessionRuntimeV2 {
 	snapshot(): MaybePromise<SessionSnapshotV2>;
+	/** Optional durable tree projection for runtimes that retain branch ancestry. */
+	readTree?(): MaybePromise<unknown>;
 	accept(operationId: string, command?: CommandV2): Promise<OperationAccepted>;
 	/** Subscribe to provider/tool lifecycle events that must reach detached clients. */
 	onEvent?(listener: (event: PiSessionRuntimeEventV2) => void): () => void;
@@ -227,10 +229,22 @@ function validateGoalCommand(command: CommandV2, payload: Record<string, unknown
 }
 
 function validateTurnCommand(command: CommandV2, payload: Record<string, unknown>): void {
-	if (command.command !== "turn/rollback" || payload.turns === undefined) return;
-	if (typeof payload.turns !== "number") throw new Error("turn/rollback turns must be a number");
-	if (!Number.isSafeInteger(payload.turns) || payload.turns < 1)
-		throw new Error("turn/rollback turns must be a positive safe integer");
+	if (command.command === "turn/rollback" && payload.turns !== undefined) {
+		if (typeof payload.turns !== "number") throw new Error("turn/rollback turns must be a number");
+		if (!Number.isSafeInteger(payload.turns) || payload.turns < 1)
+			throw new Error("turn/rollback turns must be a positive safe integer");
+	}
+	if (command.command !== "turn/navigate") return;
+	if (payload.targetId !== null && typeof payload.targetId !== "string")
+		throw new Error("turn/navigate targetId must be a string or null");
+	for (const field of ["summarize"] as const) {
+		if (payload[field] !== undefined && typeof payload[field] !== "boolean")
+			throw new Error(`turn/navigate ${field} must be a boolean`);
+	}
+	for (const field of ["customInstructions", "label"] as const) {
+		if (payload[field] !== undefined && typeof payload[field] !== "string")
+			throw new Error(`turn/navigate ${field} must be a string`);
+	}
 }
 
 function referenceFrom(command: CommandV2, payload: Record<string, unknown>): string {
@@ -569,6 +583,7 @@ export class PiServerV2 {
 			if (command.command === "operation/read") return void (await this.readOperation(state, id, command));
 			if (command.command === "session/attach") return void (await this.attach(state, id, command));
 			if (command.command === "session/read") return void (await this.readSession(state, id, command));
+			if (command.command === "session/tree/read") return void (await this.readSessionTree(state, id, command));
 			if (command.command === "goal/read") return void (await this.readGoal(state, id, command));
 			if (command.command === "turn/queue/cancel") return void (await this.cancelQueued(state, id, command));
 			if (command.command === "process/start") return void (await this.startProcess(state, id, command));
@@ -631,6 +646,7 @@ export class PiServerV2 {
 				command.command === "turn/abort" ||
 				command.command === "turn/resume" ||
 				command.command === "turn/rollback" ||
+				command.command === "turn/navigate" ||
 				command.command === "turn/compact" ||
 				command.command === "goal/create" ||
 				command.command === "goal/update" ||
@@ -781,6 +797,19 @@ export class PiServerV2 {
 		await this.sendResponse(state, id, {
 			command: command.command,
 			session: toProtocolJsonValue(await this.snapshotForSession(command.sessionId, runtime)),
+		});
+	}
+
+	private async readSessionTree(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("session/tree/read requires sessionId");
+		this.requireSessionReference(state, command.sessionId);
+		const runtime = state.sessions.get(command.sessionId) ?? (await this.service.openSession(command.sessionId));
+		this.trackRuntime(runtime);
+		state.sessions.set(command.sessionId, runtime);
+		if (runtime.readTree === undefined) throw new Error("Session tree is unavailable");
+		await this.sendResponse(state, id, {
+			command: command.command,
+			tree: toProtocolJsonValue(await runtime.readTree()),
 		});
 	}
 

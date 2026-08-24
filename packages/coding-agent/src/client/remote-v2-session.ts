@@ -111,6 +111,13 @@ export interface RemoteV2BlobRead {
 	readonly data: string;
 }
 
+/** Complete durable entry graph for a session, independent of the active transcript branch. */
+export interface RemoteV2SessionTree {
+	readonly leafId: string | null;
+	readonly entries: readonly JsonValue[];
+	readonly labels: Readonly<Record<string, string>>;
+}
+
 export type RemoteV2LocalFileReference = V2LocalFileReference;
 
 const DEFAULT_MAX_LOCAL_UPLOAD_BYTES = 8 * 1024 * 1024;
@@ -427,6 +434,23 @@ export class RemoteV2Session {
 	async rollback(turns = 1): Promise<string> {
 		if (!Number.isInteger(turns) || turns < 1) throw new Error("Rollback turns must be a positive integer");
 		return this.#accept("turn/rollback", { turns });
+	}
+
+	async readTree(): Promise<RemoteV2SessionTree> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({
+			command: "session/tree/read",
+			sessionId: this.#requireHandle().sessionId,
+		});
+		return parseRemoteV2SessionTree(result.tree);
+	}
+
+	async navigateTree(
+		targetId: string | null,
+		options: { readonly summarize?: boolean; readonly customInstructions?: string; readonly label?: string } = {},
+	): Promise<string> {
+		if (targetId !== null && targetId.length === 0) throw new Error("Tree target ID cannot be empty");
+		return this.#accept("turn/navigate", { targetId, ...options });
 	}
 
 	async abort(): Promise<string> {
@@ -1267,6 +1291,23 @@ export class RemoteV2Session {
 	#assertNotDisposed(): void {
 		if (this.#lifecycle.status === "disposed") throw new Error("Remote v2 session is disposed");
 	}
+}
+
+function parseRemoteV2SessionTree(value: unknown): RemoteV2SessionTree {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		throw new Error("Invalid session/tree/read result");
+	const tree = value as Record<string, unknown>;
+	if (tree.leafId !== null && typeof tree.leafId !== "string") throw new Error("Invalid session/tree/read leaf ID");
+	if (!Array.isArray(tree.entries)) throw new Error("Invalid session/tree/read entries");
+	if (typeof tree.labels !== "object" || tree.labels === null || Array.isArray(tree.labels))
+		throw new Error("Invalid session/tree/read labels");
+	const labels = Object.fromEntries(
+		Object.entries(tree.labels).map(([entryId, label]) => {
+			if (typeof label !== "string") throw new Error("Invalid session/tree/read label");
+			return [entryId, label];
+		}),
+	);
+	return { leafId: tree.leafId, entries: tree.entries as JsonValue[], labels };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

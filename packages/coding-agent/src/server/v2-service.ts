@@ -178,6 +178,7 @@ export interface CodingAgentV2SessionStore {
 
 export interface CodingAgentV2Runtime {
 	snapshot(): Promise<SessionSnapshotV2>;
+	readTree?(): Promise<{ leafId: string | null; entries: readonly Entry[]; labels: Readonly<Record<string, string>> }>;
 	onEvent?(listener: (event: PiSessionRuntimeEventV2) => void): () => void;
 	cancelQueued(entryId: string): Promise<void>;
 	accept(operationId: string, command?: CommandV2): Promise<OperationAccepted>;
@@ -891,6 +892,28 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		};
 	}
 
+	async readTree(): Promise<{
+		leafId: string | null;
+		entries: readonly Entry[];
+		labels: Readonly<Record<string, string>>;
+	}> {
+		const [leafId, entries] = await Promise.all([
+			this.definition.harness.session.getLeafId(),
+			this.definition.harness.session.findEntries({ order: "oldestFirst" }),
+		]);
+		const labels = Object.fromEntries(
+			(
+				await Promise.all(
+					entries.map(async (entry) => {
+						const label = await this.definition.harness.session.getLabel(entry.id);
+						return label === undefined ? undefined : ([entry.id, label] as const);
+					}),
+				)
+			).flatMap((label) => (label === undefined ? [] : [label])),
+		);
+		return { leafId, entries, labels };
+	}
+
 	async accept(_operationId: string, command?: CommandV2): Promise<OperationAccepted> {
 		const policy = await this.compactionPolicySnapshot();
 		if (
@@ -1029,6 +1052,17 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				const turns = typeof payload.turns === "number" ? payload.turns : 1;
 				const result = await harness.rollback(turns);
 				if (!result.ok) throw new Error(result.error.message);
+			} else if (runCommand === "turn/navigate") {
+				const targetId = typeof payload.targetId === "string" ? payload.targetId : null;
+				const result = await harness.navigateTree(targetId, {
+					...(payload.summarize === true ? { summarize: true } : {}),
+					...(typeof payload.customInstructions === "string"
+						? { customInstructions: payload.customInstructions }
+						: {}),
+					...(typeof payload.label === "string" ? { label: payload.label } : {}),
+				});
+				if (!result.ok) throw new Error(result.error.message);
+				if (result.value.kind === "failed") throw new Error(result.value.error.message);
 			} else if (runCommand === "turn/compact") {
 				const result = await harness.compact({
 					customInstructions:
