@@ -172,7 +172,6 @@ export class ServerDaemon {
 				"error",
 			);
 		}
-		await this.writeLifecycleMarker("running");
 		await this.recordDiagnostic("daemon_starting", { socketPath: this.options.socketPath }, "started");
 		let server: ServerDaemonServer;
 		try {
@@ -202,7 +201,6 @@ export class ServerDaemon {
 				...(this.options.usage === undefined ? {} : { usage: this.options.usage }),
 			});
 		} catch (error) {
-			await this.writeLifecycleMarker("clean").catch(() => {});
 			this.state = "stopped";
 			await this.recordDiagnostic(
 				"daemon_start_failed",
@@ -216,7 +214,6 @@ export class ServerDaemon {
 			await server.start();
 		} catch (error) {
 			await server.close().catch(() => {});
-			await this.writeLifecycleMarker("clean").catch(() => {});
 			this.state = "stopped";
 			await this.recordDiagnostic(
 				"daemon_start_failed",
@@ -228,6 +225,7 @@ export class ServerDaemon {
 		}
 		this.server = server;
 		this.state = "running";
+		await this.writeLifecycleMarker("running");
 		await this.recordDiagnostic("daemon_started", { serverId: server.id, addresses: server.addresses }, "ok");
 	}
 

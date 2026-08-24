@@ -9,7 +9,7 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-agent-core";
 import { isServerDefaultCompatible, parseArgs } from "./cli/args.ts";
-import { isExperimentalCommand } from "./cli/experimental/dispatch.ts";
+import { dispatchExperimentalCommand, isExperimentalCommand } from "./cli/experimental/dispatch.ts";
 import { RemoteV2InteractiveAttachment } from "./client/remote-v2-interactive.ts";
 import { RemoteV2SessionView, RemoteV2StatuslineComponent } from "./client/remote-v2-view.ts";
 import { APP_NAME, getAgentDir } from "./config.ts";
@@ -186,13 +186,22 @@ async function runCli(): Promise<void> {
 			});
 		},
 	});
+	if (foregroundServer) {
+		try {
+			await dispatchExperimentalCommand(args, runtime.cli);
+			await new Promise<void>((resolve) => process.once("SIGTERM", resolve));
+		} finally {
+			await runtime.close();
+		}
+		return;
+	}
 	try {
 		if (serverDefaultRpc) await runtime.cli.runRpc(parsedArgs);
 		else if (serverDefaultPrint || serverDefaultInteractive)
 			await runtime.cli.runPi({ command: "pi", options: parsedArgs });
 		else await main(args, { experimentalCliContext: runtime.cli });
 	} finally {
-		if (!foregroundServer) await runtime.close();
+		await runtime.close();
 	}
 }
 
