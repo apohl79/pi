@@ -21,6 +21,7 @@ import type {
 	CommandV2,
 	GoalSnapshot,
 	JsonValue,
+	ModelMetadata,
 	ModelRef,
 	OperationRecordV2,
 	PlanItem,
@@ -267,6 +268,12 @@ export class RemoteV2Session {
 	}
 	get mode(): V2SessionLeaseMode | undefined {
 		return this.#handle?.mode;
+	}
+
+	/** Lists the server-authoritative models enabled for this remote session. */
+	listModels(): Promise<readonly ModelMetadata[]> {
+		this.#assertNotDisposed();
+		return this.#client.listModels();
 	}
 
 	subscribe(listener: Listener): () => void {

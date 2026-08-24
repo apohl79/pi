@@ -121,13 +121,31 @@ function clientWithRequests(withQueue = false): { client: PiClientV2; commands: 
 								}
 							: message.request.command === "session/read"
 								? { session: snapshot(withQueue) }
-								: message.request.command === "plan/update"
-									? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
-									: message.request.command === "plugin/list"
-										? { plugins: [{ id: "demo", enabled: true }] }
-										: message.request.command === "process/list"
-											? { processes: [] }
-											: { command: message.request.command }) as JsonValue,
+								: message.request.command === "model/list"
+									? {
+											models: [
+												{
+													provider: "openai",
+													id: "gpt-5",
+													name: "GPT-5",
+													api: "openai-responses",
+													reasoning: true,
+													input: ["text"],
+													contextWindow: 128_000,
+													maxTokens: 16_000,
+													cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+													supportedThinkingLevels: ["off"],
+													authenticated: true,
+												},
+											],
+										}
+									: message.request.command === "plan/update"
+										? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
+										: message.request.command === "plugin/list"
+											? { plugins: [{ id: "demo", enabled: true }] }
+											: message.request.command === "process/list"
+												? { processes: [] }
+												: { command: message.request.command }) as JsonValue,
 					};
 			handlers?.onData(encodeServerMessageV2(response));
 		},
@@ -370,6 +388,21 @@ describe("remote v2 interactive command boundary", () => {
 		await vi.waitFor(() => expect(stripAnsi(adapter.render(80).join("\n"))).toContain("model"));
 
 		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("completes model arguments from the server-authoritative catalog", async () => {
+		const { client, commands } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const provider = new RemoteV2AutocompleteProvider(attached.session);
+		const suggestions = await provider.getSuggestions(["/model gpt"], 0, 10, {
+			signal: new AbortController().signal,
+		});
+
+		expect(suggestions?.items.map((item) => item.value)).toEqual(["openai/gpt-5"]);
+		expect(commands).toContain("model/list");
+		await attached.dispose();
 		client.dispose();
 	});
 

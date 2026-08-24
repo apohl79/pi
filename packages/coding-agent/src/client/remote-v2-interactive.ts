@@ -12,6 +12,7 @@ import type { RemoteV2SessionAttachment } from "./remote-v2-selector.ts";
 import type { RemoteV2FileCompletion, RemoteV2PromptContent } from "./remote-v2-session.ts";
 
 export const REMOTE_V2_SLASH_COMMANDS = [
+	"/model",
 	"/abort",
 	"/agent-follow-up",
 	"/agent-interrupt",
@@ -26,7 +27,6 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/input",
 	"/input-cancel",
 	"/interrupt-child",
-	"/model",
 	"/name",
 	"/name-auto",
 	"/plan",
@@ -98,6 +98,8 @@ export class RemoteV2AutocompleteProvider implements AutocompleteProvider {
 		options: { signal: AbortSignal; force?: boolean },
 	): Promise<AutocompleteSuggestions | null> {
 		const input = (lines[cursorLine] ?? "").slice(0, cursorCol);
+		const model = await this.modelSuggestions(input, options.signal);
+		if (model !== null) return model;
 		const command = this.commandSuggestions(input);
 		if (command !== null) return command;
 
@@ -114,6 +116,24 @@ export class RemoteV2AutocompleteProvider implements AutocompleteProvider {
 			kind: completion.kind,
 			reference: completion.reference,
 		}));
+		return items.length === 0 ? null : { items, prefix };
+	}
+
+	private async modelSuggestions(input: string, signal: AbortSignal): Promise<AutocompleteSuggestions | null> {
+		const match = /^\/model\s+([^\s]*)$/u.exec(input);
+		if (!match) return null;
+		const prefix = match[1] ?? "";
+		const models = await this.#session.listModels();
+		if (signal.aborted) return null;
+		const items = fuzzyFilter(
+			models.map((model) => ({
+				value: `${model.provider}/${model.id}`,
+				label: model.id,
+				description: model.provider,
+			})),
+			prefix,
+			(item) => `${item.value} ${item.label} ${item.description}`,
+		);
 		return items.length === 0 ? null : { items, prefix };
 	}
 
