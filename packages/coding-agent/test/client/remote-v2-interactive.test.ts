@@ -236,7 +236,9 @@ describe("remote v2 interactive command boundary", () => {
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/detach");
 		expect(parseRemoteV2Command("/clone")).toEqual({ name: "clone" });
 		expect(parseRemoteV2Command("/copy")).toEqual({ name: "copy" });
+		expect(parseRemoteV2Command("/changelog")).toEqual({ name: "changelog" });
 		expect(parseRemoteV2Command("/fork")).toEqual({ name: "fork" });
+		expect(parseRemoteV2Command("/hotkeys")).toEqual({ name: "hotkeys" });
 		expect(parseRemoteV2Command("/tree")).toEqual({ name: "tree" });
 		expect(parseRemoteV2Command("/follow-up  continue this")).toEqual({ name: "follow-up", text: "continue this" });
 		expect(parseRemoteV2Command("/agent-follow-up agent-1 continue work")).toEqual({
@@ -539,6 +541,24 @@ describe("remote v2 interactive command boundary", () => {
 
 		expect(await adapter.execute("/settings")).toEqual({ kind: "status", text: "settings opened" });
 		expect(openSettings).toHaveBeenCalledOnce();
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("opens injected client-local command output without a server command", async () => {
+		const { client, commands } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const showChangelog = vi.fn();
+		const showHotkeys = vi.fn();
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { showChangelog, showHotkeys });
+
+		expect(await adapter.execute("/changelog")).toEqual({ kind: "status", text: "changelog opened" });
+		expect(await adapter.execute("/hotkeys")).toEqual({ kind: "status", text: "keyboard shortcuts opened" });
+		expect(showChangelog).toHaveBeenCalledOnce();
+		expect(showHotkeys).toHaveBeenCalledOnce();
+		expect(commands).not.toContain("turn/start");
 
 		await adapter.dispose();
 		client.dispose();

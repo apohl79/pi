@@ -111,6 +111,7 @@ import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
+import { createChangelogCommandOutput } from "./command-output.ts";
 import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
@@ -6286,23 +6287,7 @@ export class InteractiveMode {
 	}
 
 	private handleChangelogCommand(): void {
-		const changelogPath = getChangelogPath();
-		const allEntries = parseChangelog(changelogPath);
-
-		const changelogMarkdown =
-			allEntries.length > 0
-				? allEntries
-						.reverse()
-						.map((e) => normalizeChangelogLinks(e.content, e))
-						.join("\n\n")
-				: "No changelog entries found.";
-
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DynamicBorder());
-		this.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "What's New")), 1, 0));
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Markdown(changelogMarkdown, 1, 1, this.getMarkdownThemeWithSettings()));
-		this.chatContainer.addChild(new DynamicBorder());
+		this.chatContainer.addChild(createChangelogCommandOutput(this.getMarkdownThemeWithSettings()));
 		this.ui.requestRender();
 	}
 
@@ -6321,6 +6306,10 @@ export class InteractiveMode {
 	}
 
 	private handleHotkeysCommand(): void {
+		this.renderHotkeysCommandOutput();
+	}
+
+	private renderHotkeysCommandOutput(): void {
 		// Navigation keybindings
 		const cursorUp = this.getEditorKeyDisplay("tui.editor.cursorUp");
 		const cursorDown = this.getEditorKeyDisplay("tui.editor.cursorDown");

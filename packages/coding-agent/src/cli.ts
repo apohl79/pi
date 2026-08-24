@@ -26,6 +26,7 @@ import { ModelRuntime } from "./core/model-runtime.ts";
 import type { SessionEntry, SessionInfo, SessionTreeNode } from "./core/session-manager.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { main } from "./main.ts";
+import { createChangelogCommandOutput, createHotkeysCommandOutput } from "./modes/interactive/command-output.ts";
 import { BashExecutionComponent } from "./modes/interactive/components/bash-execution.ts";
 import { CustomEditor } from "./modes/interactive/components/custom-editor.ts";
 import { ExtensionEditorComponent } from "./modes/interactive/components/extension-editor.ts";
@@ -41,7 +42,13 @@ import { TreeSelectorComponent } from "./modes/interactive/components/tree-selec
 import { UserMessageSelectorComponent } from "./modes/interactive/components/user-message-selector.ts";
 import { editInExternalEditor } from "./modes/interactive/external-editor.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
-import { getAvailableThemes, getEditorTheme, initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
+import {
+	getAvailableThemes,
+	getEditorTheme,
+	getMarkdownTheme,
+	initTheme,
+	stopThemeWatcher,
+} from "./modes/interactive/theme/theme.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "./server/daemon-runtime.ts";
 import { StatuslineRunner } from "./server/statusline.ts";
 import { copyToClipboard } from "./utils/clipboard.ts";
@@ -795,6 +802,10 @@ async function runCli(): Promise<void> {
 				},
 				editor,
 				{
+					showChangelog: () =>
+						view.addTransientTranscriptComponent(createChangelogCommandOutput(getMarkdownTheme())),
+					showHotkeys: () =>
+						view.addTransientTranscriptComponent(createHotkeysCommandOutput(keybindings, getMarkdownTheme())),
 					openSettings: showSettings,
 					openModel: showModel,
 					openResume: showResume,

@@ -21,6 +21,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/compact",
 	"/clone",
 	"/copy",
+	"/changelog",
 	"/dequeue",
 	"/detach",
 	"/follow-up",
@@ -30,6 +31,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/goal-resume",
 	"/input",
 	"/input-cancel",
+	"/hotkeys",
 	"/interrupt-child",
 	"/name",
 	"/name-auto",
@@ -88,6 +90,7 @@ export type RemoteV2Command =
 	| { readonly name: "compact"; readonly instructions?: string }
 	| { readonly name: "clone" }
 	| { readonly name: "copy" }
+	| { readonly name: "changelog" }
 	| { readonly name: "dequeue"; readonly entryId: string }
 	| { readonly name: "detach" }
 	| { readonly name: "follow-up"; readonly text: string }
@@ -97,6 +100,7 @@ export type RemoteV2Command =
 	| { readonly name: "goal-resume" }
 	| { readonly name: "input"; readonly requestId: string; readonly answers: Readonly<Record<string, string>> }
 	| { readonly name: "input-cancel"; readonly requestId: string }
+	| { readonly name: "hotkeys" }
 	| { readonly name: "model" }
 	| { readonly name: "model"; readonly provider: string; readonly id: string }
 	| { readonly name: "name"; readonly value?: string; readonly clear?: boolean; readonly generate?: boolean }
@@ -292,8 +296,10 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		name === "/abort" ||
 		name === "/clone" ||
 		name === "/copy" ||
+		name === "/changelog" ||
 		name === "/detach" ||
 		name === "/fork" ||
+		name === "/hotkeys" ||
 		name === "/quit" ||
 		name === "/release-control" ||
 		name === "/resume" ||
@@ -484,6 +490,8 @@ export class RemoteV2InteractiveAttachment {
 	readonly #readClipboardImage: () => Promise<ClipboardImage | null>;
 	readonly #readClipboardText: () => Promise<string | null>;
 	readonly #executeShell: ((command: string, excludeFromContext: boolean) => Promise<void>) | undefined;
+	readonly #showChangelog: (() => void) | undefined;
+	readonly #showHotkeys: (() => void) | undefined;
 	readonly #cwd: string | undefined;
 
 	constructor(
@@ -502,6 +510,8 @@ export class RemoteV2InteractiveAttachment {
 			readonly readClipboardImage?: () => Promise<ClipboardImage | null>;
 			readonly readClipboardText?: () => Promise<string | null>;
 			readonly executeShell?: (command: string, excludeFromContext: boolean) => Promise<void>;
+			readonly showChangelog?: () => void;
+			readonly showHotkeys?: () => void;
 			readonly cwd?: string;
 		} = {},
 	) {
@@ -519,6 +529,8 @@ export class RemoteV2InteractiveAttachment {
 		this.#readClipboardImage = options.readClipboardImage ?? readClipboardImage;
 		this.#readClipboardText = options.readClipboardText ?? readClipboardText;
 		this.#executeShell = options.executeShell;
+		this.#showChangelog = options.showChangelog;
+		this.#showHotkeys = options.showHotkeys;
 		this.#cwd = options.cwd;
 		if (editor !== undefined) {
 			editor.setAutocompleteProvider(new RemoteV2AutocompleteProvider(attachment.session));
@@ -635,6 +647,10 @@ export class RemoteV2InteractiveAttachment {
 				await this.#copyText(text);
 				return { kind: "status", text: "Copied last agent message to clipboard" };
 			}
+			case "changelog":
+				if (this.#showChangelog === undefined) throw new Error("Remote changelog is unavailable");
+				this.#showChangelog();
+				return { kind: "status", text: "changelog opened" };
 			case "dequeue":
 				this.#recalledContent = await this.session.cancelQueued(command.entryId);
 				this.#recalledText = this.#recalledContent === undefined ? "" : displayPromptContent(this.#recalledContent);
@@ -661,6 +677,10 @@ export class RemoteV2InteractiveAttachment {
 			case "input-cancel":
 				await this.session.cancelInput(command.requestId);
 				return { kind: "status", text: "input cancelled" };
+			case "hotkeys":
+				if (this.#showHotkeys === undefined) throw new Error("Remote hotkeys are unavailable");
+				this.#showHotkeys();
+				return { kind: "status", text: "keyboard shortcuts opened" };
 			case "model":
 				if (!("provider" in command)) {
 					if (this.#openModel === undefined) throw new Error("Remote model selection is unavailable");
