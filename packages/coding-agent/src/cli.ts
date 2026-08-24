@@ -20,12 +20,14 @@ import { FooterDataProvider } from "./core/footer-data-provider.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { KeybindingsManager } from "./core/keybindings.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
+import type { SessionInfo } from "./core/session-manager.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { main } from "./main.ts";
 import { CustomEditor } from "./modes/interactive/components/custom-editor.ts";
 import { InteractiveLayout } from "./modes/interactive/components/interactive-layout.ts";
 import { formatInteractiveTerminalTitle } from "./modes/interactive/components/interactive-title.ts";
 import { ModelSelectorComponent } from "./modes/interactive/components/model-selector.ts";
+import { SessionSelectorComponent } from "./modes/interactive/components/session-selector.ts";
 import { SettingsSelectorComponent } from "./modes/interactive/components/settings-selector.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
 import { getAvailableThemes, getEditorTheme, initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
@@ -382,6 +384,50 @@ async function runCli(): Promise<void> {
 				tui.setFocus(selector.getSettingsList());
 				tui.requestRender();
 			};
+			const showResume = () => {
+				const toSessionInfo = (entry: Awaited<ReturnType<typeof session.listSessions>>[number]): SessionInfo => ({
+					path: entry.id,
+					id: entry.id,
+					cwd: entry.cwd ?? "",
+					...(entry.sessionName === undefined ? {} : { name: entry.sessionName }),
+					...(entry.parentSessionId === undefined ? {} : { parentSessionPath: entry.parentSessionId }),
+					created: new Date(entry.createdAt),
+					modified: new Date(entry.updatedAt),
+					messageCount: 0,
+					firstMessage: entry.sessionName ?? entry.id,
+					allMessagesText: entry.sessionName ?? entry.id,
+				});
+				const loadSessions = async (currentDirectoryOnly: boolean): Promise<SessionInfo[]> =>
+					(await session.listSessions())
+						.filter((entry) => !currentDirectoryOnly || entry.cwd === process.cwd())
+						.map(toSessionInfo);
+				const done = () => restoreTranscript();
+				const selector = new SessionSelectorComponent(
+					() => loadSessions(true),
+					() => loadSessions(false),
+					(sessionId) => {
+						void session
+							.attach(sessionId)
+							.then(() => {
+								view.showStatus("Resumed session");
+								done();
+							})
+							.catch((error: unknown) => {
+								view.showStatus(error instanceof Error ? error.message : String(error));
+								done();
+							});
+					},
+					done,
+					done,
+					() => tui.requestRender(),
+					{ allowDelete: false, keybindings },
+					session.id,
+				);
+				transcriptContainer.clear();
+				transcriptContainer.addChild(selector);
+				tui.setFocus(selector);
+				tui.requestRender();
+			};
 			attachment = new RemoteV2InteractiveAttachment(
 				{
 					session,
@@ -393,7 +439,7 @@ async function runCli(): Promise<void> {
 					dispose: async () => view.dispose(),
 				},
 				editor,
-				{ openSettings: showSettings, openModel: showModel, cwd: process.cwd() },
+				{ openSettings: showSettings, openModel: showModel, openResume: showResume, cwd: process.cwd() },
 			);
 			statusline = new RemoteV2StatuslineComponent(
 				session,

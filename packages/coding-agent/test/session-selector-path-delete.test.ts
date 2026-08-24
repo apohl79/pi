@@ -153,6 +153,28 @@ describe("session selector path/delete interactions", () => {
 		expect(confirmationChanges).toEqual([sessions[0]!.path]);
 	});
 
+	it("does not expose filesystem deletion when the host disables it", async () => {
+		const sessions = [makeSession({ id: "remote-session", path: "remote-session" })];
+		const selector = new SessionSelectorComponent(
+			async () => sessions,
+			async () => [],
+			() => {},
+			() => {},
+			() => {},
+			() => {},
+			{ allowDelete: false, keybindings },
+		);
+		await flushPromises();
+
+		const list = selector.getSessionList();
+		const confirmationChanges: Array<string | null> = [];
+		list.onDeleteConfirmationChange = (path) => confirmationChanges.push(path);
+		list.handleInput(CTRL_D);
+
+		expect(confirmationChanges).toEqual([]);
+		expect(stripAnsi(selector.render(120).join("\n"))).not.toContain("delete");
+	});
+
 	it("enters confirmation mode on Ctrl+Backspace when search query is empty", async () => {
 		const sessions = [makeSession({ id: "a" }), makeSession({ id: "b" })];
 

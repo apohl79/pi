@@ -65,6 +65,7 @@ class SessionSelectorHeader implements Component {
 	private statusMessage: { type: "info" | "error"; message: string } | null = null;
 	private statusTimeout: ReturnType<typeof setTimeout> | null = null;
 	private showRenameHint = false;
+	private showDeleteHint = true;
 
 	constructor(scope: SessionScope, sortMode: SortMode, nameFilter: NameFilter, requestRender: () => void) {
 		this.scope = scope;
@@ -101,6 +102,10 @@ class SessionSelectorHeader implements Component {
 
 	setShowRenameHint(show: boolean): void {
 		this.showRenameHint = show;
+	}
+
+	setShowDeleteHint(show: boolean): void {
+		this.showDeleteHint = show;
 	}
 
 	setConfirmingDeletePath(path: string | null): void {
@@ -171,9 +176,9 @@ class SessionSelectorHeader implements Component {
 			const hint2Parts = [
 				keyHint("app.session.toggleSort", "sort"),
 				keyHint("app.session.toggleNamedFilter", "named"),
-				keyHint("app.session.delete", "delete"),
 				keyHint("app.session.togglePath", `path ${pathState}`),
 			];
+			if (this.showDeleteHint) hint2Parts.splice(2, 0, keyHint("app.session.delete", "delete"));
 			if (this.showRenameHint) {
 				hint2Parts.push(keyHint("app.session.rename", "rename"));
 			}
@@ -296,6 +301,7 @@ class SessionList implements Component, Focusable {
 	private showPath = false;
 	private confirmingDeletePath: string | null = null;
 	private currentSessionCanonicalPath?: string;
+	private allowDelete: boolean;
 	public onSelect?: (sessionPath: string) => void;
 	public onCancel?: () => void;
 	public onExit: () => void = () => {};
@@ -326,6 +332,7 @@ class SessionList implements Component, Focusable {
 		nameFilter: NameFilter,
 		keybindings: KeybindingsManager,
 		currentSessionFilePath?: string,
+		allowDelete = true,
 	) {
 		this.allSessions = sessions;
 		this.filteredSessions = [];
@@ -335,6 +342,7 @@ class SessionList implements Component, Focusable {
 		this.nameFilter = nameFilter;
 		this.keybindings = keybindings;
 		this.currentSessionCanonicalPath = canonicalizePath(currentSessionFilePath);
+		this.allowDelete = allowDelete;
 		this.filterSessions("");
 
 		// Handle Enter in search input - select current item
@@ -573,7 +581,7 @@ class SessionList implements Component, Focusable {
 		}
 
 		// Ctrl+D: initiate delete confirmation (useful on terminals that don't distinguish Ctrl+Backspace from Backspace)
-		if (kb.matches(keyData, "app.session.delete")) {
+		if (this.allowDelete && kb.matches(keyData, "app.session.delete")) {
 			this.startDeleteConfirmationForSelectedSession();
 			return;
 		}
@@ -589,7 +597,7 @@ class SessionList implements Component, Focusable {
 
 		// Ctrl+Backspace: non-invasive convenience alias for delete
 		// Only triggers deletion when the query is empty; otherwise it is forwarded to the input
-		if (kb.matches(keyData, "app.session.deleteNoninvasive")) {
+		if (this.allowDelete && kb.matches(keyData, "app.session.deleteNoninvasive")) {
 			if (this.searchInput.getValue().length > 0) {
 				this.searchInput.handleInput(keyData);
 				this.filterSessions(this.searchInput.getValue());
@@ -756,6 +764,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		options?: {
 			renameSession?: (sessionPath: string, currentName: string | undefined) => Promise<void>;
 			showRenameHint?: boolean;
+			allowDelete?: boolean;
 			keybindings?: KeybindingsManager;
 		},
 		currentSessionFilePath?: string,
@@ -770,6 +779,8 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		this.renameSession = renameSession;
 		this.canRename = !!renameSession;
 		this.header.setShowRenameHint(options?.showRenameHint ?? this.canRename);
+		const allowDelete = options?.allowDelete ?? true;
+		this.header.setShowDeleteHint(allowDelete);
 
 		// Create session list (starts empty, will be populated after load)
 		this.sessionList = new SessionList(
@@ -779,6 +790,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 			this.nameFilter,
 			this.keybindings,
 			currentSessionFilePath,
+			allowDelete,
 		);
 
 		this.buildBaseLayout(this.sessionList);
@@ -829,31 +841,32 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		};
 
 		// Handle session deletion
-		this.sessionList.onDeleteSession = async (sessionPath: string) => {
-			const result = await deleteSessionFile(sessionPath);
+		if (allowDelete)
+			this.sessionList.onDeleteSession = async (sessionPath: string) => {
+				const result = await deleteSessionFile(sessionPath);
 
-			if (result.ok) {
-				if (this.currentSessions) {
-					this.currentSessions = this.currentSessions.filter((s) => s.path !== sessionPath);
+				if (result.ok) {
+					if (this.currentSessions) {
+						this.currentSessions = this.currentSessions.filter((s) => s.path !== sessionPath);
+					}
+					if (this.allSessions) {
+						this.allSessions = this.allSessions.filter((s) => s.path !== sessionPath);
+					}
+
+					const sessions = this.scope === "all" ? (this.allSessions ?? []) : (this.currentSessions ?? []);
+					const showCwd = this.scope === "all";
+					this.sessionList.setSessions(sessions, showCwd);
+
+					const msg = result.method === "trash" ? "Session moved to trash" : "Session deleted";
+					this.header.setStatusMessage({ type: "info", message: msg }, 2000);
+					await this.refreshSessionsAfterMutation();
+				} else {
+					const errorMessage = result.error ?? "Unknown error";
+					this.header.setStatusMessage({ type: "error", message: `Failed to delete: ${errorMessage}` }, 3000);
 				}
-				if (this.allSessions) {
-					this.allSessions = this.allSessions.filter((s) => s.path !== sessionPath);
-				}
 
-				const sessions = this.scope === "all" ? (this.allSessions ?? []) : (this.currentSessions ?? []);
-				const showCwd = this.scope === "all";
-				this.sessionList.setSessions(sessions, showCwd);
-
-				const msg = result.method === "trash" ? "Session moved to trash" : "Session deleted";
-				this.header.setStatusMessage({ type: "info", message: msg }, 2000);
-				await this.refreshSessionsAfterMutation();
-			} else {
-				const errorMessage = result.error ?? "Unknown error";
-				this.header.setStatusMessage({ type: "error", message: `Failed to delete: ${errorMessage}` }, 3000);
-			}
-
-			this.requestRender();
-		};
+				this.requestRender();
+			};
 
 		// Start loading current sessions immediately
 		this.loadCurrentSessions();

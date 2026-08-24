@@ -439,6 +439,20 @@ describe("remote v2 interactive command boundary", () => {
 		client.dispose();
 	});
 
+	test("opens the injected session selector instead of a server turn-resume command", async () => {
+		const { client } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const openResume = vi.fn();
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { openResume });
+
+		expect(await adapter.execute("/resume")).toEqual({ kind: "status", text: "session selector opened" });
+		expect(openResume).toHaveBeenCalledOnce();
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
 	test("provides remote command and file completions to the standard editor", async () => {
 		const { client } = clientWithRequests();
 		await client.connect();

@@ -284,6 +284,12 @@ export class RemoteV2Session {
 		return this.#client.listModels();
 	}
 
+	/** Lists server-owned sessions available to this client connection. */
+	listSessions() {
+		this.#assertNotDisposed();
+		return this.#client.listSessions();
+	}
+
 	subscribe(listener: Listener): () => void {
 		this.#assertNotDisposed();
 		this.#listeners.add(listener);

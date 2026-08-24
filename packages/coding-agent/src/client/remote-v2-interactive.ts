@@ -367,17 +367,24 @@ export class RemoteV2InteractiveAttachment {
 	#recalledText: string | undefined;
 	readonly #openSettings: (() => void) | undefined;
 	readonly #openModel: (() => void) | undefined;
+	readonly #openResume: (() => void) | undefined;
 	readonly #cwd: string | undefined;
 
 	constructor(
 		attachment: RemoteV2SessionAttachment,
 		editor?: Editor,
-		options: { readonly openSettings?: () => void; readonly openModel?: () => void; readonly cwd?: string } = {},
+		options: {
+			readonly openSettings?: () => void;
+			readonly openModel?: () => void;
+			readonly openResume?: () => void;
+			readonly cwd?: string;
+		} = {},
 	) {
 		this.#attachment = attachment;
 		this.#editor = editor;
 		this.#openSettings = options.openSettings;
 		this.#openModel = options.openModel;
+		this.#openResume = options.openResume;
 		this.#cwd = options.cwd;
 		if (editor !== undefined) {
 			editor.setAutocompleteProvider(new RemoteV2AutocompleteProvider(attachment.session));
@@ -498,6 +505,10 @@ export class RemoteV2InteractiveAttachment {
 				await this.session.relinquishControl();
 				return { kind: "control", mode: "observer" };
 			case "resume":
+				if (this.#openResume !== undefined) {
+					this.#openResume();
+					return { kind: "status", text: "session selector opened" };
+				}
 				return operation(await this.session.resume());
 			case "rollback":
 				return operation(await this.session.rollback(command.turns));
