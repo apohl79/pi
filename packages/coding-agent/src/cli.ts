@@ -241,6 +241,26 @@ async function runCli(): Promise<void> {
 			restoreTranscript();
 			let statusline: RemoteV2StatuslineComponent;
 			let attachment: RemoteV2InteractiveAttachment;
+			const setSelectedModel = async (
+				selected: (typeof availableModels)[number],
+				persist: boolean,
+			): Promise<void> => {
+				const scopedThinking = scopedModels.find(
+					(scoped) => scoped.model.provider === selected.provider && scoped.model.id === selected.id,
+				)?.thinkingLevel;
+				const thinking =
+					scopedThinking ??
+					statuslineSettings.getModelThinkingLevel(selected.provider, selected.id) ??
+					statuslineSettings.getDefaultThinkingLevel() ??
+					DEFAULT_THINKING_LEVEL;
+				const modelOperation = await session.setModel({ provider: selected.provider, id: selected.id });
+				await session.waitForOperation(modelOperation);
+				const thinkingOperation = await session.setThinking(thinking);
+				await session.waitForOperation(thinkingOperation);
+				if (persist) statuslineSettings.setDefaultModelAndProvider(selected.provider, selected.id);
+				footer.invalidate();
+				view.showStatus(`Model: ${selected.name || selected.id}`);
+			};
 			const showModel = () => {
 				const snapshot = session.snapshot;
 				const currentModel = availableModels.find(
@@ -249,15 +269,8 @@ async function runCli(): Promise<void> {
 				const done = () => {
 					restoreTranscript();
 				};
-				const selectModel = (selected: (typeof availableModels)[number], persist: boolean) => {
-					void session
-						.setModel({ provider: selected.provider, id: selected.id })
-						.then(() => {
-							if (persist) statuslineSettings.setDefaultModelAndProvider(selected.provider, selected.id);
-							done();
-						})
-						.catch(() => done());
-				};
+				const selectModel = (selected: (typeof availableModels)[number], persist: boolean) =>
+					void setSelectedModel(selected, persist).then(done, done);
 				const defaultProvider = statuslineSettings.getDefaultProvider();
 				const defaultModelId = statuslineSettings.getDefaultModel();
 				const selector = new ModelSelectorComponent(
@@ -366,12 +379,8 @@ async function runCli(): Promise<void> {
 						? (currentIndex + 1) % cycleModels.length
 						: (currentIndex + cycleModels.length - 1) % cycleModels.length;
 				const next = cycleModels[nextIndex]!;
-				void session
-					.setModel({ provider: next.provider, id: next.id })
-					.then(() => {
-						footer.invalidate();
-						view.showStatus(`Switched to ${next.name || next.id}`);
-					})
+				void setSelectedModel(next, false)
+					.then(() => view.showStatus(`Switched to ${next.name || next.id}`))
 					.catch((error: unknown) => view.showStatus(error instanceof Error ? error.message : String(error)));
 			};
 			const showSettings = () => {
