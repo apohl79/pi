@@ -25,13 +25,18 @@ import { CustomEditor } from "../../src/modes/interactive/components/custom-edit
 import { getEditorTheme, initTheme } from "../../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../src/utils/ansi.ts";
 
-function snapshot(withQueue = false, id = "session-1", assistantText?: string): SessionSnapshotV2 {
+function snapshot(
+	withQueue = false,
+	id = "session-1",
+	assistantText?: string,
+	phase: SessionSnapshotV2["phase"] = "idle",
+): SessionSnapshotV2 {
 	return {
 		id,
 		nameRevision: 0,
 		revision: 1,
 		eventSeq: 1,
-		phase: "idle",
+		phase,
 		model: { provider: "faux", id: "model" },
 		thinkingLevel: "off",
 		transcript:
@@ -82,7 +87,11 @@ function snapshot(withQueue = false, id = "session-1", assistantText?: string): 
 	};
 }
 
-function clientWithRequests(withQueue = false, assistantText?: string): { client: PiClientV2; commands: string[] } {
+function clientWithRequests(
+	withQueue = false,
+	assistantText?: string,
+	phase: SessionSnapshotV2["phase"] = "idle",
+): { client: PiClientV2; commands: string[] } {
 	let handlers: ByteTransportHandlers | undefined;
 	const commands: string[] = [];
 	const transport: ByteTransport = {
@@ -134,7 +143,14 @@ function clientWithRequests(withQueue = false, assistantText?: string): { client
 									},
 								}
 							: message.request.command === "session/read"
-								? { session: snapshot(withQueue, message.request.sessionId ?? "session-1", assistantText) }
+								? {
+										session: snapshot(
+											withQueue,
+											message.request.sessionId ?? "session-1",
+											assistantText,
+											phase,
+										),
+									}
 								: message.request.command === "session/create"
 									? { session: snapshot(false, "session-2") }
 									: message.request.command === "session/fork"
@@ -444,6 +460,20 @@ describe("remote v2 interactive command boundary", () => {
 			"turn/start",
 			"session/detach",
 		]);
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("aborts an active server turn through the configured interrupt binding", async () => {
+		const { client, commands } = clientWithRequests(false, undefined, "turn");
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const editor = createEditor();
+		const adapter = new RemoteV2InteractiveAttachment(attached, editor);
+
+		editor.onEscape?.();
+		await vi.waitFor(() => expect(commands).toContain("turn/abort"));
+
 		await adapter.dispose();
 		client.dispose();
 	});

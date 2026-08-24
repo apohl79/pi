@@ -143,6 +143,7 @@ export type RemoteV2CommandResult =
 type RemoteFileAutocompleteItem = AutocompleteItem & Pick<RemoteV2FileCompletion, "kind" | "reference">;
 
 type RemoteInteractiveEditor = Editor & {
+	onEscape?: () => void;
 	onPasteImage?: () => void;
 	insertTextAtCursor?: (text: string) => void;
 };
@@ -591,6 +592,13 @@ export class RemoteV2InteractiveAttachment {
 		if (editor !== undefined) {
 			editor.setAutocompleteProvider(new RemoteV2AutocompleteProvider(attachment.session));
 			editor.onSubmit = (text) => this.submitEditorText(text);
+			editor.onEscape = () => {
+				if (this.session.phase !== "turn") return;
+				void this.session
+					.abort()
+					.then(() => this.view.showStatus("Aborting active turn"))
+					.catch((error: unknown) => this.view.showStatus(error instanceof Error ? error.message : String(error)));
+			};
 			editor.onPasteImage = () => {
 				void this.pasteClipboard().catch((error: unknown) => {
 					this.view.showStatus(error instanceof Error ? error.message : String(error));
