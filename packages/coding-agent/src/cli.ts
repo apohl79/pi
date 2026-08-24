@@ -17,7 +17,7 @@ import { isServerDefaultCompatible, parseArgs } from "./cli/args.ts";
 import { dispatchExperimentalCommand, isExperimentalCommand } from "./cli/experimental/dispatch.ts";
 import { RemoteV2InteractiveAttachment } from "./client/remote-v2-interactive.ts";
 import { RemoteV2FooterComponent, RemoteV2SessionView, RemoteV2StatuslineComponent } from "./client/remote-v2-view.ts";
-import { APP_NAME, getAgentDir, getDebugLogPath } from "./config.ts";
+import { APP_NAME, getAgentDir, getDebugLogPath, getShareViewerUrl } from "./config.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./core/defaults.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import { FooterDataProvider } from "./core/footer-data-provider.ts";
@@ -649,6 +649,41 @@ async function runCli(): Promise<void> {
 					await rm(temporaryDirectory, { recursive: true, force: true });
 				}
 			};
+			const runGitHubCli = async (
+				args: string[],
+			): Promise<{ readonly stdout: string; readonly stderr: string; readonly code: number | null }> =>
+				new Promise((resolve, reject) => {
+					const process = spawn("gh", args);
+					let stdout = "";
+					let stderr = "";
+					process.stdout?.on("data", (data: Buffer) => {
+						stdout += data.toString();
+					});
+					process.stderr?.on("data", (data: Buffer) => {
+						stderr += data.toString();
+					});
+					process.once("error", reject);
+					process.once("close", (code) => resolve({ stdout, stderr, code }));
+				});
+			const shareSession = async (): Promise<string> => {
+				const temporaryDirectory = await mkdtemp(join(agentDir, "share-"));
+				try {
+					const htmlPath = join(temporaryDirectory, "session.html");
+					const jsonlPath = join(temporaryDirectory, `${session.id}.jsonl`);
+					await writeFile(jsonlPath, await session.exportJsonl(), "utf8");
+					await exportFromFile(jsonlPath, { outputPath: htmlPath, themeName: statuslineSettings.getTheme() });
+					const auth = await runGitHubCli(["auth", "status"]);
+					if (auth.code !== 0) throw new Error("GitHub CLI is not logged in. Run 'gh auth login' first.");
+					const gist = await runGitHubCli(["gist", "create", "--public=false", htmlPath]);
+					if (gist.code !== 0) throw new Error(gist.stderr.trim() || "Failed to create GitHub gist");
+					const gistUrl = gist.stdout.trim();
+					const gistId = gistUrl.split("/").pop();
+					if (!gistId) throw new Error("Failed to parse gist ID from gh output");
+					return `Share URL: ${getShareViewerUrl(gistId)}\nGist: ${gistUrl}`;
+				} finally {
+					await rm(temporaryDirectory, { recursive: true, force: true });
+				}
+			};
 			const showResume = () => {
 				const toSessionInfo = (entry: Awaited<ReturnType<typeof session.listSessions>>[number]): SessionInfo => ({
 					path: entry.id,
@@ -899,6 +934,7 @@ async function runCli(): Promise<void> {
 					openThinking: showThinking,
 					openTrust: showTrust,
 					exportSession,
+					shareSession,
 					quit: () => finishInteractive(),
 					executeShell: async (command, excludeFromContext) => {
 						const component = new BashExecutionComponent(command, tui, excludeFromContext);

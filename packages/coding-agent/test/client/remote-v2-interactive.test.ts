@@ -243,6 +243,7 @@ describe("remote v2 interactive command boundary", () => {
 	test("parses discoverable commands without changing v1 slash commands", () => {
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/detach");
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/export");
+		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/share");
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/trust");
 		expect(parseRemoteV2Command("/clone")).toEqual({ name: "clone" });
 		expect(parseRemoteV2Command("/copy")).toEqual({ name: "copy" });
@@ -595,6 +596,24 @@ describe("remote v2 interactive command boundary", () => {
 			text: "Session exported to: transcript.jsonl",
 		});
 		expect(exportSession).toHaveBeenCalledWith("transcript.jsonl");
+		expect(commands).not.toContain("turn/start");
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("shares through the injected client-local output boundary", async () => {
+		const { client, commands } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const shareSession = vi.fn(async () => "Share URL: https://pi.dev/#gist\nGist: https://gist.github.com/gist");
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { shareSession });
+
+		expect(await adapter.execute("/share")).toEqual({
+			kind: "status",
+			text: "Share URL: https://pi.dev/#gist\nGist: https://gist.github.com/gist",
+		});
+		expect(shareSession).toHaveBeenCalledOnce();
 		expect(commands).not.toContain("turn/start");
 
 		await adapter.dispose();

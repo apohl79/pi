@@ -48,6 +48,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/settings",
 	"/session",
 	"/scoped-models",
+	"/share",
 	"/statusline",
 	"/steer",
 	"/take-control",
@@ -122,6 +123,7 @@ export type RemoteV2Command =
 	| { readonly name: "settings" }
 	| { readonly name: "session" }
 	| { readonly name: "scoped-models" }
+	| { readonly name: "share" }
 	| { readonly name: "statusline"; readonly command?: string }
 	| { readonly name: "steer"; readonly text: string }
 	| { readonly name: "take-control" }
@@ -314,6 +316,7 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		name === "/resume" ||
 		name === "/session" ||
 		name === "/scoped-models" ||
+		name === "/share" ||
 		name === "/take-control" ||
 		name === "/tree" ||
 		name === "/trust"
@@ -515,6 +518,7 @@ export class RemoteV2InteractiveAttachment {
 	readonly #openThinking: (() => void) | undefined;
 	readonly #openTrust: (() => void) | undefined;
 	readonly #exportSession: ((outputPath?: string) => Promise<string>) | undefined;
+	readonly #shareSession: (() => Promise<string>) | undefined;
 	readonly #quit: (() => void) | undefined;
 	readonly #copyText: (text: string) => Promise<void>;
 	readonly #readClipboardImage: () => Promise<ClipboardImage | null>;
@@ -539,6 +543,7 @@ export class RemoteV2InteractiveAttachment {
 			readonly openThinking?: () => void;
 			readonly openTrust?: () => void;
 			readonly exportSession?: (outputPath?: string) => Promise<string>;
+			readonly shareSession?: () => Promise<string>;
 			readonly quit?: () => void;
 			readonly copyText?: (text: string) => Promise<void>;
 			readonly readClipboardImage?: () => Promise<ClipboardImage | null>;
@@ -562,6 +567,7 @@ export class RemoteV2InteractiveAttachment {
 		this.#openThinking = options.openThinking;
 		this.#openTrust = options.openTrust;
 		this.#exportSession = options.exportSession;
+		this.#shareSession = options.shareSession;
 		this.#quit = options.quit;
 		this.#copyText = options.copyText ?? copyToClipboard;
 		this.#readClipboardImage = options.readClipboardImage ?? readClipboardImage;
@@ -705,6 +711,9 @@ export class RemoteV2InteractiveAttachment {
 			case "export":
 				if (this.#exportSession === undefined) throw new Error("Remote session export is unavailable");
 				return { kind: "status", text: `Session exported to: ${await this.#exportSession(command.outputPath)}` };
+			case "share":
+				if (this.#shareSession === undefined) throw new Error("Remote session sharing is unavailable");
+				return { kind: "status", text: await this.#shareSession() };
 			case "follow-up":
 				return operation(await this.session.followUp(command.text));
 			case "fork":
