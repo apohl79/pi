@@ -14,8 +14,24 @@ export const PROTOCOL_V2_VERSION = 2 as const;
 const IdSchema = Type.String({ minLength: 1 });
 const TimestampSchema = Type.Integer({ minimum: 0 });
 const NonNegativeIntegerSchema = Type.Integer({ minimum: 0 });
+const MimeTypeSchema = Type.String({
+	pattern: "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$",
+});
+const ImageMimeTypeSchema = Type.String({
+	pattern: "^image/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$",
+});
 const StrictObject = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
 	Type.Object(properties, { additionalProperties: false });
+
+export const CompactionPolicySchema = StrictObject({
+	enabled: Type.Boolean(),
+	contextWindow: Type.Integer({ minimum: 1 }),
+	reserveTokens: NonNegativeIntegerSchema,
+	keepRecentTokens: NonNegativeIntegerSchema,
+	triggerTokens: NonNegativeIntegerSchema,
+	source: Type.Union([Type.Literal("global"), Type.Literal("model"), Type.Literal("mixed")]),
+});
+export type CompactionPolicy = Static<typeof CompactionPolicySchema>;
 
 export const SessionPhaseV2Schema = Type.Union([
 	Type.Literal("idle"),
@@ -43,6 +59,8 @@ export const OperationSummarySchema = StrictObject({
 	state: OperationStateSchema,
 	acceptedSeq: NonNegativeIntegerSchema,
 	terminalSeq: Type.Optional(NonNegativeIntegerSchema),
+	model: Type.Optional(ModelRefSchema),
+	compactionPolicy: Type.Optional(CompactionPolicySchema),
 });
 export type OperationSummary = Static<typeof OperationSummarySchema>;
 
@@ -50,6 +68,8 @@ export const OperationAcceptedSchema = StrictObject({
 	operationId: IdSchema,
 	sessionRevision: NonNegativeIntegerSchema,
 	eventSeq: NonNegativeIntegerSchema,
+	model: Type.Optional(ModelRefSchema),
+	compactionPolicy: Type.Optional(CompactionPolicySchema),
 });
 export type OperationAccepted = Static<typeof OperationAcceptedSchema>;
 
@@ -71,9 +91,11 @@ export type EventCursor = Static<typeof EventCursorSchema>;
 
 export const PromptContentSchema = Type.Union([
 	StrictObject({ type: Type.Literal("text"), text: Type.String() }),
-	StrictObject({ type: Type.Literal("image"), digest: IdSchema, mimeType: Type.String({ minLength: 1 }) }),
-	StrictObject({ type: Type.Literal("blob"), digest: IdSchema, mimeType: Type.String({ minLength: 1 }) }),
+	StrictObject({ type: Type.Literal("image"), digest: IdSchema, mimeType: ImageMimeTypeSchema }),
+	StrictObject({ type: Type.Literal("blob"), digest: IdSchema, mimeType: MimeTypeSchema }),
+	StrictObject({ type: Type.Literal("mention"), name: IdSchema, path: IdSchema }),
 ]);
+export type PromptContent = Static<typeof PromptContentSchema>;
 
 export const QueuedInputSchema = StrictObject({
 	id: IdSchema,
@@ -120,6 +142,17 @@ export const GoalSnapshotSchema = StrictObject({
 });
 export type GoalSnapshot = Static<typeof GoalSnapshotSchema>;
 
+export const UsageAggregateSchema = StrictObject({
+	input: NonNegativeIntegerSchema,
+	output: NonNegativeIntegerSchema,
+	cacheRead: NonNegativeIntegerSchema,
+	cacheWrite: NonNegativeIntegerSchema,
+	imageUnits: Type.Optional(NonNegativeIntegerSchema),
+	costUsd: Type.Optional(Type.Number({ minimum: 0 })),
+	pricingState: Type.Union([Type.Literal("known"), Type.Literal("unknown"), Type.Literal("subscription")]),
+});
+export type UsageAggregate = Static<typeof UsageAggregateSchema>;
+
 export const AgentSummarySchema = StrictObject({
 	id: IdSchema,
 	path: IdSchema,
@@ -133,18 +166,10 @@ export const AgentSummarySchema = StrictObject({
 		Type.Literal("interrupted"),
 	]),
 	model: ModelRefSchema,
+	startedAt: Type.Optional(TimestampSchema),
+	usage: Type.Optional(UsageAggregateSchema),
 });
 export type AgentSummary = Static<typeof AgentSummarySchema>;
-
-export const UsageAggregateSchema = StrictObject({
-	input: NonNegativeIntegerSchema,
-	output: NonNegativeIntegerSchema,
-	cacheRead: NonNegativeIntegerSchema,
-	cacheWrite: NonNegativeIntegerSchema,
-	costUsd: Type.Optional(Type.Number({ minimum: 0 })),
-	pricingState: Type.Union([Type.Literal("known"), Type.Literal("unknown"), Type.Literal("subscription")]),
-});
-export type UsageAggregate = Static<typeof UsageAggregateSchema>;
 
 export const ContextUsageSchema = StrictObject({
 	inputTokens: NonNegativeIntegerSchema,
@@ -156,22 +181,17 @@ export const InstructionProfileSummarySchema = StrictObject({
 	id: IdSchema,
 	source: Type.Union([Type.Literal("text"), Type.Literal("file")]),
 	contentHash: IdSchema,
+	byteLength: Type.Optional(NonNegativeIntegerSchema),
+	estimatedTokens: Type.Optional(NonNegativeIntegerSchema),
 });
-
-export const CompactionPolicySchema = StrictObject({
-	enabled: Type.Boolean(),
-	contextWindow: Type.Integer({ minimum: 1 }),
-	reserveTokens: NonNegativeIntegerSchema,
-	keepRecentTokens: NonNegativeIntegerSchema,
-	triggerTokens: NonNegativeIntegerSchema,
-	source: Type.Union([Type.Literal("global"), Type.Literal("model"), Type.Literal("mixed")]),
-});
+export type InstructionProfileSummary = Static<typeof InstructionProfileSummarySchema>;
 
 export const DiagnosticsSnapshotSchema = StrictObject({
 	capture: Type.Union([Type.Literal("metadata"), Type.Literal("encrypted")]),
 	degraded: Type.Boolean(),
 	lastCriticalEventSeq: NonNegativeIntegerSchema,
 });
+export type DiagnosticsSnapshot = Static<typeof DiagnosticsSnapshotSchema>;
 
 export const PersistenceSnapshotSchema = StrictObject({
 	schemaVersion: NonNegativeIntegerSchema,
@@ -191,6 +211,7 @@ export const SessionNameSourceSchema = Type.Union([
 
 export const SessionSnapshotV2Schema = StrictObject({
 	id: IdSchema,
+	agentPath: Type.Optional(IdSchema),
 	name: Type.Optional(Type.String()),
 	nameSource: Type.Optional(SessionNameSourceSchema),
 	nameRevision: NonNegativeIntegerSchema,
@@ -202,6 +223,9 @@ export const SessionSnapshotV2Schema = StrictObject({
 	thinkingLevel: ThinkingLevelSchema,
 	transcript: Type.Array(TranscriptItemSchema),
 	queues: QueueSnapshotSchema,
+	steeringMode: Type.Optional(Type.Union([Type.Literal("all"), Type.Literal("one-at-a-time")])),
+	followUpMode: Type.Optional(Type.Union([Type.Literal("all"), Type.Literal("one-at-a-time")])),
+	autoRetryEnabled: Type.Optional(Type.Boolean()),
 	plan: Type.Optional(PlanSnapshotSchema),
 	goal: Type.Optional(GoalSnapshotSchema),
 	agents: Type.Array(AgentSummarySchema),
@@ -245,19 +269,26 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("session/detach"),
 	Type.Literal("session/read"),
 	Type.Literal("session/delete"),
+	Type.Literal("session/fork"),
 	Type.Literal("session/name/set"),
 	Type.Literal("session/name/generate"),
 	Type.Literal("session/name/auto/set"),
 	Type.Literal("turn/start"),
 	Type.Literal("turn/steer"),
 	Type.Literal("turn/followUp"),
+	Type.Literal("turn/queue/cancel"),
 	Type.Literal("turn/abort"),
 	Type.Literal("turn/resume"),
 	Type.Literal("turn/rollback"),
+	Type.Literal("turn/compact"),
 	Type.Literal("operation/read"),
 	Type.Literal("model/list"),
 	Type.Literal("session/model/set"),
 	Type.Literal("session/thinking/set"),
+	Type.Literal("session/steering-mode/set"),
+	Type.Literal("session/follow-up-mode/set"),
+	Type.Literal("session/compaction/set"),
+	Type.Literal("session/retry/set"),
 	Type.Literal("agent/spawn"),
 	Type.Literal("agent/list"),
 	Type.Literal("agent/wait"),
@@ -265,6 +296,7 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("agent/followUp"),
 	Type.Literal("agent/interrupt"),
 	Type.Literal("process/start"),
+	Type.Literal("process/list"),
 	Type.Literal("process/write"),
 	Type.Literal("process/wait"),
 	Type.Literal("process/terminate"),
@@ -283,6 +315,7 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("plugin/list"),
 	Type.Literal("plugin/read"),
 	Type.Literal("plugin/install"),
+	Type.Literal("plugin/upgrade"),
 	Type.Literal("plugin/uninstall"),
 	Type.Literal("plugin/enable"),
 	Type.Literal("plugin/disable"),
@@ -293,6 +326,7 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("app/list"),
 	Type.Literal("app/read"),
 	Type.Literal("app/auth/start"),
+	Type.Literal("app/auth/complete"),
 	Type.Literal("blob/put"),
 	Type.Literal("blob/read"),
 	Type.Literal("blob/stat"),
@@ -365,10 +399,28 @@ export const EventEnvelopeV2Schema = StrictObject({
 });
 export type EventEnvelopeV2 = Static<typeof EventEnvelopeV2Schema>;
 
+export const ClientDiagnosticManifestV2Schema = StrictObject({
+	clientInstanceId: Type.Optional(Type.String({ minLength: 1 })),
+	runtime: Type.String({ minLength: 1 }),
+	platform: Type.String({ minLength: 1 }),
+	arch: Type.String({ minLength: 1 }),
+	buildVersion: Type.Optional(Type.String({ minLength: 1 })),
+	forkCommit: Type.Optional(Type.String({ minLength: 1 })),
+	upstreamBaseCommit: Type.Optional(Type.String({ minLength: 1 })),
+	configHash: Type.Optional(Type.String({ minLength: 1 })),
+});
+export type ClientDiagnosticManifestV2 = Static<typeof ClientDiagnosticManifestV2Schema>;
+
 export const ClientHelloV2Schema = StrictObject({
 	type: Type.Literal("hello"),
 	version: Type.Literal(PROTOCOL_V2_VERSION),
 	lastEvent: Type.Optional(EventCursorSchema),
+	diagnostics: Type.Optional(
+		StrictObject({
+			manifest: ClientDiagnosticManifestV2Schema,
+			afterSeq: Type.Optional(NonNegativeIntegerSchema),
+		}),
+	),
 });
 export type ClientHelloV2 = Static<typeof ClientHelloV2Schema>;
 

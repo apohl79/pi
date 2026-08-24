@@ -4,7 +4,9 @@
  * Configure provider auth through ModelRuntime.
  */
 
-import { createAgentSession, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
+import { createDirectAgentSession, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
+
+const createAgentSession = createDirectAgentSession;
 
 const modelRuntime = await ModelRuntime.create();
 const { session: defaultAuthSession } = await createAgentSession({

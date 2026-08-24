@@ -22,16 +22,36 @@ export {
 	sessionStatus,
 } from "./client/remote-v2-selector.ts";
 export {
+	type RemoteV2PluginInstallOptions,
+	type RemoteV2PluginUpgradeOptions,
+	type RemoteV2PromptContent,
+	type RemoteV2PromptPart,
 	RemoteV2Session,
 	type RemoteV2SessionLifecycle,
 	type RemoteV2SessionOptions,
 	type RemoteV2SessionState,
 } from "./client/remote-v2-session.ts";
 export {
+	createRemoteV2StatuslinePayload,
 	formatRemoteV2Session,
 	RemoteV2SessionView,
 	type RemoteV2SessionViewOptions,
+	RemoteV2StatuslineController,
+	type RemoteV2StatuslinePayload,
+	type RemoteV2StatuslinePayloadOptions,
+	type RemoteV2StatuslineSource,
 } from "./client/remote-v2-view.ts";
+/** The package-default SDK entry point is server-owned. */
+export {
+	type CreateServerAgentSessionOptions,
+	type CreateServerAgentSessionOptions as CreateAgentSessionOptions,
+	type CreateServerAgentSessionResult,
+	type CreateServerAgentSessionResult as CreateAgentSessionResult,
+	createServerAgentSession,
+	createServerAgentSession as createAgentSession,
+	openServerAgentSession,
+	type ServerAgentSession,
+} from "./client/server-sdk.ts";
 // Config paths
 export {
 	CONFIG_DIR_NAME,
@@ -74,7 +94,9 @@ export {
 	resolveLocalCodexMarketplacePlugin,
 } from "./core/codex-plugin.ts";
 export {
+	acquireCodexMarketplacePlugin,
 	acquireCodexPlugin,
+	type CodexMarketplacePluginAcquisition,
 	type CodexPluginAcquisition,
 	type CodexPluginAcquisitionAdapter,
 	CodexPluginAcquisitionError,
@@ -263,13 +285,13 @@ export {
 	type AgentSessionRuntimeDiagnostic,
 	type AgentSessionServices,
 	type CreateAgentSessionFromServicesOptions,
-	type CreateAgentSessionOptions,
-	type CreateAgentSessionResult,
+	type CreateAgentSessionOptions as CreateDirectAgentSessionOptions,
+	type CreateAgentSessionResult as CreateDirectAgentSessionResult,
 	type CreateAgentSessionRuntimeFactory,
 	type CreateAgentSessionRuntimeResult,
 	type CreateAgentSessionServicesOptions,
 	// Factory
-	createAgentSession,
+	createAgentSession as createDirectAgentSession,
 	createAgentSessionFromServices,
 	createAgentSessionRuntime,
 	createAgentSessionServices,
@@ -474,6 +496,7 @@ export {
 	type ServerRuntimeExtensionContext,
 	ServerRuntimeExtensionHost,
 	type ServerRuntimeExtensionHostOptions,
+	type ServerRuntimeExtensionSamplingResult,
 	type ServerRuntimeExtensionState,
 	type ServerRuntimeModel,
 	type ServerRuntimeOperation,
@@ -485,6 +508,17 @@ export {
 	type ResolvedModelInstructionProfile,
 } from "./server/model-instructions.ts";
 export {
+	adaptPiExtensionSampling,
+	inspectPiExtensionServerCompatibility,
+	type PiExtensionServerCompatibilityReport,
+	type PiExtensionUnsupportedServerResource,
+} from "./server/pi-extension-adapter.ts";
+export {
+	AcquiringV2PluginRegistry,
+	ActivatingV2PluginRegistry,
+	type CodexPluginMarketplaceResolver,
+} from "./server/plugin-registry.ts";
+export {
 	createPluginSamplingInput,
 	type PluginSamplingDiagnostic,
 	type PluginSamplingDiagnosticSink,
@@ -495,6 +529,7 @@ export {
 	createCodingAgentV2SqliteService,
 } from "./server/sqlite-service.ts";
 export {
+	type StatuslineCommand,
 	type StatuslineExecutor,
 	StatuslineRunner,
 	type StatuslineRunnerOptions,

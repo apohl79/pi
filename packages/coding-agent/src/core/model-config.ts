@@ -159,6 +159,9 @@ const CompactionConfigSchema = Type.Object({
 	reserveTokens: Type.Optional(Type.Number({ minimum: 0 })),
 	keepRecentTokens: Type.Optional(Type.Number({ minimum: 0 })),
 });
+const ModelRoleConfigSchema = Type.Object({
+	fast: Type.Optional(Type.String({ minLength: 1 })),
+});
 
 const ModelDefinitionSchema = Type.Object({
 	id: Type.String({ minLength: 1 }),
@@ -214,6 +217,7 @@ const ProviderConfigSchema = Type.Object({
 
 const ModelsConfigSchema = Type.Object({
 	providers: Type.Record(Type.String(), ProviderConfigSchema),
+	modelRoles: Type.Optional(Type.Record(Type.String(), ModelRoleConfigSchema)),
 });
 const validateModelsConfig = Compile(ModelsConfigSchema);
 
@@ -242,13 +246,91 @@ function deepFreeze<T>(value: T): T {
 	return Object.freeze(value);
 }
 
+function modelIdFamily(id: string): string {
+	return id.replace(/-latest$/, "").replace(/-\d{8}$/, "");
+}
+
+function isModelAlias(id: string): boolean {
+	return id.endsWith("-latest") || !/-\d{8}$/.test(id);
+}
+
+function resolveCompactionModelId(
+	modelId: string,
+	modelIds: readonly string[],
+	overrideIds: readonly string[],
+): string | undefined {
+	const configuredIds = [...new Set([...modelIds, ...overrideIds])];
+	if (configuredIds.includes(modelId)) return modelId;
+	const matches = configuredIds.filter(
+		(candidate) => candidate !== modelId && modelIdFamily(candidate) === modelIdFamily(modelId),
+	);
+	const aliases = matches.filter(isModelAlias);
+	if (aliases.length === 1) return aliases[0];
+	if (aliases.length > 1) return undefined;
+	return matches.length === 1 ? matches[0] : undefined;
+}
+
+function validateCompactionPolicies(config: ModelsJson): string | undefined {
+	for (const [providerId, provider] of Object.entries(config.providers)) {
+		const models = new Map((provider.models ?? []).map((model) => [model.id, model]));
+		for (const [modelId, override] of Object.entries(provider.modelOverrides ?? {})) {
+			const model = models.get(modelId);
+			const compaction = { ...model?.compaction, ...override.compaction };
+			if (Object.keys(compaction).length === 0) continue;
+			const path = `providers.${providerId}.modelOverrides.${modelId}.compaction`;
+			for (const [field, value] of Object.entries(compaction)) {
+				if (typeof value === "number" && (!Number.isSafeInteger(value) || value < 0))
+					return `Invalid ${path}.${field}: expected a non-negative safe integer`;
+			}
+			const contextWindow = override.contextWindow ?? model?.contextWindow;
+			if (contextWindow === undefined) continue;
+			if (compaction.reserveTokens !== undefined && compaction.reserveTokens >= contextWindow)
+				return `Invalid ${path}.reserveTokens: must be smaller than contextWindow ${contextWindow}`;
+			if (
+				compaction.keepRecentTokens !== undefined &&
+				compaction.reserveTokens !== undefined &&
+				compaction.keepRecentTokens >= contextWindow - compaction.reserveTokens
+			)
+				return `Invalid ${path}.keepRecentTokens: must be smaller than the compaction trigger window`;
+		}
+		for (const model of provider.models ?? []) {
+			if (model.compaction === undefined || provider.modelOverrides?.[model.id]?.compaction !== undefined) continue;
+			const path = `providers.${providerId}.models.${model.id}.compaction`;
+			for (const [field, value] of Object.entries(model.compaction)) {
+				if (typeof value === "number" && (!Number.isSafeInteger(value) || value < 0))
+					return `Invalid ${path}.${field}: expected a non-negative safe integer`;
+			}
+			if (
+				model.contextWindow !== undefined &&
+				model.compaction.reserveTokens !== undefined &&
+				model.compaction.reserveTokens >= model.contextWindow
+			)
+				return `Invalid ${path}.reserveTokens: must be smaller than contextWindow ${model.contextWindow}`;
+			if (
+				model.contextWindow !== undefined &&
+				model.compaction.keepRecentTokens !== undefined &&
+				model.compaction.reserveTokens !== undefined &&
+				model.compaction.keepRecentTokens >= model.contextWindow - model.compaction.reserveTokens
+			)
+				return `Invalid ${path}.keepRecentTokens: must be smaller than the compaction trigger window`;
+		}
+	}
+	return undefined;
+}
+
 /** One immutable load of models.json. */
 export class ModelConfig {
 	private readonly providers: ReadonlyMap<string, ModelsJsonProvider>;
+	private readonly modelRoles: ReadonlyMap<string, Readonly<{ fast?: string }>>;
 	private readonly error: string | undefined;
 
-	private constructor(providers: ReadonlyMap<string, ModelsJsonProvider>, error?: string) {
+	private constructor(
+		providers: ReadonlyMap<string, ModelsJsonProvider>,
+		modelRoles: ReadonlyMap<string, Readonly<{ fast?: string }>> = new Map(),
+		error?: string,
+	) {
 		this.providers = providers;
+		this.modelRoles = modelRoles;
 		this.error = error;
 	}
 
@@ -262,6 +344,7 @@ export class ModelConfig {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") return new ModelConfig(new Map());
 			return new ModelConfig(
 				new Map(),
+				new Map(),
 				`Failed to load models.json: ${error instanceof Error ? error.message : error}\n\nFile: ${path}`,
 			);
 		}
@@ -271,6 +354,7 @@ export class ModelConfig {
 			parsed = JSON.parse(stripJsonComments(stripBom(content)));
 		} catch (error) {
 			return new ModelConfig(
+				new Map(),
 				new Map(),
 				`Failed to parse models.json: ${error instanceof Error ? error.message : error}\n\nFile: ${path}`,
 			);
@@ -282,15 +366,20 @@ export class ModelConfig {
 					.Errors(parsed)
 					.map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
 					.join("\n") || "Unknown schema error";
-			return new ModelConfig(new Map(), `Invalid models.json schema:\n${errors}\n\nFile: ${path}`);
+			return new ModelConfig(new Map(), new Map(), `Invalid models.json schema:\n${errors}\n\nFile: ${path}`);
 		}
 
 		const config = parsed as ModelsJson;
+		const compactionError = validateCompactionPolicies(config);
+		if (compactionError !== undefined) return new ModelConfig(new Map(), new Map(), compactionError);
 		const providers = new Map<string, ModelsJsonProvider>();
 		for (const [providerId, provider] of Object.entries(config.providers)) {
 			providers.set(providerId, deepFreeze(structuredClone(provider)));
 		}
-		return new ModelConfig(providers);
+		const modelRoles = new Map<string, Readonly<{ fast?: string }>>();
+		for (const [providerId, roles] of Object.entries(config.modelRoles ?? {}))
+			modelRoles.set(providerId, deepFreeze(structuredClone(roles)));
+		return new ModelConfig(providers, modelRoles);
 	}
 
 	getProvider(providerId: string): ModelsJsonProvider | undefined {
@@ -304,10 +393,20 @@ export class ModelConfig {
 	getCompactionOverride(providerId: string, modelId: string): ModelsJsonCompaction | undefined {
 		const provider = this.providers.get(providerId);
 		if (!provider) return undefined;
-		const model = provider.models?.find((candidate) => candidate.id === modelId)?.compaction;
-		const override = provider.modelOverrides?.[modelId]?.compaction;
+		const resolvedModelId = resolveCompactionModelId(
+			modelId,
+			(provider.models ?? []).map((candidate) => candidate.id),
+			Object.keys(provider.modelOverrides ?? {}),
+		);
+		if (resolvedModelId === undefined) return undefined;
+		const model = provider.models?.find((candidate) => candidate.id === resolvedModelId)?.compaction;
+		const override = provider.modelOverrides?.[resolvedModelId]?.compaction;
 		if (!model && !override) return undefined;
 		return { ...model, ...override };
+	}
+
+	getModelRole(providerId: string, role: "fast"): string | undefined {
+		return this.modelRoles.get(providerId)?.[role];
 	}
 
 	getError(): string | undefined {

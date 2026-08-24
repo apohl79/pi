@@ -68,6 +68,30 @@ export function normalizeSessionName(value: string): string | undefined {
 	return name.length > 0 ? name : undefined;
 }
 
+/** Return whether parsed options are supported by the server-default runner. */
+export function isServerDefaultCompatible(options: Args): boolean {
+	return (
+		options.apiKey === undefined &&
+		options.continue !== true &&
+		options.resume !== true &&
+		options.noSession !== true &&
+		options.session === undefined &&
+		options.sessionId === undefined &&
+		options.fork === undefined &&
+		options.sessionDir === undefined &&
+		options.models === undefined &&
+		options.export === undefined &&
+		options.themes === undefined &&
+		options.useTheme === undefined &&
+		options.noThemes !== true &&
+		options.listModels === undefined &&
+		options.offline !== true &&
+		options.projectTrustOverride === undefined &&
+		options.unknownFlags.size === 0 &&
+		options.diagnostics.every((diagnostic) => diagnostic.type !== "error")
+	);
+}
+
 export function parseArgs(args: string[]): Args {
 	const result: Args = {
 		messages: [],

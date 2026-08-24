@@ -1,4 +1,4 @@
-import type { StopReason, Usage } from "@earendil-works/pi-ai";
+import type { DeferredHandle, StopReason, Usage } from "@earendil-works/pi-ai";
 import "../messages.ts";
 import type { AgentMessage } from "../../types.ts";
 import type { Session } from "./session.ts";
@@ -121,6 +121,17 @@ export interface OperationStartedRecord extends RecordBase {
 		  };
 }
 
+/** Complete durable checkpoint metadata for an open operation. */
+export interface OperationState {
+	kind: OperationStartedRecord["intent"]["kind"];
+	status: "running" | "cancel_requested";
+	phase: "accepted" | "executing" | "assistant_request" | "tool_call" | "deferred";
+	attempt?: number;
+	toolCallId?: string;
+	toolName?: string;
+	deferred?: DeferredHandle;
+}
+
 export interface AbortRequestedRecord extends RecordBase {
 	type: "abort_requested";
 	runId: string;
@@ -188,6 +199,7 @@ export interface QueueCancelledRecord extends RecordBase {
 	type: "queue_cancelled";
 	runId?: string;
 	entryId: string;
+	disposition?: "cancelled" | "consumed";
 }
 
 export interface WriteDeferredRecord extends RecordBase {
@@ -222,6 +234,22 @@ export type LaneRecord =
 export type NewRecord<TRecord extends LaneRecord = LaneRecord> = TRecord extends LaneRecord
 	? Omit<TRecord, "seq" | "timestamp">
 	: never;
+
+export type RegisterWrite =
+	| { op: "set"; namespace: string; key: string; value: JsonValue }
+	| { op: "delete"; namespace: string; key: string };
+
+export interface SessionRegister {
+	namespace: string;
+	key: string;
+	seq: number;
+	value: JsonValue;
+}
+
+export interface EntryPlacement {
+	entry: ProvisionedEntry;
+	lane: string;
+}
 
 export type EntryOrder = "newestFirst" | "oldestFirst";
 
@@ -289,7 +317,8 @@ export type LogItem =
 	| { kind: "record"; seq: number; record: LaneRecord }
 	| { kind: "lane"; seq: number; lane: string; leafId: string | null }
 	| { kind: "fact"; seq: number; fact: "name"; name: string | undefined }
-	| { kind: "fact"; seq: number; fact: "label"; targetId: string; label: string | undefined };
+	| { kind: "fact"; seq: number; fact: "label"; targetId: string; label: string | undefined }
+	| { kind: "register"; seq: number; register: RegisterWrite };
 
 export interface LogOptions {
 	afterSeq?: number;
@@ -307,6 +336,7 @@ export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetad
 	// Entries and Records
 	appendEntry<TEntry extends Entry>(entry: ProvisionedEntry<TEntry>, lane: string): Promise<TEntry>;
 	appendRecord<TRecord extends LaneRecord>(record: NewRecord<TRecord>): Promise<TRecord>;
+	appendRecords<TRecord extends LaneRecord>(records: readonly NewRecord<TRecord>[]): Promise<TRecord[]>;
 
 	// Reads
 	getEntry(id: string): Promise<Entry | undefined>;
@@ -332,6 +362,21 @@ export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetad
 	getLabel(id: string): Promise<string | undefined>;
 	setLabel(id: string, label: string | undefined): Promise<void>;
 	getStats(): Promise<SessionStats>;
+}
+
+/** Optional atomic register seam used by the durable harness transition layer. */
+export interface SessionTransactionStorage<TMetadata extends SessionMetadata = SessionMetadata>
+	extends SessionStorage<TMetadata> {
+	appendTransaction<TRecord extends LaneRecord>(
+		records: readonly NewRecord<TRecord>[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ records: TRecord[]; registers: SessionRegister[] }>;
+	getRegister(namespace: string, key: string): Promise<SessionRegister | undefined>;
+	appendAtomicTransaction(
+		entries: readonly EntryPlacement[],
+		records: readonly NewRecord[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ entries: Entry[]; records: LaneRecord[]; registers: SessionRegister[] }>;
 }
 
 export interface SessionTree {

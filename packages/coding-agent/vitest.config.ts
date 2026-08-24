@@ -27,8 +27,24 @@ export default mergeConfig(
 					replacement: fileURLToPath(new URL("../client/src/index.ts", import.meta.url)),
 				},
 				{
+					find: /^@earendil-works\/pi-codex-plugin-compat$/,
+					replacement: fileURLToPath(new URL("../codex-plugin-compat/src/index.ts", import.meta.url)),
+				},
+				{
+					find: /^@earendil-works\/pi-file-references$/,
+					replacement: fileURLToPath(new URL("../file-references/src/index.ts", import.meta.url)),
+				},
+				{
+					find: /^@earendil-works\/pi-diagnostics$/,
+					replacement: fileURLToPath(new URL("../diagnostics/src/index.ts", import.meta.url)),
+				},
+				{
 					find: /^@earendil-works\/pi-client\/unix$/,
 					replacement: fileURLToPath(new URL("../client/src/unix.ts", import.meta.url)),
+				},
+				{
+					find: /^@earendil-works\/pi-client\/diagnostics$/,
+					replacement: fileURLToPath(new URL("../client/src/diagnostics.ts", import.meta.url)),
 				},
 				{
 					find: /^@earendil-works\/pi-protocol$/,
@@ -41,6 +57,18 @@ export default mergeConfig(
 				{
 					find: /^@earendil-works\/pi-server$/,
 					replacement: fileURLToPath(new URL("../server/src/index.ts", import.meta.url)),
+				},
+				{
+					find: /^@earendil-works\/pi-model-instructions$/,
+					replacement: fileURLToPath(new URL("../model-instructions/src/index.ts", import.meta.url)),
+				},
+				{
+					find: /^@earendil-works\/pi-session-naming$/,
+					replacement: fileURLToPath(new URL("../session-naming/src/index.ts", import.meta.url)),
+				},
+				{
+					find: /^@earendil-works\/pi-web-tools$/,
+					replacement: fileURLToPath(new URL("../web-tools/src/index.ts", import.meta.url)),
 				},
 				{ find: /^@mariozechner\/pi-ai$/, replacement: workspaceSourcePaths.aiIndex },
 				{ find: /^@mariozechner\/pi-ai\/oauth$/, replacement: workspaceSourcePaths.aiOAuth },

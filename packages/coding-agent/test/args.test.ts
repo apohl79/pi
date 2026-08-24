@@ -1,7 +1,50 @@
 import { describe, expect, test } from "vitest";
-import { normalizeSessionName, parseArgs } from "../src/cli/args.ts";
+import { isServerDefaultCompatible, normalizeSessionName, parseArgs } from "../src/cli/args.ts";
 
 describe("parseArgs", () => {
+	describe("server-default compatibility", () => {
+		test("accepts session, model, thinking, and TUI options", () => {
+			expect(
+				isServerDefaultCompatible(
+					parseArgs([
+						"--name",
+						"demo",
+						"--provider",
+						"faux",
+						"--model",
+						"model",
+						"--thinking",
+						"high",
+						"--tui-mode",
+						"fullscreen",
+					]),
+				),
+			).toBe(true);
+		});
+
+		test("accepts file and server-owned prompt options", () => {
+			expect(isServerDefaultCompatible(parseArgs(["@README.md"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--system-prompt", "custom"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--append-system-prompt", "extra"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--tools", "read,bash"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--no-tools"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--exclude-tools", "bash"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--no-builtin-tools"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--extension", "./extension.ts"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--no-extensions"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--skill", "./skills/review"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--prompt-template", "./prompts"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--no-skills"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--no-prompt-templates"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--no-context-files"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--provider", "faux"]))).toBe(true);
+		});
+
+		test("rejects unsupported legacy session options for server-default modes", () => {
+			expect(isServerDefaultCompatible(parseArgs(["--print", "--system-prompt", "custom", "prompt"]))).toBe(true);
+			expect(isServerDefaultCompatible(parseArgs(["--mode", "rpc", "--resume"]))).toBe(false);
+		});
+	});
 	describe("--version flag", () => {
 		test("parses --version flag", () => {
 			const result = parseArgs(["--version"]);

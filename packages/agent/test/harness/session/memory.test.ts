@@ -23,6 +23,128 @@ describe("InMemorySessionRepo conformance", () => {
 });
 
 describe("Session with in-memory storage", () => {
+	it("publishes entries, records, and registers through the atomic seam", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "atomic", createdAt: 1 }));
+		const result = await session.appendAtomicTransaction(
+			[
+				{
+					lane: "main",
+					entry: {
+						type: "message",
+						id: "entry-1",
+						message: { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },
+					},
+				},
+			],
+			[],
+			[{ op: "set", namespace: "op.meta", key: "run-1", value: { kind: "run" } }],
+		);
+		expect(result.entries.map((entry) => entry.id)).toEqual(["entry-1"]);
+		expect(await session.getLeafId()).toBe("entry-1");
+		expect(await session.getRegister("op.meta", "run-1")).toMatchObject({ value: { kind: "run" } });
+	});
+
+	it("commits records and register writes through one transaction seam", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "transaction", createdAt: 1 }));
+		const result = await session.appendTransaction(
+			[
+				{
+					type: "usage",
+					id: "usage-1",
+					lane: "main",
+					usage: {
+						input: 1,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 1,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					cause: "adjustment",
+				},
+			],
+			[{ op: "set", namespace: "pending.entry", key: "queued-1", value: { message: "queued" } }],
+		);
+		expect(result.records.map((record) => record.id)).toEqual(["usage-1"]);
+		expect(await session.getRegister("pending.entry", "queued-1")).toMatchObject({
+			namespace: "pending.entry",
+			key: "queued-1",
+			value: { message: "queued" },
+		});
+
+		await session.appendTransaction([], [{ op: "delete", namespace: "pending.entry", key: "queued-1" }]);
+		expect(await session.getRegister("pending.entry", "queued-1")).toBeUndefined();
+	});
+
+	it("publishes record batches all-or-none", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "batch", createdAt: 1 }));
+		await expect(
+			session.appendRecords([
+				{
+					type: "usage",
+					id: "usage-1",
+					lane: "main",
+					usage: {
+						input: 1,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 1,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					cause: "adjustment",
+				},
+				{
+					type: "usage",
+					id: "usage-1",
+					lane: "main",
+					usage: {
+						input: 2,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 2,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					cause: "adjustment",
+				},
+			]),
+		).rejects.toThrow("already exists");
+		expect(await session.findRecords({ type: "usage" })).toEqual([]);
+
+		const committed = await session.appendRecords([
+			{
+				type: "usage",
+				id: "usage-1",
+				lane: "main",
+				usage: {
+					input: 1,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 1,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				cause: "adjustment",
+			},
+			{
+				type: "usage",
+				id: "usage-2",
+				lane: "main",
+				usage: {
+					input: 2,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 2,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				cause: "adjustment",
+			},
+		]);
+		expect(committed.map((record) => record.id)).toEqual(["usage-1", "usage-2"]);
+	});
+
 	it("uses one injectable id generator across lane views", async () => {
 		let nextId = 0;
 		const session = new Session(new InMemorySessionStorage({ id: "session", createdAt: 1 }), {
@@ -34,5 +156,11 @@ describe("Session with in-memory storage", () => {
 
 		expect(mainId).toBe("generated-1");
 		expect(threadId).toBe("generated-2");
+	});
+
+	it("rejects unsafe pagination values before querying storage", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "session", createdAt: 1 }));
+		await expect(session.findEntries({ limit: Number.MAX_SAFE_INTEGER + 1 })).rejects.toThrow("limit");
+		await expect(session.findRecords({ afterSeq: Number.MAX_SAFE_INTEGER + 1 })).rejects.toThrow("cursor");
 	});
 });

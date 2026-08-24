@@ -1,58 +1,69 @@
-import { lstat, readdir, readFile, realpath } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
-export type V2FileReferenceKind = "file" | "directory";
+import type {
+	V2FileCompletion,
+	V2FileReference,
+	V2FileReferenceOptions,
+	V2FileReferenceService,
+} from "@earendil-works/pi-file-references";
 
-export interface V2FileReference {
-	readonly reference: string;
-	readonly path: string;
-	readonly kind: V2FileReferenceKind;
-	readonly size?: number;
-	readonly mimeType?: string;
-}
+export type {
+	V2FileCompletion,
+	V2FileReference,
+	V2FileReferenceKind,
+	V2FileReferenceOptions,
+	V2FileReferenceService,
+} from "@earendil-works/pi-file-references";
 
-export interface V2FileCompletion {
-	readonly reference: string;
-	readonly path: string;
-	readonly kind: V2FileReferenceKind;
-}
-
-export interface V2FileReferenceService {
-	complete(sessionId: string, prefix: string): Promise<readonly V2FileCompletion[]>;
-	resolve(sessionId: string, reference: string): Promise<V2FileReference>;
-	read(sessionId: string, reference: string): Promise<{ readonly file: V2FileReference; readonly data: Uint8Array }>;
-}
-
-export interface V2FileReferenceOptions {
-	readonly projectRoot: string;
-	readonly cwd?: string;
-	readonly homeDirectory?: string;
-	readonly allowAbsolute?: boolean;
-	readonly maxReadBytes?: number;
-}
-
-type FileScope = "project" | "relative" | "home" | "absolute";
+type FileScope = "project" | "relative" | "server" | "local" | "home" | "absolute";
 
 const DEFAULT_MAX_READ_BYTES = 8 * 1024 * 1024;
+const DEFAULT_MAX_COMPLETIONS = 256;
+const DEFAULT_MAX_COMPLETION_MS = 250;
 
 function cleanReference(reference: string): string {
 	const value = reference.trim();
-	return value.startsWith("@") ? value.slice(1) : value;
+	const unmarked = value.startsWith("@") ? value.slice(1) : value;
+	const scope = /^(?:server|local|project):/u.exec(unmarked)?.[0] ?? "";
+	const scoped = unmarked.slice(scope.length);
+	const quote = scoped[0];
+	const cleaned =
+		(quote === '"' || quote === "'") && scoped.endsWith(quote)
+			? scoped.slice(1, -1)
+			: quote === '"' || quote === "'"
+				? scoped.slice(1)
+				: scoped;
+	return `${scope}${cleaned}`;
 }
 
 function scopeOf(reference: string): FileScope {
-	return reference.startsWith("~/") || reference === "~"
+	return reference.startsWith("~/") || reference.startsWith("~\\") || reference === "~"
 		? "home"
 		: isAbsolute(reference)
 			? "absolute"
-			: reference.startsWith("project:")
-				? "project"
-				: "relative";
+			: reference.startsWith("server:")
+				? "server"
+				: reference.startsWith("local:")
+					? "local"
+					: reference.startsWith("project:")
+						? "project"
+						: "relative";
+}
+
+function homeReferencePath(reference: string): string {
+	const path = reference.slice(2);
+	return reference.startsWith("~\\") ? path.replaceAll("\\", sep) : path;
 }
 
 function projectReference(reference: string): string {
 	return reference.startsWith("project:") ? reference.slice("project:".length) : reference;
+}
+
+function serverReference(reference: string): string {
+	return reference.startsWith("server:") ? reference.slice("server:".length) : reference;
 }
 
 function isWithin(root: string, candidate: string): boolean {
@@ -60,12 +71,14 @@ function isWithin(root: string, candidate: string): boolean {
 	return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
 }
 
-function referenceFor(scope: FileScope, root: string, path: string): string {
+function referenceFor(scope: FileScope, root: string, path: string, absoluteServerPath = false): string {
 	return scope === "project"
 		? `project:${relative(root, path) || "."}`
-		: scope === "home"
-			? `~/${relative(root, path)}`
-			: path;
+		: scope === "server"
+			? `server:${absoluteServerPath ? path : relative(root, path) || "."}`
+			: scope === "home"
+				? `~/${relative(root, path)}`
+				: path;
 }
 
 function mimeTypeFor(path: string): string | undefined {
@@ -89,12 +102,30 @@ function mimeTypeFor(path: string): string | undefined {
 									: undefined;
 }
 
+function fuzzyScore(query: string, value: string): number | undefined {
+	const normalizedQuery = query.toLocaleLowerCase();
+	const normalizedValue = value.toLocaleLowerCase();
+	let queryIndex = 0;
+	let score = 0;
+	let previousIndex = -2;
+	for (let valueIndex = 0; valueIndex < normalizedValue.length && queryIndex < normalizedQuery.length; valueIndex++) {
+		if (normalizedValue[valueIndex] !== normalizedQuery[queryIndex]) continue;
+		if (valueIndex === previousIndex + 1) score += 2;
+		if (valueIndex === 0 || normalizedValue[valueIndex - 1] === "/") score += 3;
+		previousIndex = valueIndex;
+		queryIndex += 1;
+	}
+	return queryIndex === normalizedQuery.length ? score - normalizedValue.length / 100 : undefined;
+}
+
 export class LocalV2FileReferenceService implements V2FileReferenceService {
 	private readonly projectRoot: string;
 	private readonly cwd: string;
 	private readonly homeDirectory: string;
 	private readonly allowAbsolute: boolean;
 	private readonly maxReadBytes: number;
+	private readonly maxCompletions: number;
+	private readonly maxCompletionMs: number;
 
 	constructor(options: V2FileReferenceOptions) {
 		this.projectRoot = resolve(options.projectRoot);
@@ -102,34 +133,155 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 		this.homeDirectory = resolve(options.homeDirectory ?? homedir());
 		this.allowAbsolute = options.allowAbsolute ?? true;
 		this.maxReadBytes = options.maxReadBytes ?? DEFAULT_MAX_READ_BYTES;
+		this.maxCompletions = options.maxCompletions ?? DEFAULT_MAX_COMPLETIONS;
+		this.maxCompletionMs = options.maxCompletionMs ?? DEFAULT_MAX_COMPLETION_MS;
+		if (!Number.isSafeInteger(this.maxReadBytes) || this.maxReadBytes < 0)
+			throw new TypeError("maxReadBytes must be a non-negative safe integer");
+		if (!Number.isSafeInteger(this.maxCompletions) || this.maxCompletions <= 0)
+			throw new TypeError("maxCompletions must be a positive safe integer");
+		if (!Number.isSafeInteger(this.maxCompletionMs) || this.maxCompletionMs <= 0)
+			throw new TypeError("maxCompletionMs must be a positive safe integer");
 	}
 
-	async complete(sessionId: string, prefix: string): Promise<readonly V2FileCompletion[]> {
+	async complete(
+		sessionId: string,
+		prefix: string,
+		options: { readonly signal?: AbortSignal } = {},
+	): Promise<readonly V2FileCompletion[]> {
 		void sessionId;
+		const timeout = new AbortController();
+		const timeoutId = setTimeout(() => timeout.abort(), this.maxCompletionMs);
+		const onAbort = () => timeout.abort();
+		if (options.signal?.aborted) timeout.abort();
+		options.signal?.addEventListener("abort", onAbort, { once: true });
+		try {
+			return await this.completeWithSignal(prefix, timeout.signal);
+		} finally {
+			clearTimeout(timeoutId);
+			options.signal?.removeEventListener("abort", onAbort);
+		}
+	}
+
+	private async completeWithSignal(prefix: string, signal: AbortSignal): Promise<readonly V2FileCompletion[]> {
+		if (signal.aborted) throw new Error("filesystem completion cancelled");
 		const clean = cleanReference(prefix);
 		const scope = scopeOf(clean);
-		const logical = scope === "project" ? projectReference(clean) : scope === "home" ? clean.slice(2) : clean;
+		if (scope === "local") throw new Error("Client-local file references must be uploaded as blobs");
+		if (scope === "relative" && !clean.includes("/") && !clean.includes("\\") && clean.length > 0)
+			return this.completeFuzzy(clean, signal);
+		const logical =
+			scope === "project"
+				? projectReference(clean)
+				: scope === "server"
+					? serverReference(clean)
+					: scope === "home"
+						? homeReferencePath(clean)
+						: clean;
 		const base = scope === "project" ? this.projectRoot : scope === "home" ? this.homeDirectory : this.cwd;
 		const candidate = isAbsolute(logical) ? logical : resolve(base, logical);
+		const absoluteServerPath = scope === "server" && isAbsolute(logical);
 		const directory = await this.directoryForCompletion(candidate);
+		if (signal.aborted) throw new Error("filesystem completion cancelled");
 		const prefixName = candidate === directory ? "" : candidate.slice(directory.length + 1);
 		const entries = await readdir(directory, { withFileTypes: true });
-		return entries
-			.filter((entry) => entry.name.startsWith(prefixName))
-			.map((entry) => {
-				const path = resolve(directory, entry.name);
-				return {
-					reference: referenceFor(scope, base, path),
-					path,
-					kind: entry.isDirectory() ? "directory" : "file",
-				} satisfies V2FileCompletion;
-			})
-			.filter((entry) => this.allowedLexically(entry.path, scope === "absolute"))
+		const completions = await Promise.all(
+			entries
+				.filter((entry) => entry.name.startsWith(prefixName))
+				.map(async (entry): Promise<V2FileCompletion | undefined> => {
+					if (signal.aborted) throw new Error("filesystem completion cancelled");
+					const path = resolve(directory, entry.name);
+					if (!this.allowedLexically(path, scope === "absolute" || absoluteServerPath)) return undefined;
+					try {
+						const resolved = await realpath(path);
+						if (!(await this.allowed(resolved, scope === "absolute" || absoluteServerPath))) return undefined;
+						const reference = referenceFor(scope, base, path, absoluteServerPath);
+						const isDirectory = entry.isDirectory();
+						const mimeType = isDirectory ? undefined : mimeTypeFor(path);
+						return {
+							reference,
+							display: reference,
+							hostScope: "server",
+							path,
+							canonicalPath: resolved,
+							kind: isDirectory ? "directory" : "file",
+							...(isDirectory ? {} : { size: (await lstat(path)).size }),
+							...(mimeType === undefined ? {} : { mimeType }),
+						} satisfies V2FileCompletion;
+					} catch {
+						return undefined;
+					}
+				}),
+		);
+		if (signal.aborted) throw new Error("filesystem completion cancelled");
+		return completions
+			.filter((entry): entry is V2FileCompletion => entry !== undefined)
 			.sort(
 				(left, right) =>
 					Number(right.kind === "directory") - Number(left.kind === "directory") ||
 					left.reference.localeCompare(right.reference),
-			);
+			)
+			.slice(0, this.maxCompletions);
+	}
+
+	private async completeFuzzy(query: string, signal: AbortSignal): Promise<readonly V2FileCompletion[]> {
+		type Candidate = V2FileCompletion & { readonly score: number };
+		const candidates: Candidate[] = [];
+		const visited = new Set<string>();
+		const visit = async (directory: string): Promise<void> => {
+			if (signal.aborted) throw new Error("filesystem completion cancelled");
+			let canonicalDirectory: string;
+			try {
+				canonicalDirectory = await realpath(directory);
+			} catch {
+				return;
+			}
+			if (visited.has(canonicalDirectory)) return;
+			visited.add(canonicalDirectory);
+			let entries: Dirent[];
+			try {
+				entries = await readdir(directory, { withFileTypes: true });
+			} catch {
+				return;
+			}
+			for (const entry of entries) {
+				if (signal.aborted) throw new Error("filesystem completion cancelled");
+				const path = resolve(directory, entry.name);
+				try {
+					const canonicalPath = await realpath(path);
+					if (!(await this.allowed(canonicalPath))) continue;
+					const relativePath = relative(this.cwd, path);
+					const score = fuzzyScore(query, relativePath);
+					const isDirectory = entry.isDirectory();
+					const mimeType = isDirectory ? undefined : mimeTypeFor(path);
+					if (score !== undefined) {
+						candidates.push({
+							reference: relativePath,
+							display: relativePath,
+							hostScope: "server",
+							path,
+							canonicalPath,
+							kind: isDirectory ? "directory" : "file",
+							...(isDirectory ? {} : { size: (await lstat(path)).size }),
+							...(mimeType === undefined ? {} : { mimeType }),
+							score,
+						});
+					}
+					if (isDirectory) await visit(path);
+				} catch {
+					// Entries can disappear or become inaccessible during a completion scan.
+				}
+			}
+		};
+		await visit(this.cwd);
+		return candidates
+			.sort(
+				(left, right) =>
+					Number(right.kind === "directory") - Number(left.kind === "directory") ||
+					right.score - left.score ||
+					left.reference.localeCompare(right.reference),
+			)
+			.slice(0, this.maxCompletions)
+			.map(({ score: _score, ...candidate }) => candidate);
 	}
 
 	async resolve(sessionId: string, reference: string): Promise<V2FileReference> {
@@ -151,22 +303,38 @@ export class LocalV2FileReferenceService implements V2FileReferenceService {
 	): Promise<{ readonly file: V2FileReference; readonly data: Uint8Array }> {
 		const file = await this.resolve(sessionId, reference);
 		if (file.kind !== "file") throw new Error("File reference must resolve to a file");
-		if ((file.size ?? 0) > this.maxReadBytes)
-			throw new Error(`File exceeds maximum size of ${this.maxReadBytes} bytes`);
-		return { file, data: new Uint8Array(await readFile(file.path)) };
+		const handle = await open(file.path, "r");
+		try {
+			const buffer = Buffer.alloc(this.maxReadBytes + 1);
+			const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+			if (bytesRead > this.maxReadBytes) throw new Error(`File exceeds maximum size of ${this.maxReadBytes} bytes`);
+			const data = new Uint8Array(buffer.subarray(0, bytesRead));
+			return { file: { ...file, size: bytesRead }, data };
+		} finally {
+			await handle.close();
+		}
 	}
 
 	private async authorize(reference: string): Promise<string> {
 		const scope = scopeOf(reference);
+		if (scope === "local") throw new Error("Client-local file references must be uploaded as blobs");
 		const logical =
-			scope === "project" ? projectReference(reference) : scope === "home" ? reference.slice(2) : reference;
+			scope === "project"
+				? projectReference(reference)
+				: scope === "server"
+					? serverReference(reference)
+					: scope === "home"
+						? homeReferencePath(reference)
+						: reference;
 		const base = scope === "project" ? this.projectRoot : scope === "home" ? this.homeDirectory : this.cwd;
-		if (scope === "absolute" && !this.allowAbsolute) throw new Error("Absolute file references are disabled");
+		const absoluteServerPath = scope === "server" && isAbsolute(logical);
+		if ((scope === "absolute" || absoluteServerPath) && !this.allowAbsolute)
+			throw new Error("Absolute file references are disabled");
 		const candidate = scope === "absolute" ? resolve(reference) : resolve(base, logical);
-		if (!this.allowedLexically(candidate, scope === "absolute"))
+		if (!this.allowedLexically(candidate, scope === "absolute" || absoluteServerPath))
 			throw new Error(`File reference escapes the accessible filesystem: ${reference}`);
 		const resolved = await realpath(candidate);
-		if (!(await this.allowed(resolved, scope === "absolute")))
+		if (!(await this.allowed(resolved, scope === "absolute" || absoluteServerPath)))
 			throw new Error(`File reference escapes the accessible filesystem: ${reference}`);
 		return resolved;
 	}

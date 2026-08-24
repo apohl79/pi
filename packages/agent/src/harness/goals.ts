@@ -81,17 +81,21 @@ function isGoal(value: unknown): value is GoalSnapshot {
 		typeof candidate.id === "string" &&
 		typeof candidate.objective === "string" &&
 		GOAL_STATUSES.has(candidate.status as GoalStatus) &&
-		typeof candidate.tokensUsed === "number" &&
+		Number.isSafeInteger(candidate.tokensUsed) &&
+		(candidate.tokensUsed as number) >= 0 &&
 		typeof candidate.activeTimeSeconds === "number" &&
-		typeof candidate.createdAt === "number" &&
-		typeof candidate.updatedAt === "number" &&
-		(candidate.tokenBudget === undefined || typeof candidate.tokenBudget === "number")
+		Number.isFinite(candidate.activeTimeSeconds) &&
+		(candidate.activeTimeSeconds as number) >= 0 &&
+		Number.isSafeInteger(candidate.createdAt) &&
+		Number.isSafeInteger(candidate.updatedAt) &&
+		(candidate.tokenBudget === undefined ||
+			(Number.isSafeInteger(candidate.tokenBudget) && (candidate.tokenBudget as number) >= 0))
 	);
 }
 
 function assertNonNegativeInteger(value: number | undefined, field: string): void {
-	if (value !== undefined && (!Number.isInteger(value) || value < 0))
-		throw new Error(`${field} must be a non-negative integer`);
+	if (value !== undefined && (!Number.isSafeInteger(value) || value < 0))
+		throw new Error(`${field} must be a non-negative safe integer`);
 }
 
 export class GoalManager {
@@ -126,6 +130,17 @@ export class GoalManager {
 			createdAt: timestamp,
 			updatedAt: timestamp,
 		};
+		assertNonNegativeInteger(goal.tokensUsed, "tokensUsed");
+		assertNonNegativeInteger(goal.tokenBudget, "tokenBudget");
+		await this.session.appendCustomEntry(GOAL_ENTRY_TYPE, goal);
+		return structuredClone(goal);
+	}
+
+	/** Re-identifies copied goal state after a session fork so future accounting is independent. */
+	async forkIdentity(): Promise<GoalSnapshot | undefined> {
+		const current = await this.read();
+		if (!current) return undefined;
+		const goal = { ...current, id: uuidv7(), createdAt: this.now(), updatedAt: this.now() };
 		await this.session.appendCustomEntry(GOAL_ENTRY_TYPE, goal);
 		return structuredClone(goal);
 	}
@@ -152,7 +167,7 @@ export class GoalManager {
 			...(patch.activeTimeSeconds === undefined ? { activeTimeSeconds } : {}),
 			updatedAt: timestamp,
 		};
-		if (goal.tokenBudget !== undefined && goal.tokensUsed > goal.tokenBudget && goal.status === "active")
+		if (goal.tokenBudget !== undefined && goal.tokensUsed >= goal.tokenBudget && goal.status === "active")
 			goal.status = "budgetLimited";
 		await this.session.appendCustomEntry(GOAL_ENTRY_TYPE, goal);
 		return structuredClone(goal);

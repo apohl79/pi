@@ -1,6 +1,7 @@
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import {
 	loadCodexMarketplaceManifest,
@@ -13,6 +14,28 @@ import {
 } from "../src/core/codex-plugin.ts";
 
 describe("Codex plugin manifest compatibility", () => {
+	test("round-trips the golden plugin and marketplace fixtures", async () => {
+		const fixtureRoot = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "codex-plugin");
+		const plugin = parseCodexPluginManifest(JSON.parse(await readFile(join(fixtureRoot, "plugin.json"), "utf8")));
+		const marketplace = parseCodexMarketplaceManifest(
+			JSON.parse(await readFile(join(fixtureRoot, "marketplace.json"), "utf8")),
+		);
+		expect(plugin.manifest).toMatchObject({ name: "reviewer", version: "1.2.3", skills: ["skills/review"] });
+		expect(plugin.diagnostics).toContainEqual(
+			expect.objectContaining({ code: "unsupported_mcp_resource", severity: "warning" }),
+		);
+		expect(marketplace).toEqual({
+			manifest: {
+				plugins: [
+					{ name: "reviewer", source: { kind: "local", value: "./plugins/reviewer" } },
+					{ name: "git-reviewer", source: { kind: "git", value: "git+https://example.test/git-reviewer.git" } },
+					{ name: "npm-reviewer", source: { kind: "npm", value: "@example/npm-reviewer" } },
+				],
+			},
+			diagnostics: [],
+		});
+	});
+
 	test("normalizes supported resources and diagnoses MCP without launching it", () => {
 		const result = parseCodexPluginManifest({
 			name: "example-plugin",

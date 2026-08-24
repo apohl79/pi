@@ -1,0 +1,14 @@
+{
+	"name": "@earendil-works/pi-session-naming",
+	"version": "0.84.2",
+	"description": "Bounded, credential-aware session naming policy for pi",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+	"files": ["dist", "README.md"],
+	"scripts": { "build": "tsgo -p tsconfig.build.json", "typecheck": "tsgo -p tsconfig.build.json" },
+	"keywords": ["pi", "session", "naming"],
+	"license": "MIT",
+	"engines": { "node": ">=22.19.0" }
+}

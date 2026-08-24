@@ -15,7 +15,9 @@ import {
 	MAX_DURABLE_EXTENSION_PAYLOAD_DEPTH,
 	type OperationStartedRecord,
 	type RecordQuery,
+	type RegisterWrite,
 	SessionError,
+	type SessionRegister,
 	type SessionStats,
 } from "./types.ts";
 
@@ -24,7 +26,8 @@ export type SessionMutation =
 	| { kind: "record"; record: LaneRecord }
 	| { kind: "lane"; seq: number; lane: string; leafId: string | null }
 	| { kind: "fact"; seq: number; fact: "name"; name: string | undefined }
-	| { kind: "fact"; seq: number; fact: "label"; targetId: string; label: string | undefined };
+	| { kind: "fact"; seq: number; fact: "label"; targetId: string; label: string | undefined }
+	| { kind: "register"; seq: number; write: RegisterWrite };
 
 type InvalidMutation = (message: string) => never;
 
@@ -94,13 +97,13 @@ export function assertBoundedEntryPayload(entry: Entry, invalid: InvalidMutation
 }
 
 function assertValidLimit(limit: number | undefined): void {
-	if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+	if (limit !== undefined && (!Number.isSafeInteger(limit) || limit <= 0)) {
 		throw new SessionError("invalid_query", "limit must be a positive integer");
 	}
 }
 
 function assertValidCursor(afterSeq: number | undefined): void {
-	if (afterSeq !== undefined && (!Number.isInteger(afterSeq) || afterSeq < 0)) {
+	if (afterSeq !== undefined && (!Number.isSafeInteger(afterSeq) || afterSeq < 0)) {
 		throw new SessionError("invalid_query", "cursor sequence must be a non-negative integer");
 	}
 }
@@ -131,6 +134,7 @@ export class SessionState {
 	};
 	private name: string | undefined;
 	private readonly labels = new Map<string, string>();
+	private readonly registers = new Map<string, SessionRegister>();
 
 	get nextSequence(): number {
 		return this.sequence + 1;
@@ -252,7 +256,26 @@ export class SessionState {
 					});
 				}
 				break;
+			case "register": {
+				this.sequence = seq;
+				const registerKey = `${mutation.write.namespace}\u0000${mutation.write.key}`;
+				if (mutation.write.op === "delete") this.registers.delete(registerKey);
+				else
+					this.registers.set(registerKey, {
+						namespace: mutation.write.namespace,
+						key: mutation.write.key,
+						seq,
+						value: structuredClone(mutation.write.value),
+					});
+				this.log.push({ kind: "register", seq, register: mutation.write });
+				break;
+			}
 		}
+	}
+
+	getRegister(namespace: string, key: string): SessionRegister | undefined {
+		const register = this.registers.get(`${namespace}\u0000${key}`);
+		return register === undefined ? undefined : structuredClone(register);
 	}
 
 	getEntry(id: string): Entry | undefined {

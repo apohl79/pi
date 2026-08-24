@@ -1,3 +1,6 @@
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	AgentHarness,
 	type AgentHarnessOptions,
@@ -9,8 +12,9 @@ import {
 	type ShellExecOptions,
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import { createModels } from "@earendil-works/pi-ai";
+import { createModels, fauxProvider } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
+import { InMemoryV2ProcessRegistry } from "@earendil-works/pi-server";
 import { Type } from "typebox";
 import { describe, expect, test, vi } from "vitest";
 import {
@@ -71,6 +75,112 @@ describe("coding-agent Harness construction", () => {
 		expect(await resolver.resolve({ provider: "openai", id: "gpt-5" })).toBeUndefined();
 	});
 
+	test("resolves model instruction profiles independently by agent scope", async () => {
+		const resolver = new ModelInstructionResolver(
+			[
+				{
+					id: "root-profile",
+					provider: "openai",
+					model: "gpt-5",
+					mode: "append",
+					text: "Root instructions.",
+					applyTo: ["root"],
+				},
+				{
+					id: "child-profile",
+					provider: "openai",
+					model: "gpt-5",
+					mode: "append",
+					text: "Child instructions.",
+					applyTo: ["subagent"],
+				},
+			],
+			{ cwd: "/workspace" },
+		);
+		expect(await resolver.resolve({ provider: "openai", id: "gpt-5" }, "root")).toMatchObject({
+			id: "root-profile",
+		});
+		expect(await resolver.resolve({ provider: "openai", id: "gpt-5" }, "subagent")).toMatchObject({
+			id: "child-profile",
+		});
+	});
+
+	test("resolves file-backed profiles through canonical trusted roots", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-model-profile-success-"));
+		try {
+			await writeFile(join(directory, "profile.md"), "Use deterministic edits.");
+			const resolver = new ModelInstructionResolver(
+				[{ id: "file-profile", provider: "openai", model: "gpt-5", mode: "append", file: "profile.md" }],
+				{ cwd: directory },
+			);
+			expect(await resolver.resolve({ provider: "openai", id: "gpt-5" })).toMatchObject({
+				id: "file-profile",
+				source: "file",
+				text: "Use deterministic edits.",
+			});
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("reports model profile identity when a file cannot be read", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-model-profile-file-"));
+		try {
+			const resolver = new ModelInstructionResolver(
+				[{ id: "missing-profile", provider: "openai", model: "gpt-5", mode: "append", file: "missing.md" }],
+				{ cwd: directory },
+			);
+			await expect(resolver.resolve({ provider: "openai", id: "gpt-5" })).rejects.toThrow(
+				"Model profile missing-profile file cannot be read",
+			);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("rejects model profile files outside trusted roots", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-model-profile-trust-"));
+		const outside = await mkdtemp(join(tmpdir(), "pi-model-profile-outside-"));
+		try {
+			await writeFile(join(outside, "profile.md"), "Do not cross the trust boundary.");
+			const resolver = new ModelInstructionResolver(
+				[
+					{
+						id: "untrusted-profile",
+						provider: "openai",
+						model: "gpt-5",
+						mode: "append",
+						file: join(outside, "profile.md"),
+					},
+				],
+				{ cwd: directory },
+			);
+			await expect(resolver.resolve({ provider: "openai", id: "gpt-5" })).rejects.toThrow(
+				"Model profile untrusted-profile file is outside trusted roots",
+			);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+			await rm(outside, { recursive: true, force: true });
+		}
+	});
+
+	test("rejects oversized model profile files before loading them", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-model-profile-size-"));
+		try {
+			await writeFile(join(directory, "profile.md"), "0123456789");
+			const canonicalDirectory = await realpath(directory);
+			const resolver = new ModelInstructionResolver(
+				[{ id: "large-profile", provider: "openai", model: "gpt-5", mode: "append", file: "profile.md" }],
+				{ cwd: canonicalDirectory, maxBytes: 5 },
+			);
+			await expect(resolver.resolve({ provider: "openai", id: "gpt-5" })).rejects.toThrow(
+				"Model profile large-profile exceeds 5-byte limit",
+			);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("adds a model profile without changing the selected tool contract", () => {
 		const prompt = buildCodingAgentHarnessSystemPrompt({
 			cwd: "/workspace",
@@ -89,6 +199,67 @@ describe("coding-agent Harness construction", () => {
 		expect(prompt).toContain("- read: Read file contents");
 		expect(prompt).not.toContain("- edit: Edit files");
 	});
+
+	test("exposes and executes Pi's filesystem search tools in the server-owned defaults", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-harness-filesystem-tools-"));
+		await writeFile(join(directory, "fixture.txt"), "server-owned tools\n");
+		const session = new Session(new InMemorySessionStorage({ id: "filesystem-tools-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: directory });
+		const created = await createCodingAgentHarness({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+		});
+		try {
+			const tools = await created.harness.getTools();
+			expect(tools.map((tool) => tool.name)).toEqual([
+				"apply_patch",
+				"read",
+				"bash",
+				"edit",
+				"write",
+				"grep",
+				"find",
+				"ls",
+			]);
+			const ls = tools.find((tool) => tool.name === "ls");
+			if (!ls) throw new Error("Expected ls tool");
+			const result = await ls.execute("ls-call", {});
+			expect(result.content).toEqual([{ type: "text", text: "fixture.txt" }]);
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("replaceDefault preserves tool, project-context, and role layers", () => {
+		const prompt = buildCodingAgentHarnessSystemPrompt({
+			cwd: "/workspace",
+			tools: defaultPromptTools,
+			activeToolNames: ["read"],
+			systemPromptOptions: {
+				contextFiles: [{ path: "AGENTS.md", content: "Keep changes focused." }],
+				appendSystemPrompt: "Role: reviewer.",
+			},
+			modelInstruction: {
+				id: "profile",
+				source: "text",
+				mode: "replaceDefault",
+				text: "You are a concise reviewer.",
+				contentHash: "hash",
+				byteLength: 28,
+			},
+		});
+
+		expect(prompt).toContain("You are a concise reviewer.");
+		expect(prompt).not.toContain("You are an expert coding assistant operating inside pi");
+		expect(prompt).toContain("- read: Read file contents");
+		expect(prompt).toContain('<project_instructions path="AGENTS.md">');
+		expect(prompt).toContain("Role: reviewer.");
+	});
+
 	test("adds coding-agent policy to explicit Harness options", async () => {
 		const session = new Session(new InMemorySessionStorage({ id: "harness-session", createdAt: 1 }));
 		const env = new NodeExecutionEnv({ cwd: "/workspace" });
@@ -105,18 +276,65 @@ describe("coding-agent Harness construction", () => {
 		});
 		try {
 			expect(created.suspended).toEqual([]);
-			expect(await created.harness.getActiveTools()).toEqual(["apply_patch", "read", "bash", "edit", "write"]);
+			expect(await created.harness.getActiveTools()).toEqual([
+				"apply_patch",
+				"read",
+				"bash",
+				"edit",
+				"write",
+				"grep",
+				"find",
+				"ls",
+			]);
 			expect((await created.harness.getTools()).map((tool) => tool.name)).toEqual([
 				"apply_patch",
 				"read",
 				"bash",
 				"edit",
 				"write",
+				"grep",
+				"find",
+				"ls",
 			]);
 			expect(await created.harness.getStreamOptions()).toEqual({ maxTokens: 123 });
 			expect(await created.harness.getRetryPolicy()).toEqual({ enabled: true, maxRetries: 2, baseDelayMs: 10 });
 			expect(await created.harness.getSteeringMode()).toBe("all");
 			expect(await created.harness.getFollowUpMode()).toBe("all");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("exposes server-owned exec_command and write_stdin tools when a process registry is configured", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "process-tool-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: "/workspace" });
+		const processes = new InMemoryV2ProcessRegistry();
+		const created = await createCodingAgentHarness({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+			processes,
+		});
+		try {
+			const tools = await created.harness.getTools();
+			const execCommand = tools.find((tool) => tool.name === "exec_command");
+			const writeStdin = tools.find((tool) => tool.name === "write_stdin");
+			if (!execCommand || !writeStdin) throw new Error("Expected process compatibility tools");
+			const started = await execCommand.execute("exec-call", { command: "long-running" });
+			expect(started.details).toMatchObject({ session_id: expect.any(String), state: "running", cursor: 0 });
+			const sessionId = (started.details as { session_id: string }).session_id;
+			const written = await writeStdin.execute("stdin-call", { session_id: sessionId, chars: "input" });
+			expect(written.content).toEqual([{ type: "text", text: "input" }]);
+			expect(written.details).toMatchObject({ session_id: sessionId, state: "running", cursor: 5 });
+			const bounded = await writeStdin.execute("poll-call", {
+				session_id: sessionId,
+				cursor: 0,
+				max_output_tokens: 1,
+			});
+			expect(bounded.content).toEqual([{ type: "text", text: "inpu" }]);
+			expect(bounded.details).toMatchObject({ session_id: sessionId, truncated: true });
 		} finally {
 			await created.harness.close();
 			await env.cleanup();
@@ -236,14 +454,145 @@ describe("coding-agent Harness construction", () => {
 			]);
 			const spawn = (await created.harness.getTools()).find((tool) => tool.name === "spawn_agent");
 			if (!spawn) throw new Error("Expected spawn_agent tool");
-			expect(await spawn.execute("spawn-call", { taskName: "child", taskMessage: "Inspect the bug" })).toMatchObject(
-				{
-					content: [{ type: "text", text: expect.stringContaining('"taskName":"child"') }],
-				},
-			);
+			expect(
+				await spawn.execute("spawn-call", {
+					taskName: "child",
+					taskMessage: "Inspect the bug",
+					role: "reviewer",
+					forkTurns: 1,
+				}),
+			).toMatchObject({
+				content: [{ type: "text", text: expect.stringContaining('"role":"reviewer"') }],
+			});
 		} finally {
 			await created.harness.close();
 			await env.cleanup();
+		}
+	});
+
+	test("keeps the child-agent tool contract available for three configured providers", async () => {
+		const models = createModels();
+		const providers = [
+			fauxProvider({
+				provider: "coding-agent-harness-agent-tools-openai-faux",
+				models: [{ id: "openai-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			}),
+			fauxProvider({
+				provider: "coding-agent-harness-agent-tools-anthropic-faux",
+				models: [{ id: "anthropic-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			}),
+			fauxProvider({
+				provider: "coding-agent-harness-agent-tools-google-faux",
+				models: [{ id: "google-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			}),
+		];
+		for (const provider of providers) models.setProvider(provider.provider);
+		const expected = ["spawn_agent", "list_agents", "wait_agent", "send_message", "followup_task", "interrupt_agent"];
+
+		for (const [index, provider] of providers.entries()) {
+			const session = new Session(new InMemorySessionStorage({ id: `agent-tools-${index}`, createdAt: 1 }));
+			const env = new NodeExecutionEnv({ cwd: "/workspace" });
+			const created = await createCodingAgentHarness({
+				session,
+				models,
+				model: provider.getModel()!,
+				env,
+				agents: {
+					spawn: async (request) => ({ id: "agent-1", ...request }),
+					list: async () => [],
+					wait: async (agentId) => ({ id: agentId, state: "complete" }),
+					message: async () => {},
+					followUp: async (agentId) => ({ id: agentId, state: "running" }),
+					interrupt: async (agentId) => ({ id: agentId, state: "interrupted" }),
+				},
+			});
+			try {
+				expect((await created.harness.getTools()).map((tool) => tool.name).slice(-6)).toEqual(expected);
+			} finally {
+				await created.harness.close();
+				await env.cleanup();
+			}
+		}
+	});
+
+	test("executes every child-agent tool for each configured provider/model", async () => {
+		const models = createModels();
+		const providers = [
+			fauxProvider({
+				provider: "coding-agent-harness-agent-exec-openai-faux",
+				models: [{ id: "openai-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			}),
+			fauxProvider({
+				provider: "coding-agent-harness-agent-exec-anthropic-faux",
+				models: [{ id: "anthropic-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			}),
+			fauxProvider({
+				provider: "coding-agent-harness-agent-exec-google-faux",
+				models: [{ id: "google-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+			}),
+		];
+		for (const provider of providers) models.setProvider(provider.provider);
+
+		for (const [index, provider] of providers.entries()) {
+			const calls: string[] = [];
+			const session = new Session(new InMemorySessionStorage({ id: `agent-tools-exec-${index}`, createdAt: 1 }));
+			const env = new NodeExecutionEnv({ cwd: "/workspace" });
+			const created = await createCodingAgentHarness({
+				session,
+				models,
+				model: provider.getModel()!,
+				env,
+				agents: {
+					spawn: async (request) => {
+						calls.push("spawn");
+						return { id: "agent-1", ...request };
+					},
+					list: async () => {
+						calls.push("list");
+						return [{ id: "agent-1", state: "running" }];
+					},
+					wait: async (agentId) => {
+						calls.push(`wait:${agentId}`);
+						return { id: agentId, state: "complete" };
+					},
+					message: async (agentId) => {
+						calls.push(`message:${agentId}`);
+					},
+					followUp: async (agentId) => {
+						calls.push(`followUp:${agentId}`);
+						return { id: agentId, state: "running" };
+					},
+					interrupt: async (agentId) => {
+						calls.push(`interrupt:${agentId}`);
+						return { id: agentId, state: "interrupted" };
+					},
+				},
+			});
+			try {
+				const tools = await created.harness.getTools();
+				const tool = (name: string) => {
+					const candidate = tools.find((entry) => entry.name === name);
+					if (!candidate) throw new Error(`Expected ${name} tool`);
+					return candidate;
+				};
+				await tool("spawn_agent").execute("spawn", { taskName: "child", taskMessage: "inspect" });
+				await tool("list_agents").execute("list", {});
+				await tool("wait_agent").execute("wait", { agentId: "agent-1" });
+				await tool("send_message").execute("message", { agentId: "agent-1", message: "hello" });
+				await tool("followup_task").execute("follow-up", { agentId: "agent-1", message: "continue" });
+				await tool("interrupt_agent").execute("interrupt", { agentId: "agent-1" });
+				expect(calls).toEqual([
+					"spawn",
+					"list",
+					"wait:agent-1",
+					"message:agent-1",
+					"followUp:agent-1",
+					"interrupt:agent-1",
+				]);
+			} finally {
+				await created.harness.close();
+				await env.cleanup();
+			}
 		}
 	});
 
@@ -257,6 +606,7 @@ describe("coding-agent Harness construction", () => {
 			model: getModel("google", "gemini-2.5-flash"),
 			env,
 			plans: {
+				read: async () => undefined,
 				update: async (input) => {
 					updates.push(input);
 					return { version: 1, items: input.items };
@@ -298,6 +648,24 @@ describe("coding-agent Harness construction", () => {
 		);
 	});
 
+	test("appends role instructions after model instructions", () => {
+		const prompt = buildCodingAgentHarnessSystemPrompt({
+			cwd: "/workspace",
+			tools: [],
+			activeToolNames: [],
+			modelInstruction: {
+				id: "model-profile",
+				source: "text",
+				mode: "append",
+				text: "Model profile",
+				contentHash: "hash",
+				byteLength: "Model profile".length,
+			},
+			roleInstructions: "Reviewer role",
+		});
+		expect(prompt.indexOf("Model profile")).toBeLessThan(prompt.indexOf("Reviewer role"));
+	});
+
 	test("preserves caller-supplied tools and activation", async () => {
 		const session = new Session(new InMemorySessionStorage({ id: "custom-harness-session", createdAt: 1 }));
 		const env = new NodeExecutionEnv({ cwd: "/workspace" });
@@ -320,6 +688,32 @@ describe("coding-agent Harness construction", () => {
 		try {
 			expect((await created.harness.getTools()).map((tool) => tool.name)).toEqual(["inspect"]);
 			expect(await created.harness.getActiveTools()).toEqual([]);
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("filters server-owned active tools after assembly", async () => {
+		const session = new Session(new InMemorySessionStorage({ id: "filtered-tools-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: "/workspace" });
+		const created = await createCodingAgentHarness({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			env,
+			excludedToolNames: ["read"],
+		});
+		try {
+			expect(await created.harness.getActiveTools()).toEqual([
+				"apply_patch",
+				"bash",
+				"edit",
+				"write",
+				"grep",
+				"find",
+				"ls",
+			]);
 		} finally {
 			await created.harness.close();
 			await env.cleanup();

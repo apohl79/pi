@@ -9,7 +9,12 @@ import {
 	type SessionSnapshotV2,
 } from "@earendil-works/pi-protocol";
 import { describe, expect, test } from "vitest";
-import { RemoteV2SessionSelector, sessionStatus } from "../../src/client/remote-v2-selector.ts";
+import {
+	formatRemoteV2SessionSelector,
+	type RemoteV2SessionEntry,
+	RemoteV2SessionSelector,
+	sessionStatus,
+} from "../../src/client/remote-v2-selector.ts";
 
 function snapshot(overrides: Partial<SessionSnapshotV2> = {}): SessionSnapshotV2 {
 	return {
@@ -68,7 +73,9 @@ function attachmentClient(current: SessionSnapshotV2): PiClientV2 {
 			const result: JsonValue =
 				message.request.command === "session/read"
 					? ({ session: current } as JsonValue)
-					: { command: message.request.command };
+					: message.request.command === "process/list"
+						? ({ processes: [] } as JsonValue)
+						: { command: message.request.command };
 			handlers?.onData(encodeServerMessageV2({ type: "response", id: message.id, ok: true, result }));
 		},
 		close: () => {},
@@ -118,5 +125,26 @@ describe("sessionStatus", () => {
 		expect(attachment.view.render(120).join("\n")).toContain("session-1");
 		await attachment.dispose();
 		client.dispose();
+	});
+});
+
+describe("formatRemoteV2SessionSelector", () => {
+	test("renders authoritative status labels and bounded overflow", () => {
+		const entries = [
+			{ id: "idle", status: "idle", sessionName: "Idle task", cwd: "/work" },
+			{ id: "running", status: "running" },
+			{ id: "input", status: "awaiting-input" },
+			{ id: "suspended", status: "suspended" },
+			{ id: "goal", status: "goal-active" },
+			{ id: "failed", status: "failed" },
+		] as unknown as RemoteV2SessionEntry[];
+
+		expect(formatRemoteV2SessionSelector(entries, 5)).toBe(
+			"Idle task · idle · /work\nrunning · running\ninput · awaiting-input\nsuspended · suspended\ngoal · goal-active\nSessions +1 more",
+		);
+	});
+
+	test("rejects an invalid display limit", () => {
+		expect(() => formatRemoteV2SessionSelector([], 0)).toThrow("maxEntries must be a positive safe integer");
 	});
 });

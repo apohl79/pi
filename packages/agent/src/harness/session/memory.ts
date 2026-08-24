@@ -4,6 +4,7 @@ import { SessionState } from "./state.ts";
 import {
 	type BranchBounds,
 	type Entry,
+	type EntryPlacement,
 	type EntryQuery,
 	type ForkOptions,
 	type LanePointer,
@@ -14,15 +15,18 @@ import {
 	type OperationStartedRecord,
 	type ProvisionedEntry,
 	type RecordQuery,
+	type RegisterWrite,
 	type SessionCreateOptions,
 	SessionError,
 	type SessionMetadata,
+	type SessionRegister,
 	type SessionRepo,
 	type SessionStats,
 	type SessionStorage,
+	type SessionTransactionStorage,
 } from "./types.ts";
 
-export class InMemorySessionStorage implements SessionStorage {
+export class InMemorySessionStorage implements SessionStorage, SessionTransactionStorage {
 	private readonly metadata: SessionMetadata;
 	private readonly state = new SessionState();
 
@@ -86,6 +90,68 @@ export class InMemorySessionStorage implements SessionStorage {
 		} as unknown as TRecord;
 		this.state.applyMutation({ kind: "record", record });
 		return structuredClone(record);
+	}
+
+	async appendRecords<TRecord extends LaneRecord>(newRecords: readonly NewRecord<TRecord>[]): Promise<TRecord[]> {
+		if (newRecords.length === 0) return [];
+		const ids = new Set<string>();
+		const records: TRecord[] = [];
+		let nextSequence = this.state.nextSequence;
+		const openLanes = new Set<string>();
+		for (const newRecord of newRecords) {
+			this.state.requireLane(newRecord.lane);
+			this.state.validateUnusedId(newRecord.id);
+			if (ids.has(newRecord.id)) throw new SessionError("already_exists", `ID already exists: ${newRecord.id}`);
+			ids.add(newRecord.id);
+			const currentOpenOperationId = this.state.findOpenOperations(newRecord.lane, { limit: 1 })[0]?.id;
+			if (
+				newRecord.type === "operation_started" &&
+				(currentOpenOperationId !== undefined || openLanes.has(newRecord.lane))
+			) {
+				throw new SessionError("storage", `Lane ${newRecord.lane} already has an open operation`);
+			}
+			if (newRecord.type === "operation_started") openLanes.add(newRecord.lane);
+			const record = {
+				...structuredClone(newRecord),
+				seq: nextSequence++,
+				timestamp: Date.now(),
+			} as unknown as TRecord;
+			records.push(record);
+		}
+		for (const record of records) this.state.applyMutation({ kind: "record", record });
+		return structuredClone(records);
+	}
+
+	async appendTransaction<TRecord extends LaneRecord>(
+		newRecords: readonly NewRecord<TRecord>[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ records: TRecord[]; registers: SessionRegister[] }> {
+		if (newRecords.length === 0 && writes.length === 0) return { records: [], registers: [] };
+		const records = await this.appendRecords(newRecords);
+		const registers: SessionRegister[] = [];
+		for (const write of writes) {
+			const mutation = { kind: "register" as const, seq: this.state.nextSequence, write };
+			this.state.applyMutation(mutation);
+			const register = this.state.getRegister(write.namespace, write.key);
+			if (register !== undefined) registers.push(register);
+		}
+		return { records, registers };
+	}
+
+	async getRegister(namespace: string, key: string): Promise<SessionRegister | undefined> {
+		return this.state.getRegister(namespace, key);
+	}
+
+	async appendAtomicTransaction(
+		entries: readonly EntryPlacement[],
+		records: readonly NewRecord[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ entries: Entry[]; records: LaneRecord[]; registers: SessionRegister[] }> {
+		const committedEntries: Entry[] = [];
+		for (const placement of entries)
+			committedEntries.push(await this.appendEntry(placement.entry as ProvisionedEntry<Entry>, placement.lane));
+		const result = await this.appendTransaction(records, writes);
+		return { entries: committedEntries, records: result.records, registers: result.registers };
 	}
 
 	async getEntry(id: string): Promise<Entry | undefined> {

@@ -55,7 +55,7 @@ export interface V2UsageLedger {
 	aggregate(filter?: V2UsageFilter): Promise<V2UsageAggregate>;
 }
 
-function validateEntry(entry: V2UsageLedgerEntry): V2UsageLedgerEntry {
+export function validateV2UsageEntry(entry: V2UsageLedgerEntry): V2UsageLedgerEntry {
 	if (!entry.responseId || !entry.sessionId || !entry.agentId || !entry.operationId)
 		throw new Error("Usage ledger identity fields are required");
 	for (const [key, value] of Object.entries(entry)) {
@@ -121,11 +121,15 @@ function aggregateEntries(entries: readonly V2UsageLedgerEntry[]): V2UsageAggreg
 	};
 }
 
+export function aggregateV2UsageEntries(entries: readonly V2UsageLedgerEntry[]): V2UsageAggregate {
+	return aggregateEntries(entries);
+}
+
 export class InMemoryV2UsageLedger implements V2UsageLedger {
 	private readonly entries = new Map<string, V2UsageLedgerEntry>();
 
 	async record(entry: V2UsageLedgerEntry): Promise<V2UsageLedgerEntry> {
-		const validated = validateEntry(entry);
+		const validated = validateV2UsageEntry(entry);
 		this.entries.set(validated.responseId, validated);
 		return structuredClone(validated);
 	}
@@ -169,7 +173,7 @@ export class JsonlV2UsageLedger implements V2UsageLedger {
 	async record(entry: V2UsageLedgerEntry): Promise<V2UsageLedgerEntry> {
 		const write = this.pending.then(async () => {
 			await this.ensureLoaded();
-			const validated = await this.memory.record(entry);
+			const validated = validateV2UsageEntry(entry);
 			await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
 			const handle = await open(this.path, "a", 0o600);
 			try {
@@ -178,6 +182,7 @@ export class JsonlV2UsageLedger implements V2UsageLedger {
 			} finally {
 				await handle.close();
 			}
+			await this.memory.record(validated);
 			return validated;
 		});
 		this.pending = write.then(

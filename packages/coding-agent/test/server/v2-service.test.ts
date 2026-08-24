@@ -2,8 +2,13 @@ import { GoalContinuationScheduler, GoalManager, InMemorySessionStorage, Session
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
-import { InMemoryV2InputRegistry } from "@earendil-works/pi-server";
-import { describe, expect, test } from "vitest";
+import {
+	InMemoryForensicRecorder,
+	InMemoryV2InputRegistry,
+	InMemoryV2PlanRegistry,
+	InMemoryV2UsageLedger,
+} from "@earendil-works/pi-server";
+import { describe, expect, test, vi } from "vitest";
 import { createCodingAgentHarness } from "../../src/server/create-harness.ts";
 import { ServerRuntimeExtensionHost } from "../../src/server/extension-host.ts";
 import {
@@ -23,6 +28,115 @@ describe("coding-agent v2 service adapter", () => {
 		);
 	});
 
+	test("rejects goal pause and resume when goals are not configured", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-goal-config-faux",
+			models: [{ id: "goal-config-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const session = new Session(new InMemorySessionStorage({ id: "goal-config-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+			systemPrompt: "goal configuration",
+		});
+		try {
+			const service = createCodingAgentV2Service(models, [
+				{
+					metadata: { id: "goal-config-session", createdAt: 1, updatedAt: 1 },
+					harness: created.harness,
+				},
+			]);
+			const runtime = await service.openSession("goal-config-session");
+			for (const command of ["goal/pause", "goal/resume"] as const) {
+				await expect(
+					runtime.run(command, { command, sessionId: "goal-config-session", payload: {} }),
+				).rejects.toThrow("Goals are not configured");
+				expect((await runtime.snapshot()).activeOperation).toMatchObject({ state: "failed", kind: command });
+			}
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("delivers durable child completions on the parent next turn", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-completion-queue-faux",
+			models: [{ id: "completion-queue-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("parent response"), fauxAssistantMessage("second response")]);
+		const session = new Session(new InMemorySessionStorage({ id: "completion-queue-session", createdAt: 1 }));
+		const diagnostics = new InMemoryForensicRecorder();
+		await session.appendCustomEntry("agent_completion", {
+			version: 1,
+			agentId: "child-1",
+			path: "/root/worker",
+			taskName: "worker",
+			state: "complete",
+			role: "reviewer",
+			model: { provider: "child-provider", id: "child-model" },
+		});
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+			systemPrompt: "completion queue",
+		});
+		try {
+			const service = createCodingAgentV2Service(models, [
+				{
+					metadata: { id: "completion-queue-session", createdAt: 1, updatedAt: 1 },
+					harness: created.harness,
+					forensicRecorder: diagnostics,
+				},
+			]);
+			const runtime = await service.openSession("completion-queue-session");
+			await runtime.run("disable-auto-name", {
+				command: "session/name/auto/set",
+				sessionId: "completion-queue-session",
+				payload: { enabled: false },
+			});
+			await runtime.run("completion-turn-1", {
+				command: "turn/start",
+				sessionId: "completion-queue-session",
+				payload: { text: "continue" },
+			});
+			const messages = (await session.findEntries({ order: "oldestFirst" })).filter(
+				(entry): entry is Extract<typeof entry, { type: "message" }> => entry.type === "message",
+			);
+			const firstUser = messages.find((entry) => entry.message.role === "user");
+			expect(firstUser).toBeDefined();
+			expect(JSON.stringify(firstUser?.message)).toContain("/root/worker (complete) role=reviewer");
+			expect((await session.findEntries({ customType: "agent_completion_consumed" })).length).toBe(1);
+			expect((await diagnostics.read()).map((event) => event.kind)).toEqual(["agent_completion_delivered"]);
+			await runtime.run("completion-turn-2", {
+				command: "turn/start",
+				sessionId: "completion-queue-session",
+				payload: { text: "continue again" },
+			});
+			const updatedMessages = (await session.findEntries({ order: "oldestFirst" })).filter(
+				(entry): entry is Extract<typeof entry, { type: "message" }> => entry.type === "message",
+			);
+			expect(JSON.stringify(updatedMessages.at(-2)?.message)).not.toContain("[child agent completions]");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("projects a pending structured input request as awaitingInput", async () => {
 		const models = createModels();
 		const session = new Session(new InMemorySessionStorage({ id: "awaiting-input-session", createdAt: 1 }));
@@ -34,17 +148,58 @@ describe("coding-agent v2 service adapter", () => {
 			env,
 		});
 		const inputs = new InMemoryV2InputRegistry();
+		const plans = new InMemoryV2PlanRegistry();
+		const diagnostics = new InMemoryForensicRecorder();
+		await diagnostics.record({ kind: "turn_failed", sessionId: "awaiting-input-session", severity: "error" });
+		await plans.update("awaiting-input-session", { items: [{ step: "Inspect queue", status: "in_progress" }] });
 		const service = createCodingAgentV2Service(models, [
 			{
 				metadata: { id: "awaiting-input-session", createdAt: 1, updatedAt: 1 },
 				harness: created.harness,
 				inputs,
+				plan: async () => plans.read("awaiting-input-session"),
+				diagnostics: async () => {
+					const events = await diagnostics.read();
+					return {
+						capture: "metadata",
+						degraded: events.some((event) => event.severity === "error"),
+						lastCriticalEventSeq: events.at(-1)?.seq ?? 0,
+					};
+				},
+				queues: async () => ({
+					steer: [
+						{
+							entryId: "queued-steer",
+							message: { role: "user", content: [{ type: "text", text: "queued" }], timestamp: 7 },
+							content: [
+								{ type: "text", text: "queued" },
+								{ type: "image", digest: "sha256:queued-image", mimeType: "image/png" },
+								{ type: "blob", digest: "sha256:queued-blob", mimeType: "application/octet-stream" },
+							],
+						},
+					],
+					followUp: [],
+				}),
 			},
 		]);
 		const request = await inputs.create("awaiting-input-session", [{ id: "answer", prompt: "Answer?" }]);
 		try {
 			expect(await (await service.openSession("awaiting-input-session")).snapshot()).toMatchObject({
 				phase: "awaitingInput",
+				diagnostics: { capture: "metadata", degraded: true, lastCriticalEventSeq: 1 },
+				plan: { version: 1, items: [{ step: "Inspect queue", status: "in_progress" }] },
+				queues: {
+					steer: [
+						{
+							id: "queued-steer",
+							content: [
+								{ type: "text", text: "queued" },
+								{ type: "image", digest: "sha256:queued-image", mimeType: "image/png" },
+								{ type: "blob", digest: "sha256:queued-blob", mimeType: "application/octet-stream" },
+							],
+						},
+					],
+				},
 			});
 		} finally {
 			await inputs.cancel(request.id);
@@ -227,6 +382,13 @@ describe("coding-agent v2 service adapter", () => {
 			});
 			expect((await runtime.snapshot()).name).toBe("Fix durable session resume");
 			expect((await runtime.snapshot()).nameSource).toBe("generated");
+			await expect(
+				runtime.run("invalid-generated", {
+					command: "session/name/generate",
+					sessionId: "naming-session",
+					payload: { name: "answer." },
+				}),
+			).rejects.toThrow("safe bounded name");
 			await runtime.run("explicit", {
 				command: "session/name/set",
 				sessionId: "naming-session",
@@ -234,6 +396,354 @@ describe("coding-agent v2 service adapter", () => {
 			});
 			await runtime.run("ignored", { command: "session/name/generate", sessionId: "naming-session", payload: {} });
 			expect((await runtime.snapshot()).name).toBe("Manual title");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("falls back to the session model when no fast model is configured", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-naming-fallback-faux",
+			models: [{ id: "session-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		const foreign = fauxProvider({
+			provider: "coding-agent-v2-naming-foreign-faux",
+			models: [{ id: "foreign-fast", reasoning: false, contextWindow: 8_000, maxTokens: 500 }],
+		});
+		models.setProvider(faux.provider);
+		models.setProvider(foreign.provider);
+		faux.setResponses([fauxAssistantMessage("turn response"), fauxAssistantMessage("Recover daemon state")]);
+		const session = new Session(new InMemorySessionStorage({ id: "naming-fallback-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		try {
+			const service = createCodingAgentV2Service(
+				models,
+				[{ metadata: { id: "naming-fallback-session", createdAt: 1, updatedAt: 1 }, harness: created.harness }],
+				{ fastModel: foreign.getModel() },
+			);
+			const runtime = await service.openSession("naming-fallback-session");
+			await runtime.run("fallback-name", {
+				command: "turn/start",
+				sessionId: "naming-fallback-session",
+				payload: { text: "recover" },
+			});
+			expect((await runtime.snapshot()).name).toBe("Recover daemon state");
+			expect((await runtime.snapshot()).nameSource).toBe("generated");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("resolves the provider-local fast role without changing the session model", async () => {
+		const models = createModels();
+		const observedModels: string[] = [];
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-naming-role-faux",
+			models: [
+				{ id: "session-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+				{ id: "fast-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			(_context, _options, _state, model) => {
+				observedModels.push(model.id);
+				return fauxAssistantMessage("turn response");
+			},
+			(_context, _options, _state, model) => {
+				observedModels.push(model.id);
+				return fauxAssistantMessage("Role-selected title");
+			},
+		]);
+		const session = new Session(new InMemorySessionStorage({ id: "naming-role-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: models.getModel(faux.provider.id, "session-model")!,
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		try {
+			const runtime = await createCodingAgentV2Service(
+				models,
+				[{ metadata: { id: "naming-role-session", createdAt: 1, updatedAt: 1 }, harness: created.harness }],
+				{
+					fastModelResolver: (model) =>
+						model.provider === faux.provider.id ? models.getModel(faux.provider.id, "fast-model") : undefined,
+				},
+			).openSession("naming-role-session");
+			await runtime.run("role-name", {
+				command: "turn/start",
+				sessionId: "naming-role-session",
+				payload: { text: "recover" },
+			});
+			await vi.waitFor(() => expect(observedModels).toEqual(["session-model", "fast-model"]));
+			expect((await runtime.snapshot()).model.id).toBe("session-model");
+			expect((await runtime.snapshot()).name).toBe("Role-selected title");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("does not fail a completed turn when side-band naming fails", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-naming-failure-faux",
+			models: [{ id: "session-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("turn response")]);
+		const session = new Session(new InMemorySessionStorage({ id: "naming-failure-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({ session, models, model: faux.getModel(), env, tools: [] });
+		try {
+			const runtime = await createCodingAgentV2Service(models, [
+				{ metadata: { id: "naming-failure-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+			]).openSession("naming-failure-session");
+			await expect(
+				runtime.run("naming-failure", {
+					command: "turn/start",
+					sessionId: "naming-failure-session",
+					payload: { text: "complete this turn" },
+				}),
+			).resolves.toBeUndefined();
+			expect((await runtime.snapshot()).phase).toBe("idle");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("records compaction responses with compaction usage purpose", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-compaction-usage-faux",
+			models: [{ id: "model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("turn response"), fauxAssistantMessage("compaction summary")]);
+		const session = new Session(new InMemorySessionStorage({ id: "compaction-usage-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({ session, models, model: faux.getModel(), env, tools: [] });
+		const usage = new InMemoryV2UsageLedger();
+		try {
+			const runtime = await createCodingAgentV2Service(models, [
+				{
+					metadata: { id: "compaction-usage-session", createdAt: 1, updatedAt: 1 },
+					harness: created.harness,
+					usage,
+				},
+			]).openSession("compaction-usage-session");
+			await runtime.run("disable-auto-name", {
+				command: "session/name/auto/set",
+				sessionId: "compaction-usage-session",
+				payload: { enabled: false },
+			});
+			await runtime.run("turn", {
+				command: "turn/start",
+				sessionId: "compaction-usage-session",
+				payload: { text: "history" },
+			});
+			await runtime.run("compact", {
+				command: "turn/compact",
+				sessionId: "compaction-usage-session",
+				payload: {},
+			});
+			expect(await usage.read({ purpose: "compaction" })).toHaveLength(1);
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("persists the automatic naming setting across runtime recreation", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-auto-name-faux",
+			models: [{ id: "coding-agent-v2-auto-name-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("turn response"), fauxAssistantMessage("should not be sampled")]);
+		const session = new Session(new InMemorySessionStorage({ id: "auto-name-setting-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		try {
+			const definition = {
+				metadata: { id: "auto-name-setting-session", createdAt: 1, updatedAt: 1 },
+				harness: created.harness,
+			};
+			const first = await createCodingAgentV2Service(models, [definition]).openSession("auto-name-setting-session");
+			await first.run("disable-auto-name", {
+				command: "session/name/auto/set",
+				sessionId: "auto-name-setting-session",
+				payload: { enabled: false },
+			});
+			await first.run("explicit-name", {
+				command: "session/name/set",
+				sessionId: "auto-name-setting-session",
+				payload: { name: "Persisted manual title" },
+			});
+			const recreated = await createCodingAgentV2Service(models, [definition], { fastModel: faux.getModel() });
+			const second = await recreated.openSession("auto-name-setting-session");
+			await second.run("turn", {
+				command: "turn/start",
+				sessionId: "auto-name-setting-session",
+				payload: { text: "work" },
+			});
+			expect((await second.snapshot()).name).toBe("Persisted manual title");
+			expect((await second.snapshot()).nameSource).toBe("explicit");
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("toggles the active model compaction override through the v2 command", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-compaction-faux",
+			models: [
+				{ id: "coding-agent-v2-compaction-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		const session = new Session(new InMemorySessionStorage({ id: "compaction-toggle-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		try {
+			const activeModel = await created.harness.getModel();
+			await created.harness.setCompactionSettings({
+				enabled: true,
+				reserveTokens: 123,
+				keepRecentTokens: 456,
+				modelOverrides: { [`${activeModel.provider}/${activeModel.id}`]: { enabled: false, reserveTokens: 789 } },
+			});
+			expect(await created.harness.getCompactionSettings()).toMatchObject({ enabled: false, reserveTokens: 789 });
+			const runtime = createCodingAgentV2Service(models, [
+				{ metadata: { id: "compaction-toggle-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+			]).openSession("compaction-toggle-session");
+			const opened = await runtime;
+			expect((await opened.snapshot()).compactionPolicy.enabled).toBe(false);
+			await opened.run("enable-compaction", {
+				command: "session/compaction/set",
+				sessionId: "compaction-toggle-session",
+				payload: { enabled: true },
+			});
+			expect((await opened.snapshot()).compactionPolicy).toMatchObject({
+				enabled: true,
+				reserveTokens: 789,
+				keepRecentTokens: 456,
+			});
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("freezes compaction policy on operation acceptance", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-frozen-policy-faux",
+			models: [
+				{ id: "coding-agent-v2-frozen-policy-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		const session = new Session(new InMemorySessionStorage({ id: "frozen-policy-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		try {
+			await created.harness.setCompactionSettings({ enabled: false, reserveTokens: 123, keepRecentTokens: 456 });
+			const opened = await createCodingAgentV2Service(models, [
+				{ metadata: { id: "frozen-policy-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+			]).openSession("frozen-policy-session");
+			const accepted = await opened.accept("frozen-operation");
+			expect(accepted.compactionPolicy).toMatchObject({ enabled: false, reserveTokens: 123, keepRecentTokens: 456 });
+			await created.harness.setCompactionSettings({ enabled: true, reserveTokens: 999, keepRecentTokens: 888 });
+			expect((await opened.snapshot()).activeOperation?.compactionPolicy).toMatchObject({
+				enabled: false,
+				reserveTokens: 123,
+				keepRecentTokens: 456,
+			});
+			expect((await opened.snapshot()).compactionPolicy).toMatchObject({ enabled: true, reserveTokens: 999 });
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
+	test("keeps the active turn projection when a steer is accepted", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-steer-acceptance-faux",
+			models: [{ id: "steer-acceptance-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const session = new Session(new InMemorySessionStorage({ id: "steer-acceptance-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+		});
+		try {
+			const runtime = await createCodingAgentV2Service(models, [
+				{ metadata: { id: "steer-acceptance-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+			]).openSession("steer-acceptance-session");
+			await runtime.accept("active-turn", {
+				command: "turn/start",
+				sessionId: "steer-acceptance-session",
+				payload: {},
+			});
+			const accepted = await runtime.accept("queued-steer", {
+				command: "turn/steer",
+				sessionId: "steer-acceptance-session",
+				payload: { text: "interrupt" },
+			});
+			expect(accepted.operationId).toBe("queued-steer");
+			expect((await runtime.snapshot()).activeOperation).toMatchObject({
+				operationId: "active-turn",
+				state: "accepted",
+			});
+			expect((await runtime.snapshot()).phase).toBe("turn");
 		} finally {
 			await created.harness.close();
 			await env.cleanup();
@@ -262,6 +772,7 @@ describe("coding-agent v2 service adapter", () => {
 		});
 		try {
 			const lifecycle: string[] = [];
+			const diagnostics = new InMemoryForensicRecorder();
 			const extensionHost = new ServerRuntimeExtensionHost({
 				resolveModel: () => ({ id: faux.getModel().id, provider: faux.getModel().provider }),
 			});
@@ -274,21 +785,40 @@ describe("coding-agent v2 service adapter", () => {
 					lifecycle.push(`terminal:${operation.type}:${outcome}`);
 				},
 			});
+			await extensionHost.register({
+				id: "failing-extension",
+				onOperationAccepted: () => {
+					throw new Error("diagnostic-only extension failure");
+				},
+			});
 			const service = createCodingAgentV2Service(models, [
 				{
 					metadata: { id: "adapter-session", createdAt: 1, updatedAt: 1 },
 					harness: created.harness,
 					goals,
 					extensionHost,
+					forensicRecorder: diagnostics,
+					instructionProfile: async () => ({
+						id: "profile-1",
+						source: "text" as const,
+						contentHash: "hash-1",
+						byteLength: 20,
+						estimatedTokens: 5,
+					}),
 				},
 			]);
 			const runtime = await service.openSession("adapter-session");
+			const pluginDiagnostics: Array<Record<string, unknown>> = [];
+			runtime.onEvent?.((event) => {
+				if (event.event === "plugin_diagnostic") pluginDiagnostics.push(event.payload);
+			});
 			const accepted = await runtime.accept("operation-1");
 			expect((await runtime.snapshot()).activeOperation).toMatchObject({
 				operationId: "operation-1",
 				kind: "pending",
 				state: "accepted",
 				acceptedSeq: 2,
+				model: { provider: faux.getModel().provider, id: faux.getModel().id },
 			});
 			await runtime.run("operation-1", {
 				command: "turn/start",
@@ -305,6 +835,38 @@ describe("coding-agent v2 service adapter", () => {
 			expect(usageSnapshot.output).toBeGreaterThan(0);
 			expect(turnSnapshot.transcript.map((item) => item.role)).toEqual(["user", "assistant"]);
 			expect(lifecycle).toEqual(["accepted:turn/start", "terminal:turn/start:completed"]);
+			expect(pluginDiagnostics).toEqual([
+				{ hook: "accepted", extensionId: "test-extension", status: "fulfilled" },
+				{
+					hook: "accepted",
+					extensionId: "failing-extension",
+					status: "rejected",
+					reason: "diagnostic-only extension failure",
+				},
+				{ hook: "terminal", extensionId: "test-extension", status: "fulfilled" },
+				{ hook: "terminal", extensionId: "failing-extension", status: "fulfilled" },
+			]);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(
+				(await diagnostics.read()).filter(
+					(event) => event.kind === "server_extension_hook" && event.payload.hook === "accepted",
+				),
+			).toMatchObject([
+				{ operationId: "operation-1", outcome: "ok", payload: { extensionId: "test-extension", hook: "accepted" } },
+				{
+					operationId: "operation-1",
+					outcome: "error",
+					payload: { extensionId: "failing-extension", hook: "accepted" },
+				},
+			]);
+			expect((await diagnostics.read()).filter((event) => event.kind === "model_instruction_profile")).toMatchObject(
+				[
+					{
+						operationId: "operation-1",
+						payload: { id: "profile-1", contentHash: "hash-1", byteLength: 20, estimatedTokens: "[REDACTED]" },
+					},
+				],
+			);
 			await expect(
 				runtime.run("bad-operation", {
 					command: "session/thinking/set",

@@ -53,6 +53,7 @@ import type {
 	ResolvedCommand,
 	ResourcesDiscoverEvent,
 	ResourcesDiscoverResult,
+	SamplingInputContext,
 	SessionBeforeCompactResult,
 	SessionBeforeForkResult,
 	SessionBeforeSwitchResult,
@@ -1011,6 +1012,37 @@ export class ExtensionRunner {
 		}
 
 		return currentMessages;
+	}
+
+	async emitSamplingInput(messages: readonly AgentMessage[]): Promise<AgentMessage[]> {
+		const result: AgentMessage[] = [];
+		let characters = 0;
+		for (const ext of this.extensions) {
+			for (const registration of ext.samplingInputs?.values() ?? []) {
+				try {
+					const value = await registration.contribute({
+						model: this.getModel(),
+						messages,
+						signal: this.getSignalFn(),
+					} satisfies SamplingInputContext);
+					const fragments = value === undefined ? [] : Array.isArray(value) ? value : [value];
+					for (const fragment of fragments) {
+						const size = JSON.stringify(fragment).length;
+						if (result.length >= 128 || characters + size > 32_000) break;
+						result.push(structuredClone(fragment));
+						characters += size;
+					}
+				} catch (err) {
+					this.emitError({
+						extensionPath: ext.path,
+						event: `sampling:${registration.id}`,
+						error: err instanceof Error ? err.message : String(err),
+						stack: err instanceof Error ? err.stack : undefined,
+					});
+				}
+			}
+		}
+		return result;
 	}
 
 	async emitBeforeProviderRequest(payload: unknown): Promise<unknown> {

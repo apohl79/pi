@@ -1,4 +1,5 @@
-import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -11,6 +12,17 @@ async function createPlugin(version: string): Promise<{ root: string; manifest: 
 	const manifest = { name: "reviewer", version, skills: [], commands: [] } satisfies CodexPluginManifest;
 	await writeFile(join(root, ".codex-plugin", "plugin.json"), JSON.stringify(manifest));
 	return { root, manifest };
+}
+
+async function createPluginWithResource(
+	version: string,
+	resource: string,
+): Promise<{ root: string; manifest: CodexPluginManifest }> {
+	const plugin = await createPlugin(version);
+	await mkdir(join(plugin.root, resource), { recursive: true });
+	const manifest = { ...plugin.manifest, skills: [resource] } satisfies CodexPluginManifest;
+	await writeFile(join(plugin.root, ".codex-plugin", "plugin.json"), JSON.stringify(manifest));
+	return { root: plugin.root, manifest };
 }
 
 describe("CodexPluginActivationStore", () => {
@@ -76,5 +88,58 @@ describe("CodexPluginActivationStore", () => {
 				manifest: source.manifest,
 			}),
 		).rejects.toMatchObject({ code: "invalid_manifest" });
+	});
+
+	test("rejects incomplete packages before activating them", async () => {
+		const source = await createPluginWithResource("1.0.0", "skills/review");
+		const cache = await mkdtemp(join(tmpdir(), "pi-codex-activation-incomplete-"));
+		await rm(join(source.root, "skills"), { recursive: true, force: true });
+		const store = new CodexPluginActivationStore(cache);
+		await expect(
+			store.activate({
+				id: "reviewer@local",
+				version: source.manifest.version,
+				sourceRoot: source.root,
+				manifest: source.manifest,
+			}),
+		).rejects.toMatchObject({ code: "invalid_manifest" });
+	});
+
+	test("rolls back a failed first activation and removes staged state", async () => {
+		const source = await createPlugin("1.0.0");
+		const cache = await mkdtemp(join(tmpdir(), "pi-codex-activation-rollback-"));
+		const store = new CodexPluginActivationStore(cache);
+		const activation = await store.activate({
+			id: "reviewer@local",
+			version: source.manifest.version,
+			sourceRoot: source.root,
+			manifest: source.manifest,
+		});
+		await store.rollback(activation);
+		await expect(access(activation.root)).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(access(join(cache, "anything"))).rejects.toMatchObject({ code: "ENOENT" });
+	});
+
+	test("restores the previous pointer when an upgrade cannot be persisted", async () => {
+		const first = await createPlugin("1.0.0");
+		const second = await createPlugin("2.0.0");
+		const cache = await mkdtemp(join(tmpdir(), "pi-codex-activation-rollback-upgrade-"));
+		const store = new CodexPluginActivationStore(cache);
+		await store.activate({
+			id: "reviewer@local",
+			version: "1.0.0",
+			sourceRoot: first.root,
+			manifest: first.manifest,
+		});
+		const upgrade = await store.activate({
+			id: "reviewer@local",
+			version: "2.0.0",
+			sourceRoot: second.root,
+			manifest: second.manifest,
+		});
+		await store.rollback(upgrade);
+		const key = createHash("sha256").update("reviewer@local").digest("hex");
+		expect(JSON.parse(await readFile(join(cache, key, "active.json"), "utf8"))).toEqual({ version: "1.0.0" });
+		await expect(access(upgrade.root)).rejects.toMatchObject({ code: "ENOENT" });
 	});
 });

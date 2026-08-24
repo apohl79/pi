@@ -14,6 +14,7 @@ export interface RemoteV2SessionEntry extends SessionMetadataV2 {
 export interface RemoteV2SessionAttachment {
 	readonly session: RemoteV2Session;
 	readonly view: RemoteV2SessionView;
+	readonly setStatusline?: (command: string | undefined) => void | Promise<void>;
 	dispose(): Promise<void>;
 }
 
@@ -68,4 +69,16 @@ export function sessionStatus(snapshot: SessionSnapshotV2): RemoteV2SessionStatu
 	if (snapshot.goal?.status === "active") return "goal-active";
 	if (snapshot.phase === "turn" || snapshot.phase === "compaction") return "running";
 	return "idle";
+}
+
+export function formatRemoteV2SessionSelector(entries: readonly RemoteV2SessionEntry[], maxEntries = 32): string {
+	if (!Number.isSafeInteger(maxEntries) || maxEntries < 1)
+		throw new Error("maxEntries must be a positive safe integer");
+	const lines = entries.slice(0, maxEntries).map((entry) => {
+		const label = entry.sessionName ?? entry.id;
+		const location = entry.cwd === undefined ? "" : ` · ${entry.cwd}`;
+		return `${label} · ${entry.status}${location}`;
+	});
+	if (entries.length > maxEntries) lines.push(`Sessions +${entries.length - maxEntries} more`);
+	return lines.join("\n");
 }

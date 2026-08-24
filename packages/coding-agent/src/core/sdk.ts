@@ -360,7 +360,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		transformContext: async (messages) => {
 			const runner = extensionRunnerRef.current;
 			if (!runner) return messages;
-			return runner.emitContext(messages);
+			const transformed = await runner.emitContext(messages);
+			return [...transformed, ...(await runner.emitSamplingInput(transformed))];
 		},
 		steeringMode: settingsManager.getSteeringMode(),
 		followUpMode: settingsManager.getFollowUpMode(),

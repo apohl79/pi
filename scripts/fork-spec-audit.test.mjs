@@ -1,0 +1,19 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { auditForkSpec, resolveRepositoryRoot } from "./fork-spec-audit.mjs";
+
+test("keeps required implementation and production-test evidence present", () => {
+	const result = auditForkSpec();
+	assert.deepEqual(result.failures, []);
+	assert.ok(result.checkedFiles >= 28);
+	assert.ok(result.checkedPatterns >= 36);
+});
+
+test("resolves URL-encoded repository paths portably", () => {
+	assert.match(resolveRepositoryRoot("file:///tmp/pi%20workspace/scripts/fork-spec-audit.mjs"), /pi workspace[\\/]/);
+});
+
+test("requires compatibility entries to resolve to test files", () => {
+	const result = auditForkSpec();
+	assert.equal(result.failures.some((failure) => failure.includes("contains no test file")), false);
+});

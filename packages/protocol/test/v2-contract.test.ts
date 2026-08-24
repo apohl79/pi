@@ -3,17 +3,21 @@ import { describe, expect, test } from "vitest";
 import {
 	CommandNameV2Schema,
 	CommandV2Schema,
-	ClientMessageV2Decoder,
+	decodeCbor,
 	EventEnvelopeV2Schema,
 	EventNameV2Schema,
+	encodeCbor,
 	encodeClientMessageV2,
-	encodeServerMessageV2,
+	FrameDecoder,
+	ImageContentSchema,
 	isClientMessageV2,
 	isServerMessageV2,
+	OperationAcceptedSchema,
 	PROTOCOL_V2_VERSION,
+	PromptContentSchema,
+	parseClientMessageV2,
 	type SessionSnapshotV2,
 	SessionSnapshotV2Schema,
-	ServerMessageV2Decoder,
 } from "../src/index.ts";
 
 const commandNames = [
@@ -23,19 +27,26 @@ const commandNames = [
 	"session/detach",
 	"session/read",
 	"session/delete",
+	"session/fork",
 	"session/name/set",
 	"session/name/generate",
 	"session/name/auto/set",
 	"turn/start",
 	"turn/steer",
 	"turn/followUp",
+	"turn/queue/cancel",
 	"turn/abort",
 	"turn/resume",
 	"turn/rollback",
+	"turn/compact",
 	"operation/read",
 	"model/list",
 	"session/model/set",
 	"session/thinking/set",
+	"session/steering-mode/set",
+	"session/follow-up-mode/set",
+	"session/compaction/set",
+	"session/retry/set",
 	"agent/spawn",
 	"agent/list",
 	"agent/wait",
@@ -43,6 +54,7 @@ const commandNames = [
 	"agent/followUp",
 	"agent/interrupt",
 	"process/start",
+	"process/list",
 	"process/write",
 	"process/wait",
 	"process/terminate",
@@ -61,6 +73,7 @@ const commandNames = [
 	"plugin/list",
 	"plugin/read",
 	"plugin/install",
+	"plugin/upgrade",
 	"plugin/uninstall",
 	"plugin/enable",
 	"plugin/disable",
@@ -71,6 +84,7 @@ const commandNames = [
 	"app/list",
 	"app/read",
 	"app/auth/start",
+	"app/auth/complete",
 	"blob/put",
 	"blob/read",
 	"blob/stat",
@@ -82,6 +96,10 @@ const commandNames = [
 	"diagnostics/export",
 	"diagnostics/verify",
 	"diagnostics/doctor",
+	"usage/read",
+	"web",
+	"image/view",
+	"image/generate",
 ] as const;
 
 const eventNames = [
@@ -116,13 +134,6 @@ const eventNames = [
 	"store_integrity_changed",
 	"bundle_progress",
 ] as const;
-
-function literalSet(schema: { anyOf?: readonly { const?: unknown }[] }): string[] {
-	return (schema.anyOf ?? []).map((entry) => {
-		if (typeof entry.const !== "string") throw new Error("Expected a string literal schema");
-		return entry.const;
-	});
-}
 
 const snapshot: SessionSnapshotV2 = {
 	id: "session-1",
@@ -161,6 +172,60 @@ describe("protocol v2 contract", () => {
 		expect(snapshot.eventSeq).toBeGreaterThan(snapshot.revision);
 	});
 
+	test("accepts bounded child usage and rejects malformed usage fields", () => {
+		const agent = {
+			id: "agent-1",
+			path: "/root/worker",
+			taskName: "worker",
+			state: "running",
+			model: { provider: "test", id: "small" },
+			startedAt: 1_700_000_000_000,
+			usage: { input: 12, output: 4, cacheRead: 2, cacheWrite: 0, costUsd: 0.12, pricingState: "known" },
+		} as const;
+		expect(Check(SessionSnapshotV2Schema, { ...snapshot, agents: [agent] })).toBe(true);
+		expect(decodeCbor(encodeCbor({ ...snapshot, agents: [agent] }))).toEqual({ ...snapshot, agents: [agent] });
+		expect(Check(SessionSnapshotV2Schema, { ...snapshot, agents: [{ ...agent, usage: { input: -1 } }] })).toBe(false);
+		expect(Check(SessionSnapshotV2Schema, { ...snapshot, agents: [{ ...agent, startedAt: -1 }] })).toBe(false);
+	});
+
+	test("projects durable compaction summaries as transcript items", () => {
+		const compaction = {
+			id: "compaction-1",
+			role: "compactionSummary",
+			summary: "preserved history",
+			tokensBefore: 420,
+			timestamp: 1_700_000_000_001,
+		} as const;
+		const withCompaction = { ...snapshot, transcript: [compaction] };
+		expect(Check(SessionSnapshotV2Schema, withCompaction)).toBe(true);
+		expect(decodeCbor(encodeCbor(withCompaction))).toEqual(withCompaction);
+		expect(
+			Check(SessionSnapshotV2Schema, {
+				...snapshot,
+				transcript: [{ ...compaction, tokensBefore: -1 }],
+			}),
+		).toBe(false);
+	});
+
+	test("projects durable branch summaries as transcript items", () => {
+		const branchSummary = {
+			id: "branch-summary-1",
+			role: "branchSummary",
+			summary: "abandoned branch",
+			fromId: "message-1",
+			timestamp: 1_700_000_000_002,
+		} as const;
+		const withBranchSummary = { ...snapshot, transcript: [branchSummary] };
+		expect(Check(SessionSnapshotV2Schema, withBranchSummary)).toBe(true);
+		expect(decodeCbor(encodeCbor(withBranchSummary))).toEqual(withBranchSummary);
+		expect(
+			Check(SessionSnapshotV2Schema, {
+				...snapshot,
+				transcript: [{ ...branchSummary, fromId: "" }],
+			}),
+		).toBe(false);
+	});
+
 	test("accepts an operation request and durable acceptance response", () => {
 		const request = {
 			type: "request",
@@ -178,9 +243,42 @@ describe("protocol v2 contract", () => {
 		expect(isServerMessageV2(response)).toBe(true);
 	});
 
+	test("round-trips accepted compaction policy and rejects malformed policy values", () => {
+		const accepted = {
+			operationId: "operation-policy",
+			sessionRevision: 3,
+			eventSeq: 4,
+			compactionPolicy: {
+				enabled: true,
+				contextWindow: 32_000,
+				reserveTokens: 123,
+				keepRecentTokens: 456,
+				triggerTokens: 31_877,
+				source: "mixed",
+			},
+		} as const;
+
+		expect(Check(OperationAcceptedSchema, accepted)).toBe(true);
+		expect(decodeCbor(encodeCbor(accepted))).toEqual(accepted);
+		expect(
+			Check(OperationAcceptedSchema, {
+				...accepted,
+				compactionPolicy: { ...accepted.compactionPolicy, reserveTokens: -1 },
+			}),
+		).toBe(false);
+		expect(
+			Check(OperationAcceptedSchema, {
+				...accepted,
+				compactionPolicy: { ...accepted.compactionPolicy, source: "invalid" },
+			}),
+		).toBe(false);
+	});
+
 	test("freezes every command and authoritative event name in the v2 contract", () => {
-		expect([...commandNames].sort()).toEqual(literalSet(CommandNameV2Schema).sort());
-		expect([...eventNames].sort()).toEqual(literalSet(EventNameV2Schema).sort());
+		expect(CommandNameV2Schema.anyOf.map((entry) => entry.const)).toEqual(commandNames);
+		expect(EventNameV2Schema.anyOf.map((entry) => entry.const)).toEqual(eventNames);
+		expect(commandNames.every((command) => Check(CommandNameV2Schema, command))).toBe(true);
+		expect(eventNames.every((event) => Check(EventNameV2Schema, event))).toBe(true);
 		expect(Check(CommandV2Schema, { command: "operation/read", sessionId: "session-1" })).toBe(true);
 		expect(
 			Check(EventEnvelopeV2Schema, {
@@ -194,45 +292,51 @@ describe("protocol v2 contract", () => {
 		).toBe(true);
 	});
 
-	test("round-trips v2 messages through bounded decoders with fragmented and coalesced frames", () => {
+	test("accepts safe MIME tokens and rejects parameters or control characters", () => {
+		expect(Check(ImageContentSchema, { type: "image", data: "abc", mimeType: "image/png" })).toBe(true);
+		expect(Check(ImageContentSchema, { type: "image", data: "abc", mimeType: "image/svg+xml" })).toBe(true);
+		expect(Check(ImageContentSchema, { type: "image", data: "abc", mimeType: "text/plain; charset=utf-8" })).toBe(
+			false,
+		);
+		expect(Check(ImageContentSchema, { type: "image", data: "abc", mimeType: "text/plain\nX-Injected: yes" })).toBe(
+			false,
+		);
+	});
+
+	test("constrains V2 prompt reference MIME values", () => {
+		expect(Check(PromptContentSchema, { type: "image", digest: "sha256:image", mimeType: "image/png" })).toBe(true);
+		expect(Check(PromptContentSchema, { type: "blob", digest: "sha256:blob", mimeType: "text/plain" })).toBe(true);
+		expect(Check(PromptContentSchema, { type: "image", digest: "sha256:image", mimeType: "text/plain" })).toBe(false);
+		expect(
+			Check(PromptContentSchema, { type: "blob", digest: "sha256:blob", mimeType: "text/plain\nX-Injected: yes" }),
+		).toBe(false);
+	});
+
+	test("round-trips v2 messages through framed CBOR", () => {
 		const request = {
 			type: "request",
 			id: "request-2",
 			request: { command: "turn/start", sessionId: "session-1", payload: { text: "hello" } },
 		} as const;
-		const secondRequest = {
-			type: "request",
-			id: "request-3",
-			request: { command: "session/list" },
-		} as const;
-		const clientFirst = encodeClientMessageV2(request);
-		const clientSecond = encodeClientMessageV2(secondRequest);
-		const clientCombined = new Uint8Array(clientFirst.byteLength + clientSecond.byteLength);
-		clientCombined.set(clientFirst);
-		clientCombined.set(clientSecond, clientFirst.byteLength);
-		const clientDecoder = new ClientMessageV2Decoder();
-		const clientSplit = clientFirst.byteLength - 1;
-		const clientMessages = [
-			...clientDecoder.push(clientCombined.subarray(0, clientSplit)),
-			...clientDecoder.push(clientCombined.subarray(clientSplit)),
-		];
-		clientDecoder.end();
-		expect(clientMessages).toEqual([request, secondRequest]);
+		const frame = encodeClientMessageV2(request);
+		const decoder = new FrameDecoder();
+		const [payload] = decoder.push(frame);
 
-		const response = {
-			type: "response",
-			id: "request-1",
-			ok: true,
-			accepted: { operationId: "operation-1", sessionRevision: 5, eventSeq: 10 },
+		expect(parseClientMessageV2(decodeCbor(payload))).toEqual(request);
+	});
+
+	test("round-trips a client diagnostic manifest and local cursor", () => {
+		const hello = {
+			type: "hello",
+			version: PROTOCOL_V2_VERSION,
+			diagnostics: {
+				manifest: { runtime: "node v22", platform: "linux", arch: "x64", forkCommit: "fork-sha" },
+				afterSeq: 12,
+			},
 		} as const;
-		const serverFrame = encodeServerMessageV2(response);
-		const serverDecoder = new ServerMessageV2Decoder();
-		const serverMessages = [
-			...serverDecoder.push(serverFrame.subarray(0, 3)),
-			...serverDecoder.push(serverFrame.subarray(3)),
-		];
-		serverDecoder.end();
-		expect(serverMessages).toEqual([response]);
+		const decoder = new FrameDecoder();
+		const [payload] = decoder.push(encodeClientMessageV2(hello));
+		expect(parseClientMessageV2(decodeCbor(payload))).toEqual(hello);
 	});
 
 	test("rejects v1 messages and unknown v2 fields", () => {

@@ -2,6 +2,7 @@ import {
 	AgentHarness,
 	type AgentHarnessOptions,
 	type AgentHarnessTool,
+	type AgentTool,
 	createApplyPatchTool,
 	createBashTool,
 	createEditTool,
@@ -10,17 +11,24 @@ import {
 	createWriteTool,
 	type ExecutionEnv,
 	type ExecutionToolContext,
+	executeShellWithCapture,
 	type GoalManager,
 	type HarnessTool,
 } from "@earendil-works/pi-agent-core";
+import type { PlanSnapshot } from "@earendil-works/pi-protocol";
+import type { V2ProcessRegistry } from "@earendil-works/pi-server";
 import { type Static, type TSchema, Type } from "typebox";
 import { getExperimentalToolSampling } from "../core/experimental.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "../core/system-prompt.ts";
 import { bashToolSystemPromptContribution } from "../core/tools/bash.ts";
 import { editToolSystemPromptContribution } from "../core/tools/edit.ts";
+import { createFindTool, findToolSystemPromptContribution } from "../core/tools/find.ts";
+import { createGrepTool, grepToolSystemPromptContribution } from "../core/tools/grep.ts";
+import { createLsTool, lsToolSystemPromptContribution } from "../core/tools/ls.ts";
 import { readToolSystemPromptContribution } from "../core/tools/read.ts";
 import { writeToolSystemPromptContribution } from "../core/tools/write.ts";
 import type { ModelInstructionResolver, ResolvedModelInstructionProfile } from "./model-instructions.ts";
+import { createProcessTools } from "./process-tools.ts";
 
 export interface CodingAgentInputQuestion {
 	id: string;
@@ -36,7 +44,17 @@ export interface CodingAgentInputRequest {
 
 export type CodingAgentInputResponse = Readonly<Record<string, string>>;
 
-export type CodingAgentWebOperation = "search_query" | "open" | "click" | "find" | "screenshot" | "image_query";
+export type CodingAgentWebOperation =
+	| "search_query"
+	| "open"
+	| "click"
+	| "find"
+	| "screenshot"
+	| "image_query"
+	| "finance"
+	| "weather"
+	| "sports"
+	| "time";
 
 export interface CodingAgentWebRequest {
 	operation: CodingAgentWebOperation;
@@ -44,6 +62,19 @@ export interface CodingAgentWebRequest {
 	url?: string;
 	refId?: string;
 	pattern?: string;
+	ticker?: string;
+	market?: string;
+	location?: string;
+	duration?: number;
+	start?: string;
+	dateFrom?: string;
+	dateTo?: string;
+	league?: string;
+	team?: string;
+	opponent?: string;
+	numGames?: number;
+	locale?: string;
+	utcOffset?: string;
 }
 
 export interface CodingAgentWebResult {
@@ -64,12 +95,46 @@ export interface CodingAgentImageView {
 	reference: string;
 }
 
+export interface CodingAgentImageGenerationRequest {
+	prompt: string;
+	sourceDigest?: string;
+}
+
+export interface CodingAgentImageGenerationResult {
+	digest: string;
+	mimeType: string;
+	size: number;
+	provider: string;
+	model: string;
+	sourceOperationId?: string;
+	dimensions?: Readonly<{ width: number; height: number }>;
+	promptHash: string;
+	costUsd?: number;
+}
+
+export interface CodingAgentLifecycleHook {
+	id: string;
+	event: "turn/accepted" | "turn/completed";
+	command: string;
+}
+
+export type CodingAgentLifecycleHookOutcome = Readonly<{
+	id: string;
+	event: CodingAgentLifecycleHook["event"];
+	outcome: "ok" | "error";
+	durationMs: number;
+	outputBytes: number;
+	truncated: boolean;
+	exitCode?: number;
+}>;
+
 export interface CodingAgentAgentTools {
 	spawn(request: {
 		taskName: string;
 		taskMessage: string;
 		model?: { provider: string; id: string };
 		role?: string;
+		forkTurns?: "none" | "all" | number;
 	}): Promise<unknown>;
 	list(): Promise<unknown>;
 	wait(agentId: string, timeoutMs?: number): Promise<unknown>;
@@ -79,6 +144,7 @@ export interface CodingAgentAgentTools {
 }
 
 export interface CodingAgentPlanTools {
+	read(): Promise<PlanSnapshot | undefined>;
 	update(input: {
 		items: readonly { step: string; status: "pending" | "in_progress" | "completed" }[];
 		version?: number;
@@ -108,19 +174,43 @@ const webSchema = Type.Object({
 		Type.Literal("find"),
 		Type.Literal("screenshot"),
 		Type.Literal("image_query"),
+		Type.Literal("finance"),
+		Type.Literal("weather"),
+		Type.Literal("sports"),
+		Type.Literal("time"),
 	]),
 	query: Type.Optional(Type.String()),
 	url: Type.Optional(Type.String()),
 	refId: Type.Optional(Type.String()),
 	pattern: Type.Optional(Type.String()),
+	ticker: Type.Optional(Type.String()),
+	market: Type.Optional(Type.String()),
+	location: Type.Optional(Type.String()),
+	duration: Type.Optional(Type.Integer({ minimum: 1 })),
+	start: Type.Optional(Type.String()),
+	dateFrom: Type.Optional(Type.String()),
+	dateTo: Type.Optional(Type.String()),
+	league: Type.Optional(Type.String()),
+	team: Type.Optional(Type.String()),
+	opponent: Type.Optional(Type.String()),
+	numGames: Type.Optional(Type.Integer({ minimum: 1 })),
+	locale: Type.Optional(Type.String()),
+	utcOffset: Type.Optional(Type.String()),
 });
 
 const viewImageSchema = Type.Object({ reference: Type.String({ minLength: 1 }) });
+const generateImageSchema = Type.Object({
+	prompt: Type.String({ minLength: 1 }),
+	sourceDigest: Type.Optional(Type.String({ minLength: 1 })),
+});
 const spawnAgentSchema = Type.Object({
 	taskName: Type.String({ minLength: 1 }),
 	taskMessage: Type.String({ minLength: 1 }),
 	model: Type.Optional(Type.Object({ provider: Type.String({ minLength: 1 }), id: Type.String({ minLength: 1 }) })),
 	role: Type.Optional(Type.String({ minLength: 1 })),
+	forkTurns: Type.Optional(
+		Type.Union([Type.Literal("none"), Type.Literal("all"), Type.Integer({ minimum: 1, maximum: 32 })]),
+	),
 });
 const listAgentsSchema = Type.Object({});
 const waitAgentSchema = Type.Object({
@@ -163,21 +253,45 @@ function createCodingAgentHarnessTool<TParameters extends TSchema, TDetails>(
 	};
 }
 
+function createCoreToolHarnessTool<TParameters extends TSchema, TDetails>(
+	tool: AgentTool<TParameters, TDetails>,
+	prompt: Required<Pick<CodingAgentHarnessTool, "promptSnippet" | "promptGuidelines">>,
+): CodingAgentHarnessTool {
+	return {
+		...tool,
+		...prompt,
+		constrainedSampling: getExperimentalToolSampling(),
+		execute: (toolCallId, params, signal, onUpdate) =>
+			tool.execute(toolCallId, params as Static<TParameters>, signal, onUpdate),
+	};
+}
+
 export interface CreateCodingAgentHarnessOptions extends Omit<AgentHarnessOptions, "toolContext" | "tools"> {
 	env: ExecutionEnv;
 	goals?: GoalManager;
+	processes?: V2ProcessRegistry;
 	bashCommandPrefix?: string;
 	/** Path to the JSONL session file exposed to default bash commands as PI_SESSION_FILE. */
 	sessionFile?: string;
 	tools?: CodingAgentHarnessTool[];
 	systemPromptOptions?: Omit<BuildSystemPromptOptions, "cwd" | "promptGuidelines" | "selectedTools" | "toolSnippets">;
 	modelInstructions?: { resolver: ModelInstructionResolver; scope?: "root" | "subagent" };
+	roleInstructions?: string;
 	requestUserInput?: (
 		request: CodingAgentInputRequest,
 		signal: AbortSignal | undefined,
 	) => Promise<CodingAgentInputResponse>;
 	web?: (request: CodingAgentWebRequest) => Promise<readonly CodingAgentWebResult[]>;
 	viewImage?: (reference: string) => Promise<CodingAgentImageView>;
+	generateImage?: (request: CodingAgentImageGenerationRequest) => Promise<CodingAgentImageGenerationResult>;
+	lifecycleHooks?: readonly CodingAgentLifecycleHook[];
+	/** Resolve server-owned lifecycle hooks at each turn boundary. */
+	lifecycleHooksFactory?: () => Promise<readonly CodingAgentLifecycleHook[]>;
+	lifecycleHookOutcome?: (outcome: CodingAgentLifecycleHookOutcome) => Promise<void>;
+	/** Exclude named tools after the complete server-owned tool set is assembled. */
+	excludedToolNames?: readonly string[];
+	/** Exclude Pi's eight default coding tools while retaining server-provided tools. */
+	disableBuiltinTools?: boolean;
 	agents?: CodingAgentAgentTools;
 	plans?: CodingAgentPlanTools;
 }
@@ -188,6 +302,8 @@ export interface BuildCodingAgentHarnessSystemPromptOptions {
 	activeToolNames: readonly string[];
 	systemPromptOptions?: CreateCodingAgentHarnessOptions["systemPromptOptions"];
 	modelInstruction?: ResolvedModelInstructionProfile;
+	roleInstructions?: string;
+	plan?: PlanSnapshot;
 }
 
 export function buildCodingAgentHarnessSystemPrompt(options: BuildCodingAgentHarnessSystemPromptOptions): string {
@@ -213,13 +329,28 @@ export function buildCodingAgentHarnessSystemPrompt(options: BuildCodingAgentHar
 		promptGuidelines,
 	});
 	const instruction = options.modelInstruction;
-	if (!instruction) return basePrompt;
-	if (instruction.mode === "append") return `${basePrompt}\n\n${instruction.text}`;
-	const defaultPersona =
-		"You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
-	return basePrompt.startsWith(defaultPersona)
-		? `${instruction.text}${basePrompt.slice(defaultPersona.length)}`
-		: `${instruction.text}\n\n${basePrompt}`;
+	const instructionPrompt = !instruction
+		? basePrompt
+		: instruction.mode === "append"
+			? `${basePrompt}\n\n${instruction.text}`
+			: (() => {
+					const defaultPersona =
+						"You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
+					return basePrompt.startsWith(defaultPersona)
+						? `${instruction.text}${basePrompt.slice(defaultPersona.length)}`
+						: `${instruction.text}\n\n${basePrompt}`;
+				})();
+	const planPrompt = options.plan === undefined ? "" : formatPlanForPrompt(options.plan);
+	const prompt = [instructionPrompt, options.roleInstructions, planPrompt].filter(Boolean).join("\n\n");
+	return prompt;
+}
+
+function formatPlanForPrompt(plan: PlanSnapshot): string {
+	const items = plan.items
+		.slice(0, 64)
+		.map((item) => `- [${item.status}] ${item.step.slice(0, 500)}`)
+		.join("\n");
+	return `# Active Plan (v${plan.version})\n\n${items}`.slice(0, 8_000);
 }
 
 export async function createCodingAgentHarness(options: CreateCodingAgentHarnessOptions) {
@@ -231,6 +362,8 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 		tools: providedTools,
 		activeToolNames: providedActiveToolNames,
 		systemPrompt: providedSystemPrompt,
+		excludedToolNames,
+		disableBuiltinTools,
 		...harnessOptions
 	} = options;
 	let harness: AgentHarness | undefined;
@@ -281,7 +414,29 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 				promptSnippet: writeToolSystemPromptContribution.snippet,
 				promptGuidelines: writeToolSystemPromptContribution.guidelines,
 			}),
+			createCoreToolHarnessTool(createGrepTool(env.cwd), {
+				promptSnippet: grepToolSystemPromptContribution.snippet,
+				promptGuidelines: grepToolSystemPromptContribution.guidelines,
+			}),
+			createCoreToolHarnessTool(createFindTool(env.cwd), {
+				promptSnippet: findToolSystemPromptContribution.snippet,
+				promptGuidelines: findToolSystemPromptContribution.guidelines,
+			}),
+			createCoreToolHarnessTool(createLsTool(env.cwd), {
+				promptSnippet: lsToolSystemPromptContribution.snippet,
+				promptGuidelines: lsToolSystemPromptContribution.guidelines,
+			}),
 		];
+		if (options.processes) {
+			tools.push(
+				...createProcessTools(options.processes, metadata.id).map((tool) =>
+					createCodingAgentHarnessTool(tool, toolContext, {
+						promptSnippet: tool.description,
+						promptGuidelines: [],
+					}),
+				),
+			);
+		}
 		if (options.goals) {
 			tools.push(
 				...createGoalTools(options.goals).map((tool) => ({
@@ -326,6 +481,19 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 				parameters: viewImageSchema,
 				execute: async (_toolCallId, input) => {
 					const image = await viewImage((input as Static<typeof viewImageSchema>).reference);
+					return { content: [{ type: "text", text: JSON.stringify(image) }], details: { image } };
+				},
+			});
+		}
+		if (options.generateImage) {
+			const generateImage = options.generateImage;
+			tools.push({
+				name: "generate_image",
+				label: "generate_image",
+				description: "Generate or edit an image through the configured server image service.",
+				parameters: generateImageSchema,
+				execute: async (_toolCallId, input) => {
+					const image = await generateImage(input as Static<typeof generateImageSchema>);
 					return { content: [{ type: "text", text: JSON.stringify(image) }], details: { image } };
 				},
 			});
@@ -434,7 +602,11 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 			});
 		}
 	}
-	const activeToolNames = [...(providedActiveToolNames ?? tools.map((tool) => tool.name))];
+	const builtinToolNames = new Set(["apply_patch", "read", "bash", "edit", "write", "grep", "find", "ls"]);
+	const excludedToolSet = new Set(excludedToolNames ?? []);
+	const activeToolNames = [...(providedActiveToolNames ?? tools.map((tool) => tool.name))].filter(
+		(name) => !excludedToolSet.has(name) && !(disableBuiltinTools === true && builtinToolNames.has(name)),
+	);
 	const systemPrompt =
 		providedSystemPrompt ??
 		(async () => {
@@ -449,12 +621,15 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 						options.modelInstructions.scope,
 					)
 				: undefined;
+			const plan = options.plans === undefined ? undefined : await options.plans.read();
 			return buildCodingAgentHarnessSystemPrompt({
 				cwd: env.cwd,
 				tools: currentTools,
 				activeToolNames: currentActiveToolNames,
 				systemPromptOptions,
 				modelInstruction,
+				roleInstructions: options.roleInstructions,
+				plan,
 			});
 		});
 	const created = await AgentHarness.create({
@@ -464,5 +639,44 @@ export async function createCodingAgentHarness(options: CreateCodingAgentHarness
 		systemPrompt,
 	});
 	harness = created.harness;
+	const executeLifecycleHook = async (hook: CodingAgentLifecycleHook): Promise<void> => {
+		const startedAt = Date.now();
+		const result = await executeShellWithCapture(env, hook.command, {
+			timeout: 5,
+			returnExecutionErrors: true,
+		});
+		const details = result.ok ? result.value : undefined;
+		if (details?.fullOutputPath !== undefined)
+			await env.remove(details.fullOutputPath, { force: true }).catch(() => {});
+		await options
+			.lifecycleHookOutcome?.({
+				id: hook.id,
+				event: hook.event,
+				outcome:
+					result.ok && details !== undefined && details.executionError === undefined && details.exitCode === 0
+						? "ok"
+						: "error",
+				durationMs: Math.max(0, Date.now() - startedAt),
+				outputBytes: details?.truncation.totalBytes ?? 0,
+				truncated: details?.truncated ?? false,
+				...(details?.exitCode === undefined ? {} : { exitCode: details.exitCode }),
+			})
+			.catch(() => {});
+	};
+	const registerLifecycleHook = (hook: CodingAgentLifecycleHook): void => {
+		const lifecycleName = hook.event === "turn/accepted" ? "before_run" : "before_run_end";
+		harness.hooks.on(lifecycleName, () => executeLifecycleHook(hook), { id: hook.id });
+	};
+	for (const hook of options.lifecycleHooks ?? []) registerLifecycleHook(hook);
+	if (options.lifecycleHooksFactory !== undefined) {
+		for (const event of ["turn/accepted", "turn/completed"] as const) {
+			const lifecycleName = event === "turn/accepted" ? "before_run" : "before_run_end";
+			harness.hooks.on(lifecycleName, async () => {
+				for (const hook of await options.lifecycleHooksFactory!()) {
+					if (hook.event === event) await executeLifecycleHook(hook);
+				}
+			});
+		}
+	}
 	return created;
 }

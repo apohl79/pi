@@ -2,6 +2,7 @@ import type { FileError, Result } from "@earendil-works/pi-agent-core";
 import {
 	type BranchBounds,
 	type Entry,
+	type EntryPlacement,
 	type EntryQuery,
 	type ForkOptions,
 	type LaneRecord,
@@ -11,15 +12,19 @@ import {
 	type OperationStartedRecord,
 	type ProvisionedEntry,
 	type RecordQuery,
+	type RegisterWrite,
 	Session,
 	SessionError,
+	type SessionRegister,
 	type SessionRepo as SessionRepository,
 	type SessionStats,
 	type SessionStorage,
+	type SessionTransactionStorage,
 } from "@earendil-works/pi-agent-core";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import { appendEntryToBranchCache, buildCachedBranch, deleteBranchCache, rebuildBranchCache } from "./branch-cache.ts";
-import { applyMigrations } from "./migrations.ts";
+import { inspectSqliteDatabase, type SqliteInspection, sqliteStringLiteral } from "./maintenance.ts";
+import { applyMigrations, pendingMigrations } from "./migrations.ts";
 import { sql } from "./sql.ts";
 import { type CachedBranchEntryRow, queryCachedBranchRows, readCachedBranch } from "./storage/branch-entries.ts";
 import { readBranchTipIds } from "./storage/branch-tips.ts";
@@ -53,6 +58,7 @@ import {
 	readOpenOperationRows,
 	readRecordRows,
 } from "./storage/records.ts";
+import { deleteRegisterRows, readRegister, writeRegister } from "./storage/registers.ts";
 import {
 	advanceSequence,
 	createSequence,
@@ -103,7 +109,14 @@ export interface SqliteSessionRepositoryOptions {
 	env: SqliteSessionRepositoryEnv;
 	sqlite: SqliteDatabaseFactory;
 	databasePath: string;
+	/** Optional preserved destination for a pre-migration SQLite snapshot. */
+	migrationBackupPath?: string;
 	writerLease?: SqliteWriterLeaseOptions;
+}
+
+export interface SqliteBackupReport {
+	destinationPath: string;
+	inspection: SqliteInspection;
 }
 
 interface ResolvedWriterLeaseOptions {
@@ -170,6 +183,7 @@ function getParentPath(path: string): string {
 }
 
 function configureSqliteDatabase(db: SqliteDatabase): void {
+	sql`PRAGMA foreign_keys=ON`.exec(db);
 	sql`PRAGMA journal_mode=WAL`.exec(db);
 	sql`PRAGMA synchronous=FULL`.exec(db);
 	sql`PRAGMA busy_timeout=5000`.exec(db);
@@ -330,7 +344,9 @@ function requireSessionRow(db: SqliteDatabase, sessionId: string): SessionRow {
 	return row;
 }
 
-class SqliteSessionStorage implements SessionStorage<SqliteSessionMetadata> {
+class SqliteSessionStorage
+	implements SessionStorage<SqliteSessionMetadata>, SessionTransactionStorage<SqliteSessionMetadata>
+{
 	private readonly db: SqliteDatabase;
 	private readonly metadata: SqliteSessionMetadata;
 	private readonly lease: WriterLease;
@@ -485,13 +501,22 @@ class SqliteSessionStorage implements SessionStorage<SqliteSessionMetadata> {
 
 	async appendRecord<TRecord extends LaneRecord>(record: NewRecord<TRecord>): Promise<TRecord>;
 	async appendRecord(record: NewRecord): Promise<LaneRecord> {
-		return this.enqueueWrite(() => {
+		return this.appendRecords([record]).then((records) => records[0]!);
+	}
+
+	async appendRecords<TRecord extends LaneRecord>(records: readonly NewRecord<TRecord>[]): Promise<TRecord[]> {
+		return this.enqueueWrite(() => this.appendRecordsInTransaction(records));
+	}
+
+	private appendRecordsInTransaction<TRecord extends LaneRecord>(records: readonly NewRecord<TRecord>[]): TRecord[] {
+		const committed: LaneRecord[] = [];
+		for (const record of records) {
 			if (!readLane(this.db, this.metadata.id, record.lane)) {
 				throw new SessionError("invalid_lane", `Lane not found: ${record.lane}`);
 			}
 			assertUnusedId(this.db, this.metadata.id, record.id);
 			const seq = getNextSequence(this.db, this.metadata.id);
-			const committed: LaneRecord = { ...record, seq, timestamp: Date.now() };
+			const materialized: LaneRecord = { ...record, seq, timestamp: Date.now() };
 			if (record.type === "operation_started") {
 				startLaneOperation(this.db, this.metadata.id, record.lane, record.id);
 			}
@@ -502,7 +527,7 @@ class SqliteSessionStorage implements SessionStorage<SqliteSessionMetadata> {
 				runId: recordRunId(record),
 				type: record.type,
 				opKind: recordOpKind(record),
-				timestamp: committed.timestamp,
+				timestamp: materialized.timestamp,
 				payload: JSON.stringify(record),
 			});
 			if (record.type === "operation_finished") {
@@ -510,7 +535,77 @@ class SqliteSessionStorage implements SessionStorage<SqliteSessionMetadata> {
 			}
 			if (record.type === "usage") addUsageToStats(this.db, this.metadata.id, record.usage);
 			advanceSequence(this.db, this.metadata.id, seq);
-			return structuredClone(committed);
+			committed.push(materialized);
+		}
+		return structuredClone(committed) as TRecord[];
+	}
+
+	async appendTransaction<TRecord extends LaneRecord>(
+		records: readonly NewRecord<TRecord>[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ records: TRecord[]; registers: SessionRegister[] }> {
+		return this.enqueueWrite(() => {
+			const committed = this.appendRecordsInTransaction(records);
+			const registerValues: SessionRegister[] = [];
+			for (const write of writes) {
+				const seq = getNextSequence(this.db, this.metadata.id);
+				writeRegister(this.db, this.metadata.id, seq, write);
+				advanceSequence(this.db, this.metadata.id, seq);
+				const value = readRegister(this.db, this.metadata.id, write.namespace, write.key);
+				if (value) registerValues.push(value);
+			}
+			return { records: committed, registers: registerValues };
+		});
+	}
+
+	async getRegister(namespace: string, key: string): Promise<SessionRegister | undefined> {
+		return readRegister(this.db, this.metadata.id, namespace, key);
+	}
+
+	async appendAtomicTransaction(
+		entries: readonly EntryPlacement[],
+		records: readonly NewRecord[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ entries: Entry[]; records: LaneRecord[]; registers: SessionRegister[] }> {
+		return this.enqueueWrite(() => {
+			const committedEntries: Entry[] = [];
+			for (const placement of entries) {
+				const parentId = readLaneHead(this.db, this.metadata.id, placement.lane).leafId;
+				assertUnusedId(this.db, this.metadata.id, placement.entry.id);
+				const seq = getNextSequence(this.db, this.metadata.id);
+				const committed = { ...placement.entry, parentId, seq, timestamp: Date.now() } as Entry;
+				insertEntryRow(this.db, this.metadata.id, {
+					seq,
+					id: committed.id,
+					parentId,
+					type: committed.type,
+					timestamp: committed.timestamp,
+					payload: JSON.stringify(entryPayload(committed)),
+				});
+				setLaneLeaf(this.db, this.metadata.id, placement.lane, committed.id);
+				appendEntryToBranchCache(
+					this.db,
+					this.metadata.id,
+					committed.id,
+					seq,
+					committed.type,
+					committed.type === "custom" ? committed.customType : null,
+					parentId,
+				);
+				if (committed.type === "message") incrementMessageCount(this.db, this.metadata.id);
+				advanceSequence(this.db, this.metadata.id, seq);
+				committedEntries.push(committed);
+			}
+			const committedRecords = this.appendRecordsInTransaction(records);
+			const registerValues: SessionRegister[] = [];
+			for (const write of writes) {
+				const seq = getNextSequence(this.db, this.metadata.id);
+				writeRegister(this.db, this.metadata.id, seq, write);
+				advanceSequence(this.db, this.metadata.id, seq);
+				const value = readRegister(this.db, this.metadata.id, write.namespace, write.key);
+				if (value) registerValues.push(value);
+			}
+			return { entries: committedEntries, records: committedRecords, registers: registerValues };
 		});
 	}
 
@@ -771,6 +866,74 @@ export class SqliteSessionRepository
 		});
 	}
 
+	/** Inspects schema application and SQLite integrity without repairing canonical state. */
+	async inspect(): Promise<SqliteInspection> {
+		return this.operations.enqueue(async () => inspectSqliteDatabase(await this.getDatabase()));
+	}
+
+	/** Verifies canonical SQLite integrity through a separate reopened connection. */
+	async verifyReopen(): Promise<SqliteInspection> {
+		return this.operations.enqueue(async () => {
+			await this.getDatabase();
+			const path = await this.getDatabasePath();
+			const reopened = await this.options.sqlite.open(path);
+			try {
+				const inspection = inspectSqliteDatabase(reopened);
+				if (!inspection.healthy) throw new SessionError("storage", "SQLite reopen verification failed");
+				return inspection;
+			} finally {
+				reopened.close();
+			}
+		});
+	}
+
+	/** Rebuilds only the derived branch caches after integrity checks identify stale cache state. */
+	async repairDerivedIndexes(): Promise<readonly string[]> {
+		return this.operations.enqueue(async () => {
+			for (const storage of [...this.activeStorages]) await storage.release();
+			const db = await this.getDatabase();
+			const sessionIds = db
+				.prepare("SELECT id FROM sessions ORDER BY id")
+				.all<{ id: string }>()
+				.map((row) => row.id);
+			db.transaction(() => {
+				for (const sessionId of sessionIds) {
+					const lease = claimWriterLease(db, sessionId, this.leaseOptions);
+					rebuildBranchCache(db, sessionId);
+					releaseWriterLease(db, sessionId, lease);
+				}
+			});
+			return sessionIds;
+		});
+	}
+
+	/** Creates and verifies a consistent online snapshot using SQLite's backup primitive. */
+	async backup(destinationPath: string): Promise<SqliteBackupReport> {
+		return this.operations.enqueue(async () => {
+			const sourcePath = await this.getDatabasePath();
+			const resolvedDestination = resultOrThrow(
+				await this.options.env.absolutePath(destinationPath),
+				`Failed to resolve SQLite backup ${destinationPath}`,
+			);
+			if (resolvedDestination === sourcePath)
+				throw new SessionError("storage", "SQLite backup must use a different path");
+			resultOrThrow(
+				await this.options.env.createDir(getParentPath(resolvedDestination), { recursive: true }),
+				`Failed to create SQLite backup directory ${resolvedDestination}`,
+			);
+			const db = await this.getDatabase();
+			db.exec(`VACUUM INTO ${sqliteStringLiteral(resolvedDestination)}`);
+			const backup = await this.options.sqlite.open(resolvedDestination);
+			try {
+				const inspection = inspectSqliteDatabase(backup);
+				if (!inspection.healthy) throw new SessionError("storage", "SQLite backup failed integrity verification");
+				return { destinationPath: resolvedDestination, inspection };
+			} finally {
+				backup.close();
+			}
+		});
+	}
+
 	async delete(metadata: SqliteSessionMetadata): Promise<void> {
 		return this.operations.enqueue(async () => {
 			await this.releaseStoragesForSession(metadata.id);
@@ -785,6 +948,7 @@ export class SqliteSessionRepository
 				deleteFactRows(db, metadata.id);
 				deleteLaneRows(db, metadata.id);
 				deleteRecordRows(db, metadata.id);
+				deleteRegisterRows(db, metadata.id);
 				deleteEntryRows(db, metadata.id);
 				deleteWriterLease(db, metadata.id);
 				deleteStats(db, metadata.id);
@@ -943,11 +1107,54 @@ export class SqliteSessionRepository
 		const db = await this.options.sqlite.open(path);
 		try {
 			configureSqliteDatabase(db);
+			const pending = await pendingMigrations(db);
+			const appliedCount =
+				db.prepare("SELECT COUNT(*) AS count FROM migrations").get<{ count: number }>()?.count ?? 0;
+			const upgrading = pending.length > 0 && appliedCount > 0;
+			if (upgrading) await this.prepareMigrationBackup(db, path);
 			await applyMigrations(db);
+			if (upgrading) {
+				const inspection = inspectSqliteDatabase(db);
+				if (!inspection.healthy)
+					throw new SessionError("storage", "SQLite migration failed integrity verification");
+				const reopened = await this.options.sqlite.open(path);
+				try {
+					const reopenedInspection = inspectSqliteDatabase(reopened);
+					if (!reopenedInspection.healthy)
+						throw new SessionError("storage", "SQLite migration failed reopen verification");
+				} finally {
+					reopened.close();
+				}
+			}
 			return db;
 		} catch (error) {
 			db.close();
 			throw error;
+		}
+	}
+
+	private async prepareMigrationBackup(db: SqliteDatabase, sourcePath: string): Promise<void> {
+		const requestedPath = this.options.migrationBackupPath ?? `${sourcePath}.pre-migration.sqlite`;
+		const backupPath = resultOrThrow(
+			await this.options.env.absolutePath(requestedPath),
+			`Failed to resolve SQLite migration backup ${requestedPath}`,
+		);
+		if (backupPath === sourcePath) throw new SessionError("storage", "Migration backup must use a different path");
+		resultOrThrow(
+			await this.options.env.createDir(getParentPath(backupPath), { recursive: true }),
+			`Failed to create SQLite migration backup directory ${backupPath}`,
+		);
+		const exists = resultOrThrow(
+			await this.options.env.exists(backupPath),
+			`Failed to check SQLite migration backup ${backupPath}`,
+		);
+		if (!exists) db.exec(`VACUUM INTO ${sqliteStringLiteral(backupPath)}`);
+		const backup = await this.options.sqlite.open(backupPath);
+		try {
+			if (!inspectSqliteDatabase(backup).healthy)
+				throw new SessionError("storage", "SQLite migration backup failed integrity verification");
+		} finally {
+			backup.close();
 		}
 	}
 }

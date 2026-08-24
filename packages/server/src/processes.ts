@@ -1,18 +1,28 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 export type V2ProcessState = "running" | "exited" | "terminated" | "lost";
 
-export type V2ProcessStartRequest = Readonly<{
-	sessionId: string;
-	command: string;
-	cwd?: string;
-	env?: Readonly<Record<string, string>>;
-	pty?: boolean;
-}>;
+export interface V2ProcessStartRequest {
+	readonly sessionId: string;
+	readonly command: string;
+	readonly cwd?: string;
+	readonly env?: Readonly<Record<string, string>>;
+	readonly pty?: boolean;
+}
 
-export type V2ProcessOutput = Readonly<{ output: string; cursor: number; truncated: boolean }>;
+export interface V2ProcessOutput {
+	readonly output: string;
+	readonly cursor: number;
+	readonly truncated: boolean;
+}
+
+export interface V2ProcessWriteOptions {
+	readonly eof?: boolean;
+}
 
 export interface V2ProcessSnapshot extends V2ProcessOutput {
 	readonly processId: string;
@@ -23,13 +33,22 @@ export interface V2ProcessSnapshot extends V2ProcessOutput {
 	readonly exitCode?: number;
 }
 
+export type V2ProcessChange = {
+	readonly kind: "output" | "terminal";
+	readonly process: V2ProcessSnapshot;
+};
+
 export interface V2ProcessRegistry {
+	onChange?(listener: (change: V2ProcessChange) => void): () => void;
 	start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot>;
+	list(sessionId: string): Promise<readonly V2ProcessSnapshot[]>;
 	getSnapshot(processId: string): Promise<V2ProcessSnapshot>;
-	write(processId: string, input: string): Promise<V2ProcessOutput>;
+	write(processId: string, input: string, options?: V2ProcessWriteOptions): Promise<V2ProcessOutput>;
 	read(processId: string, cursor: number): Promise<V2ProcessOutput>;
 	wait(processId: string): Promise<V2ProcessSnapshot>;
 	terminate(processId: string): Promise<V2ProcessSnapshot>;
+	/** Mark processes owned by a daemon generation that did not shut down cleanly. */
+	markLost(): Promise<number>;
 }
 
 /** Host-provided PTY launcher; the server keeps PTY ownership behind this boundary. */
@@ -44,87 +63,32 @@ interface ProcessState {
 	readonly pty: boolean;
 	state: V2ProcessState;
 	exitCode?: number;
-	output: Buffer;
+	output: string;
 	totalBytes: number;
-};
-
-const parseCommand = (command: string): readonly [string, ...string[]] => {
-	if (command.trim().length === 0 || /[\0\n\r;&|<>`$]/u.test(command)) throw new Error("Unsupported process command");
-	const args: string[] = [];
-	let value = "";
-	let quote: '"' | "'" | undefined;
-	let escaped = false;
-	const push = (): void => {
-		if (value.length > 0) args.push(value);
-		value = "";
-	};
-	for (const character of command) {
-		if (escaped) {
-			value += character;
-			escaped = false;
-		} else if (character === "\\" && quote !== "'") escaped = true;
-		else if (quote !== undefined && character === quote) quote = undefined;
-		else if (quote === undefined && (character === '"' || character === "'")) quote = character;
-		else if (quote === undefined && /\s/u.test(character)) push();
-		else value += character;
-	}
-	if (escaped || quote !== undefined) throw new Error("Unsupported process command");
-	push();
-	if (args.length === 0) throw new Error("Unsupported process command");
-	return args as readonly [string, ...string[]];
-};
-
-const retainOutput = (output: Buffer, maxBytes: number): Buffer => {
-	const retained = output.length <= maxBytes ? output : output.subarray(output.length - maxBytes);
-	let start = 0;
-	while (start < retained.length && (retained[start] & 0xc0) === 0x80) start += 1;
-	let end = retained.length;
-	while (end > start) {
-		try {
-			new TextDecoder("utf-8", { fatal: true }).decode(retained.subarray(start, end));
-			return retained.subarray(start, end);
-		} catch {
-			end -= 1;
-		}
-	}
-	return Buffer.alloc(0);
-};
-
-const outputView = (process: ProcessState, cursor: number): V2ProcessOutput => {
-	if (!Number.isInteger(cursor) || cursor < 0) throw new Error("Process cursor must be a non-negative integer");
-	const baseCursor = process.totalBytes - process.output.length;
-	let outputOffset = Math.max(cursor, baseCursor) - baseCursor;
-	while (outputOffset < process.output.length && (process.output[outputOffset] & 0xc0) === 0x80) outputOffset += 1;
-	return {
-		output: process.output.subarray(outputOffset).toString("utf8"),
-		cursor: process.totalBytes,
-		truncated: cursor < baseCursor,
-	};
-};
-
-const appendOutput = (process: ProcessState, value: Buffer, maxBytes: number): void => {
-	process.totalBytes += value.length;
-	process.output = retainOutput(Buffer.concat([process.output, value]), maxBytes);
-};
-
-const snapshot = (process: ProcessState): V2ProcessSnapshot => ({
-	processId: process.processId,
-	sessionId: process.sessionId,
-	command: process.command,
-	state: process.state,
-	...(process.exitCode === undefined ? {} : { exitCode: process.exitCode }),
-	output: process.output.toString("utf8"),
-	cursor: process.totalBytes,
-	truncated: process.totalBytes > process.output.length,
-});
+	inputClosed?: boolean;
+	waiters: Array<(snapshot: V2ProcessSnapshot) => void>;
+}
 
 export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 	private readonly maxOutputBytes: number;
 	private readonly processes = new Map<string, ProcessState>();
-	private readonly waiters = new Map<string, Array<(value: V2ProcessSnapshot) => void>>();
+	private readonly listeners = new Set<(change: V2ProcessChange) => void>();
 
 	constructor(options: { maxOutputBytes?: number } = {}) {
 		this.maxOutputBytes = options.maxOutputBytes ?? 64 * 1024;
+	}
+
+	onChange(listener: (change: V2ProcessChange) => void): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
+
+	list(sessionId: string): Promise<readonly V2ProcessSnapshot[]> {
+		return Promise.resolve(
+			[...this.processes.values()]
+				.filter((process) => process.sessionId === sessionId)
+				.map((process) => this.snapshot(process)),
+		);
 	}
 
 	async start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
@@ -136,77 +100,21 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 			state: "running",
 			output: "",
 			totalBytes: 0,
+			waiters: [],
 		};
 		this.processes.set(process.processId, process);
-		return snapshot(process);
+		return this.snapshot(process);
 	}
 
-	async write(processId: string, input: string): Promise<V2ProcessOutput> {
+	async write(processId: string, input: string, options: V2ProcessWriteOptions = {}): Promise<V2ProcessOutput> {
 		const process = this.get(processId);
 		if (process.state !== "running") throw new Error(`Process ${processId} is not running`);
+		if (process.inputClosed) throw new Error(`Process ${processId} input is closed`);
 		const cursor = process.totalBytes;
-		appendOutput(process, Buffer.from(input), this.maxOutputBytes);
-		return outputView(process, cursor);
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
+		this.append(process, input);
+		this.notify("output", process);
+		if (options.eof) process.inputClosed = true;
+		return this.read(processId, cursor);
 	}
 
 	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
@@ -215,7 +123,20 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 
 	async read(processId: string, cursor: number): Promise<V2ProcessOutput> {
 		const process = this.get(processId);
-		return process.state === "running" ? new Promise((resolve) => this.waiters.set(processId, [...(this.waiters.get(processId) ?? []), resolve])) : Promise.resolve(snapshot(process));
+		if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error("Process cursor must be a non-negative integer");
+		const baseCursor = process.totalBytes - Buffer.byteLength(process.output, "utf8");
+		const start = Math.max(cursor, baseCursor);
+		return {
+			output: readUtf8FromCursor(process.output, start - baseCursor),
+			cursor: process.totalBytes,
+			truncated: cursor < baseCursor,
+		};
+	}
+
+	async wait(processId: string): Promise<V2ProcessSnapshot> {
+		const process = this.get(processId);
+		if (process.state !== "running") return this.snapshot(process);
+		return new Promise((resolve) => process.waiters.push(resolve));
 	}
 
 	async terminate(processId: string): Promise<V2ProcessSnapshot> {
@@ -223,20 +144,37 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 		if (process.state === "running") {
 			process.state = "terminated";
 			process.exitCode = 143;
-			const result = snapshot(process);
-			for (const resolve of this.waiters.get(processId) ?? []) resolve(result);
-			this.waiters.delete(processId);
+			this.resolveWaiters(process);
+			this.notify("terminal", process);
 		}
 		return this.snapshot(process);
 	}
 
+	markLost(): Promise<number> {
+		let count = 0;
+		for (const process of this.processes.values()) {
+			if (process.state !== "running") continue;
+			process.state = "lost";
+			count += 1;
+			this.resolveWaiters(process);
+			this.notify("terminal", process);
+		}
+		return Promise.resolve(count);
+	}
+
 	private append(process: ProcessState, value: string): void {
-		process.totalBytes += value.length;
-		process.output = `${process.output}${value}`.slice(-this.maxOutputBytes);
+		process.totalBytes += Buffer.byteLength(value, "utf8");
+		process.output = retainUtf8(`${process.output}${value}`, this.maxOutputBytes);
+	}
+
+	private resolveWaiters(process: ProcessState): void {
+		const snapshot = this.snapshot(process);
+		for (const resolve of process.waiters) resolve(snapshot);
+		process.waiters = [];
 	}
 
 	private snapshot(process: ProcessState): V2ProcessSnapshot {
-		const baseCursor = process.totalBytes - process.output.length;
+		const baseCursor = process.totalBytes - Buffer.byteLength(process.output, "utf8");
 		return {
 			processId: process.processId,
 			sessionId: process.sessionId,
@@ -255,45 +193,19 @@ export class InMemoryV2ProcessRegistry implements V2ProcessRegistry {
 		if (!process) throw new Error(`Unknown process ${processId}`);
 		return process;
 	}
+
+	private notify(kind: V2ProcessChange["kind"], process: ProcessState): void {
+		const change = { kind, process: this.snapshot(process) } satisfies V2ProcessChange;
+		for (const listener of this.listeners) listener(structuredClone(change));
+	}
 }
 
-type NodeProcessState = ProcessState & Readonly<{ child: ChildProcess }> & {
-	waiters: Array<(value: V2ProcessSnapshot) => void>;
-	decoder: StringDecoder;
-	decoderFlushed: boolean;
-	capacityReleased: boolean;
-	queuedWriteBytes: number;
-	terminationTimer?: ReturnType<typeof setTimeout>;
-	killTimer?: ReturnType<typeof setTimeout>;
-};
-
-type NodeV2ProcessRegistryOptions = Readonly<{
-	maxOutputBytes?: number;
-	maxCompletedProcesses?: number;
-	maxActiveProcesses?: number;
-	maxWriteBytes?: number;
-	maxQueuedWriteBytes?: number;
-	terminateGraceMs?: number;
-	terminateTimeoutMs?: number;
-}>;
-
-const validatePositiveInteger = (name: string, value: number | undefined, fallback: number): number => {
-	const resolved = value ?? fallback;
-	if (!Number.isInteger(resolved) || resolved <= 0) throw new Error(`${name} must be a positive integer`);
-	return resolved;
-};
-
-function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
-	if (request.pty) {
-		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
-		return ptyLauncher.spawn(request);
-	}
-	return spawn(request.command, {
-		shell: true,
-		cwd: request.cwd,
-		env: { ...process.env, ...request.env },
-		stdio: ["pipe", "pipe", "pipe"],
-	});
+interface NodeProcessState extends ProcessState {
+	readonly child: ChildProcess;
+	readonly stdoutDecoder: StringDecoder;
+	readonly stderrDecoder: StringDecoder;
+	terminationTimer?: NodeJS.Timeout;
+	waiters: Array<(snapshot: V2ProcessSnapshot) => void>;
 }
 
 function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
@@ -301,169 +213,141 @@ function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLau
 		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
 		return ptyLauncher.spawn(request);
 	}
-	return spawn(request.command, {
-		shell: true,
+	const argv = parseArgv(request.command);
+	return spawn(argv[0]!, argv.slice(1), {
+		detached: true,
+		shell: false,
 		cwd: request.cwd,
 		env: { ...process.env, ...request.env },
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 }
 
-function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
-	if (request.pty) {
-		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
-		return ptyLauncher.spawn(request);
-	}
-	return spawn(request.command, {
-		shell: true,
-		cwd: request.cwd,
-		env: { ...process.env, ...request.env },
-		stdio: ["pipe", "pipe", "pipe"],
-	});
+/** Create the default host PTY boundary used by production server runtimes. */
+export function createNativeV2PtyLauncher(): V2PtyLauncher {
+	return {
+		spawn(request) {
+			if (process.platform === "win32") {
+				throw new Error("Native PTY execution requires a Windows host PTY launcher");
+			}
+			const argv = parseArgv(request.command);
+			const relay = [
+				"import errno, os, pty, select, sys",
+				"pid, fd = pty.fork()",
+				"if pid == 0:",
+				"    os.chdir(sys.argv[1])",
+				"    os.execvpe(sys.argv[2], sys.argv[2:], os.environ)",
+				"status = None",
+				"child_exited = False",
+				"while True:",
+				"    readable, _, _ = select.select([fd] if child_exited else [fd, sys.stdin.buffer], [], [], 0.1)",
+				"    if fd in readable:",
+				"        try:",
+				"            data = os.read(fd, 4096)",
+				"            if not data: break",
+				"            os.write(1, data)",
+				"        except OSError as error:",
+				"            if error.errno in (errno.EIO, errno.EBADF, errno.EAGAIN, errno.EWOULDBLOCK): break",
+				"    elif child_exited:",
+				"        break",
+				"    if not child_exited and sys.stdin.buffer in readable:",
+				"        data = os.read(0, 4096)",
+				"        if not data: os.close(fd); break",
+				"        os.write(fd, data)",
+				"    if not child_exited:",
+				"        waited, status = os.waitpid(pid, os.WNOHANG)",
+				"        if waited == pid: child_exited = True; os.set_blocking(fd, False)",
+				"if status is None: _, status = os.waitpid(pid, 0)",
+				"sys.exit(os.waitstatus_to_exitcode(status))",
+			].join("\n");
+			return spawn("python3", ["-c", relay, request.cwd ?? process.cwd(), ...argv], {
+				cwd: request.cwd,
+				env: { ...process.env, ...request.env },
+				stdio: ["pipe", "pipe", "pipe"],
+				detached: true,
+			});
+		},
+	};
 }
 
-function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
-	if (request.pty) {
-		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
-		return ptyLauncher.spawn(request);
-	}
-	return spawn(request.command, {
-		shell: true,
-		cwd: request.cwd,
-		env: { ...process.env, ...request.env },
-		stdio: ["pipe", "pipe", "pipe"],
-	});
-}
+const FORBIDDEN_SHELL_CHARACTERS = new Set([";", "|", "&", ">", "<", "`", "$", "(", ")"]);
 
-function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
-	if (request.pty) {
-		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
-		return ptyLauncher.spawn(request);
+/** Parse the restricted argv-like process command without invoking a shell. */
+function parseArgv(command: string): string[] {
+	if (command.length === 0 || command.length > 8_192) throw new Error("Process command must be 1-8192 characters");
+	const argv: string[] = [];
+	let token = "";
+	let tokenStarted = false;
+	let quote: "single" | "double" | undefined;
+	for (let index = 0; index < command.length; index += 1) {
+		const character = command[index]!;
+		if (quote === "single") {
+			if (character === "'") quote = undefined;
+			else token += character;
+			tokenStarted = true;
+			continue;
+		}
+		if (quote === "double") {
+			if (character === '"') quote = undefined;
+			else if (character === "\\") {
+				const next = command[++index];
+				if (next === undefined) throw new Error("Process command has a trailing escape");
+				token += next;
+			} else token += character;
+			tokenStarted = true;
+			continue;
+		}
+		if (FORBIDDEN_SHELL_CHARACTERS.has(character)) throw new Error("Process command contains shell metacharacters");
+		if (character === "'" || character === '"') {
+			quote = character === "'" ? "single" : "double";
+			tokenStarted = true;
+		} else if (character === "\\") {
+			const next = command[++index];
+			if (next === undefined) throw new Error("Process command has a trailing escape");
+			token += next;
+			tokenStarted = true;
+		} else if (/\s/.test(character)) {
+			if (tokenStarted) {
+				argv.push(token);
+				token = "";
+				tokenStarted = false;
+			}
+		} else {
+			token += character;
+			tokenStarted = true;
+		}
 	}
-	return spawn(request.command, {
-		shell: true,
-		cwd: request.cwd,
-		env: { ...process.env, ...request.env },
-		stdio: ["pipe", "pipe", "pipe"],
-	});
-}
-
-function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
-	if (request.pty) {
-		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
-		return ptyLauncher.spawn(request);
-	}
-	return spawn(request.command, {
-		shell: true,
-		cwd: request.cwd,
-		env: { ...process.env, ...request.env },
-		stdio: ["pipe", "pipe", "pipe"],
-	});
-}
-
-function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
-	if (request.pty) {
-		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
-		return ptyLauncher.spawn(request);
-	}
-	return spawn(request.command, {
-		shell: true,
-		cwd: request.cwd,
-		env: { ...process.env, ...request.env },
-		stdio: ["pipe", "pipe", "pipe"],
-	});
-}
-
-function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
-	if (request.pty) {
-		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
-		return ptyLauncher.spawn(request);
-	}
-	return spawn(request.command, {
-		shell: true,
-		cwd: request.cwd,
-		env: { ...process.env, ...request.env },
-		stdio: ["pipe", "pipe", "pipe"],
-	});
-}
-
-function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
-	if (request.pty) {
-		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
-		return ptyLauncher.spawn(request);
-	}
-	return spawn(request.command, {
-		shell: true,
-		cwd: request.cwd,
-		env: { ...process.env, ...request.env },
-		stdio: ["pipe", "pipe", "pipe"],
-	});
-}
-
-function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
-	if (request.pty) {
-		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
-		return ptyLauncher.spawn(request);
-	}
-	return spawn(request.command, {
-		shell: true,
-		cwd: request.cwd,
-		env: { ...process.env, ...request.env },
-		stdio: ["pipe", "pipe", "pipe"],
-	});
-}
-
-function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
-	if (request.pty) {
-		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
-		return ptyLauncher.spawn(request);
-	}
-	return spawn(request.command, {
-		shell: true,
-		cwd: request.cwd,
-		env: { ...process.env, ...request.env },
-		stdio: ["pipe", "pipe", "pipe"],
-	});
-}
-
-function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
-	if (request.pty) {
-		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
-		return ptyLauncher.spawn(request);
-	}
-	return spawn(request.command, {
-		shell: true,
-		cwd: request.cwd,
-		env: { ...process.env, ...request.env },
-		stdio: ["pipe", "pipe", "pipe"],
-	});
-}
-
-function spawnNodeProcess(request: V2ProcessStartRequest, ptyLauncher?: V2PtyLauncher): ChildProcess {
-	if (request.pty) {
-		if (!ptyLauncher) throw new Error("PTY process execution requires a host PTY launcher");
-		return ptyLauncher.spawn(request);
-	}
-	return spawn(request.command, {
-		shell: true,
-		cwd: request.cwd,
-		env: { ...process.env, ...request.env },
-		stdio: ["pipe", "pipe", "pipe"],
-	});
+	if (quote !== undefined) throw new Error("Process command has an unterminated quote");
+	if (tokenStarted) argv.push(token);
+	if (argv.length === 0) throw new Error("Process command cannot be empty");
+	return argv;
 }
 
 export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 	private readonly maxOutputBytes: number;
 	private readonly ptyLauncher: V2PtyLauncher | undefined;
 	private readonly processes = new Map<string, NodeProcessState>();
-	private activeProcesses = 0;
+	private readonly listeners = new Set<(change: V2ProcessChange) => void>();
 
 	constructor(options: { maxOutputBytes?: number; ptyLauncher?: V2PtyLauncher } = {}) {
 		this.maxOutputBytes = options.maxOutputBytes ?? 64 * 1024;
 		this.ptyLauncher = options.ptyLauncher;
 	}
 
-	start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
+	onChange(listener: (change: V2ProcessChange) => void): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
+
+	list(sessionId: string): Promise<readonly V2ProcessSnapshot[]> {
+		return Promise.resolve(
+			[...this.processes.values()]
+				.filter((process) => process.sessionId === sessionId)
+				.map((process) => this.snapshot(process)),
+		);
+	}
+
+	async start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
 		const child = spawnNodeProcess(request, this.ptyLauncher);
 		const state: NodeProcessState = {
 			processId: randomUUID(),
@@ -474,98 +358,42 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 			output: "",
 			totalBytes: 0,
 			child,
+			stdoutDecoder: new StringDecoder("utf8"),
+			stderrDecoder: new StringDecoder("utf8"),
 			waiters: [],
 		};
 		this.processes.set(state.processId, state);
-		const append = (chunk: Buffer): void => {
-			const decoded = Buffer.from(state.decoder.write(chunk));
-			state.output = retainOutput(Buffer.concat([state.output, decoded]), this.maxOutputBytes);
-			state.totalBytes += decoded.length;
+		const append = (value: string): void => {
+			if (value.length === 0) return;
+			state.totalBytes += Buffer.byteLength(value, "utf8");
+			state.output = retainUtf8(`${state.output}${value}`, this.maxOutputBytes);
+			this.notify("output", state);
 		};
-		child.stdout?.on("data", append);
-		child.stderr?.on("data", append);
-		child.once("error", (error) => { this.finish(state, "exited", 1, Buffer.from(error.message)); });
-		child.once("close", (code) => this.finish(state, state.state === "terminated" ? "terminated" : "exited", code ?? 0));
-		return Promise.resolve(snapshot(state));
-	}
-
-	async write(processId: string, input: string): Promise<V2ProcessOutput> {
-		const process = this.get(processId);
-		if (process.state !== "running" || !process.child.stdin) throw new Error(`Process ${processId} is not running`);
-		const inputBytes = Buffer.byteLength(input, "utf8");
-		if (inputBytes > this.maxWriteBytes) throw new Error(`Process write exceeds maxWriteBytes (${this.maxWriteBytes})`);
-		if (process.queuedWriteBytes + inputBytes > this.maxQueuedWriteBytes) throw new Error(`Process queued writes exceed maxQueuedWriteBytes (${this.maxQueuedWriteBytes})`);
-		const cursor = process.totalBytes;
-		process.queuedWriteBytes += inputBytes;
-		await new Promise<void>((resolve, reject) => {
-			process.child.stdin.write(input, (error?: Error) => {
-				process.queuedWriteBytes -= inputBytes;
-				if (error) reject(error);
-				else resolve();
-			});
+		child.stdout?.on("data", (chunk: Buffer) => append(state.stdoutDecoder.write(chunk)));
+		child.stderr?.on("data", (chunk: Buffer) => append(state.stderrDecoder.write(chunk)));
+		child.once("error", (error) => {
+			append(error.message);
+			this.finish(state, "exited", 1);
 		});
-		await new Promise<void>((resolve) => setImmediate(resolve));
-		return outputView(process, cursor);
+		child.once("close", (code) => {
+			append(state.stdoutDecoder.end());
+			append(state.stderrDecoder.end());
+			this.finish(state, state.state === "terminated" ? "terminated" : "exited", code ?? 0);
+		});
+		return Promise.resolve(this.snapshot(state));
 	}
 
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
-	}
-
-	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
-		return Promise.resolve(this.snapshot(this.get(processId)));
+	async write(processId: string, input: string, options: V2ProcessWriteOptions = {}): Promise<V2ProcessOutput> {
+		const process = this.get(processId);
+		if (process.inputClosed) throw new Error(`Process ${processId} input is closed`);
+		if (process.state !== "running" || !process.child.stdin) throw new Error(`Process ${processId} is not running`);
+		const cursor = process.totalBytes;
+		process.child.stdin.write(input);
+		if (options.eof) {
+			process.inputClosed = true;
+			process.child.stdin.end();
+		}
+		return this.read(processId, cursor);
 	}
 
 	getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
@@ -574,10 +402,10 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 
 	async read(processId: string, cursor: number): Promise<V2ProcessOutput> {
 		const process = this.get(processId);
-		if (!Number.isInteger(cursor) || cursor < 0) throw new Error("Process cursor must be a non-negative integer");
-		const baseCursor = process.totalBytes - process.output.length;
+		if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error("Process cursor must be a non-negative integer");
+		const baseCursor = process.totalBytes - Buffer.byteLength(process.output, "utf8");
 		return {
-			output: process.output.slice(Math.max(0, cursor - baseCursor)),
+			output: readUtf8FromCursor(process.output, Math.max(0, cursor - baseCursor)),
 			cursor: process.totalBytes,
 			truncated: cursor < baseCursor,
 		};
@@ -585,55 +413,59 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 
 	wait(processId: string): Promise<V2ProcessSnapshot> {
 		const process = this.get(processId);
-		return process.state === "running" ? new Promise((resolve) => process.waiters.push(resolve)) : Promise.resolve(snapshot(process));
+		if (process.state !== "running") return Promise.resolve(this.snapshot(process));
+		return new Promise((resolve) => process.waiters.push(resolve));
 	}
 
 	async terminate(processId: string): Promise<V2ProcessSnapshot> {
-		const state = this.get(processId);
-		if (state.state === "running") {
-			state.state = "terminated";
-			state.exitCode = 143;
-			if (state.child.pid != null && process.platform !== "win32") {
-				try { process.kill(-state.child.pid, "SIGTERM"); } catch { state.child.kill("SIGTERM"); }
-			} else state.child.kill("SIGTERM");
-			state.terminationTimer = setTimeout(() => {
-				if (state.state !== "terminated" || state.child.exitCode !== null) return;
-				try { state.child.kill("SIGKILL"); } catch { }
-				state.killTimer = setTimeout(() => {
-					if (state.state === "terminated") this.finish(state, "terminated", 143);
-				}, this.terminateTimeoutMs);
-				state.killTimer.unref?.();
-			}, this.terminateGraceMs);
-			state.terminationTimer.unref?.();
+		const process = this.get(processId);
+		if (process.state === "running") {
+			process.state = "terminated";
+			process.exitCode = 143;
+			signalProcessTree(process.child, "SIGTERM");
+			process.terminationTimer = setTimeout(() => {
+				if (process.state === "terminated") signalProcessTree(process.child, "SIGKILL");
+			}, 500);
+			process.terminationTimer.unref();
 		}
-		return snapshot(state);
+		return this.snapshot(process);
 	}
 
-	private finish(process: NodeProcessState, state: V2ProcessState, exitCode: number, errorOutput?: Buffer): void {
+	markLost(): Promise<number> {
+		let count = 0;
+		for (const process of this.processes.values()) {
+			if (process.state !== "running") continue;
+			process.state = "lost";
+			count += 1;
+			if (process.terminationTimer !== undefined) {
+				clearTimeout(process.terminationTimer);
+				process.terminationTimer = undefined;
+			}
+			signalProcessTree(process.child, "SIGTERM");
+			const snapshot = this.snapshot(process);
+			for (const resolve of process.waiters) resolve(snapshot);
+			process.waiters = [];
+			this.notify("terminal", process);
+		}
+		return Promise.resolve(count);
+	}
+
+	private finish(process: NodeProcessState, state: V2ProcessState, exitCode: number): void {
 		if (process.state !== "running" && state !== "terminated") return;
-		if (!process.decoderFlushed) {
-			process.decoderFlushed = true;
-			const tail = Buffer.from(process.decoder.end());
-			process.output = retainOutput(Buffer.concat([process.output, tail]), this.maxOutputBytes);
-			process.totalBytes += tail.length;
+		if (process.terminationTimer !== undefined) {
+			clearTimeout(process.terminationTimer);
+			process.terminationTimer = undefined;
 		}
-		if (errorOutput) {
-			process.output = retainOutput(Buffer.concat([process.output, errorOutput]), this.maxOutputBytes);
-			process.totalBytes += errorOutput.length;
-		}
-		if (process.terminationTimer) clearTimeout(process.terminationTimer);
-		if (process.killTimer) clearTimeout(process.killTimer);
 		process.state = state;
 		process.exitCode = process.exitCode ?? exitCode;
-		this.releaseCapacity(process);
-		const result = snapshot(process);
-		for (const resolve of process.waiters) resolve(result);
+		const snapshot = this.snapshot(process);
+		for (const resolve of process.waiters) resolve(snapshot);
 		process.waiters = [];
-		this.pruneCompleted();
+		this.notify("terminal", process);
 	}
 
 	private snapshot(process: NodeProcessState): V2ProcessSnapshot {
-		const baseCursor = process.totalBytes - process.output.length;
+		const baseCursor = process.totalBytes - Buffer.byteLength(process.output, "utf8");
 		return {
 			processId: process.processId,
 			sessionId: process.sessionId,
@@ -652,4 +484,193 @@ export class NodeV2ProcessRegistry implements V2ProcessRegistry {
 		if (!process) throw new Error(`Unknown process ${processId}`);
 		return process;
 	}
+
+	private notify(kind: V2ProcessChange["kind"], process: NodeProcessState): void {
+		const change = { kind, process: this.snapshot(process) } satisfies V2ProcessChange;
+		for (const listener of this.listeners) listener(structuredClone(change));
+	}
+}
+
+/**
+ * Persists process snapshots so a newly constructed daemon can classify the
+ * previous generation's running processes as lost before accepting clients.
+ * Live process ownership remains in the delegate; the journal is recovery
+ * metadata, not a claim that an OS process can be reattached.
+ */
+export class JsonlV2ProcessRegistry implements V2ProcessRegistry {
+	private readonly path: string;
+	private readonly delegate: V2ProcessRegistry;
+	private readonly records = new Map<string, V2ProcessSnapshot>();
+	private readonly ready: Promise<void>;
+	private pendingWrite: Promise<void> = Promise.resolve();
+	private readonly listeners = new Set<(change: V2ProcessChange) => void>();
+
+	constructor(path: string, delegate: V2ProcessRegistry = new NodeV2ProcessRegistry()) {
+		if (path.length === 0) throw new TypeError("Process journal path must not be empty");
+		this.path = path;
+		this.delegate = delegate;
+		this.delegate.onChange?.((change) => this.notify(change));
+		this.ready = this.load();
+	}
+
+	onChange(listener: (change: V2ProcessChange) => void): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
+
+	async list(sessionId: string): Promise<readonly V2ProcessSnapshot[]> {
+		await this.ready;
+		const live = await this.delegate.list(sessionId);
+		const snapshots = new Map(live.map((snapshot) => [snapshot.processId, snapshot]));
+		for (const snapshot of this.records.values()) {
+			if (snapshot.sessionId === sessionId && !snapshots.has(snapshot.processId))
+				snapshots.set(snapshot.processId, snapshot);
+		}
+		return [...snapshots.values()].map((snapshot) => structuredClone(snapshot));
+	}
+
+	async start(request: V2ProcessStartRequest): Promise<V2ProcessSnapshot> {
+		await this.ready;
+		const snapshot = await this.delegate.start(request);
+		await this.persist(snapshot);
+		return snapshot;
+	}
+
+	async getSnapshot(processId: string): Promise<V2ProcessSnapshot> {
+		await this.ready;
+		const persisted = this.records.get(processId);
+		try {
+			const snapshot = await this.delegate.getSnapshot(processId);
+			await this.persist(snapshot);
+			return snapshot;
+		} catch (error) {
+			if (persisted !== undefined) return persisted;
+			throw error;
+		}
+	}
+
+	async write(processId: string, input: string, options?: V2ProcessWriteOptions): Promise<V2ProcessOutput> {
+		await this.ready;
+		const output = await this.delegate.write(processId, input, options);
+		await this.persist(await this.delegate.getSnapshot(processId));
+		return output;
+	}
+
+	async read(processId: string, cursor: number): Promise<V2ProcessOutput> {
+		await this.ready;
+		try {
+			return await this.delegate.read(processId, cursor);
+		} catch (error) {
+			const snapshot = this.records.get(processId);
+			if (snapshot === undefined) throw error;
+			if (!Number.isSafeInteger(cursor) || cursor < 0)
+				throw new Error("Process cursor must be a non-negative integer");
+			const baseCursor = snapshot.cursor - Buffer.byteLength(snapshot.output, "utf8");
+			return {
+				output: readUtf8FromCursor(snapshot.output, Math.max(0, cursor - baseCursor)),
+				cursor: snapshot.cursor,
+				truncated: cursor < baseCursor,
+			};
+		}
+	}
+
+	async wait(processId: string): Promise<V2ProcessSnapshot> {
+		await this.ready;
+		try {
+			const snapshot = await this.delegate.wait(processId);
+			await this.persist(snapshot);
+			return snapshot;
+		} catch (error) {
+			const snapshot = this.records.get(processId);
+			if (snapshot !== undefined) return snapshot;
+			throw error;
+		}
+	}
+
+	async terminate(processId: string): Promise<V2ProcessSnapshot> {
+		await this.ready;
+		try {
+			const snapshot = await this.delegate.terminate(processId);
+			await this.persist(snapshot);
+			return snapshot;
+		} catch (error) {
+			const snapshot = this.records.get(processId);
+			if (snapshot !== undefined) return snapshot;
+			throw error;
+		}
+	}
+
+	async markLost(): Promise<number> {
+		await this.ready;
+		let count = 0;
+		for (const [processId, snapshot] of this.records) {
+			if (snapshot.state !== "running") continue;
+			count += 1;
+			const lost = { ...snapshot, state: "lost" as const };
+			this.records.set(processId, lost);
+			await this.append(lost);
+		}
+		await this.delegate.markLost();
+		return count;
+	}
+
+	private async load(): Promise<void> {
+		try {
+			const content = await readFile(this.path, "utf8");
+			for (const line of content.split("\n")) {
+				if (line.length === 0) continue;
+				const value = JSON.parse(line) as V2ProcessSnapshot;
+				if (typeof value.processId === "string" && typeof value.state === "string")
+					this.records.set(value.processId, value);
+			}
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
+
+	private async persist(snapshot: V2ProcessSnapshot): Promise<void> {
+		this.records.set(snapshot.processId, snapshot);
+		const write = this.pendingWrite.then(() => this.append(snapshot));
+		this.pendingWrite = write.then(
+			() => undefined,
+			() => undefined,
+		);
+		await write;
+	}
+
+	private notify(change: V2ProcessChange): void {
+		for (const listener of this.listeners) listener(structuredClone(change));
+	}
+
+	private async append(snapshot: V2ProcessSnapshot): Promise<void> {
+		await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+		await appendFile(this.path, `${JSON.stringify(snapshot)}\n`, { mode: 0o600 });
+	}
+}
+
+function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
+	if (process.platform !== "win32" && child.pid !== undefined) {
+		try {
+			process.kill(-child.pid, signal);
+			return;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+		}
+	}
+	child.kill(signal);
+}
+
+function retainUtf8(value: string, maxBytes: number): string {
+	if (maxBytes <= 0) return "";
+	const bytes = Buffer.from(value, "utf8");
+	let start = Math.max(0, bytes.length - maxBytes);
+	while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start += 1;
+	return bytes.subarray(start).toString("utf8");
+}
+
+function readUtf8FromCursor(value: string, offset: number): string {
+	const bytes = Buffer.from(value, "utf8");
+	let start = Math.max(0, Math.min(offset, bytes.length));
+	while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start += 1;
+	return bytes.subarray(start).toString("utf8");
 }

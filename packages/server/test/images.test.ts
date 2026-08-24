@@ -46,12 +46,141 @@ describe("BlobV2ImageService", () => {
 			},
 		);
 
-		expect(await service.generate("session-1", { prompt: "draw a tree" })).toMatchObject({
+		const generated = await service.generate("session-1", {
+			prompt: "draw a tree",
+			sourceOperationId: "operation-1",
+		});
+		expect(generated).toMatchObject({
 			mimeType: "image/png",
 			provider: "fake",
 			model: "image-fast",
+			reference: `blob:${generated.digest}`,
+			sourceOperationId: "operation-1",
 			dimensions: { width: 1, height: 2 },
 			costUsd: 0.01,
 		});
+	});
+
+	test("views generated images through their blob reference", async () => {
+		const blobs = new InMemoryV2BlobStore();
+		const service = new BlobV2ImageService(new LocalV2FileReferenceService({ projectRoot: "." }), blobs, {
+			generate: async () => ({
+				data: new Uint8Array([137, 80, 78, 71]),
+				mimeType: "image/png",
+				provider: "fake",
+				model: "image-fast",
+			}),
+		});
+		const generated = await service.generate("session-1", { prompt: "draw" });
+		expect(await service.view("session-1", generated.reference)).toEqual({
+			digest: generated.digest,
+			mimeType: "image/png",
+			size: 4,
+			reference: generated.reference,
+		});
+	});
+
+	test("retains adapter-provided source operation provenance", async () => {
+		const service = new BlobV2ImageService(
+			new LocalV2FileReferenceService({ projectRoot: "." }),
+			new InMemoryV2BlobStore(),
+			{
+				generate: async () => ({
+					data: new Uint8Array([1]),
+					mimeType: "image/png",
+					provider: "fake",
+					model: "image-fast",
+					sourceOperationId: "adapter-operation",
+				}),
+			},
+		);
+
+		expect(await service.generate("session-1", { prompt: "draw" })).toMatchObject({
+			sourceOperationId: "adapter-operation",
+		});
+	});
+
+	test("validates an edit source before invoking the generator", async () => {
+		let calls = 0;
+		const blobs = new InMemoryV2BlobStore();
+		const service = new BlobV2ImageService(new LocalV2FileReferenceService({ projectRoot: "." }), blobs, {
+			generate: async () => {
+				calls += 1;
+				return { data: new Uint8Array([1]), mimeType: "image/png", provider: "fake", model: "image-fast" };
+			},
+		});
+
+		await expect(service.generate("session-1", { prompt: "edit", sourceDigest: "missing" })).rejects.toThrow(
+			"Unknown blob missing",
+		);
+		expect(calls).toBe(0);
+
+		const text = await blobs.put(new Uint8Array([1]), "text/plain");
+		await expect(service.generate("session-1", { prompt: "edit", sourceDigest: text.digest })).rejects.toThrow(
+			"Unsupported image MIME type",
+		);
+		expect(calls).toBe(0);
+	});
+
+	test("rejects invalid generated dimensions and cost before storing the blob", async () => {
+		const blobs = new InMemoryV2BlobStore();
+		const invalidDimensions = new BlobV2ImageService(new LocalV2FileReferenceService({ projectRoot: "." }), blobs, {
+			generate: async () => ({
+				data: new Uint8Array([1]),
+				mimeType: "image/png",
+				provider: "fake",
+				model: "image-fast",
+				dimensions: { width: 1.5, height: 2 },
+			}),
+		});
+		await expect(invalidDimensions.generate("session-1", { prompt: "draw" })).rejects.toThrow(
+			"Generated image dimensions must be positive safe integers",
+		);
+
+		const invalidCost = new BlobV2ImageService(new LocalV2FileReferenceService({ projectRoot: "." }), blobs, {
+			generate: async () => ({
+				data: new Uint8Array([1]),
+				mimeType: "image/png",
+				provider: "fake",
+				model: "image-fast",
+				costUsd: -1,
+			}),
+		});
+		await expect(invalidCost.generate("session-1", { prompt: "draw" })).rejects.toThrow(
+			"Generated image cost must be a non-negative finite number",
+		);
+	});
+
+	test("rejects empty generation provenance before storing the blob", async () => {
+		const blobs = new InMemoryV2BlobStore();
+		const service = new BlobV2ImageService(new LocalV2FileReferenceService({ projectRoot: "." }), blobs, {
+			generate: async () => ({
+				data: new Uint8Array([1]),
+				mimeType: "image/png",
+				provider: " ",
+				model: "image-fast",
+			}),
+		});
+
+		await expect(service.generate("session-1", { prompt: "tree" })).rejects.toThrow("provider");
+	});
+
+	test("rejects empty request source operation provenance before invoking the generator", async () => {
+		let calls = 0;
+		const service = new BlobV2ImageService(
+			new LocalV2FileReferenceService({ projectRoot: "." }),
+			new InMemoryV2BlobStore(),
+			{
+				generate: async () => {
+					calls += 1;
+					return { data: new Uint8Array([1]), mimeType: "image/png", provider: "fake", model: "image-fast" };
+				},
+			},
+		);
+
+		await expect(service.generate("session-1", { prompt: "tree", sourceOperationId: " " })).rejects.toThrow(
+			"sourceOperationId",
+		);
+		expect(calls).toBe(0);
 	});
 });

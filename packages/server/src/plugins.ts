@@ -12,6 +12,38 @@ export type V2PluginSamplingEntry = Readonly<{
 	conditionShell?: string;
 }>;
 
+export type V2PluginApp = Readonly<{
+	id: string;
+	name: string;
+	description?: string;
+	auth: "unsupported" | "unauthenticated" | "authenticated" | "pending";
+	enabled: boolean;
+	metadata?: Readonly<Record<string, unknown>>;
+}>;
+
+export type V2PluginAppAuthStart = Readonly<{
+	appId: string;
+	state: "pending";
+	authorizationUrl?: string;
+}>;
+
+export type V2PluginAppAuthComplete = Readonly<{ appId: string; state: "authenticated" }>;
+
+export type V2PluginHook = Readonly<{
+	id: string;
+	event: string;
+	command?: string;
+	enabled: boolean;
+}>;
+
+export type V2PluginInterface = Readonly<Record<string, unknown>>;
+
+export type V2PluginDiagnostic = Readonly<{
+	code: "unsupported_mcp_resource";
+	severity: "warning";
+	message: string;
+}>;
+
 export type V2Marketplace = Readonly<{
 	name: string;
 	source: string;
@@ -34,12 +66,26 @@ export type V2Plugin = Readonly<{
 		apps: number;
 		hooks: number;
 	}>;
+	appDescriptors?: readonly V2PluginApp[];
+	hookDescriptors?: readonly V2PluginHook[];
+	interface?: V2PluginInterface;
+	diagnostics?: readonly V2PluginDiagnostic[];
+	threadContext?: readonly V2PluginSamplingEntry[];
 	sampling: readonly V2PluginSamplingEntry[];
 }>;
 
 export type V2PluginRegistryState = Readonly<{
 	marketplaces: readonly V2Marketplace[];
 	plugins: readonly V2Plugin[];
+}>;
+
+export type V2PluginInstallInput = Readonly<{
+	name: string;
+	marketplace: string;
+	version: string;
+	manifest?: Record<string, unknown>;
+	root?: string;
+	scope?: V2PluginScope;
 }>;
 
 export interface V2PluginRegistry {
@@ -49,16 +95,12 @@ export interface V2PluginRegistry {
 	upgradeMarketplace(name: string): Promise<V2Marketplace>;
 	listPlugins(installedOnly?: boolean): Promise<readonly V2Plugin[]>;
 	readPlugin(id: string): Promise<V2Plugin | undefined>;
-	installPlugin(input: {
-		name: string;
-		marketplace: string;
-		version: string;
-		manifest: Record<string, unknown>;
-		root?: string;
-		scope?: V2PluginScope;
-	}): Promise<V2Plugin>;
+	installPlugin(input: V2PluginInstallInput): Promise<V2Plugin>;
+	upgradePlugin(id: string, version: string, manifest?: Record<string, unknown>, root?: string): Promise<V2Plugin>;
 	uninstallPlugin(id: string): Promise<void>;
 	setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin>;
+	startAppAuth?(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthStart>;
+	completeAppAuth?(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthComplete>;
 }
 
 function requireName(value: string, field: string): string {
@@ -71,8 +113,80 @@ function manifestDigest(manifest: Record<string, unknown>): string {
 	return createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
 }
 
+function validateManifestIdentity(manifest: Record<string, unknown>, name: string, version: string): void {
+	if (manifest.name !== undefined && manifest.name !== name)
+		throw new Error("Plugin manifest name does not match install metadata");
+	if (manifest.version !== undefined && manifest.version !== version)
+		throw new Error("Plugin manifest version does not match install metadata");
+}
+
+export function hashV2PluginSet(plugins: readonly V2Plugin[]): string {
+	const active = plugins
+		.filter((plugin) => plugin.enabled)
+		.map((plugin) => ({ id: plugin.id, version: plugin.version, manifestDigest: plugin.manifestDigest }))
+		.sort((left, right) => left.id.localeCompare(right.id));
+	return createHash("sha256").update(JSON.stringify(active)).digest("hex");
+}
+
 function resourceCount(value: unknown): number {
 	return Array.isArray(value) ? value.length : value === undefined ? 0 : 1;
+}
+
+function interfaceMetadata(value: unknown): V2PluginInterface | undefined {
+	return value !== null && typeof value === "object" && !Array.isArray(value)
+		? (structuredClone(value) as V2PluginInterface)
+		: undefined;
+}
+
+function appDescriptors(pluginId: string, value: unknown, enabled: boolean): readonly V2PluginApp[] {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((raw) => {
+		if (!raw || typeof raw !== "object" || Array.isArray(raw) || typeof raw.id !== "string") return [];
+		const id = raw.id.trim();
+		if (id.length === 0) return [];
+		const auth = raw.auth;
+		return [
+			{
+				id: `${pluginId}:${id}`,
+				name: typeof raw.name === "string" && raw.name.trim().length > 0 ? raw.name : id,
+				...(typeof raw.description === "string" ? { description: raw.description } : {}),
+				auth: auth === "authenticated" || auth === "pending" || auth === "unauthenticated" ? auth : "unsupported",
+				enabled,
+				...(raw.metadata && typeof raw.metadata === "object" && !Array.isArray(raw.metadata)
+					? { metadata: raw.metadata as Record<string, unknown> }
+					: {}),
+			},
+		];
+	});
+}
+
+function hookDescriptors(pluginId: string, value: unknown, enabled: boolean): readonly V2PluginHook[] {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((raw, index) => {
+		if (!raw || typeof raw !== "object" || Array.isArray(raw) || typeof raw.event !== "string") return [];
+		const event = raw.event.trim();
+		if (event.length === 0) return [];
+		return [
+			{
+				id: `${pluginId}:hook-${index}`,
+				event,
+				enabled,
+				...(typeof raw.command === "string" && raw.command.trim().length > 0 ? { command: raw.command } : {}),
+			},
+		];
+	});
+}
+
+function manifestDiagnostics(manifest: Record<string, unknown>): readonly V2PluginDiagnostic[] {
+	return manifest.mcpServers === undefined
+		? []
+		: [
+				{
+					code: "unsupported_mcp_resource",
+					severity: "warning",
+					message: "MCP resources are not started by Pi; supported plugin resources may still activate",
+				},
+			];
 }
 
 const samplingSlots = new Set<V2PluginSamplingEntry["slot"]>([
@@ -83,12 +197,15 @@ const samplingSlots = new Set<V2PluginSamplingEntry["slot"]>([
 ]);
 const samplingPositions = new Set<V2PluginSamplingEntry["position"]>(["preamble", "supplement"]);
 
-function samplingEntries(manifest: Record<string, unknown>): readonly V2PluginSamplingEntry[] {
+function contextEntries(
+	manifest: Record<string, unknown>,
+	key: "sampling" | "thread",
+): readonly V2PluginSamplingEntry[] {
 	const context = manifest.context;
 	if (!context || typeof context !== "object" || Array.isArray(context)) return [];
-	const sampling = (context as Record<string, unknown>).sampling;
-	if (!Array.isArray(sampling)) return [];
-	return sampling
+	const entries = (context as Record<string, unknown>)[key];
+	if (!Array.isArray(entries)) return [];
+	return entries
 		.flatMap((value) => {
 			if (!value || typeof value !== "object" || Array.isArray(value)) return [];
 			const entry = value as Record<string, unknown>;
@@ -118,7 +235,73 @@ function samplingEntries(manifest: Record<string, unknown>): readonly V2PluginSa
 }
 
 function normalizePlugin(plugin: V2Plugin): V2Plugin {
-	return { ...plugin, sampling: plugin.sampling ?? [] };
+	return {
+		...plugin,
+		appDescriptors: plugin.appDescriptors ?? [],
+		hookDescriptors: plugin.hookDescriptors ?? [],
+		diagnostics: plugin.diagnostics ?? [],
+		threadContext: plugin.threadContext ?? [],
+		sampling: plugin.sampling ?? [],
+	};
+}
+
+function validatePluginState(value: unknown): asserts value is V2PluginRegistryState {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		throw new Error("Plugin registry file is invalid");
+	const state = value as Record<string, unknown>;
+	if (!Array.isArray(state.marketplaces) || !Array.isArray(state.plugins))
+		throw new Error("Plugin registry file is invalid");
+	for (const marketplace of state.marketplaces) {
+		if (
+			typeof marketplace !== "object" ||
+			marketplace === null ||
+			Array.isArray(marketplace) ||
+			!typeNonEmpty((marketplace as Record<string, unknown>).name) ||
+			!typeNonEmpty((marketplace as Record<string, unknown>).source) ||
+			!Number.isFinite((marketplace as Record<string, unknown>).addedAt)
+		)
+			throw new Error("Plugin registry marketplace record is invalid");
+	}
+	for (const plugin of state.plugins) {
+		if (typeof plugin !== "object" || plugin === null || Array.isArray(plugin))
+			throw new Error("Plugin registry plugin record is invalid");
+		const record = plugin as Record<string, unknown>;
+		if (
+			!typeNonEmpty(record.id) ||
+			!typeNonEmpty(record.name) ||
+			!typeNonEmpty(record.marketplace) ||
+			!typeNonEmpty(record.version) ||
+			!typeNonEmpty(record.manifestDigest) ||
+			typeof record.enabled !== "boolean" ||
+			(record.scope !== "user" && record.scope !== "project") ||
+			(record.provenance !== "manifest" && record.provenance !== "package")
+		)
+			throw new Error("Plugin registry plugin record is invalid");
+		const resources = record.resources;
+		const resourceRecord = resources as Record<string, unknown>;
+		const skills = resourceRecord.skills;
+		const commands = resourceRecord.commands;
+		const apps = resourceRecord.apps;
+		const hooks = resourceRecord.hooks;
+		if (
+			typeof resources !== "object" ||
+			resources === null ||
+			Array.isArray(resources) ||
+			!Array.isArray(skills) ||
+			!Array.isArray(commands) ||
+			!skills.every((item): item is string => typeof item === "string") ||
+			!commands.every((item): item is string => typeof item === "string") ||
+			!Number.isSafeInteger(apps) ||
+			(apps as number) < 0 ||
+			!Number.isSafeInteger(hooks) ||
+			(hooks as number) < 0
+		)
+			throw new Error("Plugin registry plugin resources are invalid");
+	}
+}
+
+function typeNonEmpty(value: unknown): value is string {
+	return typeof value === "string" && value.trim().length > 0;
 }
 
 export class InMemoryV2PluginRegistry implements V2PluginRegistry {
@@ -181,14 +364,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		return this.plugins.has(id) ? structuredClone(normalizePlugin(this.plugins.get(id)!)) : undefined;
 	}
 
-	async installPlugin(input: {
-		name: string;
-		marketplace: string;
-		version: string;
-		manifest: Record<string, unknown>;
-		root?: string;
-		scope?: V2PluginScope;
-	}): Promise<V2Plugin> {
+	async installPlugin(input: V2PluginInstallInput): Promise<V2Plugin> {
 		const name = requireName(input.name, "plugin name");
 		const marketplace = requireName(input.marketplace, "marketplace name");
 		const version = requireName(input.version, "plugin version");
@@ -196,6 +372,8 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		const id = `${name}@${marketplace}`;
 		if (this.plugins.has(id)) throw new Error(`Plugin already installed: ${id}`);
 		const manifest = input.manifest;
+		if (manifest === undefined) throw new Error("Plugin manifest is required by this registry");
+		validateManifestIdentity(manifest, name, version);
 		const plugin: V2Plugin = {
 			id,
 			name,
@@ -205,7 +383,7 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 			...(input.root === undefined ? {} : { root: input.root }),
 			enabled: true,
 			scope: input.scope ?? "user",
-			provenance: "manifest",
+			provenance: input.root === undefined ? "manifest" : "package",
 			resources: {
 				skills: Array.isArray(manifest.skills)
 					? manifest.skills.filter((value): value is string => typeof value === "string")
@@ -216,7 +394,14 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 				apps: resourceCount(manifest.apps),
 				hooks: resourceCount(manifest.hooks),
 			},
-			sampling: samplingEntries(manifest),
+			appDescriptors: appDescriptors(id, manifest.apps, true),
+			hookDescriptors: hookDescriptors(id, manifest.hooks, true),
+			...(interfaceMetadata(manifest.interface) === undefined
+				? {}
+				: { interface: interfaceMetadata(manifest.interface) }),
+			diagnostics: manifestDiagnostics(manifest),
+			threadContext: contextEntries(manifest, "thread"),
+			sampling: contextEntries(manifest, "sampling"),
 		};
 		this.plugins.set(id, plugin);
 		return structuredClone(plugin);
@@ -226,12 +411,108 @@ export class InMemoryV2PluginRegistry implements V2PluginRegistry {
 		if (!this.plugins.delete(requireName(id, "plugin id"))) throw new Error(`Unknown plugin: ${id}`);
 	}
 
+	async upgradePlugin(
+		id: string,
+		version: string,
+		manifest?: Record<string, unknown>,
+		root?: string,
+	): Promise<V2Plugin> {
+		const normalizedId = requireName(id, "plugin id");
+		const normalizedVersion = requireName(version, "plugin version");
+		const existing = this.plugins.get(normalizedId);
+		if (!existing) throw new Error(`Unknown plugin: ${normalizedId}`);
+		if (manifest !== undefined) validateManifestIdentity(manifest, existing.name, normalizedVersion);
+		const updated =
+			manifest === undefined
+				? { ...existing, version: normalizedVersion }
+				: {
+						...existing,
+						version: normalizedVersion,
+						manifestDigest: manifestDigest(manifest),
+						provenance: root === undefined ? existing.provenance : "package",
+						...(root === undefined ? {} : { root }),
+						resources: {
+							skills: Array.isArray(manifest.skills)
+								? manifest.skills.filter((value): value is string => typeof value === "string")
+								: [],
+							commands: Array.isArray(manifest.commands)
+								? manifest.commands.filter((value): value is string => typeof value === "string")
+								: [],
+							apps: resourceCount(manifest.apps),
+							hooks: resourceCount(manifest.hooks),
+						},
+						appDescriptors: appDescriptors(normalizedId, manifest.apps, existing.enabled),
+						hookDescriptors: hookDescriptors(normalizedId, manifest.hooks, existing.enabled),
+						...(interfaceMetadata(manifest.interface) === undefined
+							? {}
+							: { interface: interfaceMetadata(manifest.interface) }),
+						diagnostics: manifestDiagnostics(manifest),
+						threadContext: contextEntries(manifest, "thread"),
+						sampling: contextEntries(manifest, "sampling"),
+					};
+		this.plugins.set(normalizedId, updated);
+		return structuredClone(updated);
+	}
+
 	async setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin> {
 		const existing = this.plugins.get(requireName(id, "plugin id"));
 		if (!existing) throw new Error(`Unknown plugin: ${id}`);
-		const updated = { ...existing, enabled, ...(scope === undefined ? {} : { scope }) };
+		const updated = {
+			...existing,
+			enabled,
+			appDescriptors: (existing.appDescriptors ?? []).map((app) => ({ ...app, enabled })),
+			hookDescriptors: (existing.hookDescriptors ?? []).map((hook) => ({ ...hook, enabled })),
+			...(scope === undefined ? {} : { scope }),
+		};
 		this.plugins.set(id, updated);
 		return structuredClone(updated);
+	}
+
+	async startAppAuth(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthStart> {
+		const normalizedId = requireName(id, "app id");
+		for (const [pluginId, plugin] of this.plugins) {
+			const app = (plugin.appDescriptors ?? []).find((candidate) => candidate.id === normalizedId);
+			if (!app) continue;
+			if (app.auth === "unsupported") throw new Error(`App does not support authentication: ${normalizedId}`);
+			const updatedApp = {
+				...app,
+				auth: "pending" as const,
+				...(typeof payload.authorizationUrl === "string"
+					? { metadata: { ...app.metadata, authorizationUrl: payload.authorizationUrl } }
+					: {}),
+			};
+			this.plugins.set(pluginId, {
+				...plugin,
+				appDescriptors: (plugin.appDescriptors ?? []).map((candidate) =>
+					candidate.id === normalizedId ? updatedApp : candidate,
+				),
+			});
+			return {
+				appId: normalizedId,
+				state: "pending",
+				...(typeof payload.authorizationUrl === "string" ? { authorizationUrl: payload.authorizationUrl } : {}),
+			};
+		}
+		throw new Error(`Unknown app: ${normalizedId}`);
+	}
+
+	async completeAppAuth(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthComplete> {
+		const normalizedId = requireName(id, "app id");
+		if (typeof payload.code !== "string" && typeof payload.redirectUri !== "string")
+			throw new Error("app auth completion requires code or redirectUri");
+		for (const [pluginId, plugin] of this.plugins) {
+			const app = (plugin.appDescriptors ?? []).find((candidate) => candidate.id === normalizedId);
+			if (!app) continue;
+			if (app.auth !== "pending") throw new Error(`App authentication is not pending: ${normalizedId}`);
+			this.plugins.set(pluginId, {
+				...plugin,
+				appDescriptors: (plugin.appDescriptors ?? []).map((candidate) =>
+					candidate.id === normalizedId ? { ...candidate, auth: "authenticated" as const } : candidate,
+				),
+			});
+			return { appId: normalizedId, state: "authenticated" };
+		}
+		throw new Error(`Unknown app: ${normalizedId}`);
 	}
 }
 
@@ -251,28 +532,30 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 		this.loaded = true;
 		try {
 			const value: unknown = JSON.parse(await readFile(this.filePath, "utf8"));
-			if (!value || typeof value !== "object" || !Array.isArray((value as { marketplaces?: unknown }).marketplaces))
-				throw new Error("Plugin registry file is invalid");
-			const state = value as V2PluginRegistryState;
-			for (const marketplace of state.marketplaces) {
-				if (!marketplace || typeof marketplace.name !== "string" || typeof marketplace.source !== "string")
-					throw new Error("Plugin registry marketplace record is invalid");
-			}
-			for (const plugin of state.plugins ?? []) {
-				if (!plugin || typeof plugin.id !== "string" || typeof plugin.name !== "string")
-					throw new Error("Plugin registry plugin record is invalid");
-			}
+			validatePluginState(value);
+			const state = value;
 			this.memory.replace(state);
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
 	}
 
-	private async persist(): Promise<void> {
+	private async persist(state = this.memory.toState()): Promise<void> {
 		await mkdir(dirname(this.filePath), { recursive: true });
 		const temporary = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
-		await writeFile(temporary, `${JSON.stringify(this.memory.toState())}\n`, { mode: 0o600 });
+		await writeFile(temporary, `${JSON.stringify(state)}\n`, { mode: 0o600 });
 		await rename(temporary, this.filePath);
+	}
+
+	private async transact<T>(operation: (candidate: InMemoryV2PluginRegistry) => Promise<T>): Promise<T> {
+		await this.ensureLoaded();
+		const candidate = new InMemoryV2PluginRegistry();
+		candidate.replace(this.memory.toState());
+		const value = await operation(candidate);
+		const state = candidate.toState();
+		await this.persist(state);
+		this.memory.replace(state);
+		return value;
 	}
 
 	async listMarketplaces(): Promise<readonly V2Marketplace[]> {
@@ -281,23 +564,15 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 	}
 
 	async addMarketplace(name: string, source: string): Promise<V2Marketplace> {
-		await this.ensureLoaded();
-		const value = await this.memory.addMarketplace(name, source);
-		await this.persist();
-		return value;
+		return this.transact((candidate) => candidate.addMarketplace(name, source));
 	}
 
 	async removeMarketplace(name: string): Promise<void> {
-		await this.ensureLoaded();
-		await this.memory.removeMarketplace(name);
-		await this.persist();
+		await this.transact((candidate) => candidate.removeMarketplace(name));
 	}
 
 	async upgradeMarketplace(name: string): Promise<V2Marketplace> {
-		await this.ensureLoaded();
-		const value = await this.memory.upgradeMarketplace(name);
-		await this.persist();
-		return value;
+		return this.transact((candidate) => candidate.upgradeMarketplace(name));
 	}
 
 	async listPlugins(installedOnly = false): Promise<readonly V2Plugin[]> {
@@ -311,22 +586,31 @@ export class JsonV2PluginRegistry implements V2PluginRegistry {
 	}
 
 	async installPlugin(input: Parameters<V2PluginRegistry["installPlugin"]>[0]): Promise<V2Plugin> {
-		await this.ensureLoaded();
-		const value = await this.memory.installPlugin(input);
-		await this.persist();
-		return value;
+		return this.transact((candidate) => candidate.installPlugin(input));
 	}
 
 	async uninstallPlugin(id: string): Promise<void> {
-		await this.ensureLoaded();
-		await this.memory.uninstallPlugin(id);
-		await this.persist();
+		await this.transact((candidate) => candidate.uninstallPlugin(id));
+	}
+
+	async upgradePlugin(
+		id: string,
+		version: string,
+		manifest?: Record<string, unknown>,
+		root?: string,
+	): Promise<V2Plugin> {
+		return this.transact((candidate) => candidate.upgradePlugin(id, version, manifest, root));
 	}
 
 	async setEnabled(id: string, enabled: boolean, scope?: V2PluginScope): Promise<V2Plugin> {
-		await this.ensureLoaded();
-		const value = await this.memory.setEnabled(id, enabled, scope);
-		await this.persist();
-		return value;
+		return this.transact((candidate) => candidate.setEnabled(id, enabled, scope));
+	}
+
+	async startAppAuth(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthStart> {
+		return this.transact((candidate) => candidate.startAppAuth(id, payload));
+	}
+
+	async completeAppAuth(id: string, payload: Record<string, unknown>): Promise<V2PluginAppAuthComplete> {
+		return this.transact((candidate) => candidate.completeAppAuth(id, payload));
 	}
 }

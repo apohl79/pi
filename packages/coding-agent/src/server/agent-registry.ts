@@ -1,88 +1,194 @@
 import { randomUUID } from "node:crypto";
+import type { Entry } from "@earendil-works/pi-agent-core";
 import type { AgentSummary } from "@earendil-works/pi-protocol";
-import type { V2AgentRegistry, V2AgentRequest, V2AgentSnapshot } from "@earendil-works/pi-server";
+import type { ForensicRecorder, V2AgentRegistry, V2AgentRequest, V2AgentSnapshot } from "@earendil-works/pi-server";
 import type { CodingAgentV2Runtime, CodingAgentV2Service } from "./v2-service.ts";
 
+const EMPTY_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
+
+const MAX_AGENT_INBOX_MESSAGES = 32;
+const MAX_AGENT_INBOX_CHARACTERS = 16_000;
+const AGENT_REGISTRY_STATE = "agent_registry_state";
+const AGENT_COMPLETION = "agent_completion";
+
+interface PersistedAgentState {
+	readonly version: 1;
+	readonly parentPath?: string;
+	readonly state?: AgentSummary["state"];
+	readonly role?: string;
+	readonly inbox: readonly string[];
+	readonly followUps: readonly string[];
+}
+
+function isPersistedAgentState(value: unknown): value is PersistedAgentState {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const state = value as Record<string, unknown>;
+	if (state.version !== 1 || !Array.isArray(state.inbox) || !Array.isArray(state.followUps)) return false;
+	if (state.parentPath !== undefined && (typeof state.parentPath !== "string" || state.parentPath.length === 0))
+		return false;
+	if (
+		state.role !== undefined &&
+		(typeof state.role !== "string" || state.role.length === 0 || state.role.length > 128)
+	)
+		return false;
+	if (
+		state.state !== undefined &&
+		!(["idle", "running", "awaitingInput", "complete", "failed", "interrupted"] as const).includes(
+			state.state as AgentSummary["state"],
+		)
+	)
+		return false;
+	if (![...state.inbox, ...state.followUps].every((item) => typeof item === "string" && item.length > 0)) return false;
+	const characters = [...state.inbox, ...state.followUps].reduce((total, item) => total + item.length, 0);
+	return (
+		state.inbox.length <= MAX_AGENT_INBOX_MESSAGES &&
+		state.followUps.length <= MAX_AGENT_INBOX_MESSAGES &&
+		characters <= MAX_AGENT_INBOX_CHARACTERS
+	);
+}
+
+function isCompletionForAgent(entry: Entry, agentId: string): boolean {
+	if (entry.type !== "custom" || entry.customType !== AGENT_COMPLETION) return false;
+	if (typeof entry.data !== "object" || entry.data === null || Array.isArray(entry.data)) return false;
+	return (entry.data as Record<string, unknown>).agentId === agentId;
+}
+
 interface ChildAgent {
-	readonly summary: AgentSummary;
+	summary: AgentSummary;
+	readonly parentPath: string;
 	readonly parentSessionId: string;
 	readonly childSessionId: string;
+	readonly role?: string;
 	readonly runtime: CodingAgentV2Runtime;
 	state: AgentSummary["state"];
-	messages: string[];
+	inbox: string[];
 	followUps: string[];
 	waiters: Array<() => void>;
+	persistence: Promise<void>;
+	completionQueued: boolean;
 }
 
 export interface CodingAgentV2AgentRegistryOptions {
 	readonly maxDepth?: number;
 	readonly maxActive?: number;
+	readonly maxActivePerParent?: number;
+	readonly diagnostics?: ForensicRecorder;
 }
 
 /** Executes server-owned child agents through the durable coding-agent service. */
 export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 	private readonly maxDepth: number;
 	private readonly maxActive: number;
+	private readonly maxActivePerParent: number;
+	private readonly diagnostics: ForensicRecorder | undefined;
 	private readonly agents = new Map<string, ChildAgent>();
 	private readonly service: CodingAgentV2Service;
 	private disposed = false;
+	private readonly hydratedParents = new Set<string>();
 
 	constructor(service: CodingAgentV2Service, options: CodingAgentV2AgentRegistryOptions = {}) {
 		this.service = service;
 		this.maxDepth = options.maxDepth ?? 1;
 		this.maxActive = options.maxActive ?? 8;
+		this.maxActivePerParent = options.maxActivePerParent ?? 4;
+		this.diagnostics = options.diagnostics;
+		if (!Number.isSafeInteger(this.maxDepth) || this.maxDepth < 1)
+			throw new Error("maxDepth must be a positive integer");
+		if (!Number.isSafeInteger(this.maxActive) || this.maxActive < 1 || this.maxActive > 8)
+			throw new Error("maxActive must be an integer from 1 to 8");
+		if (!Number.isSafeInteger(this.maxActivePerParent) || this.maxActivePerParent < 1 || this.maxActivePerParent > 8)
+			throw new Error("maxActivePerParent must be an integer from 1 to 8");
 	}
 
 	async spawn(request: V2AgentRequest): Promise<AgentSummary> {
 		if (this.disposed) throw new Error("Coding-agent child registry is disposed");
-		this.validateRequest(request);
+		const parentPath = await this.resolveParentPath(request);
+		const normalizedRequest = { ...request, parentPath };
+		this.validateRequest(normalizedRequest);
+		await this.hydrate(request.sessionId);
 		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
+		if (this.activeCountForParent(parentPath) >= this.maxActivePerParent)
+			throw new Error(`Agent active limit ${this.maxActivePerParent} exceeded for parent ${parentPath}`);
 		if (!this.service.createSession) throw new Error("Coding-agent service does not support child sessions");
 		const model = await this.resolveModel(request);
-		const path = `${request.parentPath.replace(/\/$/, "")}/${request.taskName}`;
+		const forkedContext = await this.readForkedContext(request);
+		const path = `${parentPath}/${request.taskName}`;
 		if ([...this.agents.values()].some((agent) => agent.summary.path === path))
 			throw new Error(`Agent path ${path} already exists`);
+		const agentId = randomUUID();
 		const created = await this.service.createSession({
 			parentSessionId: request.sessionId,
+			agentPath: path,
 			name: request.taskName,
 			model,
+			modelResolution: request.modelResolution,
+			...(request.role === undefined ? {} : { role: request.role }),
+			id: agentId,
 		});
+		const effectiveModel = (await created.runtime.snapshot()).model;
 		const summary: AgentSummary = {
-			id: randomUUID(),
+			id: agentId,
 			path,
 			taskName: request.taskName,
 			state: "running",
-			model,
+			model: effectiveModel,
+			startedAt: Date.now(),
+			usage: (await created.runtime.snapshot()).usage,
 		};
 		const agent: ChildAgent = {
 			summary,
+			parentPath,
 			parentSessionId: request.sessionId,
 			childSessionId: created.sessionId,
+			...(request.role === undefined ? {} : { role: request.role }),
 			runtime: created.runtime,
 			state: "running",
-			messages: [request.taskMessage],
+			inbox: [],
 			followUps: [],
 			waiters: [],
+			persistence: Promise.resolve(),
+			completionQueued: false,
 		};
 		this.agents.set(summary.id, agent);
-		void this.run(agent, "turn/start", request.taskMessage);
+		this.recordDiagnostic("agent_spawned", agent, undefined, {
+			path: summary.path,
+			taskName: summary.taskName,
+			...(agent.role === undefined ? {} : { role: agent.role }),
+			model: `${summary.model.provider}/${summary.model.id}`,
+		});
+		await this.persist(agent);
+		void this.run(agent, "turn/start", [forkedContext, request.taskMessage].filter(Boolean).join("\n\n"));
 		return this.snapshot(agent);
 	}
 
 	async list(sessionId: string): Promise<readonly AgentSummary[]> {
-		return [...this.agents.values()]
-			.filter((agent) => agent.parentSessionId === sessionId)
-			.map((agent) => this.snapshot(agent));
+		const visible = new Map<string, ChildAgent>();
+		const pending = [sessionId];
+		while (pending.length > 0) {
+			const parentSessionId = pending.shift()!;
+			await this.hydrate(parentSessionId);
+			for (const agent of this.agents.values()) {
+				if (agent.parentSessionId !== parentSessionId || visible.has(agent.summary.id)) continue;
+				visible.set(agent.summary.id, agent);
+				pending.push(agent.childSessionId);
+			}
+		}
+		const owned = [...visible.values()];
+		await Promise.all(owned.map((agent) => this.refreshUsage(agent)));
+		return owned.map((agent) => this.snapshot(agent));
 	}
 
 	async getSnapshot(agentId: string): Promise<V2AgentSnapshot> {
+		await this.ensureAgent(agentId);
 		const agent = this.get(agentId);
+		await this.refreshUsage(agent);
 		return { ...this.snapshot(agent), sessionId: agent.parentSessionId };
 	}
 
 	async wait(agentId: string, timeoutMs?: number): Promise<AgentSummary> {
-		if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs < 0))
+		if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0))
 			throw new Error("timeoutMs must be non-negative");
+		await this.ensureAgent(agentId);
 		const agent = this.get(agentId);
 		if (agent.state === "running" || agent.state === "awaitingInput") {
 			await new Promise<void>((resolve) => {
@@ -90,26 +196,49 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 				if (timeoutMs !== undefined) setTimeout(resolve, timeoutMs);
 			});
 		}
+		await this.refreshUsage(agent);
 		return this.snapshot(agent);
 	}
 
 	async message(agentId: string, message: string): Promise<void> {
 		if (message.trim().length === 0) throw new Error("Agent message must not be empty");
-		this.get(agentId).messages.push(message);
+		await this.ensureAgent(agentId);
+		const agent = this.get(agentId);
+		const characters = agent.inbox.reduce((total, item) => total + item.length, 0);
+		if (agent.inbox.length >= MAX_AGENT_INBOX_MESSAGES || characters + message.length > MAX_AGENT_INBOX_CHARACTERS)
+			throw new Error("Agent message inbox limit exceeded");
+		agent.inbox.push(message);
+		await this.persist(agent);
+		this.recordDiagnostic("agent_message_queued", agent, undefined, { characters: message.length });
 	}
 
 	async followUp(agentId: string, message: string): Promise<AgentSummary> {
 		if (message.trim().length === 0) throw new Error("Agent message must not be empty");
+		await this.ensureAgent(agentId);
 		const agent = this.get(agentId);
-		await this.message(agentId, message);
 		if (agent.state === "complete" || agent.state === "interrupted" || agent.state === "failed") {
+			this.ensureActiveCapacity(agent);
+			const previousState = agent.state;
 			agent.state = "running";
-			void this.run(agent, "turn/followUp", message);
-		} else agent.followUps.push(message);
+			await this.persist(agent);
+			this.recordDiagnostic("agent_followup_queued", agent, previousState, { characters: message.length });
+			void this.run(agent, "turn/start", message);
+		} else {
+			const characters = agent.followUps.reduce((total, item) => total + item.length, 0);
+			if (
+				agent.followUps.length >= MAX_AGENT_INBOX_MESSAGES ||
+				characters + message.length > MAX_AGENT_INBOX_CHARACTERS
+			)
+				throw new Error("Agent follow-up queue limit exceeded");
+			agent.followUps.push(message);
+			await this.persist(agent);
+			this.recordDiagnostic("agent_followup_queued", agent, undefined, { characters: message.length });
+		}
 		return this.snapshot(agent);
 	}
 
 	async interrupt(agentId: string): Promise<AgentSummary> {
+		await this.ensureAgent(agentId);
 		const agent = this.get(agentId);
 		if (agent.state === "running" || agent.state === "awaitingInput") {
 			try {
@@ -121,11 +250,32 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 					payload: {},
 				});
 			} finally {
+				const previousState = agent.state;
 				agent.state = "interrupted";
+				this.recordDiagnostic("agent_state_changed", agent, previousState);
+				await this.queueCompletion(agent);
+				await this.persist(agent);
 				this.resolveWaiters(agent);
 			}
 		}
 		return this.snapshot(agent);
+	}
+
+	async interruptSession(sessionId: string): Promise<void> {
+		const pending = [sessionId];
+		const descendants: ChildAgent[] = [];
+		while (pending.length > 0) {
+			const parentSessionId = pending.shift()!;
+			await this.hydrate(parentSessionId);
+			for (const agent of this.agents.values()) {
+				if (agent.parentSessionId !== parentSessionId || descendants.includes(agent)) continue;
+				descendants.push(agent);
+				pending.push(agent.childSessionId);
+			}
+		}
+		for (const agent of descendants) {
+			if (agent.state === "running" || agent.state === "awaitingInput") await this.interrupt(agent.summary.id);
+		}
 	}
 
 	async dispose(): Promise<void> {
@@ -133,38 +283,110 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		this.disposed = true;
 		const agents = [...this.agents.values()];
 		this.agents.clear();
+		await Promise.all(
+			agents.map(async (agent) => {
+				if (agent.state !== "running" && agent.state !== "awaitingInput") return;
+				const previousState = agent.state;
+				agent.state = "interrupted";
+				this.recordDiagnostic("agent_state_changed", agent, previousState);
+				await this.queueCompletion(agent);
+				await this.persist(agent);
+			}),
+		);
 		await Promise.allSettled(agents.map((agent) => agent.runtime.dispose()));
 		for (const agent of agents) this.resolveWaiters(agent);
 	}
 
-	private async run(agent: ChildAgent, command: "turn/start" | "turn/followUp", text: string): Promise<void> {
+	private async run(agent: ChildAgent, command: "turn/start", text: string): Promise<void> {
 		try {
+			const inbox = agent.inbox.slice();
+			const prompt = [...inbox, text].join("\n\n");
+			const usageBefore = await agent.runtime.snapshot();
 			const operationId = randomUUID();
 			await agent.runtime.accept(operationId);
 			await agent.runtime.run(operationId, {
 				command,
 				sessionId: agent.childSessionId,
-				payload: { text },
+				payload: { text: prompt },
 			});
+			const usageAfter = await agent.runtime.snapshot();
+			const beforeUsage = usageBefore.usage ?? EMPTY_USAGE;
+			const afterUsage = usageAfter.usage ?? EMPTY_USAGE;
+			const usageDelta =
+				afterUsage.input +
+				afterUsage.output +
+				afterUsage.cacheRead +
+				afterUsage.cacheWrite -
+				(beforeUsage.input + beforeUsage.output + beforeUsage.cacheRead + beforeUsage.cacheWrite);
+			if (usageDelta > 0) {
+				const parent = await this.service.openSession(agent.parentSessionId);
+				await parent.recordGoalUsage?.(usageDelta);
+			}
+			if (inbox.length > 0) agent.inbox.splice(0, inbox.length);
+			const previousState = agent.state;
 			agent.state = "complete";
+			this.recordDiagnostic("agent_state_changed", agent, previousState);
 			const next = agent.followUps.shift();
 			if (next !== undefined) {
+				await this.persist(agent);
 				agent.state = "running";
-				void this.run(agent, "turn/followUp", next);
+				await this.persist(agent);
+				void this.run(agent, "turn/start", next);
+			} else {
+				await this.queueCompletion(agent);
+				await this.persist(agent);
 			}
 		} catch {
+			const previousState = agent.state;
 			agent.state = "failed";
+			this.recordDiagnostic("agent_state_changed", agent, previousState);
+			await this.queueCompletion(agent);
+			await this.persist(agent);
 		} finally {
 			if (agent.state !== "running") this.resolveWaiters(agent);
 		}
 	}
 
+	private async queueCompletion(agent: ChildAgent): Promise<void> {
+		if (agent.completionQueued) return;
+		agent.completionQueued = true;
+		const parent = await this.service.openSession(agent.parentSessionId);
+		if (!parent.appendCustomEntry) return;
+		if (parent.readCustomEntries) {
+			const completions = await parent.readCustomEntries(AGENT_COMPLETION);
+			if (completions.some((entry) => isCompletionForAgent(entry, agent.summary.id))) return;
+		}
+		try {
+			await parent.appendCustomEntry(AGENT_COMPLETION, {
+				version: 1,
+				agentId: agent.summary.id,
+				path: agent.summary.path,
+				taskName: agent.summary.taskName,
+				state: agent.state,
+				...(agent.role === undefined ? {} : { role: agent.role }),
+				model: agent.summary.model,
+			});
+		} catch (error) {
+			agent.completionQueued = false;
+			throw error;
+		}
+	}
+
 	private validateRequest(request: V2AgentRequest): void {
+		if (
+			request.forkTurns !== undefined &&
+			request.forkTurns !== "none" &&
+			request.forkTurns !== "all" &&
+			(!Number.isSafeInteger(request.forkTurns) || request.forkTurns < 1 || request.forkTurns > 32)
+		)
+			throw new Error("forkTurns must be none, all, or an integer from 1 to 32");
 		const depth = request.parentPath.split("/").filter(Boolean).length - 1;
 		if (depth >= this.maxDepth) throw new Error(`Agent maximum depth ${this.maxDepth} exceeded`);
 		if (!/^[A-Za-z0-9._-]+$/.test(request.taskName))
 			throw new Error("Agent taskName contains unsupported characters");
 		if (request.taskMessage.trim().length === 0) throw new Error("Agent taskMessage must not be empty");
+		if (request.role !== undefined && (request.role.trim().length === 0 || request.role.length > 128))
+			throw new Error("Agent role must be 1-128 characters");
 	}
 
 	private async resolveModel(request: V2AgentRequest): Promise<{ provider: string; id: string }> {
@@ -177,8 +399,136 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		};
 	}
 
+	private async readForkedContext(request: V2AgentRequest): Promise<string | undefined> {
+		if (request.forkTurns === undefined || request.forkTurns === "none") return undefined;
+		const snapshot = await (await this.service.openSession(request.sessionId)).snapshot();
+		const transcript = snapshot.transcript;
+		const userIndexes = transcript.flatMap((item, index) => (item.role === "user" ? [index] : []));
+		const start =
+			request.forkTurns === "all"
+				? 0
+				: (userIndexes[Math.max(0, userIndexes.length - request.forkTurns)] ?? transcript.length);
+		const selected = transcript.slice(start);
+		if (selected.length === 0) return undefined;
+		const serialized = selected
+			.map((item) =>
+				item.role === "compactionSummary" || item.role === "branchSummary"
+					? `${item.role}: ${item.summary}`
+					: `${item.role}: ${JSON.stringify(item.content)}`,
+			)
+			.join("\n");
+		const bounded = serialized.slice(0, 32_000);
+		return `[forked context]\n${bounded}`;
+	}
+
 	private activeCount(): number {
 		return [...this.agents.values()].filter((agent) => agent.state === "running").length;
+	}
+
+	private activeCountForParent(parentPath: string): number {
+		return [...this.agents.values()].filter((agent) => agent.parentPath === parentPath && agent.state === "running")
+			.length;
+	}
+
+	private ensureActiveCapacity(agent: ChildAgent): void {
+		if (this.activeCount() >= this.maxActive) throw new Error(`Agent active limit ${this.maxActive} exceeded`);
+		if (this.activeCountForParent(agent.parentPath) >= this.maxActivePerParent)
+			throw new Error(`Agent active limit ${this.maxActivePerParent} exceeded for parent ${agent.parentPath}`);
+	}
+
+	private async ensureAgent(agentId: string): Promise<void> {
+		if (this.agents.has(agentId)) return;
+		const sessions = await this.service.listSessions();
+		for (const metadata of sessions) {
+			if (metadata.parentSessionId === undefined) continue;
+			await this.hydrate(metadata.parentSessionId);
+			if (this.agents.has(agentId)) return;
+		}
+	}
+
+	private async resolveParentPath(request: V2AgentRequest): Promise<string> {
+		const requestedPath = request.parentPath.replace(/\/$/, "");
+		const findOwner = () => [...this.agents.values()].find((agent) => agent.childSessionId === request.sessionId);
+		const loadedOwner = findOwner();
+		if (loadedOwner) return loadedOwner.summary.path;
+
+		await this.hydrate(request.sessionId);
+		const hydratedOwner = findOwner();
+		if (hydratedOwner) return hydratedOwner.summary.path;
+
+		// A fresh registry may not have loaded the parent session yet. Hydrate every
+		// known parent once so nested child requests recover their canonical path.
+		for (const metadata of await this.service.listSessions()) {
+			if (metadata.parentSessionId === undefined) continue;
+			await this.hydrate(metadata.parentSessionId);
+			const owner = findOwner();
+			if (owner) return owner.summary.path;
+		}
+		return requestedPath;
+	}
+
+	private async hydrate(parentSessionId: string): Promise<void> {
+		if (this.hydratedParents.has(parentSessionId)) return;
+		this.hydratedParents.add(parentSessionId);
+		const sessions = await this.service.listSessions();
+		for (const metadata of sessions) {
+			if (metadata.parentSessionId !== parentSessionId || this.agents.has(metadata.id)) continue;
+			const runtime = await this.service.openSession(metadata.id);
+			const snapshot = await runtime.snapshot();
+			const persisted = await this.readState(runtime);
+			const taskName = metadata.sessionName ?? metadata.id;
+			const parentPath = persisted?.parentPath ?? this.agents.get(metadata.parentSessionId)?.summary.path ?? "/root";
+			const summary: AgentSummary = {
+				id: metadata.id,
+				path: `${parentPath}/${taskName}`,
+				taskName,
+				state: persisted?.state ?? (snapshot.phase === "idle" ? "complete" : "running"),
+				model: snapshot.model,
+				startedAt: metadata.createdAt,
+				usage: snapshot.usage,
+			};
+			this.agents.set(metadata.id, {
+				summary,
+				parentPath,
+				parentSessionId,
+				childSessionId: metadata.id,
+				runtime,
+				state: summary.state,
+				inbox: persisted?.inbox.slice() ?? [],
+				followUps: persisted?.followUps.slice() ?? [],
+				...(persisted?.role === undefined ? {} : { role: persisted.role }),
+				waiters: [],
+				persistence: Promise.resolve(),
+				completionQueued: false,
+			});
+		}
+	}
+
+	private async persist(agent: ChildAgent): Promise<void> {
+		const append = agent.runtime.appendCustomEntry;
+		if (!append) return;
+		const state: PersistedAgentState = {
+			version: 1,
+			parentPath: agent.parentPath,
+			state: agent.state,
+			...(agent.role === undefined ? {} : { role: agent.role }),
+			inbox: agent.inbox.slice(),
+			followUps: agent.followUps.slice(),
+		};
+		agent.persistence = agent.persistence.then(() =>
+			append.call(agent.runtime, AGENT_REGISTRY_STATE, state).then(() => undefined),
+		);
+		await agent.persistence;
+	}
+
+	private async readState(runtime: CodingAgentV2Runtime): Promise<PersistedAgentState | undefined> {
+		if (!runtime.readCustomEntries) return undefined;
+		const entries = await runtime.readCustomEntries(AGENT_REGISTRY_STATE);
+		for (const entry of entries) {
+			if (entry.type !== "custom" || !isPersistedAgentState(entry.data)) continue;
+			return entry.data;
+		}
+		return undefined;
 	}
 
 	private resolveWaiters(agent: ChildAgent): void {
@@ -186,8 +536,36 @@ export class CodingAgentV2AgentRegistry implements V2AgentRegistry {
 		for (const resolve of waiters) resolve();
 	}
 
+	private recordDiagnostic(
+		kind: string,
+		agent: ChildAgent,
+		previousState: AgentSummary["state"] | undefined,
+		payload?: Record<string, unknown>,
+	): void {
+		void this.diagnostics
+			?.record({
+				kind,
+				agentId: agent.summary.id,
+				sessionId: agent.parentSessionId,
+				payload: {
+					...(previousState === undefined ? {} : { previousState }),
+					state: agent.state,
+					...payload,
+				},
+			})
+			.catch(() => undefined);
+	}
+
 	private snapshot(agent: ChildAgent): AgentSummary {
 		return structuredClone({ ...agent.summary, state: agent.state });
+	}
+
+	private async refreshUsage(agent: ChildAgent): Promise<void> {
+		const usage = (await agent.runtime.snapshot()).usage;
+		const summary = { ...agent.summary };
+		if (usage === undefined) delete summary.usage;
+		else summary.usage = usage;
+		agent.summary = summary;
 	}
 
 	private get(agentId: string): ChildAgent {

@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "packages": {
+    "packages/agent": {
+      "classification": "fork core",
+      "rationale": "Durable harness lifecycle and recovery seams are authoritative for server-owned operations.",
+      "tests": ["packages/agent/test"]
+    },
+    "packages/ai": {
+      "classification": "stock-compatible extension",
+      "rationale": "Provider and model APIs remain independent of the fork daemon boundary.",
+      "tests": ["packages/ai/test"]
+    },
+    "packages/client": {
+      "classification": "fork core",
+      "rationale": "The v2 client owns protocol validation, reconnect cursors, and transport lifecycle at the fork boundary.",
+      "tests": ["packages/client/test"]
+    },
+    "packages/codex-plugin-compat": {
+      "classification": "stock-compatible extension",
+      "rationale": "Codex manifest and resource adaptation uses provider-neutral registries without changing Pi provider APIs.",
+      "tests": ["packages/coding-agent/test/codex-plugin.test.ts"]
+    },
+    "packages/coding-agent": {
+      "classification": "fork core",
+      "rationale": "The configured daemon and server-owned coding-agent service define fork lifecycle, ownership, and compatibility behavior.",
+      "tests": ["packages/coding-agent/test/server", "packages/coding-agent/test/client"]
+    },
+    "packages/diagnostics": {
+      "classification": "fork-dependent extension",
+      "rationale": "Diagnostic contracts are reusable, while durable persistence and bundle ownership are supplied by the fork server.",
+      "tests": ["packages/server/test/diagnostics.test.ts"]
+    },
+    "packages/evals": {
+      "classification": "stock-compatible extension",
+      "rationale": "Evaluation helpers do not depend on the daemon or fork protocol.",
+      "tests": ["packages/evals"]
+    },
+    "packages/file-references": {
+      "classification": "fork-dependent extension",
+      "rationale": "Reference parsing is reusable, but remote resolution and upload semantics require the fork server boundary.",
+      "tests": ["packages/coding-agent/test/client/remote-v2-production-files.test.ts"]
+    },
+    "packages/model-instructions": {
+      "classification": "fork-dependent extension",
+      "rationale": "Profile matching is reusable, while resolved-model freezing is supplied by the server runtime host.",
+      "tests": ["packages/coding-agent/test/server/daemon-model-instructions.test.ts"]
+    },
+    "packages/protocol": {
+      "classification": "fork core",
+      "rationale": "Versioned v2 schemas, cursors, and error envelopes are authoritative fork protocol contracts.",
+      "tests": ["packages/protocol/test"]
+    },
+    "packages/server-extension-api": {
+      "classification": "fork-dependent extension",
+      "rationale": "The public extension contract is reusable but requires the fork server runtime to execute durably.",
+      "tests": ["packages/coding-agent/test/server/extension-host.test.ts"]
+    },
+    "packages/server": {
+      "classification": "fork core",
+      "rationale": "Transport, leases, authorization, persistence projections, and recovery are server-owned invariants.",
+      "tests": ["packages/server/test"]
+    },
+    "packages/session-backends/sqlite-node": {
+      "classification": "fork core",
+      "rationale": "SQLite transactions and derived-state repair implement the authoritative durable session boundary.",
+      "tests": ["packages/session-backends/sqlite-node/test"]
+    },
+    "packages/session-naming": {
+      "classification": "stock-compatible extension",
+      "rationale": "Naming policy consumes public model and session seams and has no protocol ownership.",
+      "tests": ["packages/coding-agent/test/server/daemon-runtime.test.ts"]
+    },
+    "packages/telemetry": {
+      "classification": "stock-compatible extension",
+      "rationale": "Telemetry contracts are runtime-neutral and carry no fork-specific authority.",
+      "tests": ["packages/telemetry/test"]
+    },
+    "packages/tui": {
+      "classification": "stock-compatible extension",
+      "rationale": "TUI components remain reusable; remote views consume snapshots through the client adapter.",
+      "tests": ["packages/tui/test"]
+    },
+    "packages/web-tools": {
+      "classification": "fork-dependent extension",
+      "rationale": "Provider-neutral web operations are reusable, but safety, bounds, and provenance are enforced by the fork server.",
+      "tests": ["packages/server/test/web.test.ts"]
+    }
+  }
+}

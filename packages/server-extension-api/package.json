@@ -1,0 +1,26 @@
+{
+	"name": "@earendil-works/pi-server-extension-api",
+	"version": "0.84.2",
+	"description": "Public server-runtime extension contracts for pi",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": ["dist", "README.md"],
+	"scripts": {
+		"build": "tsgo -p tsconfig.build.json",
+		"typecheck": "tsgo -p tsconfig.build.json"
+	},
+	"keywords": ["pi", "server", "extension"],
+	"license": "MIT",
+	"engines": { "node": ">=22.19.0" },
+	"dependencies": {
+		"@earendil-works/pi-agent-core": "^0.84.2",
+		"@earendil-works/pi-server": "^0.84.2"
+	}
+}

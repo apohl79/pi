@@ -266,6 +266,47 @@ describe("extension provider model lifecycle", () => {
 		}
 	});
 
+	it("reloads compaction overrides on the next model refresh", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "pi-model-compaction-reload-"));
+		const modelsPath = join(tempDir, "models.json");
+		const writeConfig = (reserveTokens: number) =>
+			writeFileSync(
+				modelsPath,
+				JSON.stringify({
+					providers: { "extension-reload": { modelOverrides: { reload: { compaction: { reserveTokens } } } } },
+				}),
+			);
+		writeConfig(100);
+		try {
+			const runtime = await ModelRuntime.create({
+				credentials: AuthStorage.inMemory(),
+				modelsStore: new InMemoryModelsStore(),
+				modelsPath,
+				allowModelNetwork: false,
+			});
+			runtime.registerNativeProvider({
+				id: "extension-reload",
+				name: "Reload provider",
+				auth: {
+					apiKey: { name: "Reload key", resolve: async () => ({ auth: { apiKey: "key" }, source: "test" }) },
+				},
+				getModels: () => [{ ...model("reload"), provider: "extension-reload" }],
+				stream: () => {
+					throw new Error("unused");
+				},
+				streamSimple: () => {
+					throw new Error("unused");
+				},
+			});
+			expect(runtime.getCompactionOverride("extension-reload", "reload")).toEqual({ reserveTokens: 100 });
+			writeConfig(200);
+			await runtime.refresh({ allowNetwork: false });
+			expect(runtime.getCompactionOverride("extension-reload", "reload")).toEqual({ reserveTokens: 200 });
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
 	it("publishes refreshModels results without forcing ModelsStore persistence", async () => {
 		const modelsStore = new InMemoryModelsStore();
 		const runtime = await ModelRuntime.create({

@@ -1,17 +1,67 @@
-import { createModels, fauxAssistantMessage, fauxProvider, type Usage } from "@earendil-works/pi-ai";
+import {
+	createModels,
+	fauxAssistantMessage,
+	fauxProvider,
+	type SimpleStreamOptions,
+	type Usage,
+} from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
 import { describe, expect, it } from "vitest";
 import { AgentHarness, HarnessClosed, type HarnessTool, type Resources } from "../../src/harness/agent-harness.ts";
 import {
 	InMemorySessionStorage,
+	type JsonValue,
+	type LaneRecord,
 	type NewRecord,
 	type OperationStartedRecord,
+	type RegisterWrite,
 	Session,
+	type SessionRegister,
 } from "../../src/harness/session/index.ts";
 import type { AgentMessage } from "../../src/types.ts";
 
 function createSession(id = "session"): Session {
 	return new Session(new InMemorySessionStorage({ id, createdAt: 1 }));
+}
+
+class ThrowAfterOperationStartStorage extends InMemorySessionStorage {
+	private injected = false;
+
+	override async appendRecord<TRecord extends LaneRecord>(record: NewRecord<TRecord>): Promise<TRecord> {
+		const appended = await super.appendRecord(record);
+		if (!this.injected && record.type === "operation_started") {
+			this.injected = true;
+			throw new Error("compaction admission response lost after commit");
+		}
+		return appended;
+	}
+}
+
+class ThrowAfterOperationFinishedStorage extends InMemorySessionStorage {
+	private injected = false;
+
+	override async appendRecord<TRecord extends LaneRecord>(record: NewRecord<TRecord>): Promise<TRecord> {
+		const appended = await super.appendRecord(record);
+		if (!this.injected && record.type === "operation_finished") {
+			this.injected = true;
+			throw new Error("terminal response lost after commit");
+		}
+		return appended;
+	}
+}
+
+class OperationStateCaptureStorage extends InMemorySessionStorage {
+	readonly operationStates: JsonValue[] = [];
+
+	override async appendTransaction<TRecord extends LaneRecord>(
+		records: readonly NewRecord<TRecord>[],
+		writes: readonly RegisterWrite[],
+	): Promise<{ records: TRecord[]; registers: SessionRegister[] }> {
+		for (const write of writes) {
+			if (write.op === "set" && write.namespace === "op.state") this.operationStates.push(write.value);
+		}
+		return super.appendTransaction(records, writes);
+	}
 }
 
 function createHarness(session = createSession()): Promise<AgentHarness> {
@@ -65,14 +115,233 @@ describe("AgentHarness v2 scaffold", () => {
 		if (!result.ok || result.value.kind !== "completed") throw new Error("Expected completed prompt");
 		expect(result.value.finalMessage.content).toEqual([{ type: "text", text: "hello from faux" }]);
 		expect((await session.findRecords({ type: "operation_started" })).length).toBe(1);
+		const started = (await session.findRecords({ type: "operation_started" }))[0]!;
+		expect(await session.getRegister("op.meta", started.id)).toBeUndefined();
+		expect(await session.getRegister("op.state", started.id)).toBeUndefined();
 		expect((await session.findRecords({ type: "operation_finished" })).map((record) => record.outcome)).toEqual([
 			"completed",
 		]);
+		expect(await session.getRegister("lane.lastResult", "main")).toMatchObject({
+			value: { runId: started.id, outcome: "completed" },
+		});
 		const messages = await session.findEntriesOnBranch({ order: "oldestFirst" });
 		expect(messages.filter((entry) => entry.type === "message").map((entry) => entry.message.role)).toEqual([
 			"user",
 			"assistant",
 		]);
+		await harness.close();
+	});
+
+	it("delivers follow-up queue input through the provider loop", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-follow-up-faux",
+			models: [{ id: "harness-follow-up-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				return fauxAssistantMessage("initial");
+			},
+			fauxAssistantMessage("follow-up"),
+		]);
+		const session = createSession("follow-up");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		const prompt = harness.prompt("start");
+		for (let attempt = 0; attempt < 100 && (await session.findOpenOperations("main")).length === 0; attempt++)
+			await new Promise((resolve) => setTimeout(resolve, 1));
+		const followUp = await harness.followUp("continue");
+		expect(followUp).toMatchObject({ ok: true });
+		await expect(prompt).resolves.toMatchObject({ ok: true, value: { kind: "completed" } });
+		if (!followUp.ok) throw new Error("Expected follow-up admission");
+		expect(await harness.cancelQueued(followUp.value.entryId)).toEqual({
+			ok: true,
+			value: { outcome: "already_consumed" },
+		});
+		const messages = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		expect(JSON.stringify(messages)).toContain("continue");
+		expect(JSON.stringify(messages)).toContain("follow-up");
+		await harness.close();
+	});
+
+	it("keeps deferred provider work open for recovery", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "deferred-faux",
+			models: [{ id: "deferred-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage("waiting", {
+				stopReason: "deferred",
+				deferred: { provider: "faux", modelId: "faux-1", api: "faux", id: "response-1" },
+			}),
+		]);
+		const session = createSession("deferred");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+
+		const result = await harness.prompt("wait for me");
+
+		expect(result).toMatchObject({ ok: true, value: { kind: "suspended", deferred: { id: "response-1" } } });
+		const started = (await session.findRecords({ type: "operation_started" }))[0]!;
+		expect(await session.getRegister("op.state", started.id)).toMatchObject({
+			value: { kind: "run", status: "running", phase: "deferred", deferred: { id: "response-1" } },
+		});
+		expect(await session.findOpenOperations("main")).toHaveLength(1);
+		expect((await harness.lanes())[0]?.operation).toMatchObject({ status: "suspended" });
+		await harness.close();
+	});
+
+	it("resumes a deferred provider handle without starting a second operation", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "deferred-resume-faux",
+			deferred: { pendingFetches: 0 },
+			models: [{ id: "deferred-resume-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("resolved after polling")]);
+		const session = createSession("deferred-resume");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			streamOptions: { deferred: true },
+		});
+		harness.hooks.on("after_response", (event) => ({
+			message: {
+				...(event as { message: AgentMessage }).message,
+				content: [{ type: "text", text: "transformed deferred response" }],
+			},
+		}));
+
+		const suspended = await harness.prompt("defer this");
+		expect(suspended).toMatchObject({ ok: true, value: { kind: "suspended" } });
+		const resumed = await harness.resume();
+
+		expect(resumed).toMatchObject({
+			ok: true,
+			value: { operation: "run", runId: expect.any(String), kind: "completed" },
+		});
+		expect(faux.state.deferredFetchCount).toBe(1);
+		expect(await session.findOpenOperations("main")).toEqual([]);
+		expect((await session.findRecords({ type: "operation_started" })).length).toBe(1);
+		expect((await session.findRecords({ type: "operation_finished" })).map((record) => record.outcome)).toEqual([
+			"completed",
+		]);
+		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		expect(
+			entries.some(
+				(entry) =>
+					entry.type === "message" &&
+					entry.message.role === "assistant" &&
+					entry.message.content[0]?.type === "text" &&
+					entry.message.content[0].text === "transformed deferred response",
+			),
+		).toBe(true);
+		await harness.close();
+	});
+
+	it("rehydrates a deferred provider handle after harness recreation", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "deferred-recovery-faux",
+			deferred: { pendingFetches: 0 },
+			models: [{ id: "deferred-recovery-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("resolved after restart")]);
+		const session = createSession("deferred-recovery");
+		const first = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			streamOptions: { deferred: true },
+		});
+		expect(await first.harness.prompt("defer this")).toMatchObject({ ok: true, value: { kind: "suspended" } });
+		const started = (await session.findRecords({ type: "operation_started" }))[0]!;
+		const checkpoint = await session.getRegister("op.state", started.id);
+		await first.harness.close();
+
+		const second = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			streamOptions: { deferred: true },
+		});
+		expect(second.suspended).toMatchObject([{ reason: "deferred", deferred: { provider: faux.provider.id } }]);
+		expect(second.suspended[0]?.deferred).toEqual(
+			(checkpoint?.value as { deferred?: unknown } | undefined)?.deferred,
+		);
+		const resumed = await second.harness.resume();
+
+		expect(resumed).toMatchObject({ ok: true, value: { kind: "completed", runId: expect.any(String) } });
+		expect(faux.state.deferredFetchCount).toBe(1);
+		expect(await session.findOpenOperations("main")).toEqual([]);
+		await second.harness.close();
+	});
+
+	it("rejects deferred resume when its provider model is unavailable", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "deferred-missing-model-faux",
+			deferred: { pendingFetches: 0 },
+			models: [{ id: "deferred-missing-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage("waiting", {
+				stopReason: "deferred",
+				deferred: { provider: faux.provider.id, modelId: "deferred-missing-model", api: "faux", id: "response-1" },
+			}),
+		]);
+		const session = createSession("deferred-missing-model");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			streamOptions: { deferred: true },
+		});
+
+		expect(await harness.prompt("defer this")).toMatchObject({ ok: true, value: { kind: "suspended" } });
+		models.deleteProvider(faux.provider.id);
+
+		const resumed = await harness.resume();
+
+		expect(resumed).toMatchObject({
+			ok: false,
+			error: {
+				name: "MissingIdentities",
+				models: [`${faux.provider.id}/${faux.getModel().id}`],
+			},
+		});
+		expect(await session.findOpenOperations("main")).toHaveLength(1);
+		expect(await session.findRecords({ type: "operation_finished" })).toEqual([]);
+		await harness.close();
+	});
+
+	it("cancels a deferred provider handle before terminal abort cleanup", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "deferred-cancel-faux",
+			deferred: { pendingFetches: 1 },
+			models: [{ id: "deferred-cancel-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("cancelled later")]);
+		const session = createSession("deferred-cancel");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			streamOptions: { deferred: true },
+		});
+
+		expect(await harness.prompt("defer then abort")).toMatchObject({ ok: true, value: { kind: "suspended" } });
+		expect(await harness.abort()).toMatchObject({ ok: true, value: { runId: expect.any(String) } });
+		expect(faux.state.cancelledDeferred).toHaveLength(1);
+		expect(await session.findOpenOperations("main")).toEqual([]);
 		await harness.close();
 	});
 
@@ -134,11 +403,19 @@ describe("AgentHarness v2 scaffold", () => {
 				modelOverrides: { "harness-compaction-faux/harness-compaction-model": { reserveTokens: 7 } },
 			},
 		});
+		const compactionEvents: string[] = [];
+		harness.events.on("compaction_start", () => {
+			compactionEvents.push("start");
+		});
+		harness.events.on("compaction_end", () => {
+			compactionEvents.push("end");
+		});
 		expect(await harness.getCompactionSettings()).toMatchObject({
 			enabled: true,
 			reserveTokens: 7,
 			keepRecentTokens: 1,
 		});
+		expect(await harness.getCompactionPolicySource()).toBe("mixed");
 		await harness.prompt("first request with enough text to create history");
 		await harness.prompt("second request with enough text to create history");
 		faux.setResponses([fauxAssistantMessage("durable summary"), fauxAssistantMessage("durable turn prefix")]);
@@ -151,6 +428,279 @@ describe("AgentHarness v2 scaffold", () => {
 			true,
 		);
 		expect((await session.findRecords({ type: "operation_finished" })).at(-1)?.outcome).toBe("completed");
+		expect(compactionEvents).toEqual(["start", "end"]);
+		await harness.close();
+	});
+
+	it("publishes an executing checkpoint for compaction", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-compaction-checkpoint-faux",
+			models: [{ id: "harness-compaction-checkpoint-model", contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage("history"),
+			fauxAssistantMessage("history two"),
+			fauxAssistantMessage("checkpoint summary"),
+			fauxAssistantMessage("checkpoint prefix"),
+		]);
+		const storage = new OperationStateCaptureStorage({ id: "compaction-checkpoint", createdAt: 1 });
+		const session = new Session(storage);
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+		});
+		await harness.prompt("first request with enough text to create durable history for compaction");
+		await harness.prompt("second request with enough text to create durable history for compaction");
+		expect(await harness.compact()).toMatchObject({ ok: true, value: { kind: "completed" } });
+		expect(storage.operationStates).toContainEqual({ kind: "compaction", status: "running", phase: "executing" });
+		await harness.close();
+	});
+
+	it("continues compaction when admission reports an error after commit", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-compaction-admission-faux",
+			models: [{ id: "harness-compaction-admission-model", contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("first response")]);
+		const session = new Session(new ThrowAfterOperationStartStorage({ id: "compaction-admission", createdAt: 1 }));
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+		});
+		expect(await harness.prompt("create durable history")).toMatchObject({ ok: true, value: { kind: "completed" } });
+		faux.setResponses([fauxAssistantMessage("durable summary")]);
+
+		const result = await harness.compact();
+
+		expect(result).toMatchObject({ ok: true, value: { kind: "completed", entry: { type: "compaction" } } });
+		expect((await session.findRecords({ type: "operation_finished" })).at(-1)?.outcome).toBe("completed");
+		await harness.close();
+	});
+
+	it("allows structural lifecycle hooks to decline compaction and navigation", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "structural-hook-faux",
+			models: [{ id: "structural-hook-model", contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("history")]);
+		const session = createSession("structural-hooks");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+		});
+		await harness.prompt("create enough durable history");
+		harness.hooks.on("before_compaction", () => ({ decline: true }));
+		harness.hooks.on("before_navigation", () => ({ decline: true }));
+
+		const compactResult = await harness.compact();
+		const navigationResult = await harness.navigateTree(null);
+
+		expect(compactResult).toMatchObject({ ok: true, value: { kind: "declined" } });
+		expect(navigationResult).toMatchObject({ ok: true, value: { kind: "declined" } });
+		await harness.close();
+	});
+
+	it("redacts provider compaction errors before durable persistence", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "compaction-error-redaction-faux",
+			models: [{ id: "compaction-error-redaction-model", contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("history")]);
+		const session = createSession("compaction-error-redaction");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+		});
+		await harness.prompt("create durable history");
+		faux.setResponses([
+			fauxAssistantMessage("", {
+				stopReason: "error",
+				errorMessage: 'request failed: {"api_key":"secret-value"} Bearer bearer-secret',
+			}),
+		]);
+
+		const result = await harness.compact();
+
+		expect(result).toMatchObject({
+			ok: true,
+			value: {
+				kind: "failed",
+				error: {
+					message: 'Turn prefix summarization failed: request failed: {"api_key"=[redacted]} Bearer [redacted]',
+				},
+			},
+		});
+		expect(
+			(await session.findRecords({ type: "operation_finished" })).some(
+				(record) =>
+					record.outcome === "failed" &&
+					record.error?.message ===
+						'Turn prefix summarization failed: request failed: {"api_key"=[redacted]} Bearer [redacted]',
+			),
+		).toBe(true);
+		await harness.close();
+	});
+
+	it("recovers navigation admission when the start record was already committed", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-navigation-admission-faux",
+			models: [{ id: "harness-navigation-admission-model", contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		const session = new Session(new ThrowAfterOperationStartStorage({ id: "navigation-admission", createdAt: 1 }));
+		await session.appendMessage(userMessage);
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+
+		const result = await harness.navigateTree(null);
+
+		expect(result).toMatchObject({ ok: true, value: { kind: "completed", newLeafId: null } });
+		await harness.close();
+	});
+
+	it("automatically compacts before a turn crosses the resolved threshold", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-auto-compaction-faux",
+			models: [{ id: "harness-auto-compaction-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("first response")]);
+		const session = createSession("auto-compaction");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			compaction: { enabled: true, reserveTokens: 31_999, keepRecentTokens: 1 },
+		});
+		await harness.prompt("first request");
+		faux.setResponses([fauxAssistantMessage("durable summary"), fauxAssistantMessage("second response")]);
+		const result = await harness.prompt("second request");
+		expect(result).toMatchObject({ ok: true, value: { kind: "completed" } });
+		expect(
+			(await session.findEntriesOnBranch({ order: "oldestFirst" })).some((entry) => entry.type === "compaction"),
+		).toBe(true);
+		await harness.close();
+	});
+
+	it("preflights compaction before switching to a smaller model", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-model-switch-faux",
+			models: [
+				{ id: "large-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+				{ id: "small-model", reasoning: false, contextWindow: 10, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			{
+				...fauxAssistantMessage("large response"),
+				usage: { ...usage, input: 100, totalTokens: 100 },
+			},
+		]);
+		const session = createSession("model-switch-preflight");
+		const largeModel = faux.getModel("large-model");
+		const smallModel = faux.getModel("small-model");
+		if (!largeModel || !smallModel) throw new Error("Expected faux model catalog entries");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: largeModel,
+			compaction: { enabled: true, reserveTokens: 99, keepRecentTokens: 1 },
+		});
+		const compactionReasons: string[] = [];
+		harness.events.on("compaction_start", (event) => {
+			compactionReasons.push((event as { reason: string }).reason);
+		});
+		await harness.prompt("history that should exceed the smaller model threshold");
+		faux.setResponses([fauxAssistantMessage("switch summary"), fauxAssistantMessage("small response")]);
+		await harness.setModel(smallModel);
+		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		expect(entries.some((entry) => entry.type === "compaction" && entry.summary.includes("switch summary"))).toBe(
+			true,
+		);
+		expect(compactionReasons).toContain("overflow");
+		const result = await harness.prompt("continue on the small model");
+		expect(result).toMatchObject({ ok: true, value: { kind: "completed" } });
+		await harness.close();
+	});
+
+	it("includes system prompt and tool overhead in model-switch preflight", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-model-switch-overhead-faux",
+			models: [
+				{ id: "large-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+				{ id: "small-model", reasoning: false, contextWindow: 100, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("large response"), fauxAssistantMessage("switch summary")]);
+		const session = createSession("model-switch-overhead");
+		const largeModel = faux.getModel("large-model");
+		const smallModel = faux.getModel("small-model");
+		if (!largeModel || !smallModel) throw new Error("Expected faux model catalog entries");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: largeModel,
+			compaction: { enabled: true, reserveTokens: 10, keepRecentTokens: 1 },
+			systemPrompt: "x".repeat(1_000),
+		});
+		await harness.prompt("short history");
+		await harness.setModel(smallModel);
+		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		expect(entries.some((entry) => entry.type === "compaction" && entry.summary.includes("switch summary"))).toBe(
+			true,
+		);
+		await harness.close();
+	});
+
+	it("includes request-only sampling input in model-switch preflight", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "harness-model-switch-sampling-faux",
+			models: [
+				{ id: "large-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 },
+				{ id: "small-model", reasoning: false, contextWindow: 100, maxTokens: 1_000 },
+			],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("large response"), fauxAssistantMessage("sampling summary")]);
+		const session = createSession("model-switch-sampling");
+		const largeModel = faux.getModel("large-model");
+		const smallModel = faux.getModel("small-model");
+		if (!largeModel || !smallModel) throw new Error("Expected faux model catalog entries");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: largeModel,
+			compaction: { enabled: true, reserveTokens: 10, keepRecentTokens: 1 },
+			samplingInput: () => [{ role: "user", content: "x".repeat(1_000), timestamp: 1 }],
+		});
+		await harness.prompt("short history");
+		await harness.setModel(smallModel);
+		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		expect(entries.some((entry) => entry.type === "compaction" && entry.summary.includes("sampling summary"))).toBe(
+			true,
+		);
 		await harness.close();
 	});
 
@@ -187,6 +737,62 @@ describe("AgentHarness v2 scaffold", () => {
 				missing: { tools: [], models: [] },
 			},
 		]);
+		await restored.harness.close();
+	});
+
+	it("reconstructs durable cancellation as an aborting operation", async () => {
+		const session = createSession("cancel-recovery");
+		const recalled = { type: "message" as const, id: "recalled", message: userMessage };
+		await session.appendTransaction(
+			[
+				operationStarted("cancelled-run"),
+				{
+					type: "queue_enqueued",
+					id: "queue-recalled",
+					lane: "main",
+					queue: "steer",
+					runId: "cancelled-run",
+					target: recalled,
+				},
+			],
+			[
+				{ op: "set", namespace: "op.meta", key: "cancelled-run", value: { kind: "run" } },
+				{ op: "set", namespace: "pending.entry", key: recalled.id, value: recalled as unknown as JsonValue },
+			],
+		);
+		await session.appendTransaction(
+			[
+				{
+					type: "queue_cancelled",
+					id: "cancel-recalled",
+					lane: "main",
+					runId: "cancelled-run",
+					entryId: recalled.id,
+					disposition: "cancelled",
+				},
+			],
+			[
+				{
+					op: "set",
+					namespace: "op.state",
+					key: "cancelled-run",
+					value: { kind: "run", status: "cancel_requested" },
+				},
+			],
+		);
+
+		const restored = await AgentHarness.create({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+		});
+		expect(restored.suspended).toMatchObject([{ id: "cancelled-run", reason: "crash" }]);
+		expect(restored.suspended[0]?.aborting).toEqual({ steer: [userMessage], followUp: [] });
+		expect(await session.getRegister("pending.entry", recalled.id)).toMatchObject({ value: recalled });
+		expect(await restored.harness.lanes()).toMatchObject([
+			{ name: "main", operation: { id: "cancelled-run", status: "aborting" } },
+		]);
+		expect((await restored.harness.watch()).snapshot.operation).toMatchObject({ status: "aborting" });
 		await restored.harness.close();
 	});
 
@@ -238,6 +844,80 @@ describe("AgentHarness v2 scaffold", () => {
 		await reopened.harness.close();
 	});
 
+	it("persists retry policy changes across harness recreation", async () => {
+		const session = createSession("retry-policy");
+		const harness = await createHarness(session);
+		await harness.setRetryPolicy({ enabled: true, maxRetries: 3, baseDelayMs: 17 });
+		await harness.close();
+		const reopened = await AgentHarness.create({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+		});
+		expect(await reopened.harness.getRetryPolicy()).toEqual({
+			enabled: true,
+			maxRetries: 3,
+			baseDelayMs: 17,
+		});
+		await reopened.harness.close();
+	});
+
+	it("persists compaction settings across harness recreation", async () => {
+		const session = createSession("compaction-settings");
+		const harness = await createHarness(session);
+		await harness.setCompactionSettings({ enabled: false, reserveTokens: 123, keepRecentTokens: 456 });
+		await harness.close();
+		const reopened = await AgentHarness.create({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+		});
+		expect(await reopened.harness.getCompactionSettings()).toMatchObject({
+			enabled: false,
+			reserveTokens: 123,
+			keepRecentTokens: 456,
+		});
+		await reopened.harness.close();
+	});
+
+	it("toggles the active model compaction override without losing policy fields", async () => {
+		const session = createSession("compaction-override-toggle");
+		const { harness } = await AgentHarness.create({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+			compaction: {
+				enabled: true,
+				reserveTokens: 123,
+				keepRecentTokens: 456,
+				modelOverrides: { "google/gemini-2.5-flash": { enabled: false, reserveTokens: 789 } },
+			},
+		});
+		await harness.setCompactionEnabled(true);
+		expect(await harness.getCompactionSettings()).toMatchObject({
+			enabled: true,
+			reserveTokens: 789,
+			keepRecentTokens: 456,
+		});
+		await harness.close();
+	});
+
+	it("persists steering and follow-up queue modes across harness recreation", async () => {
+		const session = createSession("queue-modes");
+		const harness = await createHarness(session);
+		await harness.setSteeringMode("all");
+		await harness.setFollowUpMode("one-at-a-time");
+		await harness.close();
+		const reopened = await AgentHarness.create({
+			session,
+			models: createModels(),
+			model: getModel("google", "gemini-2.5-flash"),
+		});
+		expect(await reopened.harness.getSteeringMode()).toBe("all");
+		expect(await reopened.harness.getFollowUpMode()).toBe("one-at-a-time");
+		await reopened.harness.close();
+	});
+
 	it("runs registered lifecycle hooks and emits operation events", async () => {
 		const models = createModels();
 		const faux = fauxProvider({
@@ -250,6 +930,7 @@ describe("AgentHarness v2 scaffold", () => {
 		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
 		const hooks: string[] = [];
 		const events: string[] = [];
+		const passiveEvents: string[] = [];
 		harness.hooks.on("before_run", () => hooks.push("before_run"));
 		harness.hooks.on("after_response", () => hooks.push("after_response"));
 		harness.events.on("operation_started", () => {
@@ -258,9 +939,207 @@ describe("AgentHarness v2 scaffold", () => {
 		harness.events.on("operation_finished", () => {
 			events.push("finished");
 		});
+		harness.events.on("run_start", () => {
+			passiveEvents.push("run_start");
+		});
+		harness.events.on("run_end", () => {
+			passiveEvents.push("run_end");
+		});
 		await harness.prompt("run lifecycle");
 		expect(hooks).toEqual(["before_run", "after_response"]);
 		expect(events).toEqual(["started", "finished"]);
+		expect(passiveEvents).toEqual(["run_start", "run_end"]);
+		await harness.close();
+	});
+
+	it("applies before_run prompt and system prompt contributions before acceptance", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "before-run-faux",
+			models: [{ id: "before-run-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		let observedSystemPrompt = "";
+		faux.setResponses([
+			(context) => {
+				observedSystemPrompt = context.systemPrompt ?? "";
+				return fauxAssistantMessage("done");
+			},
+		]);
+		const session = createSession("before-run");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			systemPrompt: "base system",
+		});
+		harness.hooks.on("before_run", () => {
+			throw new Error("optional contributor failed");
+		});
+		harness.hooks.on("before_run", () => ({
+			messages: [{ role: "user", content: [{ type: "text", text: "hook prompt" }], timestamp: 1 }],
+			systemPrompt: "hook system",
+		}));
+
+		await harness.prompt("hello");
+
+		expect(observedSystemPrompt).toBe("hook system");
+		expect(
+			(await session.findEntriesOnBranch({ order: "oldestFirst" })).some(
+				(entry) =>
+					entry.type === "message" &&
+					entry.message.role === "user" &&
+					JSON.stringify(entry.message.content).includes("hook prompt"),
+			),
+		).toBe(true);
+		await harness.close();
+	});
+
+	it("queues before_run_end follow-ups after normal completion", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "before-run-end-faux",
+			models: [{ id: "before-run-end-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("done")]);
+		const { harness } = await AgentHarness.create({
+			session: createSession("before-run-end"),
+			models,
+			model: faux.getModel(),
+		});
+		harness.hooks.on("before_run_end", () => ({ followUp: "continue later" }));
+
+		await harness.prompt("hello");
+
+		const queues = await harness.getQueueSnapshot();
+		expect(queues.nextRun).toHaveLength(1);
+		expect(queues.nextRun[0]?.message).toMatchObject({
+			role: "user",
+			content: [{ type: "text", text: "continue later" }],
+		});
+		await harness.close();
+	});
+
+	it("applies transform_context hooks before provider conversion", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "transform-context-faux",
+			models: [{ id: "transform-context-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("transformed")]);
+		let converted: AgentMessage[] | undefined;
+		const { harness } = await AgentHarness.create({
+			session: createSession("transform-context"),
+			models,
+			model: faux.getModel(),
+			toProviderMessages: (messages) => {
+				converted = messages;
+				return [];
+			},
+		});
+		harness.hooks.on("transform_context", (event) => ({
+			messages: [
+				...(event as { messages: AgentMessage[] }).messages,
+				{ role: "user", content: [{ type: "text", text: "hook context" }], timestamp: 2 },
+			],
+		}));
+
+		await harness.prompt("hello");
+
+		expect(
+			converted?.some(
+				(message) =>
+					message.role === "user" &&
+					Array.isArray(message.content) &&
+					message.content.some((part) => part.type === "text" && part.text === "hook context"),
+			),
+		).toBe(true);
+		await harness.close();
+	});
+
+	it("applies before_request stream option patches before provider dispatch", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "before-request-faux",
+			models: [{ id: "before-request-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		let observedOptions: Pick<SimpleStreamOptions, "metadata" | "maxTokens"> | undefined;
+		faux.setResponses([
+			(_context, options) => {
+				observedOptions = { metadata: options?.metadata, maxTokens: options?.maxTokens };
+				return fauxAssistantMessage("patched");
+			},
+		]);
+		const { harness } = await AgentHarness.create({
+			session: createSession("before-request"),
+			models,
+			model: faux.getModel(),
+		});
+		harness.hooks.on("before_request", () => ({ streamOptions: { metadata: { hook: "patched" } } }));
+		harness.hooks.on("before_request", (event) => ({
+			streamOptions: {
+				maxTokens: (event as { streamOptions: SimpleStreamOptions }).streamOptions.maxTokens ?? 42,
+			},
+		}));
+
+		await harness.prompt("hello");
+
+		expect(observedOptions).toEqual({ metadata: { hook: "patched" }, maxTokens: 42 });
+		await harness.close();
+	});
+
+	it("applies before_payload hooks at the provider payload boundary", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "before-payload-faux",
+			models: [{ id: "before-payload-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("payload patched")]);
+		const { harness } = await AgentHarness.create({
+			session: createSession("before-payload"),
+			models,
+			model: faux.getModel(),
+		});
+		harness.hooks.on("before_payload", (event) => ({
+			payload: { ...(event as { payload: Record<string, unknown> }).payload, marker: "hooked" },
+		}));
+
+		await harness.prompt("hello");
+
+		expect(faux.state.lastPayload).toMatchObject({ marker: "hooked" });
+		await harness.close();
+	});
+
+	it("applies after_response message transformations before persistence", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "after-response-faux",
+			models: [{ id: "after-response-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("original")]);
+		const session = createSession("after-response");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		harness.hooks.on("after_response", (event) => ({
+			message: {
+				...(event as { message: AgentMessage }).message,
+				content: [{ type: "text", text: "transformed" }],
+			},
+		}));
+
+		await harness.prompt("hello");
+
+		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		const assistant = entries.find((entry) => entry.type === "message" && entry.message.role === "assistant");
+		const assistantContent =
+			assistant?.type === "message" && assistant.message.role === "assistant"
+				? assistant.message.content
+				: undefined;
+		expect(assistantContent).toEqual([{ type: "text", text: "transformed" }]);
 		await harness.close();
 	});
 
@@ -313,6 +1192,13 @@ describe("AgentHarness v2 scaffold", () => {
 		]);
 		const session = createSession("navigation");
 		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+		const navigationEvents: string[] = [];
+		harness.events.on("navigation_start", () => {
+			navigationEvents.push("start");
+		});
+		harness.events.on("navigation_end", () => {
+			navigationEvents.push("end");
+		});
 		await harness.prompt("first");
 		const firstUser = (await session.findEntriesOnBranch({ order: "oldestFirst" })).find(
 			(entry) => entry.type === "message" && entry.message.role === "user",
@@ -331,6 +1217,7 @@ describe("AgentHarness v2 scaffold", () => {
 			summary: expect.stringContaining("branch summary"),
 		});
 		expect((await session.findRecords({ type: "operation_finished" })).at(-1)?.outcome).toBe("completed");
+		expect(navigationEvents).toEqual(["start", "end"]);
 		await harness.close();
 	});
 
@@ -352,10 +1239,13 @@ describe("AgentHarness v2 scaffold", () => {
 		});
 		const { harness, suspended } = await AgentHarness.create({ session, models, model: faux.getModel() });
 		expect(suspended).toMatchObject([{ id: "crashed-run", kind: "run", reason: "crash" }]);
+		const resumeHooks: unknown[] = [];
+		harness.hooks.on("before_resume", (event) => resumeHooks.push(event));
 
 		const result = await harness.resume();
 
 		expect(result).toMatchObject({ ok: true, value: { operation: "run", kind: "completed" } });
+		expect(resumeHooks).toEqual([{ operationId: "crashed-run", kind: "run" }]);
 		expect(await session.findOpenOperations("main")).toEqual([]);
 		expect(
 			(await session.findRecords({ type: "operation_finished", order: "oldestFirst" })).map(
@@ -378,9 +1268,35 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(nextRun).toMatchObject({ ok: true, value: { entryId: expect.any(String) } });
 		const queued = await session.findRecords({ type: "queue_enqueued", order: "oldestFirst" });
 		expect(queued.map((record) => record.queue)).toEqual(["steer", "followUp", "nextRun"]);
+		for (const record of queued) {
+			expect(await session.getRegister("pending.entry", record.target.id)).toMatchObject({
+				value: record.target,
+			});
+		}
 		const entryId = nextRun.ok ? nextRun.value.entryId : "missing";
 		expect(await harness.cancelQueued(entryId)).toEqual({ ok: true, value: { outcome: "cancelled" } });
+		expect(await session.getRegister("pending.entry", entryId)).toBeUndefined();
 		expect(await harness.cancelQueued(entryId)).toEqual({ ok: true, value: { outcome: "already_cleared" } });
+		await harness.close();
+	});
+
+	it("serializes concurrent queue cancellation", async () => {
+		const session = createSession("queue-cancel-race");
+		const harness = await createHarness(session);
+		await session.appendRecord(operationStarted("run-race"));
+		const queued = await harness.nextRun("cancel once");
+		expect(queued).toMatchObject({ ok: true, value: { entryId: expect.any(String) } });
+		if (!queued.ok) throw new Error("queue admission failed");
+
+		const outcomes = await Promise.all([
+			harness.cancelQueued(queued.value.entryId),
+			harness.cancelQueued(queued.value.entryId),
+		]);
+		expect(outcomes.map((result) => result.ok && result.value.outcome).sort()).toEqual([
+			"already_cleared",
+			"cancelled",
+		]);
+		expect(await session.findRecords({ type: "queue_cancelled" })).toHaveLength(1);
 		await harness.close();
 	});
 
@@ -400,8 +1316,74 @@ describe("AgentHarness v2 scaffold", () => {
 		expect(records.filter((record) => record.type === "abort_requested")).toHaveLength(1);
 		expect(records.filter((record) => record.type === "operation_finished")).toMatchObject([{ outcome: "aborted" }]);
 		expect(records.filter((record) => record.type === "queue_cancelled")).toHaveLength(2);
+		for (const record of records.filter((candidate) => candidate.type === "queue_cancelled")) {
+			expect(await session.getRegister("pending.entry", record.entryId)).toBeUndefined();
+		}
 		expect(steer.ok && followUp.ok).toBe(true);
 		await harness.close();
+	});
+
+	it("serializes abort queue drain against cancellation", async () => {
+		const session = createSession("abort-queue-race");
+		const harness = await createHarness(session);
+		await session.appendRecord(operationStarted("run-abort-race"));
+		const queued = await harness.steer("cancel or recall");
+		expect(queued).toMatchObject({ ok: true, value: { entryId: expect.any(String) } });
+		if (!queued.ok) throw new Error("queue admission failed");
+
+		const [, cancellation] = await Promise.all([harness.abort(), harness.cancelQueued(queued.value.entryId)]);
+		expect(cancellation.ok).toBe(true);
+		expect(await session.findRecords({ type: "queue_cancelled" })).toHaveLength(1);
+		await harness.close();
+	});
+
+	it("signals active runs so abort owns the terminal outcome", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "active-abort-faux",
+			models: [{ id: "active-abort-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("should not complete")]);
+		const session = createSession("active-abort");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			drive: "manual",
+		});
+
+		const run = harness.prompt("abort me");
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(await harness.abort()).toMatchObject({ ok: true });
+		expect(await harness.executeAction()).toMatchObject({ kind: "stream_assistant" });
+		expect(await run).toMatchObject({ ok: true, value: { kind: "aborted" } });
+		expect((await session.findRecords({ type: "operation_finished" })).map((record) => record.outcome)).toEqual([
+			"aborted",
+		]);
+		await harness.close();
+	});
+
+	it("cancels an active run when the harness closes", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "close-active-run-faux",
+			models: [{ id: "close-active-run-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("should not complete")]);
+		const { harness } = await AgentHarness.create({
+			session: createSession("close-active-run"),
+			models,
+			model: faux.getModel(),
+			drive: "manual",
+		});
+
+		const run = harness.prompt("close me");
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		await harness.close();
+
+		expect(await run).toMatchObject({ ok: true, value: { kind: "aborted" } });
 	});
 
 	it("keeps scaffold-safe configuration as defensive copies", async () => {
@@ -481,34 +1463,68 @@ describe("AgentHarness v2 scaffold", () => {
 		const laneWatch = await harness.watch();
 		const sessionWatch = await harness.watchSession();
 		expect(laneWatch.snapshot).toMatchObject({ lane: "main", leafId: null, operation: null, faulted: false });
-		expect(sessionWatch.snapshot).toMatchObject({ faulted: false, lanes: [{ lane: "main", leafId: null }] });
+		expect(sessionWatch.snapshot).toMatchObject({ faulted: false, lanes: [{ name: "main", leafId: null }] });
 		const events: string[] = [];
 		laneWatch.start((event) => events.push(String((event as { type: string }).type)));
 		sessionWatch.start((event) => events.push(`session:${String((event as { type: string }).type)}`));
 		await harness.prompt("watch me");
-		expect(events).toEqual(["run_start", "session:run_start", "run_end", "session:run_end"]);
+		expect(events).toEqual([
+			"run_start",
+			"session:run_start",
+			"item_completed",
+			"session:item_completed",
+			"item_completed",
+			"session:item_completed",
+			"run_end",
+			"session:run_end",
+		]);
 		laneWatch.unsubscribe();
 		sessionWatch.unsubscribe();
 		await harness.close();
 	});
 
-	it("rejects every unfinished public operation explicitly", async () => {
+	it("rejects duplicate lane creation explicitly", async () => {
 		const harness = await createHarness();
-		const unfinished: [string, () => unknown | Promise<unknown>][] = [
-			["peekAction", () => harness.peekAction()],
-			["executeAction", () => harness.executeAction()],
-			["runToCompletion", () => harness.runToCompletion()],
-			["lane", () => harness.lane("main")],
-			["createLane", () => harness.createLane("thread", null)],
-			["lanes", () => harness.lanes()],
-		];
+		expect(await harness.createLane("main", null)).toMatchObject({
+			ok: false,
+			error: { name: "LaneExists", lane: "main" },
+		});
+		await harness.close();
+	});
 
-		for (const [operation, invoke] of unfinished) {
-			await expect(Promise.resolve().then(invoke), operation).rejects.toMatchObject({
-				name: "HarnessNotImplemented",
-				operation,
-			});
-		}
+	it("parks one provider action for manual drive and releases it explicitly", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "manual-drive-faux",
+			models: [{ id: "manual-drive-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("manual response")]);
+		const session = createSession("manual");
+		const { harness } = await AgentHarness.create({
+			models,
+			model: faux.getModel(),
+			session,
+			drive: "manual",
+		});
+		const run = harness.prompt("manual prompt");
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		const started = (await session.findRecords({ type: "operation_started" }))[0]!;
+		expect(await session.getRegister("op.state", started.id)).toMatchObject({
+			value: { kind: "run", status: "running", phase: "assistant_request", attempt: 1 },
+		});
+		expect(await harness.peekAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 1 });
+		expect(await harness.executeAction()).toEqual({ kind: "stream_assistant", step: "assistant", attempt: 1 });
+		expect(await run).toMatchObject({ ok: true, value: { kind: "completed" } });
+		await harness.close();
+	});
+
+	it("exposes the durable main lane and lane inventory", async () => {
+		const harness = await createHarness();
+		expect(await harness.lane("main")).toBe(harness);
+		expect(await harness.lane("missing")).toBeUndefined();
+		expect(await harness.lanes()).toEqual([{ name: "main", leafId: null, operation: null }]);
+		await harness.close();
 	});
 
 	it("reports HarnessClosed for unfinished operations after close", async () => {
@@ -519,5 +1535,135 @@ describe("AgentHarness v2 scaffold", () => {
 		await expect(harness.waitForIdle()).rejects.toBeInstanceOf(HarnessClosed);
 		expect(() => harness.hooks.on("before_run", () => {})).toThrow(HarnessClosed);
 		expect(() => harness.events.on("event", () => {})).toThrow(HarnessClosed);
+	});
+
+	it("redacts credentials from failed assistant messages before durable append", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "transcript-redaction",
+			models: [{ id: "redaction-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage(
+				'upstream failed: {"api_key":"secret-value"}; Authorization: Bearer bearer-secret; sk-short-secret',
+				{
+					stopReason: "error",
+					errorMessage: 'request failed: {"api-key":"json-secret"} Bearer bearer-error sk-project-secret',
+				},
+			),
+		]);
+		const session = createSession("transcript-redaction");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+
+		const result = await harness.prompt("hello");
+		expect(result).toMatchObject({ ok: true, value: { kind: "failed" } });
+		const entries = await session.findEntriesOnBranch({ order: "oldestFirst" });
+		const assistant = entries.find((entry) => entry.type === "message" && entry.message.role === "assistant");
+		expect(assistant).toBeDefined();
+		if (assistant?.type !== "message" || assistant.message.role !== "assistant") return;
+		const text = assistant.message.content
+			.filter((part): part is { type: "text"; text: string } => part.type === "text")
+			.map((part) => part.text)
+			.join(" ");
+		expect(text).toContain("upstream failed");
+		expect(text).not.toMatch(/secret-value|bearer-secret|short-secret/);
+		expect(assistant.message.errorMessage).toContain("request failed");
+		expect(assistant.message.errorMessage).not.toMatch(/json-secret|bearer-error|project-secret/);
+		expect(assistant.message.errorMessage!.length).toBeLessThanOrEqual(512);
+		await harness.close();
+	});
+
+	it("records provider error stops as failed operations", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "provider-error-terminal-faux",
+			models: [{ id: "provider-error-terminal-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "provider failed" })]);
+		const session = createSession("provider-error-terminal");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+
+		const result = await harness.prompt("hello");
+
+		expect(result).toMatchObject({ ok: true, value: { kind: "failed", error: { code: "run_error" } } });
+		expect((await session.findRecords({ type: "operation_finished" })).at(-1)).toMatchObject({
+			outcome: "failed",
+			error: { code: "run_error", message: "provider failed" },
+		});
+		await harness.close();
+	});
+
+	it("redacts aborted assistant content before durable persistence", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "aborted-content-redaction-faux",
+			models: [{ id: "aborted-content-redaction-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			fauxAssistantMessage('partial Bearer bearer-secret {"api_key":"secret-value"}', {
+				stopReason: "aborted",
+				errorMessage: "stopped",
+			}),
+		]);
+		const session = createSession("aborted-content-redaction");
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+
+		await harness.prompt("hello");
+
+		const assistant = (await session.findEntriesOnBranch({ order: "oldestFirst" })).find(
+			(entry) => entry.type === "message" && entry.message.role === "assistant",
+		);
+		expect(assistant).toMatchObject({
+			type: "message",
+			message: { content: [{ type: "text", text: 'partial Bearer [redacted] {"api_key"=[redacted]}' }] },
+		});
+		await harness.close();
+	});
+
+	it("does not duplicate a terminal record after its commit response is lost", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "terminal-commit-race-faux",
+			models: [{ id: "terminal-commit-race-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("done")]);
+		const storage = new ThrowAfterOperationFinishedStorage({ id: "terminal-commit-race", createdAt: 1 });
+		const session = new Session(storage);
+		const { harness } = await AgentHarness.create({ session, models, model: faux.getModel() });
+
+		await harness.prompt("hello");
+
+		expect(await session.findRecords({ type: "operation_finished" })).toHaveLength(1);
+		await harness.close();
+	});
+
+	it("redacts caught run failures before durable persistence", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "caught-run-error-faux",
+			models: [{ id: "caught-run-error-model", contextWindow: 4096, maxTokens: 256 }],
+		});
+		models.setProvider(faux.provider);
+		const session = createSession("caught-run-error");
+		const { harness } = await AgentHarness.create({
+			session,
+			models,
+			model: faux.getModel(),
+			toProviderMessages: () => {
+				throw new Error('request failed: {"api_key":"secret-value"} Bearer bearer-secret');
+			},
+		});
+
+		await harness.prompt("hello");
+
+		expect((await session.findRecords({ type: "operation_finished" })).at(-1)).toMatchObject({
+			outcome: "failed",
+			error: { code: "run_failed", message: 'request failed: {"api_key"=[redacted]} Bearer [redacted]' },
+		});
+		await harness.close();
 	});
 });

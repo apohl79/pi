@@ -81,7 +81,7 @@ if [[ -n "$PLATFORM" ]]; then
 fi
 
 if [[ -z "$OUTPUT_DIR" ]]; then
-    OUTPUT_DIR="packages/coding-agent/binaries"
+	OUTPUT_DIR="packages/coding-agent/binaries"
 fi
 if [[ "$OUTPUT_DIR" != /* ]]; then
     OUTPUT_DIR="$(pwd)/$OUTPUT_DIR"
@@ -130,8 +130,43 @@ if [[ "$SKIP_DEPS" == "false" ]]; then
     cleanup_native_deps
     trap - EXIT
 else
-    echo "==> Skipping cross-platform native bindings (--skip-deps)"
+	echo "==> Skipping cross-platform native bindings (--skip-deps)"
 fi
+
+# Standalone binaries do not inherit the CI environment that produced them.
+# Compile the release identity into the runtime manifest, then restore the
+# tracked source fallback before returning to the caller.
+BUILD_IDENTITY_FILE="$(pwd)/packages/coding-agent/src/server/build-identity.generated.ts"
+BUILD_IDENTITY_BACKUP="$(mktemp)"
+cp "$BUILD_IDENTITY_FILE" "$BUILD_IDENTITY_BACKUP"
+restore_build_identity() {
+	cp "$BUILD_IDENTITY_BACKUP" "$BUILD_IDENTITY_FILE"
+	rm -f "$BUILD_IDENTITY_BACKUP"
+}
+trap restore_build_identity EXIT
+
+if [[ -n "${PI_BUILD_VERSION:-}" ]]; then
+	build_identity_version="$PI_BUILD_VERSION"
+else
+	build_identity_version="${RELEASE_TAG:-dev}"
+	build_identity_version="${build_identity_version#v}"
+fi
+build_identity_fork="${PI_FORK_COMMIT:-$(git rev-parse --verify HEAD 2>/dev/null || true)}"
+build_identity_upstream="${PI_UPSTREAM_BASE_COMMIT:-}"
+if [[ -z "$build_identity_upstream" && -f FORK_DELTA.md ]]; then
+	build_identity_upstream="$(sed -n 's/^- Initial pinned upstream base: //p' FORK_DELTA.md | head -n 1)"
+fi
+build_identity_version_json="$(node -p 'JSON.stringify(process.argv[1])' "$build_identity_version")"
+build_identity_fork_json="$(node -p 'JSON.stringify(process.argv[1])' "$build_identity_fork")"
+build_identity_upstream_json="$(node -p 'JSON.stringify(process.argv[1])' "$build_identity_upstream")"
+printf '%s\n' \
+	'/** Generated for this standalone build; restored by build-binaries.sh. */' \
+	'export const BUILD_IDENTITY = {' \
+	"    buildVersion: ${build_identity_version_json}," \
+	"    forkCommit: ${build_identity_fork_json}," \
+	"    upstreamBaseCommit: ${build_identity_upstream_json}," \
+	'    configHash: undefined,' \
+	'} as const;' > "$BUILD_IDENTITY_FILE"
 
 if [[ "$SKIP_BUILD" == "false" ]]; then
     if [[ "$OFFLINE_MODEL_DATA" == "true" ]]; then

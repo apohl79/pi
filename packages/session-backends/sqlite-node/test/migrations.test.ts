@@ -1,9 +1,24 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyMigrations, createNodeSqliteFactory } from "../src/index.ts";
+import { applyMigrations, createNodeSqliteFactory, pendingMigrations } from "../src/index.ts";
 import { createTempDir } from "./test-utils.ts";
 
 describe("SQLite migrations", () => {
+	it("reports pending migrations before applying them", async () => {
+		const databasePath = join(createTempDir(), "sessions.sqlite");
+		const db = await createNodeSqliteFactory().open(databasePath);
+		try {
+			expect((await pendingMigrations(db)).map((migration) => migration.id)).toEqual([
+				"001_initial.sql",
+				"002_registers.sql",
+			]);
+			await applyMigrations(db);
+			expect(await pendingMigrations(db)).toEqual([]);
+		} finally {
+			db.close();
+		}
+	});
+
 	it("applies the current schema once and records its migration", async () => {
 		const databasePath = join(createTempDir(), "sessions.sqlite");
 		const db = await createNodeSqliteFactory().open(databasePath);
@@ -12,7 +27,7 @@ describe("SQLite migrations", () => {
 			await applyMigrations(db);
 
 			const rows = db.prepare("SELECT id FROM migrations ORDER BY id").all<{ id: string }>();
-			expect(rows.map((row) => row.id)).toEqual(["001_initial.sql"]);
+			expect(rows.map((row) => row.id)).toEqual(["001_initial.sql", "002_registers.sql"]);
 			const tables = db
 				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
 				.all<{ name: string }>();
@@ -30,6 +45,7 @@ describe("SQLite migrations", () => {
 					"lane_moves",
 					"facts",
 					"writer_leases",
+					"registers",
 				]),
 			);
 			const sessionColumns = db.prepare("PRAGMA table_info(sessions)").all<{ name: string }>();

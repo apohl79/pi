@@ -4,13 +4,15 @@
  * Use tool names to choose which built-in tools are enabled.
  *
  * Tool names are matched against all available tools. If you use a custom `cwd`,
- * createAgentSession() applies that cwd when it builds the actual built-in tools.
+ * createDirectAgentSession() applies that cwd when it builds the actual built-in tools.
  *
  * For custom tools, see 06-extensions.ts - custom tools are registered via the
  * extensions system using pi.registerTool().
  */
 
-import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import { createDirectAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+
+const createAgentSession = createDirectAgentSession;
 
 // Read-only mode (no edit/write)
 const { session: readOnlySession } = await createAgentSession({

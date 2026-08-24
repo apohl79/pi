@@ -1,0 +1,206 @@
+import {
+	encodeServerMessageV2,
+	PROTOCOL_V2_VERSION,
+	type ServerMessageV2,
+	type ServerSnapshotV2,
+} from "@earendil-works/pi-protocol";
+import { describe, expect, test, vi } from "vitest";
+import type { ByteTransport, ByteTransportHandlers } from "../src/transport.ts";
+import { PiClientV2 } from "../src/v2.ts";
+
+const snapshot: ServerSnapshotV2 = {
+	serverId: "server-1",
+	protocolVersion: PROTOCOL_V2_VERSION,
+	revision: 0,
+	eventSeq: 0,
+	sessions: [],
+	models: [],
+};
+
+function transportFixture() {
+	const handlers: ByteTransportHandlers[] = [];
+	const transports: ByteTransport[] = [];
+	return {
+		handlers,
+		transports,
+		factory: async (next: ByteTransportHandlers): Promise<ByteTransport> => {
+			handlers.push(next);
+			const transport: ByteTransport = { send: async () => {}, close: vi.fn() };
+			transports.push(transport);
+			return transport;
+		},
+		deliver(index: number, message: ServerMessageV2) {
+			handlers[index]?.onData(encodeServerMessageV2(message));
+		},
+	};
+}
+
+describe("PiClientV2 resilience", () => {
+	test("resets decoder and ignores stale callbacks across reconnects", async () => {
+		const fixture = transportFixture();
+		const client = new PiClientV2({ transportFactory: fixture.factory });
+		const hello = encodeServerMessageV2({
+			type: "hello",
+			version: PROTOCOL_V2_VERSION,
+			connectionId: "connection-1",
+			snapshot,
+		});
+
+		const first = client.connect();
+		await Promise.resolve();
+		fixture.handlers[0]?.onData(hello.subarray(0, 2));
+		fixture.handlers[0]?.onClose();
+		await expect(first).rejects.toThrow("transport closed");
+
+		const second = client.connect();
+		await Promise.resolve();
+		fixture.deliver(1, { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-2", snapshot });
+		expect(await second).toEqual(snapshot);
+		fixture.handlers[0]?.onData(hello);
+		expect(client.connected).toBe(true);
+		expect(fixture.transports).toHaveLength(2);
+		client.disconnect();
+	});
+
+	test("contains event listener failures", async () => {
+		const fixture = transportFixture();
+		const listenerErrors: Error[] = [];
+		const client = new PiClientV2({
+			transportFactory: fixture.factory,
+			onListenerError: (error) => listenerErrors.push(error),
+		});
+		const connecting = client.connect();
+		await Promise.resolve();
+		fixture.deliver(0, { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot });
+		await connecting;
+		client.onEvent(() => {
+			throw new Error("consumer failure");
+		});
+		fixture.deliver(0, {
+			type: "event",
+			sessionId: "session-1",
+			seq: 1,
+			revision: 1,
+			event: "usage_updated",
+			payload: {},
+		});
+		expect(listenerErrors).toEqual([new Error("consumer failure")]);
+		expect(client.connected).toBe(true);
+		client.disconnect();
+	});
+
+	test("closes a transport that resolves after disconnect", async () => {
+		let resolveTransport: ((transport: ByteTransport) => void) | undefined;
+		const factory = () =>
+			new Promise<ByteTransport>((resolve) => {
+				resolveTransport = resolve;
+			});
+		const client = new PiClientV2({ transportFactory: factory });
+		const connecting = client.connect();
+		const disconnected = connecting.catch((error: unknown) => error);
+		await Promise.resolve();
+		const close = vi.fn();
+		const transport: ByteTransport = { send: async () => {}, close };
+		expect(resolveTransport).toBeDefined();
+		client.disconnect();
+		resolveTransport?.(transport);
+
+		expect(await disconnected).toEqual(new Error("PiClientV2 transport closed"));
+		expect(close).toHaveBeenCalledOnce();
+		expect(client.connected).toBe(false);
+	});
+
+	test("closes the transport after a handshake error and permits reconnect", async () => {
+		const fixture = transportFixture();
+		const client = new PiClientV2({ transportFactory: fixture.factory });
+		const first = client.connect();
+		await Promise.resolve();
+		fixture.deliver(0, { type: "hello_error", error: { code: "version", message: "Unsupported protocol" } });
+
+		expect(await first.catch((error: unknown) => error)).toEqual(new Error("Unsupported protocol"));
+		expect(fixture.transports[0]?.close).toHaveBeenCalledOnce();
+		expect(client.connected).toBe(false);
+
+		const second = client.connect();
+		await Promise.resolve();
+		fixture.deliver(1, { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-2", snapshot });
+		expect(await second).toEqual(snapshot);
+		client.disconnect();
+	});
+
+	test("rejects non-handshake messages before the server hello", async () => {
+		const fixture = transportFixture();
+		const client = new PiClientV2({ transportFactory: fixture.factory });
+		const connecting = client.connect();
+		await Promise.resolve();
+		fixture.deliver(0, {
+			type: "event",
+			sessionId: "session-1",
+			seq: 1,
+			revision: 1,
+			event: "usage_updated",
+			payload: {},
+		});
+
+		expect(await connecting.catch((error: unknown) => error)).toEqual(
+			new Error("PiClientV2 expected server hello before other messages"),
+		);
+		expect(fixture.transports[0]?.close).toHaveBeenCalledOnce();
+		expect(client.connected).toBe(false);
+	});
+
+	test("rejects duplicate handshake messages after connection", async () => {
+		const fixture = transportFixture();
+		const client = new PiClientV2({ transportFactory: fixture.factory });
+		const connecting = client.connect();
+		await Promise.resolve();
+		const hello = { type: "hello", version: PROTOCOL_V2_VERSION, connectionId: "connection-1", snapshot } as const;
+		fixture.deliver(0, hello);
+		await connecting;
+
+		fixture.deliver(0, hello);
+
+		expect(fixture.transports[0]?.close).toHaveBeenCalledOnce();
+		expect(client.connected).toBe(false);
+	});
+
+	test("invalidates the transport when a request send fails", async () => {
+		let rejectRequest: ((error: Error) => void) | undefined;
+		let handlers: ByteTransportHandlers | undefined;
+		let sendIndex = 0;
+		const sendPromises: [Promise<void>, Promise<void>] = [
+			Promise.resolve(),
+			new Promise<void>((_, reject) => {
+				rejectRequest = reject;
+			}),
+		];
+		const close = vi.fn();
+		const client = new PiClientV2({
+			transportFactory: async (next) => {
+				handlers = next;
+				return {
+					send: () => sendPromises[sendIndex++]!,
+					close,
+				};
+			},
+		});
+		const connecting = client.connect();
+		await Promise.resolve();
+		handlers?.onData(
+			encodeServerMessageV2({
+				type: "hello",
+				version: PROTOCOL_V2_VERSION,
+				connectionId: "connection-1",
+				snapshot,
+			}),
+		);
+		await connecting;
+		const request = client.request({ command: "session/list" });
+		await Promise.resolve();
+		expect(rejectRequest).toBeDefined();
+		rejectRequest?.(new Error("write failed"));
+		expect(await request.catch((error: unknown) => error)).toEqual(new Error("write failed"));
+		expect(close).toHaveBeenCalledOnce();
+		expect(client.connected).toBe(false);
+	});
+});

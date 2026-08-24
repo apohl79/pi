@@ -84,7 +84,9 @@ export const ThinkingContentSchema = StrictObject({
 export const ImageContentSchema = StrictObject({
 	type: Type.Literal("image"),
 	data: Type.String(),
-	mimeType: Type.String({ minLength: 1 }),
+	mimeType: Type.String({
+		pattern: "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$",
+	}),
 });
 export const ToolCallContentSchema = StrictObject({
 	type: Type.Literal("toolCall"),
@@ -190,14 +192,36 @@ export const ToolTranscriptItemSchema = Type.Union([
 	CompleteToolTranscriptItemSchema,
 	ErrorToolTranscriptItemSchema,
 ]);
+export const CompactionSummaryTranscriptItemSchema = StrictObject({
+	id: IdSchema,
+	role: Type.Literal("compactionSummary"),
+	summary: Type.String(),
+	tokensBefore: Type.Integer({ minimum: 0 }),
+	usage: Type.Optional(UsageSchema),
+	details: Type.Optional(JsonValueSchema),
+	timestamp: TimestampSchema,
+});
+export const BranchSummaryTranscriptItemSchema = StrictObject({
+	id: IdSchema,
+	role: Type.Literal("branchSummary"),
+	summary: Type.String(),
+	fromId: IdSchema,
+	usage: Type.Optional(UsageSchema),
+	details: Type.Optional(JsonValueSchema),
+	timestamp: TimestampSchema,
+});
 export const TranscriptItemSchema = Type.Union([
 	UserTranscriptItemSchema,
 	AssistantTranscriptItemSchema,
 	ToolTranscriptItemSchema,
+	CompactionSummaryTranscriptItemSchema,
+	BranchSummaryTranscriptItemSchema,
 ]);
 export type UserTranscriptItem = Static<typeof UserTranscriptItemSchema>;
 export type AssistantTranscriptItem = Static<typeof AssistantTranscriptItemSchema>;
 export type ToolTranscriptItem = Static<typeof ToolTranscriptItemSchema>;
+export type CompactionSummaryTranscriptItem = Static<typeof CompactionSummaryTranscriptItemSchema>;
+export type BranchSummaryTranscriptItem = Static<typeof BranchSummaryTranscriptItemSchema>;
 export type TranscriptItem = Static<typeof TranscriptItemSchema>;
 
 /** Normalized incremental activity. Snapshots remain authoritative. */

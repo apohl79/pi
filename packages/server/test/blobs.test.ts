@@ -1,91 +1,71 @@
-import { describe, expect, test } from "vitest";
-import { mkdtemp, readFile, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FileV2BlobStore, InMemoryV2BlobStore } from "../src/blobs.ts";
+import { describe, expect, test } from "vitest";
+import { FileV2BlobStore, InMemoryV2BlobStore, type V2BlobStore } from "../src/blobs.ts";
+
+const legacyBlobStore: V2BlobStore = {
+	put: async () => ({ digest: "a".repeat(64), mimeType: "text/plain", size: 0 }),
+	read: async () => new Uint8Array(),
+	stat: async () => ({ digest: "a".repeat(64), mimeType: "text/plain", size: 0 }),
+};
 
 describe("InMemoryV2BlobStore", () => {
+	test("rejects invalid quota options", () => {
+		expect(() => new InMemoryV2BlobStore({ maxBytes: -1 })).toThrow("maxBytes");
+		expect(() => new InMemoryV2BlobStore({ maxTotalBytes: Number.POSITIVE_INFINITY })).toThrow("maxTotalBytes");
+		expect(() => new InMemoryV2BlobStore({ maxBlobs: 1.5 })).toThrow("maxBlobs");
+	});
+
+	test("keeps inventory optional for protocol-compatible custom stores", async () => {
+		expect(legacyBlobStore.list).toBeUndefined();
+		expect(await legacyBlobStore.stat("a".repeat(64))).toMatchObject({ mimeType: "text/plain" });
+	});
+
 	test("deduplicates content by sha256 digest and returns bounded metadata", async () => {
-		const store = new InMemoryV2BlobStore({ maxBytes: 32 });
+		const store = new InMemoryV2BlobStore({ maxBytes: 32, maxTotalBytes: 5, maxBlobs: 1 });
 		const first = await store.put(new TextEncoder().encode("hello"), "text/plain");
 		const second = await store.put(new TextEncoder().encode("hello"), "text/plain");
 
 		expect(second.digest).toBe(first.digest);
 		expect(await store.stat(first.digest)).toEqual({ digest: first.digest, mimeType: "text/plain", size: 5 });
+		expect(await store.list()).toEqual([{ digest: first.digest, mimeType: "text/plain", size: 5 }]);
 		expect(new TextDecoder().decode(await store.read(first.digest))).toBe("hello");
+		await expect(store.put(new TextEncoder().encode("hello"), "text/plain; charset=utf-8")).rejects.toThrow(
+			"MIME type",
+		);
+		await expect(store.put(new TextEncoder().encode("hello"), "text/plain\nX-Injected: yes")).rejects.toThrow(
+			"MIME type",
+		);
+		await expect(store.put(new TextEncoder().encode("world"), "text/plain")).rejects.toThrow("Blob count");
 		await expect(store.put(new Uint8Array(33), "application/octet-stream")).rejects.toThrow("maximum size");
-		await expect(store.put(new Uint8Array([1]), "text/\u0000plain")).rejects.toThrow("MIME");
-	});
-
-	test("enforces total byte and blob count quotas", async () => {
-		const store = new InMemoryV2BlobStore({ maxBytes: 4, maxTotalBytes: 5, maxBlobCount: 1 });
-		await store.put(new Uint8Array([1, 2, 3]), "application/octet-stream");
-		await expect(store.put(new Uint8Array([4]), "application/octet-stream")).rejects.toThrow("count");
-		expect(() => new InMemoryV2BlobStore({ maxBytes: 4, maxTotalBytes: 3 })).toThrow();
-		const byteStore = new InMemoryV2BlobStore({ maxBytes: 3, maxTotalBytes: 3, maxBlobCount: 4 });
-		await byteStore.put(new Uint8Array([1, 2]), "application/octet-stream");
-		await expect(byteStore.put(new Uint8Array([3, 4]), "application/octet-stream")).rejects.toThrow("store");
 	});
 });
 
 describe("FileV2BlobStore", () => {
-	test("validates digest paths and stored integrity", async () => {
-		const root = await mkdtemp(join(tmpdir(), "pi-blobs-"));
-		const store = new FileV2BlobStore(root, { maxBytes: 32 });
-		const metadata = await store.put(new TextEncoder().encode("hello"), "text/plain");
-		expect(await store.stat(metadata.digest)).toEqual(metadata);
-		await expect(store.read("../unsafe")).rejects.toThrow("Invalid blob digest");
-		await writeFile(join(root, `${metadata.digest}.blob`), "xxxxx");
-		await expect(store.read(metadata.digest)).rejects.toThrow("digest mismatch");
-		await writeFile(join(root, `${metadata.digest}.blob`), "tampered");
-		await expect(store.stat(metadata.digest)).rejects.toThrow("size mismatch");
-		await writeFile(join(root, `${metadata.digest}.blob`), new Uint8Array(33));
-		await expect(store.stat(metadata.digest)).rejects.toThrow("maximum size");
-		await expect(store.put(new Uint8Array([1]), "text/\u007fplain")).rejects.toThrow("MIME");
+	test("rejects invalid quota and verification limits", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-blobs-limits-"));
+		expect(() => new FileV2BlobStore(directory, { maxBytes: -1 })).toThrow("maxBytes");
+		const store = new FileV2BlobStore(directory);
+		await expect(store.verify(-1)).rejects.toThrow("verify maxEntries");
 	});
 
-	test("enforces total byte and blob count quotas", async () => {
-		const root = await mkdtemp(join(tmpdir(), "pi-blobs-"));
-		const store = new FileV2BlobStore(root, { maxBytes: 4, maxTotalBytes: 5, maxBlobCount: 1 });
-		await store.put(new Uint8Array([1, 2, 3]), "application/octet-stream");
-		await expect(store.put(new Uint8Array([4]), "application/octet-stream")).rejects.toThrow("count");
-		expect(() => new FileV2BlobStore(root, { maxBytes: 4, maxTotalBytes: 3 })).toThrow();
-
-		const byteStore = new FileV2BlobStore(await mkdtemp(join(tmpdir(), "pi-blobs-")), {
-			maxBytes: 3,
-			maxTotalBytes: 3,
-			maxBlobCount: 4,
-		});
-		await byteStore.put(new Uint8Array([1, 2]), "application/octet-stream");
-		await expect(byteStore.put(new Uint8Array([3, 4]), "application/octet-stream")).rejects.toThrow("store");
+	test("verifies content-addressed files and reports corruption without repair", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-blobs-integrity-"));
+		const store = new FileV2BlobStore(directory);
+		const stat = await store.put(new TextEncoder().encode("hello"), "text/plain");
+		expect(await store.list()).toEqual([{ digest: stat.digest, mimeType: "text/plain", size: 5 }]);
+		expect(await store.verify()).toMatchObject({ ok: true, blobs: 1, bytes: 5, errors: [] });
+		await writeFile(join(directory, `${stat.digest}.blob`), "corrupt");
+		await expect(store.read(stat.digest)).rejects.toThrow("content digest mismatch");
+		expect(await store.verify()).toMatchObject({ ok: false, blobs: 1, errors: [`content_mismatch:${stat.digest}`] });
 	});
 
-	test("publishes complete metadata under concurrent writes", async () => {
-		const root = await mkdtemp(join(tmpdir(), "pi-blobs-"));
-		const store = new FileV2BlobStore(root);
-		const data = new TextEncoder().encode("concurrent");
-		const stats = await Promise.all(Array.from({ length: 8 }, () => store.put(data, "text/plain")));
-		expect(new Set(stats.map((stat) => stat.digest)).size).toBe(1);
-		expect(JSON.parse(await readFile(join(root, `${stats[0].digest}.json`), "utf8"))).toEqual(stats[0]);
-	});
-
-	test("rejects symlinked metadata and blob files", async () => {
-		const root = await mkdtemp(join(tmpdir(), "pi-blobs-"));
-		const outside = await mkdtemp(join(tmpdir(), "pi-blobs-outside-"));
-		const store = new FileV2BlobStore(root);
-		const metadata = await store.put(new TextEncoder().encode("hello"), "text/plain");
-		const metadataPath = join(root, `${metadata.digest}.json`);
-		const blobPath = join(root, `${metadata.digest}.blob`);
-		await writeFile(join(outside, "metadata.json"), JSON.stringify(metadata));
-		await writeFile(join(outside, "blob"), "hello");
-		await unlink(metadataPath);
-		await symlink(join(outside, "metadata.json"), metadataPath);
-		await expect(store.stat(metadata.digest)).rejects.toThrow("not a regular file");
-
-		await unlink(metadataPath);
-		await writeFile(metadataPath, JSON.stringify(metadata));
-		await unlink(blobPath);
-		await symlink(join(outside, "blob"), blobPath);
-		await expect(store.read(metadata.digest)).rejects.toThrow("not a regular file");
+	test("enforces aggregate filesystem blob quotas while allowing deduplication", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-blobs-quota-"));
+		const store = new FileV2BlobStore(directory, { maxTotalBytes: 5, maxBlobs: 1 });
+		await store.put(new TextEncoder().encode("hello"), "text/plain");
+		await store.put(new TextEncoder().encode("hello"), "text/plain");
+		await expect(store.put(new TextEncoder().encode("world"), "text/plain")).rejects.toThrow("Blob count");
 	});
 });

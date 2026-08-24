@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { cp, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { type CodexPluginManifest, loadCodexPluginManifest } from "./codex-plugin.ts";
+import { type CodexPluginManifest, loadCodexPluginManifest, resolveCodexPluginResourceOnDisk } from "./codex-plugin.ts";
 
 export type CodexPluginActivation = Readonly<{
 	id: string;
@@ -36,6 +36,14 @@ function manifestDigest(manifest: CodexPluginManifest): string {
 	return createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
 }
 
+async function validateResources(root: string, manifest: CodexPluginManifest): Promise<void> {
+	for (const resource of [...manifest.skills, ...manifest.commands]) {
+		const resolved = await resolveCodexPluginResourceOnDisk(root, resource);
+		if (!resolved.ok)
+			throw new CodexPluginActivationError("invalid_manifest", `Plugin resource is invalid: ${resolved.message}`);
+	}
+}
+
 /** Stage and atomically activate a validated plugin version under a private cache root. */
 export class CodexPluginActivationStore {
 	private readonly cacheRoot: string;
@@ -61,6 +69,7 @@ export class CodexPluginActivationStore {
 				"Staged plugin manifest does not match activation metadata",
 			);
 		}
+		await validateResources(sourceRoot, loaded.manifest);
 		const key = activationKey(options.id);
 		const versionRoot = join(this.cacheRoot, key, "versions", options.version);
 		const activePath = join(this.cacheRoot, key, "active.json");
@@ -88,6 +97,7 @@ export class CodexPluginActivationStore {
 				staged.manifest.version !== options.version
 			)
 				throw new CodexPluginActivationError("invalid_manifest", "Copied plugin manifest failed validation");
+			await validateResources(stageRoot, staged.manifest);
 			await rename(stageRoot, versionRoot);
 			const temporaryPointer = `${activePath}.${randomUUID()}.tmp`;
 			await writeFile(temporaryPointer, `${JSON.stringify({ version: options.version })}\n`, { mode: 0o600 });
@@ -107,5 +117,35 @@ export class CodexPluginActivationStore {
 				error instanceof Error ? error.message : String(error),
 			);
 		}
+	}
+
+	/** Restore the pointer that was active before an activation failed to persist. */
+	async rollback(activation: CodexPluginActivation): Promise<void> {
+		const key = activationKey(activation.id);
+		const activePath = join(this.cacheRoot, key, "active.json");
+		try {
+			const current = JSON.parse(await readFile(activePath, "utf8")) as { version?: unknown };
+			if (current.version !== activation.version) return;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+			throw error;
+		}
+		const versionRoot = join(this.cacheRoot, key, "versions", activation.version);
+		if (activation.previousVersion === undefined) {
+			await rm(activePath, { force: true });
+			await rm(join(this.cacheRoot, key), { recursive: true, force: true });
+			return;
+		}
+		const temporaryPointer = [activePath, randomUUID(), "tmp"].join(".");
+		await writeFile(temporaryPointer, JSON.stringify({ version: activation.previousVersion }).concat("\n"), {
+			mode: 0o600,
+		});
+		await rename(temporaryPointer, activePath);
+		await rm(versionRoot, { recursive: true, force: true });
+	}
+
+	/** Remove all private staged state after a plugin is uninstalled. */
+	async remove(id: string): Promise<void> {
+		await rm(join(this.cacheRoot, activationKey(id)), { recursive: true, force: true });
 	}
 }

@@ -221,3 +221,37 @@ describe.runIf(process.platform !== "win32")("Unix-domain sockets", () => {
 		}
 	});
 });
+
+describe.runIf(process.platform === "win32")("Windows named pipes", () => {
+	test("PiClient exchanges framed messages over a named pipe", async () => {
+		const pipePath = `\\\\.\\pipe\\pi-client-${process.pid}-${Math.random().toString(36).slice(2)}`;
+		const sockets = new Set<Socket>();
+		const server = createServer((socket) => {
+			sockets.add(socket);
+			socket.once("close", () => sockets.delete(socket));
+			const decoder = new ClientMessageDecoder();
+			socket.on("data", (chunk) => {
+				for (const message of decoder.push(chunk)) {
+					if (message.type !== "hello") continue;
+					socket.write(
+						encodeServerMessage({
+							type: "hello",
+							version: PROTOCOL_VERSION,
+							connectionId: "named-pipe-connection",
+							snapshot: serverSnapshot,
+						}),
+					);
+				}
+			});
+		});
+		await listen(server, pipePath);
+		const client = new PiClient({ transportFactory: createUnixTransportFactory({ path: pipePath }) });
+
+		try {
+			await expect(client.connect()).resolves.toEqual(serverSnapshot);
+		} finally {
+			client.disconnect();
+			await closeServer(server, sockets);
+		}
+	});
+});

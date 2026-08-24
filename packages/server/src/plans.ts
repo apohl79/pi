@@ -23,8 +23,7 @@ export class InMemoryV2PlanRegistry implements V2PlanRegistry {
 		sessionId: string,
 		input: { readonly items: readonly PlanItem[]; readonly version?: number },
 	): Promise<PlanSnapshot> {
-		const current = this.plans.get(sessionId);
-		const plan = validatePlan(current, input);
+		const plan = validateV2Plan(this.plans.get(sessionId), input);
 		this.plans.set(sessionId, plan);
 		return structuredClone(plan);
 	}
@@ -59,7 +58,7 @@ export class JsonlV2PlanRegistry implements V2PlanRegistry {
 		input: { readonly items: readonly PlanItem[]; readonly version?: number },
 	): Promise<PlanSnapshot> {
 		await this.loaded;
-		const plan = validatePlan(this.plans.get(sessionId), input);
+		const plan = validateV2Plan(this.plans.get(sessionId), input);
 		await this.append({ sessionId, plan });
 		this.plans.set(sessionId, plan);
 		return structuredClone(plan);
@@ -80,7 +79,7 @@ export class JsonlV2PlanRegistry implements V2PlanRegistry {
 			throw error;
 		}
 		for (const line of contents.split("\n").filter(Boolean)) {
-			const record = JSON.parse(line) as PlanRecord;
+			const record = parsePlanRecord(JSON.parse(line));
 			if (record.plan === undefined) this.plans.delete(record.sessionId);
 			else this.plans.set(record.sessionId, record.plan);
 		}
@@ -102,18 +101,48 @@ export class JsonlV2PlanRegistry implements V2PlanRegistry {
 	}
 }
 
-function validatePlan(
+export function validateV2Plan(
 	current: PlanSnapshot | undefined,
 	input: { readonly items: readonly PlanItem[]; readonly version?: number },
 ): PlanSnapshot {
+	validatePlanItems(input.items);
 	if (input.items.length === 0) throw new Error("Plan must contain at least one step");
 	if (input.items.filter((item) => item.status === "in_progress").length > 1)
 		throw new Error("Plan may contain only one in-progress step");
-	if (input.items.some((item) => item.step.trim().length === 0)) throw new Error("Plan steps must not be empty");
 	if (input.version !== undefined && input.version !== (current?.version ?? 0) + 1)
 		throw new Error(`Plan version must be ${(current?.version ?? 0) + 1}`);
 	return {
 		version: (current?.version ?? 0) + 1,
 		items: input.items.map((item) => ({ ...item })),
 	};
+}
+
+function validatePlanItems(items: readonly PlanItem[]): void {
+	for (const item of items) {
+		if (
+			typeof item !== "object" ||
+			item === null ||
+			typeof item.step !== "string" ||
+			!(item.status === "pending" || item.status === "in_progress" || item.status === "completed")
+		)
+			throw new Error("Plan items are invalid");
+	}
+	if (items.some((item) => item.step.trim().length === 0)) throw new Error("Plan steps must not be empty");
+}
+
+function parsePlanRecord(value: unknown): PlanRecord {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Invalid plan record");
+	const record = value as Record<string, unknown>;
+	if (typeof record.sessionId !== "string" || record.sessionId.trim().length === 0)
+		throw new Error("Invalid plan record session id");
+	if (record.plan === undefined) return { sessionId: record.sessionId };
+	if (typeof record.plan !== "object" || record.plan === null || Array.isArray(record.plan))
+		throw new Error("Invalid plan record plan");
+	const plan = record.plan as Record<string, unknown>;
+	if (!Number.isInteger(plan.version) || (plan.version as number) < 1 || !Array.isArray(plan.items))
+		throw new Error("Invalid plan record snapshot");
+	validatePlanItems(plan.items as readonly PlanItem[]);
+	if (plan.items.filter((item) => item.status === "in_progress").length > 1)
+		throw new Error("Invalid plan record snapshot");
+	return { sessionId: record.sessionId, plan: { version: plan.version as number, items: plan.items } };
 }

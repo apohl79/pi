@@ -5,14 +5,17 @@ import type { V2FileReferenceService } from "./files.ts";
 export type V2ImageGenerationRequest = Readonly<{
 	prompt: string;
 	sourceDigest?: string;
+	sourceOperationId?: string;
 }>;
 
 export type V2GeneratedImage = Readonly<{
 	digest: string;
 	mimeType: string;
 	size: number;
+	reference: string;
 	provider: string;
 	model: string;
+	sourceOperationId?: string;
 	dimensions?: Readonly<{ width: number; height: number }>;
 	promptHash: string;
 	costUsd?: number;
@@ -25,6 +28,7 @@ export interface V2ImageGenerationAdapter {
 			mimeType: string;
 			provider: string;
 			model: string;
+			sourceOperationId?: string;
 			dimensions?: Readonly<{ width: number; height: number }>;
 			costUsd?: number;
 		}>
@@ -47,6 +51,20 @@ function assertImageMime(mimeType: string): void {
 	if (!mimeType.startsWith("image/")) throw new Error(`Unsupported image MIME type: ${mimeType}`);
 }
 
+function assertImageDimensions(dimensions: Readonly<{ width: number; height: number }>): void {
+	if (
+		!Number.isSafeInteger(dimensions.width) ||
+		!Number.isSafeInteger(dimensions.height) ||
+		dimensions.width <= 0 ||
+		dimensions.height <= 0
+	)
+		throw new Error("Generated image dimensions must be positive safe integers");
+}
+
+function assertProvenance(value: string, field: string): void {
+	if (value.trim().length === 0) throw new Error(`Generated image ${field} must not be empty`);
+}
+
 export class BlobV2ImageService implements V2ImageService {
 	private readonly files: V2FileReferenceService;
 	private readonly blobs: V2BlobStore;
@@ -62,6 +80,12 @@ export class BlobV2ImageService implements V2ImageService {
 		sessionId: string,
 		reference: string,
 	): Promise<Readonly<{ digest: string; mimeType: string; size: number; reference: string }>> {
+		if (reference.startsWith("blob:")) {
+			const digest = reference.slice("blob:".length);
+			const blob = await this.blobs.stat(digest);
+			assertImageMime(blob.mimeType);
+			return { ...blob, reference };
+		}
 		const result = await this.files.read(sessionId, reference);
 		const mimeType = result.file.mimeType;
 		if (!mimeType) throw new Error("Image MIME type could not be determined");
@@ -74,15 +98,30 @@ export class BlobV2ImageService implements V2ImageService {
 		void sessionId;
 		if (!this.generator) throw new Error("Image generation service is not configured");
 		if (request.prompt.trim().length === 0) throw new Error("Image prompt must not be empty");
+		if (request.sourceOperationId !== undefined) assertProvenance(request.sourceOperationId, "sourceOperationId");
+		if (request.sourceDigest !== undefined) {
+			const source = await this.blobs.stat(request.sourceDigest);
+			assertImageMime(source.mimeType);
+		}
 		const generated = await this.generator.generate(request);
 		assertImageMime(generated.mimeType);
+		assertProvenance(generated.provider, "provider");
+		assertProvenance(generated.model, "model");
+		if (generated.sourceOperationId !== undefined) assertProvenance(generated.sourceOperationId, "sourceOperationId");
+		if (generated.dimensions !== undefined) assertImageDimensions(generated.dimensions);
+		if (generated.costUsd !== undefined && (!Number.isFinite(generated.costUsd) || generated.costUsd < 0))
+			throw new Error("Generated image cost must be a non-negative finite number");
 		const blob = await this.blobs.put(generated.data, generated.mimeType);
 		return {
 			digest: blob.digest,
 			mimeType: blob.mimeType,
 			size: blob.size,
+			reference: `blob:${blob.digest}`,
 			provider: generated.provider,
 			model: generated.model,
+			...(request.sourceOperationId === undefined && generated.sourceOperationId === undefined
+				? {}
+				: { sourceOperationId: request.sourceOperationId ?? generated.sourceOperationId }),
 			...(generated.dimensions ? { dimensions: generated.dimensions } : {}),
 			promptHash: promptHash(request.prompt),
 			...(generated.costUsd === undefined ? {} : { costUsd: generated.costUsd }),

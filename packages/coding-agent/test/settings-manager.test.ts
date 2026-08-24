@@ -602,4 +602,32 @@ describe("SettingsManager", () => {
 			expect(manager.getShellPath()).toBe(homedir());
 		});
 	});
+
+	describe("statusline settings", () => {
+		it("loads and clones the documented command configuration", () => {
+			const command = ["/bin/statusline", "--json"];
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ statusLine: ["project", "cost"], statusLineUseColors: false, statusLineCommand: command }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getStatusLine()).toEqual(["project", "cost"]);
+			expect(manager.getStatusLineUseColors()).toBe(false);
+			expect(manager.getStatusLineCommand()).toEqual(command);
+			const returned = manager.getStatusLineCommand();
+			expect(returned).not.toBe(command);
+		});
+
+		it("persists project updates and supports shell-string commands", () => {
+			const manager = SettingsManager.inMemory();
+			manager.setStatusLine(["context", "goal"]);
+			manager.setStatusLineUseColors(false);
+			manager.setStatusLineCommand("~/.claude/statusline.sh");
+
+			expect(manager.getStatusLine()).toEqual(["context", "goal"]);
+			expect(manager.getStatusLineUseColors()).toBe(false);
+			expect(manager.getStatusLineCommand()).toBe("~/.claude/statusline.sh");
+		});
+	});
 });

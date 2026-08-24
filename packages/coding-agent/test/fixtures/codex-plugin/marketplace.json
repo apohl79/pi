@@ -1,0 +1,7 @@
+{
+	"plugins": [
+		{"name": "reviewer", "source": "./plugins/reviewer"},
+		{"name": "git-reviewer", "source": "git+https://example.test/git-reviewer.git"},
+		{"name": "npm-reviewer", "source": "npm:@example/npm-reviewer"}
+	]
+}

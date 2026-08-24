@@ -105,8 +105,25 @@ trap 'rm -f "$temporary_archive" "$temporary_index" "$manifest"; rm -rf "$valida
 # deterministic for the same commit and generated model data.
 GIT_INDEX_FILE="$temporary_index" git read-tree "$commit"
 GIT_INDEX_FILE="$temporary_index" git add -f -- "${model_data_files[@]}"
-archive_tree="$(GIT_INDEX_FILE="$temporary_index" git write-tree)"
 archive_mtime="$(git show -s --format=%ct "$commit")"
+
+# The extracted release source archive has no .git directory. Include the
+# exact fork commit in the temporary archive index so build-binaries.sh can
+# compile runtime identity even when CI cannot pass workflow-scoped metadata.
+identity_file="$(mktemp "${output}.identity.XXXXXX")"
+upstream_base_commit="$(git show "${commit}:FORK_DELTA.md" | sed -n 's/^- Initial pinned upstream base: //p' | head -n 1)"
+printf '%s\n' \
+    '/** Generated for this source archive; build-binaries.sh restores it after compilation. */' \
+    'export const BUILD_IDENTITY = {' \
+    "    buildVersion: \"${version}\"," \
+    "    forkCommit: \"${commit}\"," \
+    "    upstreamBaseCommit: \"${upstream_base_commit}\"," \
+    '    configHash: undefined,' \
+    '} as const;' > "$identity_file"
+identity_blob="$(git hash-object -w "$identity_file")"
+GIT_INDEX_FILE="$temporary_index" git update-index --add --cacheinfo "100644,$identity_blob,packages/coding-agent/src/server/build-identity.generated.ts"
+rm -f "$identity_file"
+archive_tree="$(GIT_INDEX_FILE="$temporary_index" git write-tree)"
 
 archive_root="pi-${version}"
 git archive --format=tar --prefix="${archive_root}/" --mtime="@${archive_mtime}" "$archive_tree" \

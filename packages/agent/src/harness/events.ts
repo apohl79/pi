@@ -12,7 +12,69 @@ export interface RunEndEvent {
 	leafId: string;
 }
 
-export type HarnessEvent = RunStartEvent | RunEndEvent;
+export type CompactionReason = "manual" | "threshold" | "overflow";
+
+export interface CompactionStartEvent {
+	type: "compaction_start";
+	runId: string;
+	reason: CompactionReason;
+}
+
+export interface CompactionEndEvent {
+	type: "compaction_end";
+	runId: string;
+	reason: CompactionReason;
+	outcome: "completed" | "aborted" | "failed";
+	entryId?: string;
+	error?: { code: string; message: string };
+}
+
+export interface NavigationStartEvent {
+	type: "navigation_start";
+	runId: string;
+	targetId: string | null;
+}
+
+export interface NavigationEndEvent {
+	type: "navigation_end";
+	runId: string;
+	oldLeafId: string | null;
+	newLeafId: string | null;
+	outcome: "completed" | "aborted" | "failed";
+	error?: { code: string; message: string };
+}
+
+export interface ItemCompletedEvent {
+	type: "item_completed";
+	runId: string;
+	role: string;
+}
+
+export interface ToolStartedEvent {
+	type: "tool_started";
+	runId: string;
+	toolCallId: string;
+	toolName: string;
+}
+
+export interface ToolCompletedEvent {
+	type: "tool_completed";
+	runId: string;
+	toolCallId: string;
+	toolName: string;
+	isError: boolean;
+}
+
+export type HarnessEvent =
+	| RunStartEvent
+	| RunEndEvent
+	| CompactionStartEvent
+	| CompactionEndEvent
+	| NavigationStartEvent
+	| NavigationEndEvent
+	| ItemCompletedEvent
+	| ToolStartedEvent
+	| ToolCompletedEvent;
 export type HarnessEventType = HarnessEvent["type"];
 export type HarnessEventOfType<TType extends HarnessEventType> = Extract<HarnessEvent, { type: TType }>;
 export type HarnessEventListener<TEvent extends HarnessEvent = HarnessEvent> = (event: TEvent) => void | Promise<void>;
