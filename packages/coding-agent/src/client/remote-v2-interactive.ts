@@ -35,6 +35,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/release-control",
 	"/resume",
 	"/rollback",
+	"/settings",
 	"/statusline",
 	"/steer",
 	"/take-control",
@@ -65,6 +66,7 @@ export type RemoteV2Command =
 	| { readonly name: "release-control" }
 	| { readonly name: "resume" }
 	| { readonly name: "rollback"; readonly turns: number }
+	| { readonly name: "settings" }
 	| { readonly name: "statusline"; readonly command?: string }
 	| { readonly name: "steer"; readonly text: string }
 	| { readonly name: "take-control" }
@@ -301,6 +303,10 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		if (arguments_.length > 0) throw new Error("/plugins does not accept arguments");
 		return { name: "plugins" };
 	}
+	if (name === "/settings") {
+		if (arguments_.length > 0) throw new Error("/settings does not accept arguments");
+		return { name: "settings" };
+	}
 	if (name === "/rollback") {
 		const turns = arguments_.length === 0 ? 1 : Number(arguments_[0]);
 		if (arguments_.length > 1 || !Number.isInteger(turns) || turns < 1) {
@@ -337,10 +343,16 @@ export class RemoteV2InteractiveAttachment implements Component {
 	#recalledContent: RemoteV2PromptContent | undefined;
 	#status = "";
 	#completionSequence = 0;
+	readonly #openSettings: (() => void) | undefined;
 
-	constructor(attachment: RemoteV2SessionAttachment, editor?: Editor) {
+	constructor(
+		attachment: RemoteV2SessionAttachment,
+		editor?: Editor,
+		options: { readonly openSettings?: () => void } = {},
+	) {
 		this.#attachment = attachment;
 		this.#editor = editor;
+		this.#openSettings = options.openSettings;
 		if (editor !== undefined) {
 			editor.setAutocompleteProvider(new RemoteV2AutocompleteProvider(attachment.session));
 			editor.onSubmit = (text) => this.submitEditorText(text);
@@ -445,6 +457,10 @@ export class RemoteV2InteractiveAttachment implements Component {
 				return operation(await this.session.resume());
 			case "rollback":
 				return operation(await this.session.rollback(command.turns));
+			case "settings":
+				if (this.#openSettings === undefined) throw new Error("Remote settings are unavailable");
+				this.#openSettings();
+				return { kind: "status", text: "settings opened" };
 			case "statusline":
 				if (!this.#attachment.setStatusline) throw new Error("Remote statusline is unavailable");
 				await this.#attachment.setStatusline(command.command);

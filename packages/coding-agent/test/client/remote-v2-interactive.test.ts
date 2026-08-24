@@ -218,6 +218,7 @@ describe("remote v2 interactive command boundary", () => {
 		});
 		expect(parseRemoteV2Command("/plan-clear")).toEqual({ name: "plan-clear" });
 		expect(parseRemoteV2Command("/plugins")).toEqual({ name: "plugins" });
+		expect(parseRemoteV2Command("/settings")).toEqual({ name: "settings" });
 		expect(() => parseRemoteV2Command("/plugins demo")).toThrow("does not accept arguments");
 		expect(parseRemoteV2Command("/statusline /bin/statusline --json")).toEqual({
 			name: "statusline",
@@ -366,6 +367,20 @@ describe("remote v2 interactive command boundary", () => {
 		editor.setText("");
 		adapter.handleInput("/");
 		await vi.waitFor(() => expect(stripAnsi(adapter.render(80).join("\n"))).toContain("model"));
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("opens the injected settings selector without a server command", async () => {
+		const { client } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const openSettings = vi.fn();
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { openSettings });
+
+		expect(await adapter.execute("/settings")).toEqual({ kind: "status", text: "settings opened" });
+		expect(openSettings).toHaveBeenCalledOnce();
 
 		await adapter.dispose();
 		client.dispose();

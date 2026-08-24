@@ -14,14 +14,16 @@ import { dispatchExperimentalCommand, isExperimentalCommand } from "./cli/experi
 import { RemoteV2InteractiveAttachment } from "./client/remote-v2-interactive.ts";
 import { RemoteV2SessionView, RemoteV2StatuslineComponent } from "./client/remote-v2-view.ts";
 import { APP_NAME, getAgentDir } from "./config.ts";
+import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./core/defaults.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { KeybindingsManager } from "./core/keybindings.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { main } from "./main.ts";
 import { CustomEditor } from "./modes/interactive/components/custom-editor.ts";
+import { SettingsSelectorComponent } from "./modes/interactive/components/settings-selector.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
-import { getEditorTheme, initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
+import { getAvailableThemes, getEditorTheme, initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "./server/daemon-runtime.ts";
 import { StatuslineRunner } from "./server/statusline.ts";
 
@@ -115,7 +117,8 @@ async function runCli(): Promise<void> {
 	const agentDir = getAgentDir();
 	const statuslineSettings = SettingsManager.create(process.cwd(), agentDir);
 	const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false });
-	const model = (await modelRuntime.getAvailable())[0];
+	const availableModels = await modelRuntime.getAvailable();
+	const model = availableModels[0];
 	if (model === undefined) throw new Error("No configured model is available for the experimental daemon");
 	const harnessOptions =
 		parsedArgs.systemPrompt === undefined &&
@@ -188,7 +191,128 @@ async function runCli(): Promise<void> {
 			const editor = new CustomEditor(tui, getEditorTheme(), keybindings);
 			const view = new RemoteV2SessionView(session, { onUpdated: () => tui?.requestRender() });
 			let statusline: RemoteV2StatuslineComponent;
-			const attachment = new RemoteV2InteractiveAttachment(
+			let attachment: RemoteV2InteractiveAttachment;
+			const showSettings = () => {
+				const snapshot = session.snapshot;
+				const currentModel = availableModels.find(
+					(candidate) => candidate.provider === snapshot?.model.provider && candidate.id === snapshot?.model.id,
+				);
+				const done = () => {
+					tui.removeChild(selector);
+					tui.removeChild(statusline);
+					tui.addChild(attachment);
+					tui.addChild(statusline);
+					tui.setFocus(attachment);
+					tui.requestRender();
+				};
+				const selector = new SettingsSelectorComponent(
+					{
+						autoCompact: snapshot?.compactionPolicy.enabled ?? true,
+						defaultModel: statuslineSettings.getDefaultModel() ?? "not set",
+						currentModel,
+						availableDefaultModels: availableModels,
+						showImages: statuslineSettings.getShowImages(),
+						imageWidthCells: statuslineSettings.getImageWidthCells(),
+						autoResizeImages: statuslineSettings.getImageAutoResize(),
+						blockImages: statuslineSettings.getBlockImages(),
+						enableSkillCommands: statuslineSettings.getEnableSkillCommands(),
+						steeringMode: snapshot?.steeringMode ?? "all",
+						followUpMode: snapshot?.followUpMode ?? "all",
+						transport: statuslineSettings.getTransport(),
+						httpIdleTimeoutMs: statuslineSettings.getHttpIdleTimeoutMs(),
+						thinkingLevel: snapshot?.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+						availableThinkingLevels: [...THINKING_LEVEL_OPTIONS],
+						modelThinkingLevels: statuslineSettings.getAllModelThinkingLevels(),
+						currentTheme: statuslineSettings.getTheme(),
+						terminalTheme: "dark",
+						availableThemes: getAvailableThemes(),
+						hideThinkingBlock: statuslineSettings.getHideThinkingBlock(),
+						mermaidRenderingMode: statuslineSettings.getMermaidRenderingMode(),
+						showCacheMissNotices: statuslineSettings.getShowCacheMissNotices(),
+						collapseChangelog: statuslineSettings.getCollapseChangelog(),
+						enableInstallTelemetry: statuslineSettings.getEnableInstallTelemetry(),
+						doubleEscapeAction: statuslineSettings.getDoubleEscapeAction(),
+						treeFilterMode: statuslineSettings.getTreeFilterMode(),
+						showHardwareCursor: statuslineSettings.getShowHardwareCursor(),
+						editorPaddingX: statuslineSettings.getEditorPaddingX(),
+						outputPad: statuslineSettings.getOutputPad(),
+						autocompleteMaxVisible: statuslineSettings.getAutocompleteMaxVisible(),
+						quietStartup: statuslineSettings.getQuietStartup(),
+						defaultProjectTrust: statuslineSettings.getDefaultProjectTrust(),
+						clearOnShrink: statuslineSettings.getClearOnShrink(),
+						showTerminalProgress: statuslineSettings.getShowTerminalProgress(),
+						tuiMode: tui.mode,
+						fullscreenExitOutput: statuslineSettings.getFullscreenExitOutput(),
+						fullscreenScrollbar: statuslineSettings.getFullscreenScrollbar(),
+						warnings: statuslineSettings.getWarnings(),
+					},
+					{
+						onAutoCompactChange: (enabled) => void session.setAutoCompaction(enabled).catch(() => undefined),
+						onShowImagesChange: (enabled) => statuslineSettings.setShowImages(enabled),
+						onImageWidthCellsChange: (width) => statuslineSettings.setImageWidthCells(width),
+						onAutoResizeImagesChange: (enabled) => statuslineSettings.setImageAutoResize(enabled),
+						onBlockImagesChange: (blocked) => statuslineSettings.setBlockImages(blocked),
+						onEnableSkillCommandsChange: (enabled) => statuslineSettings.setEnableSkillCommands(enabled),
+						onSteeringModeChange: (mode) => void session.setSteeringMode(mode).catch(() => undefined),
+						onFollowUpModeChange: (mode) => void session.setFollowUpMode(mode).catch(() => undefined),
+						onTransportChange: (transport) => statuslineSettings.setTransport(transport),
+						onHttpIdleTimeoutMsChange: (timeoutMs) => {
+							statuslineSettings.setHttpIdleTimeoutMs(timeoutMs);
+							configureHttpDispatcher(timeoutMs);
+						},
+						onModelThinkingLevelChange: (provider, modelId, level) => {
+							statuslineSettings.setModelThinkingLevel(provider, modelId, level);
+							if (snapshot?.model.provider === provider && snapshot.model.id === modelId)
+								void session.setThinking(level).catch(() => undefined);
+						},
+						onModelThinkingLevelRemove: (provider, modelId) =>
+							statuslineSettings.removeModelThinkingLevel(provider, modelId),
+						onThemeChange: (themeSetting) => {
+							statuslineSettings.setTheme(themeSetting);
+							initTheme(themeSetting, true);
+						},
+						onHideThinkingBlockChange: (hidden) => statuslineSettings.setHideThinkingBlock(hidden),
+						onMermaidRenderingModeChange: (mode) => statuslineSettings.setMermaidRenderingMode(mode),
+						onShowCacheMissNoticesChange: (shown) => statuslineSettings.setShowCacheMissNotices(shown),
+						onCollapseChangelogChange: (collapsed) => statuslineSettings.setCollapseChangelog(collapsed),
+						onEnableInstallTelemetryChange: (enabled) => statuslineSettings.setEnableInstallTelemetry(enabled),
+						onDoubleEscapeActionChange: (action) => statuslineSettings.setDoubleEscapeAction(action),
+						onTreeFilterModeChange: (mode) => statuslineSettings.setTreeFilterMode(mode),
+						onShowHardwareCursorChange: (enabled) => {
+							statuslineSettings.setShowHardwareCursor(enabled);
+							tui.setShowHardwareCursor(enabled);
+						},
+						onEditorPaddingXChange: (padding) => {
+							statuslineSettings.setEditorPaddingX(padding);
+							editor.setPaddingX(padding);
+						},
+						onOutputPadChange: (padding) => statuslineSettings.setOutputPad(padding),
+						onAutocompleteMaxVisibleChange: (maxVisible) => {
+							statuslineSettings.setAutocompleteMaxVisible(maxVisible);
+							editor.setAutocompleteMaxVisible(maxVisible);
+						},
+						onQuietStartupChange: (enabled) => statuslineSettings.setQuietStartup(enabled),
+						onDefaultProjectTrustChange: (value) => statuslineSettings.setDefaultProjectTrust(value),
+						onClearOnShrinkChange: (enabled) => {
+							statuslineSettings.setClearOnShrink(enabled);
+							tui.setClearOnShrink(enabled);
+						},
+						onShowTerminalProgressChange: (enabled) => statuslineSettings.setShowTerminalProgress(enabled),
+						onTuiModeChange: (mode) => statuslineSettings.setTuiMode(mode),
+						onFullscreenExitOutputChange: (output) => statuslineSettings.setFullscreenExitOutput(output),
+						onFullscreenScrollbarChange: (scrollbar) => statuslineSettings.setFullscreenScrollbar(scrollbar),
+						onWarningsChange: (warnings) => statuslineSettings.setWarnings(warnings),
+						onCancel: done,
+					},
+				);
+				tui.removeChild(attachment);
+				tui.removeChild(statusline);
+				tui.addChild(selector);
+				tui.addChild(statusline);
+				tui.setFocus(selector.getSettingsList());
+				tui.requestRender();
+			};
+			attachment = new RemoteV2InteractiveAttachment(
 				{
 					session,
 					view,
@@ -199,6 +323,7 @@ async function runCli(): Promise<void> {
 					dispose: async () => view.dispose(),
 				},
 				editor,
+				{ openSettings: showSettings },
 			);
 			statusline = new RemoteV2StatuslineComponent(
 				session,
