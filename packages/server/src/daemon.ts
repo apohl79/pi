@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { V2AgentRegistry } from "./agents.ts";
@@ -71,6 +72,7 @@ interface DaemonLifecycleMarker {
 	daemonInstanceId: string;
 	state: "running" | "clean";
 	timestamp: number;
+	pid: number;
 }
 
 /** Owns one restartable server instance and exposes a small daemon lifecycle seam. */
@@ -86,9 +88,27 @@ export class ServerDaemon {
 	}
 
 	status(): ServerDaemonStatus {
-		const addresses = this.server === undefined ? [] : [...this.server.addresses];
+		const persistedRunning =
+			this.server === undefined &&
+			this.options.lifecycleMarkerPath !== undefined &&
+			existsSync(this.options.socketPath) &&
+			(() => {
+				try {
+					return (
+						(
+							JSON.parse(
+								readFileSync(this.options.lifecycleMarkerPath!, "utf8"),
+							) as Partial<DaemonLifecycleMarker>
+						).state === "running"
+					);
+				} catch {
+					return false;
+				}
+			})();
+		const addresses =
+			this.server === undefined ? (persistedRunning ? [this.options.socketPath] : []) : [...this.server.addresses];
 		return {
-			state: this.state,
+			state: persistedRunning ? "running" : this.state,
 			...(this.server === undefined ? {} : { serverId: this.server.id }),
 			addresses,
 		};
@@ -112,7 +132,18 @@ export class ServerDaemon {
 	}
 
 	async stop(): Promise<ServerDaemonStatus> {
-		if (this.state === "stopped") return this.status();
+		if (this.state === "stopped") {
+			const marker = this.readPersistedRunningMarker();
+			if (marker !== undefined && marker.pid !== process.pid) {
+				try {
+					process.kill(marker.pid, "SIGTERM");
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+				}
+				return { state: "stopped", addresses: [] };
+			}
+			return this.status();
+		}
 		if (this.transition) {
 			await this.transition;
 			return this.stop();
@@ -248,10 +279,20 @@ export class ServerDaemon {
 		const temporary = `${path}.${process.pid}.tmp`;
 		await writeFile(
 			temporary,
-			`${JSON.stringify({ schemaVersion: 1, daemonInstanceId: this.daemonInstanceId, state, timestamp: Date.now() })}\n`,
+			`${JSON.stringify({ schemaVersion: 1, daemonInstanceId: this.daemonInstanceId, state, timestamp: Date.now(), pid: process.pid })}\n`,
 			{ mode: 0o600 },
 		);
 		await rename(temporary, path);
+	}
+
+	private readPersistedRunningMarker(): DaemonLifecycleMarker | undefined {
+		if (this.options.lifecycleMarkerPath === undefined) return undefined;
+		try {
+			const marker = JSON.parse(readFileSync(this.options.lifecycleMarkerPath, "utf8")) as DaemonLifecycleMarker;
+			return marker.state === "running" && Number.isSafeInteger(marker.pid) ? marker : undefined;
+		} catch {
+			return undefined;
+		}
 	}
 
 	private async recordDiagnostic(

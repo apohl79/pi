@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process";
 /**
  * CLI entry point for the refactored coding agent.
  * Uses main.ts with AgentSession and new mode modules.
@@ -33,6 +34,18 @@ const LEGACY_COMMANDS = new Set(["install", "remove", "uninstall", "update", "li
 
 async function runCli(): Promise<void> {
 	const args = process.argv.slice(2);
+	const foregroundServer = args[0] === "server" && args[1] === "start" && args.includes("--foreground");
+	if (args[0] === "server" && args[1] === "start" && !args.includes("--foreground")) {
+		const entrypoint = process.argv[1];
+		if (entrypoint === undefined) throw new Error("Cannot determine CLI entrypoint for detached server");
+		const child = spawn(process.execPath, [...process.execArgv, entrypoint, ...args, "--foreground"], {
+			detached: true,
+			stdio: "ignore",
+		});
+		child.unref();
+		console.log(JSON.stringify({ state: "running", addresses: [join(getAgentDir(), "pi.sock")] }));
+		return;
+	}
 	const parsedArgs = parseArgs(args);
 	const jsonMode = args.some((arg, index) => arg === "--mode" && args[index + 1] === "json");
 	const rpcMode = args.some((arg, index) => arg === "--mode" && args[index + 1] === "rpc");
@@ -179,7 +192,7 @@ async function runCli(): Promise<void> {
 			await runtime.cli.runPi({ command: "pi", options: parsedArgs });
 		else await main(args, { experimentalCliContext: runtime.cli });
 	} finally {
-		await runtime.close();
+		if (!foregroundServer) await runtime.close();
 	}
 }
 
