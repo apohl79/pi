@@ -47,7 +47,6 @@ import chalk from "chalk";
 import { spawn, spawnSync } from "child_process";
 import {
 	APP_NAME,
-	APP_TITLE,
 	CONFIG_DIR_NAME,
 	getAgentDir,
 	getAuthPath,
@@ -126,6 +125,8 @@ import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
+import { InteractiveLayout } from "./components/interactive-layout.ts";
+import { formatInteractiveTerminalTitle } from "./components/interactive-title.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { createMermaidMarkdownTransformer } from "./components/mermaid.ts";
@@ -148,7 +149,6 @@ import {
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
 import { ThinkingSelectorComponent } from "./components/thinking-selector.ts";
-import { InteractiveLayout } from "./components/interactive-layout.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TranscriptRenderer } from "./components/transcript-renderer.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
@@ -1070,13 +1070,9 @@ export class InteractiveMode {
 	 * Update terminal title with session name and cwd.
 	 */
 	private updateTerminalTitle(): void {
-		const cwdBasename = path.basename(this.sessionManager.getCwd());
-		const sessionName = this.sessionManager.getSessionName();
-		if (sessionName) {
-			this.ui.terminal.setTitle(`${APP_TITLE} - ${sessionName} - ${cwdBasename}`);
-		} else {
-			this.ui.terminal.setTitle(`${APP_TITLE} - ${cwdBasename}`);
-		}
+		this.ui.terminal.setTitle(
+			formatInteractiveTerminalTitle(this.sessionManager.getCwd(), this.sessionManager.getSessionName()),
+		);
 	}
 
 	/**

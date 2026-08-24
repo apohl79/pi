@@ -23,6 +23,7 @@ import { SettingsManager } from "./core/settings-manager.ts";
 import { main } from "./main.ts";
 import { CustomEditor } from "./modes/interactive/components/custom-editor.ts";
 import { InteractiveLayout } from "./modes/interactive/components/interactive-layout.ts";
+import { formatInteractiveTerminalTitle } from "./modes/interactive/components/interactive-title.ts";
 import { ModelSelectorComponent } from "./modes/interactive/components/model-selector.ts";
 import { SettingsSelectorComponent } from "./modes/interactive/components/settings-selector.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
@@ -192,15 +193,22 @@ async function runCli(): Promise<void> {
 				logDirectory: agentDir,
 			});
 			const editor = new CustomEditor(tui, getEditorTheme(), keybindings);
+			const updateTerminalTitle = () => {
+				tui.terminal.setTitle(formatInteractiveTerminalTitle(process.cwd(), session.snapshot?.name));
+			};
 			const view = new RemoteV2SessionView(session, {
 				tui,
 				cwd: process.cwd(),
-				onUpdated: () => tui?.requestRender(),
+				onUpdated: () => {
+					updateTerminalTitle();
+					tui.requestRender();
+				},
 				getHideThinkingBlock: () => statuslineSettings.getHideThinkingBlock(),
 				getOutputPad: () => statuslineSettings.getOutputPad(),
 				getShowImages: () => statuslineSettings.getShowImages(),
 				getImageWidthCells: () => statuslineSettings.getImageWidthCells(),
 			});
+			updateTerminalTitle();
 			const transcriptContainer = new Container();
 			const pendingContainer = new Container();
 			const statusContainer = new Container();
