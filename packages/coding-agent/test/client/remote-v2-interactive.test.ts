@@ -633,6 +633,11 @@ describe("remote v2 interactive command boundary", () => {
 
 		expect(suggestions?.items.map((item) => item.value)).toEqual(["openai/gpt-5"]);
 		expect(commands).toContain("model/list");
+		expect(provider.applyCompletion(["/model gpt"], 0, 10, suggestions!.items[0], suggestions!.prefix)).toEqual({
+			lines: ["/model openai/gpt-5 "],
+			cursorLine: 0,
+			cursorCol: 20,
+		});
 		await attached.dispose();
 		client.dispose();
 	});

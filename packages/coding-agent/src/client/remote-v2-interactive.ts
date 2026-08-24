@@ -247,7 +247,7 @@ export class RemoteV2AutocompleteProvider implements AutocompleteProvider {
 		const completed =
 			remoteFile.kind === "file" || remoteFile.kind === "directory"
 				? applyRemoteFileCompletion(beforeCursor, beforePrefix.length, remoteFile)
-				: `${beforePrefix}/${item.value} `;
+				: `${beforePrefix}${beforePrefix.length === 0 ? "/" : ""}${item.value} `;
 		const nextLine = `${completed}${afterCursor}`;
 		const nextLines = [...lines];
 		nextLines[cursorLine] = nextLine;
