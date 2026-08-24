@@ -43,16 +43,17 @@ function detachedServerStatus(agentDir: string): DetachedServerStatus | undefine
 			state: string;
 			pid: number;
 		}>;
+		const pid = marker.pid;
 		if (
 			marker.state !== "running" ||
 			typeof marker.daemonInstanceId !== "string" ||
-			!Number.isSafeInteger(marker.pid) ||
-			marker.pid <= 0 ||
+			!Number.isSafeInteger(pid) ||
+			pid <= 0 ||
 			!existsSync(socketPath)
 		)
 			return undefined;
-		process.kill(marker.pid, 0);
-		return { serverId: marker.daemonInstanceId, pid: marker.pid, addresses: [socketPath] };
+		process.kill(pid, 0);
+		return { serverId: marker.daemonInstanceId, pid, addresses: [socketPath] };
 	} catch {
 		return undefined;
 	}

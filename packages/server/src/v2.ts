@@ -273,6 +273,7 @@ export class PiServerV2 {
 	private readonly runtimes = new Set<PiSessionRuntimeV2>();
 	private readonly eventHistory = new Map<string, EventEnvelopeV2[]>();
 	private readonly eventDeliveryTails = new WeakMap<V2ConnectionState, Promise<void>>();
+	private readonly sessionOperationTails = new Map<string, Promise<void>>();
 	private readonly agentWatches = new Set<string>();
 	private readonly operations = new Map<string, OperationRecordV2>();
 	private readonly pendingRecoveryReports = new Map<string, OperationRecordV2[]>();
@@ -645,7 +646,7 @@ export class PiServerV2 {
 				command.command === "session/name/generate" ||
 				command.command === "session/name/auto/set"
 			)
-				return void (await this.startTurn(state, id, command));
+				return void (await this.runSessionCommand(state, id, command));
 			await this.sendError(
 				state,
 				id,
@@ -1973,9 +1974,10 @@ export class PiServerV2 {
 
 	private async startTurn(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
 		if (!command.sessionId) throw new Error("turn/start requires sessionId");
-		this.requireControl(state, command.sessionId);
-		const runtime = state.sessions.get(command.sessionId);
-		if (!runtime) throw new Error(`Session ${command.sessionId} is not attached`);
+		const sessionId = command.sessionId;
+		this.requireControl(state, sessionId);
+		const runtime = state.sessions.get(sessionId);
+		if (!runtime) throw new Error(`Session ${sessionId} is not attached`);
 		const payload = objectPayload(command);
 		validateGoalCommand(command, payload);
 		validateTurnCommand(command, payload);
@@ -2065,7 +2067,25 @@ export class PiServerV2 {
 			"operation_accepted",
 			{ eventSeq: accepted.eventSeq, revision: accepted.sessionRevision },
 		);
-		void this.runOperation(runtime, command.sessionId, operationId, resolvedCommand);
+		const execute = () => this.runOperation(runtime, sessionId, operationId, resolvedCommand);
+		if (command.command === "turn/abort" || command.command === "turn/steer" || command.command === "turn/followUp") void execute();
+		else await execute();
+	}
+
+	private runSessionCommand(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const interactive = command.command === "turn/abort" || command.command === "turn/steer" || command.command === "turn/followUp";
+		if (interactive || command.sessionId === undefined) return this.startTurn(state, id, command);
+		return this.enqueueSessionOperation(command.sessionId, () => this.startTurn(state, id, command));
+	}
+
+	private enqueueSessionOperation(sessionId: string, operation: () => Promise<void>): Promise<void> {
+		const previous = this.sessionOperationTails.get(sessionId) ?? Promise.resolve();
+		const next = previous.catch(() => undefined).then(operation);
+		this.sessionOperationTails.set(sessionId, next);
+		void next.finally(() => {
+			if (this.sessionOperationTails.get(sessionId) === next) this.sessionOperationTails.delete(sessionId);
+		});
+		return next;
 	}
 
 	private async diagnosticCapsulesForExport(): Promise<readonly DiagnosticCapsule[]> {
