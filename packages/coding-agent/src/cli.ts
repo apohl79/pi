@@ -12,12 +12,12 @@ import { dirname, join } from "node:path";
 import { type AgentMessage, DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-agent-core";
 import { contentText } from "@earendil-works/pi-ai";
 import type { JsonValue } from "@earendil-works/pi-protocol";
-import { Container } from "@earendil-works/pi-tui";
+import { Container, Spacer, setKeybindings } from "@earendil-works/pi-tui";
 import { isServerDefaultCompatible, parseArgs } from "./cli/args.ts";
 import { dispatchExperimentalCommand, isExperimentalCommand } from "./cli/experimental/dispatch.ts";
 import { RemoteV2InteractiveAttachment } from "./client/remote-v2-interactive.ts";
 import { RemoteV2FooterComponent, RemoteV2SessionView, RemoteV2StatuslineComponent } from "./client/remote-v2-view.ts";
-import { APP_NAME, getAgentDir, getDebugLogPath, getShareViewerUrl } from "./config.ts";
+import { APP_NAME, getAgentDir, getDebugLogPath, getShareViewerUrl, VERSION } from "./config.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./core/defaults.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import { FooterDataProvider } from "./core/footer-data-provider.ts";
@@ -44,6 +44,7 @@ import { ModelSelectorComponent } from "./modes/interactive/components/model-sel
 import { ScopedModelsSelectorComponent } from "./modes/interactive/components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./modes/interactive/components/session-selector.ts";
 import { SettingsSelectorComponent } from "./modes/interactive/components/settings-selector.ts";
+import { createInteractiveStartupHeader } from "./modes/interactive/components/startup-header.ts";
 import { ThinkingSelectorComponent } from "./modes/interactive/components/thinking-selector.ts";
 import { TreeSelectorComponent } from "./modes/interactive/components/tree-selector.ts";
 import { TrustSelectorComponent } from "./modes/interactive/components/trust-selector.ts";
@@ -304,6 +305,7 @@ async function runCli(): Promise<void> {
 		writeText: (value) => process.stdout.write(`${value}\n`),
 		runInteractive: async (session, options) => {
 			const keybindings = KeybindingsManager.create(agentDir);
+			setKeybindings(keybindings);
 			initTheme(statuslineSettings.getTheme(), true);
 			const tui = createInteractiveTui({
 				tuiMode: options.tuiMode ?? "regular",
@@ -330,6 +332,10 @@ async function runCli(): Promise<void> {
 			});
 			updateTerminalTitle();
 			const transcriptContainer = new Container();
+			const documentContainer = new Container();
+			const startupHeader = statuslineSettings.getQuietStartup()
+				? undefined
+				: createInteractiveStartupHeader({ version: VERSION, expanded: false });
 			const statusContainer = new Container();
 			const aboveEditorContainer = new Container();
 			const editorContainer = new Container();
@@ -340,9 +346,19 @@ async function runCli(): Promise<void> {
 			footerData.setAvailableProviderCount(new Set(availableModels.map((candidate) => candidate.provider)).size);
 			const footer = new RemoteV2FooterComponent(session, footerData, process.cwd());
 			footerContainer.addChild(footer);
+			const renderDocument = () => {
+				documentContainer.clear();
+				if (startupHeader !== undefined) {
+					documentContainer.addChild(new Spacer(1));
+					documentContainer.addChild(startupHeader);
+					documentContainer.addChild(new Spacer(1));
+				}
+				documentContainer.addChild(view);
+			};
 			const restoreTranscript = () => {
 				transcriptContainer.clear();
-				transcriptContainer.addChild(view);
+				renderDocument();
+				transcriptContainer.addChild(documentContainer);
 				tui.setFocus(editor);
 				tui.requestRender();
 			};
@@ -1009,7 +1025,9 @@ async function runCli(): Promise<void> {
 			editor.onAction("app.model.cycleBackward", () => cycleModel("backward"));
 			editor.onAction("app.model.select", showModel);
 			editor.onAction("app.tools.expand", () => {
-				view.showStatus(`Tool output: ${view.toggleToolOutputExpansion() ? "expanded" : "collapsed"}`);
+				const expanded = view.toggleToolOutputExpansion();
+				startupHeader?.setExpanded(expanded);
+				view.showStatus(`Tool output: ${expanded ? "expanded" : "collapsed"}`);
 			});
 			editor.onAction("app.thinking.toggle", () => {
 				const hidden = !statuslineSettings.getHideThinkingBlock();
