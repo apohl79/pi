@@ -292,6 +292,7 @@ describe("remote v2 interactive command boundary", () => {
 		expect(parseRemoteV2Command("/plugins")).toEqual({ name: "plugins" });
 		expect(parseRemoteV2Command("/quit")).toEqual({ name: "quit" });
 		expect(parseRemoteV2Command("/settings")).toEqual({ name: "settings" });
+		expect(parseRemoteV2Command("/session")).toEqual({ name: "session" });
 		expect(parseRemoteV2Command("/scoped-models")).toEqual({ name: "scoped-models" });
 		expect(() => parseRemoteV2Command("/plugins demo")).toThrow("does not accept arguments");
 		expect(parseRemoteV2Command("/statusline /bin/statusline --json")).toEqual({
@@ -552,12 +553,15 @@ describe("remote v2 interactive command boundary", () => {
 		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
 		const showChangelog = vi.fn();
 		const showHotkeys = vi.fn();
-		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { showChangelog, showHotkeys });
+		const showSession = vi.fn();
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { showChangelog, showHotkeys, showSession });
 
 		expect(await adapter.execute("/changelog")).toEqual({ kind: "status", text: "changelog opened" });
 		expect(await adapter.execute("/hotkeys")).toEqual({ kind: "status", text: "keyboard shortcuts opened" });
+		expect(await adapter.execute("/session")).toEqual({ kind: "status", text: "session information opened" });
 		expect(showChangelog).toHaveBeenCalledOnce();
 		expect(showHotkeys).toHaveBeenCalledOnce();
+		expect(showSession).toHaveBeenCalledOnce();
 		expect(commands).not.toContain("turn/start");
 
 		await adapter.dispose();

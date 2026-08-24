@@ -44,6 +44,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/resume",
 	"/rollback",
 	"/settings",
+	"/session",
 	"/scoped-models",
 	"/statusline",
 	"/steer",
@@ -114,6 +115,7 @@ export type RemoteV2Command =
 	| { readonly name: "resume" }
 	| { readonly name: "rollback"; readonly turns: number }
 	| { readonly name: "settings" }
+	| { readonly name: "session" }
 	| { readonly name: "scoped-models" }
 	| { readonly name: "statusline"; readonly command?: string }
 	| { readonly name: "steer"; readonly text: string }
@@ -303,6 +305,7 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		name === "/quit" ||
 		name === "/release-control" ||
 		name === "/resume" ||
+		name === "/session" ||
 		name === "/scoped-models" ||
 		name === "/take-control" ||
 		name === "/tree"
@@ -492,6 +495,7 @@ export class RemoteV2InteractiveAttachment {
 	readonly #executeShell: ((command: string, excludeFromContext: boolean) => Promise<void>) | undefined;
 	readonly #showChangelog: (() => void) | undefined;
 	readonly #showHotkeys: (() => void) | undefined;
+	readonly #showSession: (() => void) | undefined;
 	readonly #cwd: string | undefined;
 
 	constructor(
@@ -512,6 +516,7 @@ export class RemoteV2InteractiveAttachment {
 			readonly executeShell?: (command: string, excludeFromContext: boolean) => Promise<void>;
 			readonly showChangelog?: () => void;
 			readonly showHotkeys?: () => void;
+			readonly showSession?: () => void;
 			readonly cwd?: string;
 		} = {},
 	) {
@@ -531,6 +536,7 @@ export class RemoteV2InteractiveAttachment {
 		this.#executeShell = options.executeShell;
 		this.#showChangelog = options.showChangelog;
 		this.#showHotkeys = options.showHotkeys;
+		this.#showSession = options.showSession;
 		this.#cwd = options.cwd;
 		if (editor !== undefined) {
 			editor.setAutocompleteProvider(new RemoteV2AutocompleteProvider(attachment.session));
@@ -743,6 +749,10 @@ export class RemoteV2InteractiveAttachment {
 				if (this.#openSettings === undefined) throw new Error("Remote settings are unavailable");
 				this.#openSettings();
 				return { kind: "status", text: "settings opened" };
+			case "session":
+				if (this.#showSession === undefined) throw new Error("Remote session information is unavailable");
+				this.#showSession();
+				return { kind: "status", text: "session information opened" };
 			case "scoped-models":
 				if (this.#openScopedModels === undefined) throw new Error("Remote model scope is unavailable");
 				this.#openScopedModels();

@@ -26,7 +26,11 @@ import { ModelRuntime } from "./core/model-runtime.ts";
 import type { SessionEntry, SessionInfo, SessionTreeNode } from "./core/session-manager.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { main } from "./main.ts";
-import { createChangelogCommandOutput, createHotkeysCommandOutput } from "./modes/interactive/command-output.ts";
+import {
+	createChangelogCommandOutput,
+	createHotkeysCommandOutput,
+	createSessionCommandOutput,
+} from "./modes/interactive/command-output.ts";
 import { BashExecutionComponent } from "./modes/interactive/components/bash-execution.ts";
 import { CustomEditor } from "./modes/interactive/components/custom-editor.ts";
 import { ExtensionEditorComponent } from "./modes/interactive/components/extension-editor.ts";
@@ -806,6 +810,8 @@ async function runCli(): Promise<void> {
 						view.addTransientTranscriptComponent(createChangelogCommandOutput(getMarkdownTheme())),
 					showHotkeys: () =>
 						view.addTransientTranscriptComponent(createHotkeysCommandOutput(keybindings, getMarkdownTheme())),
+					showSession: () =>
+						view.addTransientTranscriptComponent(createSessionCommandOutput(session.snapshot, getMarkdownTheme())),
 					openSettings: showSettings,
 					openModel: showModel,
 					openResume: showResume,

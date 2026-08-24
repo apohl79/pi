@@ -1,4 +1,5 @@
 import type { Keybinding, MarkdownTheme } from "@earendil-works/pi-tui";
+import type { SessionSnapshotV2 } from "@earendil-works/pi-protocol";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { getChangelogPath, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
@@ -55,6 +56,34 @@ export function createHotkeysCommandOutput(_keybindings: KeybindingsManager, mar
 | \`!\` / \`!!\` | Run bash command / exclude it from context |
 `;
 	return createCommandOutput("Keyboard Shortcuts", markdown.trim(), markdownTheme);
+}
+
+export function createSessionCommandOutput(snapshot: SessionSnapshotV2 | undefined, markdownTheme: MarkdownTheme): Container {
+	const messages = snapshot?.transcript ?? [];
+	const usage = snapshot?.usage;
+	const markdown = snapshot === undefined
+		? "No server session is attached."
+		: `**Session**
+
+| Field | Value |
+|-------|-------|
+| Name | ${snapshot.name ?? "(unnamed)"} |
+| ID | ${snapshot.id} |
+| Model | ${snapshot.model.provider}/${snapshot.model.id} |
+| Phase | ${snapshot.phase} |
+
+**Messages**
+
+| Total | User | Assistant | Tool |
+|-------|------|-----------|------|
+| ${messages.length} | ${messages.filter((message) => message.role === "user").length} | ${messages.filter((message) => message.role === "assistant").length} | ${messages.filter((message) => message.role === "tool").length} |
+
+**Usage**
+
+| Input | Output | Cache read | Cost |
+|-------|--------|------------|------|
+| ${(usage?.input ?? 0).toLocaleString()} | ${(usage?.output ?? 0).toLocaleString()} | ${(usage?.cacheRead ?? 0).toLocaleString()} | ${usage?.costUsd === undefined ? "unknown" : `$${usage.costUsd.toFixed(3)}`} |`;
+	return createCommandOutput("Session Info", markdown, markdownTheme);
 }
 
 function createCommandOutput(title: string, markdown: string, markdownTheme: MarkdownTheme): Container {
