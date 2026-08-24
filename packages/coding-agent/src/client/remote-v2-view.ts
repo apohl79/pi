@@ -1,10 +1,10 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai/compat";
-import { type Component, Container, Text, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
+import { type Component, Container, Spacer, Text, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import type { ReadonlyFooterDataProvider } from "../core/footer-data-provider.ts";
 import { FooterComponent } from "../modes/interactive/components/footer.ts";
 import { ToolExecutionComponent } from "../modes/interactive/components/tool-execution.ts";
 import { TranscriptRenderer } from "../modes/interactive/components/transcript-renderer.ts";
-import { getMarkdownTheme } from "../modes/interactive/theme/theme.ts";
+import { getMarkdownTheme, theme } from "../modes/interactive/theme/theme.ts";
 import type { StatuslineCommand, StatuslineRunner, StatuslineSnapshot } from "../server/statusline.ts";
 import type { RemoteV2Session, RemoteV2SessionState } from "./remote-v2-session.ts";
 
@@ -238,6 +238,7 @@ export class RemoteV2SessionView extends Container {
 	readonly #unsubscribe: () => void;
 	readonly #onUpdated?: () => void;
 	readonly #durationTimer?: ReturnType<typeof setInterval>;
+	#status: string | undefined;
 
 	constructor(session: RemoteV2Session, options: RemoteV2SessionViewOptions = {}) {
 		super();
@@ -289,6 +290,13 @@ export class RemoteV2SessionView extends Container {
 		this.#unsubscribe();
 	}
 
+	/** Shows transient client-side command feedback beside server-authoritative transcript entries. */
+	showStatus(message: string): void {
+		this.#status = message;
+		this.rebuild();
+		this.#onUpdated?.();
+	}
+
 	private rebuild(): void {
 		this.clear();
 		const snapshot = this.#state.snapshot;
@@ -303,6 +311,10 @@ export class RemoteV2SessionView extends Container {
 			if (characters + text.length > this.#options.maxTranscriptCharacters) break;
 			characters += text.length;
 			this.addTranscriptItem(item, renderedTools);
+		}
+		if (this.#status !== undefined) {
+			this.addChild(new Spacer(1));
+			this.addChild(new Text(theme.fg("dim", this.#status), 1, 0));
 		}
 	}
 

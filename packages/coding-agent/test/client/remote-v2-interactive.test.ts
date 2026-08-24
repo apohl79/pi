@@ -296,7 +296,9 @@ describe("remote v2 interactive command boundary", () => {
 			text: "queued message recalled",
 		});
 		editor.onSubmit?.(editor.getText());
-		await vi.waitFor(() => expect(submit).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ type: "image" })])));
+		await vi.waitFor(() =>
+			expect(submit).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ type: "image" })])),
+		);
 		expect(await adapter.execute("/release-control")).toEqual({ kind: "control", mode: "observer" });
 		await adapter.execute("/take-control");
 		expect(await adapter.execute("/thinking high")).toEqual({ kind: "operation", operationId: "operation-1" });
@@ -367,6 +369,7 @@ describe("remote v2 interactive command boundary", () => {
 		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
 		const editor = createEditor();
 		const adapter = new RemoteV2InteractiveAttachment(attached, editor);
+		const showStatus = vi.spyOn(adapter.view, "showStatus");
 
 		editor.handleInput("hello");
 		expect(stripAnsi(editor.render(80).join("\n"))).toContain("hello");
@@ -375,6 +378,9 @@ describe("remote v2 interactive command boundary", () => {
 		editor.setText("");
 		editor.handleInput("/");
 		await vi.waitFor(() => expect(stripAnsi(editor.render(80).join("\n"))).toContain("model"));
+		editor.setText("/plugins");
+		editor.onSubmit?.(editor.getText());
+		await vi.waitFor(() => expect(showStatus).toHaveBeenCalledWith("demo"));
 
 		await adapter.dispose();
 		client.dispose();

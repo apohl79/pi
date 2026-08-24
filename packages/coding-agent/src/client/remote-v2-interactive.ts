@@ -518,13 +518,19 @@ export class RemoteV2InteractiveAttachment {
 		this.#recalledText = undefined;
 		this.#editor?.setText("");
 		const action = input.startsWith("/")
-			? this.execute(input).then((result) =>
-					result.kind === "operation" ? `operation ${result.operationId}` : result.kind,
-				)
+			? this.execute(input)
 			: (recalledContent === undefined ? this.submit(input) : this.session.submit(recalledContent)).then(
 					(operationId) => `operation ${operationId}`,
 				);
-		void action.then(() => this.view.invalidate()).catch(() => this.view.invalidate());
+		void action
+			.then((result) => {
+				if (typeof result !== "string") this.view.showStatus(formatRemoteV2CommandResult(result));
+				this.view.invalidate();
+			})
+			.catch((error: unknown) => {
+				this.view.showStatus(error instanceof Error ? error.message : String(error));
+				this.view.invalidate();
+			});
 	}
 
 	dispose(): Promise<void> {
@@ -559,6 +565,13 @@ function displayPromptContent(content: RemoteV2PromptContent): string {
 
 function operation(operationId: string): RemoteV2CommandResult {
 	return { kind: "operation", operationId };
+}
+
+function formatRemoteV2CommandResult(result: RemoteV2CommandResult): string {
+	if (result.kind === "status") return result.text;
+	if (result.kind === "control") return `Control mode: ${result.mode}`;
+	if (result.kind === "operation") return `Operation accepted: ${result.operationId}`;
+	return "Detached from server session";
 }
 
 function isThinkingLevel(value: string): value is ThinkingLevel {

@@ -251,6 +251,20 @@ describe("formatRemoteV2Session", () => {
 		}
 	});
 
+	test("keeps transient command feedback in the shared transcript view", () => {
+		const source = {
+			state: { lifecycle: { status: "ready" as const }, snapshot },
+			subscribe: (_listener: (state: RemoteV2SessionState) => void) => () => {},
+		};
+		const view = new RemoteV2SessionView(source as never);
+		try {
+			view.showStatus("plan updated");
+			expect(stripAnsi(view.render(120).join("\n"))).toContain("plan updated");
+		} finally {
+			view.dispose();
+		}
+	});
+
 	test("renders the server snapshot through the direct-mode footer renderer", () => {
 		const source = {
 			state: {
