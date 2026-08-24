@@ -527,6 +527,20 @@ describe("RemoteV2Session", () => {
 		await session.dispose();
 	});
 
+	test("forks through the server-owned session boundary and moves the live attachment", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		pair.overrideNextResult("session/fork", { session: { ...snapshot(), id: "session-2" } });
+
+		expect(await session.forkAndAttach({ scope: "tree" })).toBe("session-2");
+		expect(session.id).toBe("session-2");
+		expect(pair.requests.map((request) => request.command)).toContain("session/detach");
+
+		await session.dispose();
+	});
+
 	test("deletes through the server-owned session boundary", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });

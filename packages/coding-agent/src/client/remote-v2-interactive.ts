@@ -16,9 +16,11 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/agent-interrupt",
 	"/agent-message",
 	"/compact",
+	"/clone",
 	"/dequeue",
 	"/detach",
 	"/follow-up",
+	"/fork",
 	"/goal",
 	"/goal-pause",
 	"/goal-resume",
@@ -48,9 +50,11 @@ export type RemoteV2Command =
 	| { readonly name: "interrupt-child"; readonly agentId: string }
 	| { readonly name: "agent-message"; readonly agentId: string; readonly text: string }
 	| { readonly name: "compact"; readonly instructions?: string }
+	| { readonly name: "clone" }
 	| { readonly name: "dequeue"; readonly entryId: string }
 	| { readonly name: "detach" }
 	| { readonly name: "follow-up"; readonly text: string }
+	| { readonly name: "fork" }
 	| { readonly name: "goal"; readonly objective: string }
 	| { readonly name: "goal-pause" }
 	| { readonly name: "goal-resume" }
@@ -205,7 +209,9 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 	const [name, ...arguments_] = parts;
 	if (
 		name === "/abort" ||
+		name === "/clone" ||
 		name === "/detach" ||
+		name === "/fork" ||
 		name === "/release-control" ||
 		name === "/resume" ||
 		name === "/take-control"
@@ -368,6 +374,7 @@ export class RemoteV2InteractiveAttachment {
 	readonly #openSettings: (() => void) | undefined;
 	readonly #openModel: (() => void) | undefined;
 	readonly #openResume: (() => void) | undefined;
+	readonly #openFork: (() => void) | undefined;
 	readonly #cwd: string | undefined;
 
 	constructor(
@@ -377,6 +384,7 @@ export class RemoteV2InteractiveAttachment {
 			readonly openSettings?: () => void;
 			readonly openModel?: () => void;
 			readonly openResume?: () => void;
+			readonly openFork?: () => void;
 			readonly cwd?: string;
 		} = {},
 	) {
@@ -385,6 +393,7 @@ export class RemoteV2InteractiveAttachment {
 		this.#openSettings = options.openSettings;
 		this.#openModel = options.openModel;
 		this.#openResume = options.openResume;
+		this.#openFork = options.openFork;
 		this.#cwd = options.cwd;
 		if (editor !== undefined) {
 			editor.setAutocompleteProvider(new RemoteV2AutocompleteProvider(attachment.session));
@@ -436,6 +445,11 @@ export class RemoteV2InteractiveAttachment {
 				return { kind: "status", text: "agent message sent" };
 			case "compact":
 				return operation(await this.session.compact(command.instructions));
+			case "clone":
+				return {
+					kind: "status",
+					text: `Cloned to new session: ${await this.session.forkAndAttach({ scope: "tree" })}`,
+				};
 			case "dequeue":
 				this.#recalledContent = await this.session.cancelQueued(command.entryId);
 				this.#recalledText = this.#recalledContent === undefined ? "" : displayPromptContent(this.#recalledContent);
@@ -446,6 +460,10 @@ export class RemoteV2InteractiveAttachment {
 				return { kind: "detached" };
 			case "follow-up":
 				return operation(await this.session.followUp(command.text));
+			case "fork":
+				if (this.#openFork === undefined) throw new Error("Remote session forking is unavailable");
+				this.#openFork();
+				return { kind: "status", text: "fork selector opened" };
 			case "goal":
 				return operation(await this.session.createGoal(command.objective));
 			case "goal-pause":

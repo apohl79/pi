@@ -123,31 +123,33 @@ function clientWithRequests(withQueue = false): { client: PiClientV2; commands: 
 								? { session: snapshot(withQueue, message.request.sessionId ?? "session-1") }
 								: message.request.command === "session/create"
 									? { session: snapshot(false, "session-2") }
-									: message.request.command === "model/list"
-										? {
-												models: [
-													{
-														provider: "openai",
-														id: "gpt-5",
-														name: "GPT-5",
-														api: "openai-responses",
-														reasoning: true,
-														input: ["text"],
-														contextWindow: 128_000,
-														maxTokens: 16_000,
-														cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-														supportedThinkingLevels: ["off"],
-														authenticated: true,
-													},
-												],
-											}
-										: message.request.command === "plan/update"
-											? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
-											: message.request.command === "plugin/list"
-												? { plugins: [{ id: "demo", enabled: true }] }
-												: message.request.command === "process/list"
-													? { processes: [] }
-													: { command: message.request.command }) as JsonValue,
+									: message.request.command === "session/fork"
+										? { session: snapshot(false, "session-2") }
+										: message.request.command === "model/list"
+											? {
+													models: [
+														{
+															provider: "openai",
+															id: "gpt-5",
+															name: "GPT-5",
+															api: "openai-responses",
+															reasoning: true,
+															input: ["text"],
+															contextWindow: 128_000,
+															maxTokens: 16_000,
+															cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+															supportedThinkingLevels: ["off"],
+															authenticated: true,
+														},
+													],
+												}
+											: message.request.command === "plan/update"
+												? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
+												: message.request.command === "plugin/list"
+													? { plugins: [{ id: "demo", enabled: true }] }
+													: message.request.command === "process/list"
+														? { processes: [] }
+														: { command: message.request.command }) as JsonValue,
 					};
 			handlers?.onData(encodeServerMessageV2(response));
 		},
@@ -196,6 +198,8 @@ describe("remote v2 interactive command boundary", () => {
 
 	test("parses discoverable commands without changing v1 slash commands", () => {
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/detach");
+		expect(parseRemoteV2Command("/clone")).toEqual({ name: "clone" });
+		expect(parseRemoteV2Command("/fork")).toEqual({ name: "fork" });
 		expect(parseRemoteV2Command("/follow-up  continue this")).toEqual({ name: "follow-up", text: "continue this" });
 		expect(parseRemoteV2Command("/agent-follow-up agent-1 continue work")).toEqual({
 			name: "agent-follow-up",
@@ -448,6 +452,34 @@ describe("remote v2 interactive command boundary", () => {
 
 		expect(await adapter.execute("/resume")).toEqual({ kind: "status", text: "session selector opened" });
 		expect(openResume).toHaveBeenCalledOnce();
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("opens the injected fork selector", async () => {
+		const { client } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const openFork = vi.fn();
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { openFork });
+
+		expect(await adapter.execute("/fork")).toEqual({ kind: "status", text: "fork selector opened" });
+		expect(openFork).toHaveBeenCalledOnce();
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("clones through the server-owned fork boundary", async () => {
+		const { client, commands } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const adapter = new RemoteV2InteractiveAttachment(attached);
+
+		expect(await adapter.execute("/clone")).toEqual({ kind: "status", text: "Cloned to new session: session-2" });
+		expect(adapter.session.id).toBe("session-2");
+		expect(commands).toContain("session/fork");
 
 		await adapter.dispose();
 		client.dispose();

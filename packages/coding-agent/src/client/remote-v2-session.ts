@@ -249,6 +249,14 @@ export class RemoteV2Session {
 		});
 	}
 
+	/** Forks the current server session and moves this live attachment to the fork. */
+	async forkAndAttach(options: ForkSessionV2Options = {}): Promise<string> {
+		this.#assertControl();
+		const forked = await this.#client.forkSession(this.#requireHandle().sessionId, options);
+		await this.attach(forked.id);
+		return forked.id;
+	}
+
 	/** Creates a server-owned session and moves this live attachment to it. */
 	async createAndAttach(options: CreateSessionV2Options = {}): Promise<string> {
 		this.#assertNotDisposed();

@@ -29,6 +29,7 @@ import { formatInteractiveTerminalTitle } from "./modes/interactive/components/i
 import { ModelSelectorComponent } from "./modes/interactive/components/model-selector.ts";
 import { SessionSelectorComponent } from "./modes/interactive/components/session-selector.ts";
 import { SettingsSelectorComponent } from "./modes/interactive/components/settings-selector.ts";
+import { UserMessageSelectorComponent } from "./modes/interactive/components/user-message-selector.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
 import { getAvailableThemes, getEditorTheme, initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "./server/daemon-runtime.ts";
@@ -428,6 +429,39 @@ async function runCli(): Promise<void> {
 				tui.setFocus(selector);
 				tui.requestRender();
 			};
+			const showFork = () => {
+				const messages = (session.snapshot?.transcript ?? [])
+					.filter((item) => item.role === "user")
+					.map((item) => ({
+						id: item.id,
+						text: item.content
+							.filter((content) => content.type === "text")
+							.map((content) => content.text)
+							.join("\n"),
+					}));
+				const done = () => restoreTranscript();
+				const selector = new UserMessageSelectorComponent(
+					messages,
+					(entryId) => {
+						void session
+							.forkAndAttach({ entryId, position: "before" })
+							.then((sessionId) => {
+								view.showStatus(`Forked to new session: ${sessionId}`);
+								done();
+							})
+							.catch((error: unknown) => {
+								view.showStatus(error instanceof Error ? error.message : String(error));
+								done();
+							});
+					},
+					done,
+					messages.at(-1)?.id,
+				);
+				transcriptContainer.clear();
+				transcriptContainer.addChild(selector);
+				tui.setFocus(selector.getMessageList());
+				tui.requestRender();
+			};
 			attachment = new RemoteV2InteractiveAttachment(
 				{
 					session,
@@ -439,7 +473,13 @@ async function runCli(): Promise<void> {
 					dispose: async () => view.dispose(),
 				},
 				editor,
-				{ openSettings: showSettings, openModel: showModel, openResume: showResume, cwd: process.cwd() },
+				{
+					openSettings: showSettings,
+					openModel: showModel,
+					openResume: showResume,
+					openFork: showFork,
+					cwd: process.cwd(),
+				},
 			);
 			statusline = new RemoteV2StatuslineComponent(
 				session,
