@@ -137,57 +137,63 @@ function clientWithRequests(withQueue = false, assistantText?: string): { client
 								? { session: snapshot(withQueue, message.request.sessionId ?? "session-1", assistantText) }
 								: message.request.command === "session/create"
 									? { session: snapshot(false, "session-2") }
-								: message.request.command === "session/fork"
-									? { session: snapshot(false, "session-2") }
-									: message.request.command === "session/export"
-										? { jsonl: '{"type":"session"}\n' }
-									: message.request.command === "model/list"
-											? {
-													models: [
-														{
-															provider: "openai",
-															id: "gpt-5",
-															name: "GPT-5",
-															api: "openai-responses",
-															reasoning: true,
-															input: ["text"],
-															contextWindow: 128_000,
-															maxTokens: 16_000,
-															cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-															supportedThinkingLevels: ["off"],
-															authenticated: true,
-														},
-														{
-															provider: "faux",
-															id: "model",
-															name: "Faux model",
-															api: "faux",
-															reasoning: false,
-															input: ["text"],
-															contextWindow: 16_000,
-															maxTokens: 4_000,
-															cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-															supportedThinkingLevels: ["off"],
-															authenticated: true,
-														},
-													],
-												}
-											: message.request.command === "resource/list"
+									: message.request.command === "session/fork"
+										? { session: snapshot(false, "session-2") }
+										: message.request.command === "session/export"
+											? { jsonl: '{"type":"session"}\n' }
+											: message.request.command === "model/list"
 												? {
-														resources: [
-															{ kind: "prompt", name: "commit", description: "Create a commit" },
-															{ kind: "skill", name: "skill:review", description: "Review code" },
+														models: [
+															{
+																provider: "openai",
+																id: "gpt-5",
+																name: "GPT-5",
+																api: "openai-responses",
+																reasoning: true,
+																input: ["text"],
+																contextWindow: 128_000,
+																maxTokens: 16_000,
+																cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+																supportedThinkingLevels: ["off"],
+																authenticated: true,
+															},
+															{
+																provider: "faux",
+																id: "model",
+																name: "Faux model",
+																api: "faux",
+																reasoning: false,
+																input: ["text"],
+																contextWindow: 16_000,
+																maxTokens: 4_000,
+																cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+																supportedThinkingLevels: ["off"],
+																authenticated: true,
+															},
 														],
 													}
-												: message.request.command === "plan/update"
-													? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
-													: message.request.command === "plugin/list"
-														? { plugins: [{ id: "demo", enabled: true }] }
-														: message.request.command === "process/list"
-															? { processes: [] }
-															: message.request.command === "blob/put"
-																? { blob: { digest: "b".repeat(64), mimeType: "image/png", size: 3 } }
-																: { command: message.request.command }) as JsonValue,
+												: message.request.command === "resource/list"
+													? {
+															resources: [
+																{ kind: "prompt", name: "commit", description: "Create a commit" },
+																{ kind: "skill", name: "skill:review", description: "Review code" },
+															],
+														}
+													: message.request.command === "plan/update"
+														? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
+														: message.request.command === "plugin/list"
+															? { plugins: [{ id: "demo", enabled: true }] }
+															: message.request.command === "process/list"
+																? { processes: [] }
+																: message.request.command === "blob/put"
+																	? {
+																			blob: {
+																				digest: "b".repeat(64),
+																				mimeType: "image/png",
+																				size: 3,
+																			},
+																		}
+																	: { command: message.request.command }) as JsonValue,
 					};
 			handlers?.onData(encodeServerMessageV2(response));
 		},
@@ -236,10 +242,19 @@ describe("remote v2 interactive command boundary", () => {
 
 	test("parses discoverable commands without changing v1 slash commands", () => {
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/detach");
+		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/export");
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/trust");
 		expect(parseRemoteV2Command("/clone")).toEqual({ name: "clone" });
 		expect(parseRemoteV2Command("/copy")).toEqual({ name: "copy" });
 		expect(parseRemoteV2Command("/debug")).toEqual({ name: "debug" });
+		expect(parseRemoteV2Command("/export transcript.jsonl")).toEqual({
+			name: "export",
+			outputPath: "transcript.jsonl",
+		});
+		expect(parseRemoteV2Command('/export "session transcript.html"')).toEqual({
+			name: "export",
+			outputPath: "session transcript.html",
+		});
 		expect(parseRemoteV2Command("/changelog")).toEqual({ name: "changelog" });
 		expect(parseRemoteV2Command("/fork")).toEqual({ name: "fork" });
 		expect(parseRemoteV2Command("/hotkeys")).toEqual({ name: "hotkeys" });
@@ -562,6 +577,24 @@ describe("remote v2 interactive command boundary", () => {
 
 		expect(await adapter.execute("/trust")).toEqual({ kind: "status", text: "project trust selector opened" });
 		expect(openTrust).toHaveBeenCalledOnce();
+		expect(commands).not.toContain("turn/start");
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("exports through the injected client-local output boundary", async () => {
+		const { client, commands } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const exportSession = vi.fn(async (outputPath?: string) => outputPath ?? "pi-session.html");
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { exportSession });
+
+		expect(await adapter.execute("/export transcript.jsonl")).toEqual({
+			kind: "status",
+			text: "Session exported to: transcript.jsonl",
+		});
+		expect(exportSession).toHaveBeenCalledWith("transcript.jsonl");
 		expect(commands).not.toContain("turn/start");
 
 		await adapter.dispose();

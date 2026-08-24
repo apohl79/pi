@@ -25,6 +25,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/changelog",
 	"/dequeue",
 	"/detach",
+	"/export",
 	"/follow-up",
 	"/fork",
 	"/goal",
@@ -97,6 +98,7 @@ export type RemoteV2Command =
 	| { readonly name: "changelog" }
 	| { readonly name: "dequeue"; readonly entryId: string }
 	| { readonly name: "detach" }
+	| { readonly name: "export"; readonly outputPath?: string }
 	| { readonly name: "follow-up"; readonly text: string }
 	| { readonly name: "fork" }
 	| { readonly name: "goal"; readonly objective: string }
@@ -319,6 +321,10 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		if (arguments_.length > 0) throw new Error(`${name} does not accept arguments`);
 		return { name: name.slice(1) as RemoteV2Command["name"] } as RemoteV2Command;
 	}
+	if (name === "/export") {
+		const outputPath = getRemoteV2PathCommandArgument(input, "/export");
+		return outputPath === undefined ? { name: "export" } : { name: "export", outputPath };
+	}
 	if (name === "/follow-up") {
 		const text = arguments_.join(" ").trim();
 		if (!text) throw new Error("/follow-up requires text");
@@ -465,6 +471,19 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 	throw new Error(`Unknown remote session command: ${name || "<empty>"}`);
 }
 
+function getRemoteV2PathCommandArgument(text: string, command: "/export"): string | undefined {
+	if (text === command || !text.startsWith(`${command} `)) return undefined;
+	const argsString = text.slice(command.length + 1).trimStart();
+	if (!argsString) return undefined;
+	const firstChar = argsString[0];
+	if (firstChar === '"' || firstChar === "'") {
+		const closingQuoteIndex = argsString.indexOf(firstChar, 1);
+		return closingQuoteIndex < 0 ? undefined : argsString.slice(1, closingQuoteIndex);
+	}
+	const firstWhitespaceIndex = argsString.search(/\s/u);
+	return firstWhitespaceIndex < 0 ? argsString : argsString.slice(0, firstWhitespaceIndex);
+}
+
 export function getLastRemoteAssistantText(snapshot: SessionSnapshotV2 | undefined): string | undefined {
 	const message = snapshot?.transcript
 		.slice()
@@ -495,6 +514,7 @@ export class RemoteV2InteractiveAttachment {
 	readonly #openScopedModels: (() => void) | undefined;
 	readonly #openThinking: (() => void) | undefined;
 	readonly #openTrust: (() => void) | undefined;
+	readonly #exportSession: ((outputPath?: string) => Promise<string>) | undefined;
 	readonly #quit: (() => void) | undefined;
 	readonly #copyText: (text: string) => Promise<void>;
 	readonly #readClipboardImage: () => Promise<ClipboardImage | null>;
@@ -518,6 +538,7 @@ export class RemoteV2InteractiveAttachment {
 			readonly openScopedModels?: () => void;
 			readonly openThinking?: () => void;
 			readonly openTrust?: () => void;
+			readonly exportSession?: (outputPath?: string) => Promise<string>;
 			readonly quit?: () => void;
 			readonly copyText?: (text: string) => Promise<void>;
 			readonly readClipboardImage?: () => Promise<ClipboardImage | null>;
@@ -540,6 +561,7 @@ export class RemoteV2InteractiveAttachment {
 		this.#openScopedModels = options.openScopedModels;
 		this.#openThinking = options.openThinking;
 		this.#openTrust = options.openTrust;
+		this.#exportSession = options.exportSession;
 		this.#quit = options.quit;
 		this.#copyText = options.copyText ?? copyToClipboard;
 		this.#readClipboardImage = options.readClipboardImage ?? readClipboardImage;
@@ -680,6 +702,9 @@ export class RemoteV2InteractiveAttachment {
 			case "detach":
 				await this.dispose();
 				return { kind: "detached" };
+			case "export":
+				if (this.#exportSession === undefined) throw new Error("Remote session export is unavailable");
+				return { kind: "status", text: `Session exported to: ${await this.#exportSession(command.outputPath)}` };
 			case "follow-up":
 				return operation(await this.session.followUp(command.text));
 			case "fork":

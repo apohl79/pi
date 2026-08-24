@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 /**
  * CLI entry point for the refactored coding agent.
  * Uses main.ts with AgentSession and new mode modules.
@@ -19,6 +19,7 @@ import { RemoteV2InteractiveAttachment } from "./client/remote-v2-interactive.ts
 import { RemoteV2FooterComponent, RemoteV2SessionView, RemoteV2StatuslineComponent } from "./client/remote-v2-view.ts";
 import { APP_NAME, getAgentDir, getDebugLogPath } from "./config.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./core/defaults.ts";
+import { exportFromFile } from "./core/export-html/index.ts";
 import { FooterDataProvider } from "./core/footer-data-provider.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { KeybindingsManager } from "./core/keybindings.ts";
@@ -630,6 +631,24 @@ async function runCli(): Promise<void> {
 				tui.setFocus(selector);
 				tui.requestRender();
 			};
+			const exportSession = async (outputPath?: string): Promise<string> => {
+				const jsonl = await session.exportJsonl();
+				if (outputPath?.endsWith(".jsonl")) {
+					await writeFile(outputPath, jsonl, "utf8");
+					return outputPath;
+				}
+				const temporaryDirectory = await mkdtemp(join(agentDir, "export-"));
+				const temporaryJsonlPath = join(temporaryDirectory, `${session.id}.jsonl`);
+				try {
+					await writeFile(temporaryJsonlPath, jsonl, "utf8");
+					return await exportFromFile(temporaryJsonlPath, {
+						...(outputPath === undefined ? {} : { outputPath }),
+						themeName: statuslineSettings.getTheme(),
+					});
+				} finally {
+					await rm(temporaryDirectory, { recursive: true, force: true });
+				}
+			};
 			const showResume = () => {
 				const toSessionInfo = (entry: Awaited<ReturnType<typeof session.listSessions>>[number]): SessionInfo => ({
 					path: entry.id,
@@ -879,6 +898,7 @@ async function runCli(): Promise<void> {
 					openScopedModels: showScopedModels,
 					openThinking: showThinking,
 					openTrust: showTrust,
+					exportSession,
 					quit: () => finishInteractive(),
 					executeShell: async (command, excludeFromContext) => {
 						const component = new BashExecutionComponent(command, tui, excludeFromContext);
