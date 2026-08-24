@@ -1,4 +1,6 @@
 import { open, readFile } from "node:fs/promises";
+import { type EventNameV2, EventNameV2Schema } from "@earendil-works/pi-protocol";
+import { Check } from "typebox/value";
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { readonly [key: string]: JsonValue };
 
@@ -17,7 +19,7 @@ export type EventEnvelopeV2 = Readonly<{
 	seq: number;
 	revision: number;
 	operationId?: string;
-	event: string;
+	event: EventNameV2;
 	payload: JsonValue;
 }>;
 
@@ -68,8 +70,7 @@ export function validateV2EventEnvelope(value: unknown): asserts value is EventE
 		throw new Error("Invalid operation store event identity");
 	if (!isNonNegativeInteger(event.seq) || !isNonNegativeInteger(event.revision))
 		throw new Error("Invalid operation store event cursor");
-	if (typeof event.event !== "string" || event.event.length === 0)
-		throw new Error("Invalid operation store event name");
+	if (!Check(EventNameV2Schema, event.event)) throw new Error("Invalid operation store event name");
 	if (event.operationId !== undefined && (typeof event.operationId !== "string" || event.operationId.length === 0))
 		throw new Error("Invalid operation store event operation id");
 }

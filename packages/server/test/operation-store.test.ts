@@ -90,4 +90,27 @@ describe("JsonlV2OperationStore", () => {
 		);
 		await expect(new JsonlV2OperationStore(path).load()).rejects.toThrow("Invalid operation store event cursor");
 	});
+
+	test("rejects persisted events outside the protocol event contract", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pis-operation-store-event-name-"));
+		directories.push(directory);
+		const path = join(directory, "operations.jsonl");
+		await writeFile(
+			path,
+			`${JSON.stringify({
+				kind: "event",
+				value: {
+					type: "event",
+					sessionId: "session-1",
+					seq: 1,
+					revision: 1,
+					event: "unknown_event",
+					payload: {},
+				},
+			})}\n`,
+			"utf8",
+		);
+
+		await expect(new JsonlV2OperationStore(path).load()).rejects.toThrow("Invalid operation store event name");
+	});
 });

@@ -536,6 +536,7 @@ export class InteractiveMode {
 		handler: (data: string) => { consume?: boolean; data?: string } | undefined;
 		unsubscribe: () => void;
 	}>();
+	private removeClearInputListener: (() => void) | undefined;
 
 	// Extension widgets (components rendered above/below the editor)
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
@@ -850,6 +851,12 @@ export class InteractiveMode {
 	}
 
 	private mountInteractiveTui(tui: TuiMainScreen | TuiAltScreen, components: readonly Component[]): void {
+		this.removeClearInputListener?.();
+		this.removeClearInputListener = tui.addInputListener((data) => {
+			if (!this.keybindings.matches(data, "app.clear")) return undefined;
+			this.handleCtrlC();
+			return { consume: true };
+		});
 		for (const component of components) tui.addChild(component);
 		if (TuiLayouts.isViewportTUI(tui)) {
 			if (!this.fullscreenLayoutRoot) throw new Error("Fullscreen layout is not initialized");
@@ -6607,6 +6614,8 @@ export class InteractiveMode {
 		this.clearStatusIndicator();
 		this.themeController.disableAutoSync();
 		this.clearExtensionTerminalInputListeners();
+		this.removeClearInputListener?.();
+		this.removeClearInputListener = undefined;
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
 		if (this.unsubscribe) {

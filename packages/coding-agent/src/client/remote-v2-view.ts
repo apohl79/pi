@@ -1,5 +1,13 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai/compat";
-import { type Component, Container, Spacer, Text, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	Container,
+	Spacer,
+	Text,
+	TruncatedText,
+	type TUI,
+	truncateToWidth,
+} from "@earendil-works/pi-tui";
 import type { ReadonlyFooterDataProvider } from "../core/footer-data-provider.ts";
 import { FooterComponent } from "../modes/interactive/components/footer.ts";
 import { ToolExecutionComponent } from "../modes/interactive/components/tool-execution.ts";
@@ -13,6 +21,7 @@ type RemoteTranscriptItem = NonNullable<RemoteV2SessionState["snapshot"]>["trans
 export interface RemoteV2SessionViewOptions {
 	readonly tui?: TUI;
 	readonly cwd?: string;
+	readonly pendingContainer?: Container;
 	readonly maxTranscriptItems?: number;
 	readonly maxTranscriptCharacters?: number;
 	readonly maxAgentItems?: number;
@@ -226,12 +235,20 @@ export class RemoteV2SessionView extends Container {
 	readonly #options: Required<
 		Omit<
 			RemoteV2SessionViewOptions,
-			"tui" | "cwd" | "onUpdated" | "getHideThinkingBlock" | "getOutputPad" | "getShowImages" | "getImageWidthCells"
+			| "tui"
+			| "cwd"
+			| "onUpdated"
+			| "getHideThinkingBlock"
+			| "getOutputPad"
+			| "getShowImages"
+			| "getImageWidthCells"
+			| "pendingContainer"
 		>
 	>;
 	readonly #transcriptRenderer: TranscriptRenderer;
 	readonly #tui?: TUI;
 	readonly #cwd?: string;
+	readonly #pendingContainer?: Container;
 	readonly #getHideThinkingBlock: () => boolean;
 	readonly #getShowImages: () => boolean;
 	readonly #getImageWidthCells: () => number;
@@ -256,6 +273,7 @@ export class RemoteV2SessionView extends Container {
 		this.#state = session.state;
 		this.#tui = options.tui;
 		this.#cwd = options.cwd;
+		this.#pendingContainer = options.pendingContainer;
 		this.#getHideThinkingBlock = options.getHideThinkingBlock ?? (() => false);
 		this.#getShowImages = options.getShowImages ?? (() => true);
 		this.#getImageWidthCells = options.getImageWidthCells ?? (() => 60);
@@ -315,6 +333,7 @@ export class RemoteV2SessionView extends Container {
 	private rebuild(): void {
 		this.clear();
 		const snapshot = this.#state.snapshot;
+		this.rebuildPending(snapshot);
 		if (!snapshot) {
 			this.addChild(new Text(`Session ${this.#state.lifecycle.status}`, 1, 0));
 			return;
@@ -331,6 +350,26 @@ export class RemoteV2SessionView extends Container {
 			this.addChild(new Spacer(1));
 			this.addChild(new Text(theme.fg("dim", this.#status), 1, 0));
 		}
+	}
+
+	private rebuildPending(snapshot: RemoteV2SessionState["snapshot"]): void {
+		if (this.#pendingContainer === undefined) return;
+		this.#pendingContainer.clear();
+		if (snapshot === undefined) return;
+		const queued = [
+			...snapshot.queues.steer.map((entry) => ({ label: "Steering", entry })),
+			...snapshot.queues.followUp.map((entry) => ({ label: "Follow-up", entry })),
+		];
+		if (queued.length === 0) return;
+		this.#pendingContainer.addChild(new Spacer(1));
+		for (const { label, entry } of queued) {
+			this.#pendingContainer.addChild(
+				new TruncatedText(theme.fg("dim", `${label}: ${queuedPromptText(entry.content)}`), 1, 0),
+			);
+		}
+		this.#pendingContainer.addChild(
+			new TruncatedText(theme.fg("dim", "↳ /dequeue <entry-id> to edit a queued message"), 1, 0),
+		);
 	}
 
 	private addTranscriptItem(item: RemoteTranscriptItem, renderedTools: Map<string, ToolExecutionComponent>): void {
@@ -394,6 +433,18 @@ export class RemoteV2SessionView extends Container {
 			}
 		}
 	}
+}
+
+function queuedPromptText(
+	content: NonNullable<RemoteV2SessionState["snapshot"]>["queues"]["steer"][number]["content"],
+): string {
+	return content
+		.map((part) => {
+			if (part.type === "text") return part.text;
+			if (part.type === "image" || part.type === "blob") return `[${part.type} ${part.mimeType}]`;
+			return `@${part.name}:${part.path}`;
+		})
+		.join("\n");
 }
 
 function toToolArguments(input: unknown): Record<string, unknown> {

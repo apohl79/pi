@@ -1,13 +1,7 @@
 import type { Readable } from "node:stream";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { PiClientV2 } from "@earendil-works/pi-client";
-import type {
-	ModelMetadata,
-	ModelRef,
-	SessionSnapshotV2,
-	TranscriptItem,
-	UserTranscriptItem,
-} from "@earendil-works/pi-protocol";
+import type { ModelMetadata, ModelRef, SessionSnapshotV2 } from "@earendil-works/pi-protocol";
 import { type RemoteV2PromptContent, RemoteV2Session } from "../../client/remote-v2-session.ts";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.ts";
 import type { RpcCommand } from "../../modes/rpc/rpc-types.ts";
@@ -282,7 +276,7 @@ function subscribeSession(
 	});
 }
 
-function transcriptMessage(item: TranscriptItem): AgentMessage | undefined {
+function transcriptMessage(item: SessionSnapshotV2["transcript"][number]): AgentMessage | undefined {
 	if (item.role === "user") return userMessage(item);
 	if (item.role !== "assistant") return undefined;
 	return {
@@ -304,7 +298,7 @@ function transcriptMessage(item: TranscriptItem): AgentMessage | undefined {
 	};
 }
 
-function userMessage(item: UserTranscriptItem): AgentMessage {
+function userMessage(item: Extract<SessionSnapshotV2["transcript"][number], { role: "user" }>): AgentMessage {
 	return {
 		role: "user",
 		content: item.content.flatMap((part) => (part.type === "text" ? [{ type: "text", text: part.text }] : [])),

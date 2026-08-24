@@ -85,6 +85,7 @@ describe("experimental CLI command composition", () => {
 			runPi: vi.fn(() => undefined),
 			runServer: vi.fn(() => undefined),
 			runClient: vi.fn(() => undefined),
+			runDiagnostics: vi.fn(() => undefined),
 			runAttach: vi.fn(() => undefined),
 			runSessions: vi.fn(() => undefined),
 		};

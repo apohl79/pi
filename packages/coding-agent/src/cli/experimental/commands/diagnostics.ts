@@ -1,6 +1,6 @@
 import type { AuthInput } from "../auth.ts";
-import { Command, type CommandOption } from "../command.ts";
-import { authTokenFileOption, authTokenOption, parseAuth, stringOption, transportOption } from "../command-options.ts";
+import { Command, type CommandOption, stringOption } from "../command.ts";
+import { authTokenFileOption, authTokenOption, parseAuth, transportOption } from "../command-options.ts";
 import type { TransportAddress } from "../transport-address.ts";
 
 export type DiagnosticsAction = "status" | "tail" | "timeline" | "export" | "verify" | "doctor";

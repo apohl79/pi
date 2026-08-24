@@ -156,6 +156,19 @@ function clientWithRequests(withQueue = false, assistantText?: string): { client
 															supportedThinkingLevels: ["off"],
 															authenticated: true,
 														},
+														{
+															provider: "faux",
+															id: "model",
+															name: "Faux model",
+															api: "faux",
+															reasoning: false,
+															input: ["text"],
+															contextWindow: 16_000,
+															maxTokens: 4_000,
+															cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+															supportedThinkingLevels: ["off"],
+															authenticated: true,
+														},
 													],
 												}
 											: message.request.command === "plan/update"
@@ -435,6 +448,21 @@ describe("remote v2 interactive command boundary", () => {
 		client.dispose();
 	});
 
+	test("completes thinking levels from the selected server model", async () => {
+		const { client, commands } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const provider = new RemoteV2AutocompleteProvider(attached.session);
+		const suggestions = await provider.getSuggestions(["/thinking o"], 0, 11, {
+			signal: new AbortController().signal,
+		});
+
+		expect(suggestions?.items.map((item) => item.value)).toEqual(["off"]);
+		expect(commands).toContain("model/list");
+		await attached.dispose();
+		client.dispose();
+	});
+
 	test("opens the injected settings selector without a server command", async () => {
 		const { client } = clientWithRequests();
 		await client.connect();
@@ -574,7 +602,19 @@ describe("remote v2 interactive command boundary", () => {
 		expect(await provider.getSuggestions(["/mo"], 0, 3, { signal: new AbortController().signal })).toEqual(
 			expect.objectContaining({
 				prefix: "/mo",
-				items: expect.arrayContaining([expect.objectContaining({ value: "model" })]),
+				items: expect.arrayContaining([
+					expect.objectContaining({ value: "model", description: "Select model (opens selector UI)" }),
+				]),
+			}),
+		);
+		expect(provider.commandSuggestions("/detach")).toEqual(
+			expect.objectContaining({
+				items: expect.arrayContaining([
+					expect.objectContaining({
+						value: "detach",
+						description: "Detach this TUI and leave the server session running",
+					}),
+				]),
 			}),
 		);
 		expect(provider.applyCompletion(["/mo"], 0, 3, { value: "model", label: "model" }, "/mo")).toEqual({

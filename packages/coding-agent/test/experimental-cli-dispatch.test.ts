@@ -7,6 +7,7 @@ function context(): ExperimentalCliContext {
 		runPi: vi.fn(),
 		runServer: vi.fn(),
 		runClient: vi.fn(),
+		runDiagnostics: vi.fn(),
 		runAttach: vi.fn(),
 		runSessions: vi.fn(),
 	};

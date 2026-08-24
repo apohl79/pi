@@ -6,6 +6,7 @@ import {
 	type Editor,
 	fuzzyFilter,
 } from "@earendil-works/pi-tui";
+import { BUILTIN_SLASH_COMMANDS } from "../core/slash-commands.ts";
 import { copyToClipboard } from "../utils/clipboard.ts";
 import type { RemoteV2SessionAttachment } from "./remote-v2-selector.ts";
 import type { RemoteV2FileCompletion, RemoteV2PromptContent } from "./remote-v2-session.ts";
@@ -47,6 +48,35 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/thinking",
 	"/tree",
 ] as const;
+
+const REMOTE_V2_COMMAND_DESCRIPTIONS: Readonly<Partial<Record<(typeof REMOTE_V2_SLASH_COMMANDS)[number], string>>> = {
+	"/abort": "Abort the active server operation",
+	"/agent-follow-up": "Send a follow-up to a child agent",
+	"/agent-interrupt": "Interrupt a child agent",
+	"/agent-message": "Send a message to a child agent",
+	"/dequeue": "Recall a queued message into the editor",
+	"/detach": "Detach this TUI and leave the server session running",
+	"/follow-up": "Queue a follow-up after the active operation",
+	"/goal": "Create a durable session goal",
+	"/goal-pause": "Pause the active durable goal",
+	"/goal-resume": "Resume the paused durable goal",
+	"/input": "Answer a server input request",
+	"/input-cancel": "Cancel a server input request",
+	"/interrupt-child": "Interrupt a child agent",
+	"/name-auto": "Enable or disable automatic session names",
+	"/plan": "Replace the server session plan",
+	"/plan-clear": "Clear the server session plan",
+	"/plugins": "List server session plugins",
+	"/release-control": "Release control of this server session",
+	"/rollback": "Rollback recent server conversation turns",
+	"/steer": "Steer the active server operation",
+	"/take-control": "Acquire control of this server session",
+};
+
+function remoteV2CommandDescription(command: (typeof REMOTE_V2_SLASH_COMMANDS)[number]): string {
+	const builtin = BUILTIN_SLASH_COMMANDS.find((candidate) => `/${candidate.name}` === command);
+	return builtin?.description ?? REMOTE_V2_COMMAND_DESCRIPTIONS[command] ?? "Server session command";
+}
 
 export type RemoteV2Command =
 	| { readonly name: "abort" }
@@ -114,6 +144,8 @@ export class RemoteV2AutocompleteProvider implements AutocompleteProvider {
 		const input = (lines[cursorLine] ?? "").slice(0, cursorCol);
 		const model = await this.modelSuggestions(input, options.signal);
 		if (model !== null) return model;
+		const thinking = await this.thinkingSuggestions(input, options.signal);
+		if (thinking !== null) return thinking;
 		const command = this.commandSuggestions(input);
 		if (command !== null) return command;
 
@@ -130,6 +162,26 @@ export class RemoteV2AutocompleteProvider implements AutocompleteProvider {
 			kind: completion.kind,
 			reference: completion.reference,
 		}));
+		return items.length === 0 ? null : { items, prefix };
+	}
+
+	private async thinkingSuggestions(input: string, signal: AbortSignal): Promise<AutocompleteSuggestions | null> {
+		const match = /^\/thinking\s+([^\s]*)$/u.exec(input);
+		if (!match) return null;
+		const selectedModel = this.#session.snapshot?.model;
+		if (selectedModel === undefined) return null;
+		const models = await this.#session.listModels();
+		if (signal.aborted) return null;
+		const model = models.find(
+			(candidate) => candidate.provider === selectedModel.provider && candidate.id === selectedModel.id,
+		);
+		if (model === undefined) return null;
+		const prefix = match[1] ?? "";
+		const items = fuzzyFilter(
+			model.supportedThinkingLevels.map((level) => ({ value: level, label: level })),
+			prefix,
+			(item) => item.value,
+		);
 		return items.length === 0 ? null : { items, prefix };
 	}
 
@@ -183,9 +235,13 @@ export class RemoteV2AutocompleteProvider implements AutocompleteProvider {
 		if (!input.startsWith("/") || /\s/u.test(input)) return null;
 		const prefix = input.slice(1);
 		const items = fuzzyFilter(
-			REMOTE_V2_SLASH_COMMANDS.map((command) => ({ value: command.slice(1), label: command.slice(1) })),
+			REMOTE_V2_SLASH_COMMANDS.map((command) => ({
+				value: command.slice(1),
+				label: command.slice(1),
+				description: remoteV2CommandDescription(command),
+			})),
 			prefix,
-			(item) => item.value,
+			(item) => `${item.value} ${item.description ?? ""}`,
 		);
 		return items.length === 0 ? null : { items, prefix: input };
 	}

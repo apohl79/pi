@@ -38,6 +38,7 @@ import { SettingsSelectorComponent } from "./modes/interactive/components/settin
 import { ThinkingSelectorComponent } from "./modes/interactive/components/thinking-selector.ts";
 import { TreeSelectorComponent } from "./modes/interactive/components/tree-selector.ts";
 import { UserMessageSelectorComponent } from "./modes/interactive/components/user-message-selector.ts";
+import { editInExternalEditor } from "./modes/interactive/external-editor.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
 import { getAvailableThemes, getEditorTheme, initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "./server/daemon-runtime.ts";
@@ -69,6 +70,7 @@ function detachedServerStatus(agentDir: string): DetachedServerStatus | undefine
 		if (
 			marker.state !== "running" ||
 			typeof marker.daemonInstanceId !== "string" ||
+			typeof pid !== "number" ||
 			!Number.isSafeInteger(pid) ||
 			pid <= 0 ||
 			!existsSync(socketPath)
@@ -280,12 +282,14 @@ async function runCli(): Promise<void> {
 				logDirectory: agentDir,
 			});
 			const editor = new CustomEditor(tui, getEditorTheme(), keybindings);
+			const pendingContainer = new Container();
 			const updateTerminalTitle = () => {
 				tui.terminal.setTitle(formatInteractiveTerminalTitle(process.cwd(), session.snapshot?.name));
 			};
 			const view = new RemoteV2SessionView(session, {
 				tui,
 				cwd: process.cwd(),
+				pendingContainer,
 				onUpdated: () => {
 					updateTerminalTitle();
 					tui.requestRender();
@@ -297,7 +301,6 @@ async function runCli(): Promise<void> {
 			});
 			updateTerminalTitle();
 			const transcriptContainer = new Container();
-			const pendingContainer = new Container();
 			const statusContainer = new Container();
 			const aboveEditorContainer = new Container();
 			const editorContainer = new Container();
@@ -383,7 +386,7 @@ async function runCli(): Promise<void> {
 				};
 				const done = () => restoreTranscript();
 				const selector = new ScopedModelsSelectorComponent(
-					{ allModels: availableModels, enabledModelIds: enabledIds },
+					{ allModels: [...availableModels], enabledModelIds: enabledIds },
 					{
 						onChange: applyScope,
 						onPersist: (nextIds) => {
@@ -489,7 +492,7 @@ async function runCli(): Promise<void> {
 						thinkingLevel: snapshot?.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
 						availableThinkingLevels: [...THINKING_LEVEL_OPTIONS],
 						modelThinkingLevels: statuslineSettings.getAllModelThinkingLevels(),
-						currentTheme: statuslineSettings.getTheme(),
+						currentTheme: statuslineSettings.getTheme() ?? "dark",
 						terminalTheme: "dark",
 						availableThemes: getAvailableThemes(),
 						hideThinkingBlock: statuslineSettings.getHideThinkingBlock(),
@@ -844,13 +847,71 @@ async function runCli(): Promise<void> {
 					.then((result) => view.showStatus(result.kind === "status" ? result.text : "New session started"))
 					.catch((error: unknown) => view.showStatus(error instanceof Error ? error.message : String(error)));
 			});
+			editor.onAction("app.message.copy", () => {
+				void attachment
+					.execute("/copy")
+					.then((result) => view.showStatus(result.kind === "status" ? result.text : "Copied last agent message"))
+					.catch((error: unknown) => view.showStatus(error instanceof Error ? error.message : String(error)));
+			});
+			editor.onAction("app.message.followUp", () => {
+				const text = editor.getText().trim();
+				if (!text) return;
+				if (session.phase !== "turn") {
+					editor.setText("");
+					editor.onSubmit?.(text);
+					return;
+				}
+				editor.setText("");
+				void session
+					.followUp(text)
+					.then((operationId) => view.showStatus(`Follow-up accepted: ${operationId}`))
+					.catch((error: unknown) => view.showStatus(error instanceof Error ? error.message : String(error)));
+			});
+			editor.onAction("app.editor.external", () => {
+				const content = editor.getExpandedText?.() ?? editor.getText();
+				tui.stop();
+				void editInExternalEditor({ command: statuslineSettings.getExternalEditorCommand(), content })
+					.then((result) => {
+						if (result.status === "complete") editor.setText(result.content);
+					})
+					.catch((error: unknown) => view.showStatus(error instanceof Error ? error.message : String(error)))
+					.finally(() => {
+						tui.start();
+						tui.requestRender(true);
+					});
+			});
+			editor.onAction("app.suspend", () => {
+				if (process.platform === "win32") {
+					view.showStatus("Suspend to background is not supported on Windows");
+					return;
+				}
+				const keepAlive = setInterval(() => {}, 2 ** 30);
+				const ignoreSigint = () => {};
+				process.on("SIGINT", ignoreSigint);
+				process.once("SIGCONT", () => {
+					clearInterval(keepAlive);
+					process.removeListener("SIGINT", ignoreSigint);
+					tui.start();
+					tui.requestRender(true);
+				});
+				try {
+					tui.stop();
+					process.kill(0, "SIGTSTP");
+				} catch (error) {
+					clearInterval(keepAlive);
+					process.removeListener("SIGINT", ignoreSigint);
+					view.showStatus(error instanceof Error ? error.message : String(error));
+				}
+			});
 			tui.setFocus(editor);
 			await new Promise<void>((resolve) => {
 				let settled = false;
+				let removeClearListener: (() => void) | undefined;
 				const finish = () => {
 					if (settled) return;
 					settled = true;
 					process.stdin.off("end", finish);
+					removeClearListener?.();
 					tui.stop();
 					void attachment.dispose().finally(() => {
 						footer.dispose();
@@ -861,6 +922,15 @@ async function runCli(): Promise<void> {
 					});
 				};
 				finishInteractive = finish;
+				removeClearListener = tui.addInputListener((data) => {
+					if (!keybindings.matches(data, "app.clear")) return undefined;
+					if (editor.getText().length === 0) finish();
+					else {
+						editor.setText("");
+						tui.setFocus(editor);
+					}
+					return { consume: true };
+				});
 				editor.onAction("app.clear", () => {
 					if (editor.getText().length === 0) finish();
 					else editor.setText("");

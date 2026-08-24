@@ -1,5 +1,5 @@
 import type { SessionSnapshotV2 } from "@earendil-works/pi-protocol";
-import { type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { Container, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { RemoteV2SessionState } from "../../src/client/remote-v2-session.ts";
 import {
@@ -260,6 +260,37 @@ describe("formatRemoteV2Session", () => {
 		try {
 			view.showStatus("plan updated");
 			expect(stripAnsi(view.render(120).join("\n"))).toContain("plan updated");
+		} finally {
+			view.dispose();
+		}
+	});
+
+	test("renders server-owned queued prompts in the shared pending layout region", () => {
+		const pendingContainer = new Container();
+		const source = {
+			state: {
+				lifecycle: { status: "ready" as const },
+				snapshot: {
+					...snapshot,
+					queues: {
+						steer: [
+							{
+								id: "steer-1",
+								content: [{ type: "text" as const, text: "keep the test focused" }],
+								createdAt: 1,
+							},
+						],
+						followUp: [],
+					},
+				},
+			},
+			subscribe: (_listener: (state: RemoteV2SessionState) => void) => () => {},
+		};
+		const view = new RemoteV2SessionView(source as never, { pendingContainer });
+		try {
+			const rendered = stripAnsi(pendingContainer.render(120).join("\n"));
+			expect(rendered).toContain("Steering: keep the test focused");
+			expect(rendered).toContain("/dequeue <entry-id>");
 		} finally {
 			view.dispose();
 		}
