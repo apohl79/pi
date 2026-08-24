@@ -247,7 +247,7 @@ export async function createCodingAgentDaemonRuntime(
 				return daemon.start();
 			},
 			status: () => daemon.status(),
-			stop: () => daemon.stop(),
+			stop: () => daemon.stopPersisted(),
 		},
 		defaultConnect,
 		diagnosticsSpool: clientSpool,

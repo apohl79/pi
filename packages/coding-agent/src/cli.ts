@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 /**
  * CLI entry point for the refactored coding agent.
  * Uses main.ts with AgentSession and new mode modules.
@@ -32,18 +33,59 @@ configureHttpDispatcher();
 
 const LEGACY_COMMANDS = new Set(["install", "remove", "uninstall", "update", "list", "config", "auth"]);
 
+type DetachedServerStatus = Readonly<{ serverId: string; pid: number; addresses: readonly string[] }>;
+
+function detachedServerStatus(agentDir: string): DetachedServerStatus | undefined {
+	const socketPath = join(agentDir, "pi.sock");
+	try {
+		const marker = JSON.parse(readFileSync(join(agentDir, "daemon-state.json"), "utf8")) as Partial<{
+			daemonInstanceId: string;
+			state: string;
+			pid: number;
+		}>;
+		if (
+			marker.state !== "running" ||
+			typeof marker.daemonInstanceId !== "string" ||
+			!Number.isSafeInteger(marker.pid) ||
+			marker.pid <= 0 ||
+			!existsSync(socketPath)
+		)
+			return undefined;
+		process.kill(marker.pid, 0);
+		return { serverId: marker.daemonInstanceId, pid: marker.pid, addresses: [socketPath] };
+	} catch {
+		return undefined;
+	}
+}
+
+const waitForDetachedServer = async (agentDir: string, pid: number): Promise<DetachedServerStatus> => {
+	for (let attempt = 0; attempt < 50; attempt++) {
+		const status = detachedServerStatus(agentDir);
+		if (status?.pid === pid) return status;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	throw new Error("Detached server did not become ready");
+};
+
 async function runCli(): Promise<void> {
 	const args = process.argv.slice(2);
 	const foregroundServer = args[0] === "server" && args[1] === "start" && args.includes("--foreground");
 	if (args[0] === "server" && args[1] === "start" && !args.includes("--foreground")) {
+		const agentDir = getAgentDir();
+		const running = detachedServerStatus(agentDir);
+		if (running !== undefined) {
+			console.log(JSON.stringify({ state: "running", ...running }));
+			return;
+		}
 		const entrypoint = process.argv[1];
 		if (entrypoint === undefined) throw new Error("Cannot determine CLI entrypoint for detached server");
 		const child = spawn(process.execPath, [...process.execArgv, entrypoint, ...args, "--foreground"], {
 			detached: true,
 			stdio: "ignore",
 		});
+		if (child.pid === undefined) throw new Error("Failed to start detached server process");
 		child.unref();
-		console.log(JSON.stringify({ state: "running", addresses: [join(getAgentDir(), "pi.sock")] }));
+		console.log(JSON.stringify({ state: "running", ...(await waitForDetachedServer(agentDir, child.pid)) }));
 		return;
 	}
 	const parsedArgs = parseArgs(args);

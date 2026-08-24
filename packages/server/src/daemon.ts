@@ -30,6 +30,7 @@ export type ServerDaemonState = "stopped" | "starting" | "running" | "stopping";
 export interface ServerDaemonStatus {
 	readonly state: ServerDaemonState;
 	readonly serverId?: string;
+	readonly pid?: number;
 	readonly addresses: readonly string[];
 }
 
@@ -88,28 +89,20 @@ export class ServerDaemon {
 	}
 
 	status(): ServerDaemonStatus {
-		const persistedRunning =
-			this.server === undefined &&
-			this.options.lifecycleMarkerPath !== undefined &&
-			existsSync(this.options.socketPath) &&
-			(() => {
-				try {
-					return (
-						(
-							JSON.parse(
-								readFileSync(this.options.lifecycleMarkerPath!, "utf8"),
-							) as Partial<DaemonLifecycleMarker>
-						).state === "running"
-					);
-				} catch {
-					return false;
-				}
-			})();
+		const persistedMarker =
+			this.server === undefined && existsSync(this.options.socketPath)
+				? this.readPersistedRunningMarker()
+				: undefined;
+		const persistedRunning = persistedMarker !== undefined;
 		const addresses =
 			this.server === undefined ? (persistedRunning ? [this.options.socketPath] : []) : [...this.server.addresses];
 		return {
 			state: persistedRunning ? "running" : this.state,
-			...(this.server === undefined ? {} : { serverId: this.server.id }),
+			...(this.server === undefined
+				? persistedMarker === undefined
+					? {}
+					: { serverId: persistedMarker.daemonInstanceId, pid: persistedMarker.pid }
+				: { serverId: this.server.id, pid: process.pid }),
 			addresses,
 		};
 	}
@@ -132,18 +125,7 @@ export class ServerDaemon {
 	}
 
 	async stop(): Promise<ServerDaemonStatus> {
-		if (this.state === "stopped") {
-			const marker = this.readPersistedRunningMarker();
-			if (marker !== undefined && marker.pid !== process.pid) {
-				try {
-					process.kill(marker.pid, "SIGTERM");
-				} catch (error) {
-					if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-				}
-				return { state: "stopped", addresses: [] };
-			}
-			return this.status();
-		}
+		if (this.state === "stopped") return this.status();
 		if (this.transition) {
 			await this.transition;
 			return this.stop();
@@ -158,6 +140,18 @@ export class ServerDaemon {
 		} finally {
 			this.transition = undefined;
 		}
+	}
+
+	async stopPersisted(): Promise<ServerDaemonStatus> {
+		if (this.state !== "stopped") return this.stop();
+		const marker = this.readPersistedRunningMarker();
+		if (marker === undefined || marker.pid === process.pid) return this.status();
+		try {
+			process.kill(marker.pid, "SIGTERM");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+		}
+		return { state: "stopped", addresses: [] };
 	}
 
 	private async startInternal(): Promise<void> {
