@@ -11,6 +11,9 @@ import {
 
 export const PROTOCOL_V2_VERSION = 2 as const;
 
+export const MAX_V2_ARRAY_ITEMS = 10_000;
+export const MAX_V2_JSON_DEPTH = 8;
+
 const IdSchema = Type.String({ minLength: 1 });
 const TimestampSchema = Type.Integer({ minimum: 0 });
 const NonNegativeIntegerSchema = Type.Integer({ minimum: 0 });
