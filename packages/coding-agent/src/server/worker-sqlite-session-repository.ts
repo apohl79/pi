@@ -13,12 +13,13 @@ import type {
 	ProvisionedEntry,
 	RecordQuery,
 	RegisterWrite,
+	SessionErrorCode,
 	SessionRegister,
 	SessionStats,
 	SessionStorage,
 	SessionTransactionStorage,
 } from "@earendil-works/pi-agent-core";
-import { Session } from "@earendil-works/pi-agent-core";
+import { Session, SessionError } from "@earendil-works/pi-agent-core";
 import type {
 	SqliteBackupReport,
 	SqliteInspection,
@@ -74,7 +75,7 @@ type WorkerCommand =
 type WorkerResponse = {
 	readonly id: number;
 	readonly result?: unknown;
-	readonly error?: { readonly message: string; readonly name: string };
+	readonly error?: { readonly message: string; readonly name: string; readonly code?: SessionErrorCode };
 };
 
 export type SqliteSessionRepositoryLike = Pick<
@@ -314,9 +315,13 @@ export class WorkerSqliteSessionRepository implements SqliteSessionRepositoryLik
 		const request = this.#pending.get(message.id);
 		if (request === undefined) return;
 		this.#pending.delete(message.id);
-		if (message.error !== undefined)
-			request.reject(Object.assign(new Error(message.error.message), { name: message.error.name }));
-		else request.resolve(message.result);
+		if (message.error !== undefined) {
+			request.reject(
+				message.error.code === undefined
+					? Object.assign(new Error(message.error.message), { name: message.error.name })
+					: new SessionError(message.error.code, message.error.message),
+			);
+		} else request.resolve(message.result);
 	}
 
 	#failPending(error: Error): void {

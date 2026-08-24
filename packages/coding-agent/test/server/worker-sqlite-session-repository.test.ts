@@ -16,6 +16,7 @@ describe("WorkerSqliteSessionRepository", () => {
 		directories.push(directory);
 		const path = join(directory, "sessions.sqlite");
 		const first = new WorkerSqliteSessionRepository({ databasePath: path, cwd: directory });
+		await expect(first.open({ id: "missing", cwd: directory, path })).rejects.toMatchObject({ code: "not_found" });
 		const session = await first.create({ id: "session-1", cwd: directory });
 		await session.appendCustomEntry("marker", { value: "persisted" });
 		await first.close();

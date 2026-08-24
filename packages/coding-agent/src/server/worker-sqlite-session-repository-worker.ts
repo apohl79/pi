@@ -1,5 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads";
-import type { Session } from "@earendil-works/pi-agent-core";
+import type { SessionErrorCode } from "@earendil-works/pi-agent-core";
+import { type Session, SessionError } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
 	createNodeSqliteFactory,
@@ -54,7 +55,7 @@ type WorkerRequest = { readonly id: number; readonly command: WorkerCommand };
 type WorkerResponse = {
 	readonly id: number;
 	readonly result?: unknown;
-	readonly error?: { readonly message: string; readonly name: string };
+	readonly error?: { readonly message: string; readonly name: string; readonly code?: SessionErrorCode };
 };
 type WorkerOptions = {
 	readonly databasePath: string;
@@ -178,11 +179,13 @@ port.on("message", (message: unknown) => {
 					: await invokeStorage(message.command.sessionId, message.command.command, message.command.args);
 			port.postMessage({ id: message.id, result } satisfies WorkerResponse);
 		} catch (error) {
+			const sessionError = error instanceof SessionError ? error : undefined;
 			port.postMessage({
 				id: message.id,
 				error: {
 					name: error instanceof Error ? error.name : "Error",
 					message: error instanceof Error ? error.message : String(error),
+					...(sessionError === undefined ? {} : { code: sessionError.code }),
 				},
 			} satisfies WorkerResponse);
 		}
