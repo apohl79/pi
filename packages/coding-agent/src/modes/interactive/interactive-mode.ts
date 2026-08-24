@@ -116,8 +116,6 @@ import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BorderedLoader } from "./components/bordered-loader.ts";
-import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
-import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
 import { CustomEntryComponent } from "./components/custom-entry.ts";
 import { CustomMessageComponent } from "./components/custom-message.ts";
@@ -151,6 +149,7 @@ import {
 } from "./components/status-indicator.ts";
 import { ThinkingSelectorComponent } from "./components/thinking-selector.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
+import { TranscriptRenderer } from "./components/transcript-renderer.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
@@ -356,6 +355,20 @@ export interface InteractiveModeOptions {
 	initialThemeSetting?: string;
 }
 
+/** Runtime operations the interactive renderer owns independently of session transport. */
+export type InteractiveModeRuntime = Pick<
+	AgentSessionRuntime,
+	| "dispose"
+	| "fork"
+	| "importFromJsonl"
+	| "newSession"
+	| "services"
+	| "session"
+	| "setBeforeSessionInvalidate"
+	| "setRebindSession"
+	| "switchSession"
+>;
+
 interface InteractiveTuiOptions {
 	tuiMode: TuiMode;
 	showHardwareCursor: boolean;
@@ -419,12 +432,13 @@ export function createInteractiveTuiReference(getTui: () => TUI): TUI {
 }
 
 export class InteractiveMode {
-	private runtimeHost: AgentSessionRuntime;
+	private runtimeHost: InteractiveModeRuntime;
 	private renderer: TuiMainScreen | TuiAltScreen;
 	private ui: TUI;
 	private mainScreenRenderState: TuiMainScreenRenderState | undefined;
 	private loadedResourcesContainer: Container;
 	private chatContainer: Container;
+	private transcriptRenderer: TranscriptRenderer;
 	private documentContainer: Container;
 	private transcriptScrollView: TuiLayouts.ScrollView | undefined;
 	private fullscreenLayoutRoot: Component | undefined;
@@ -561,7 +575,7 @@ export class InteractiveMode {
 		return this.session.settingsManager;
 	}
 
-	constructor(runtimeHost: AgentSessionRuntime, options: InteractiveModeOptions = {}) {
+	constructor(runtimeHost: InteractiveModeRuntime, options: InteractiveModeOptions = {}) {
 		this.runtimeHost = runtimeHost;
 		const tuiMode = options.tuiMode ?? this.settingsManager.getTuiMode();
 		this.options = { ...options, tuiMode };
@@ -585,6 +599,15 @@ export class InteractiveMode {
 		this.headerContainer = new Container();
 		this.loadedResourcesContainer = new Container();
 		this.chatContainer = new Container();
+		this.transcriptRenderer = new TranscriptRenderer({
+			container: this.chatContainer,
+			getMarkdownTheme: () => this.getMarkdownThemeWithSettings(),
+			getHideThinkingBlock: () => this.hideThinkingBlock,
+			getHiddenThinkingLabel: () => this.hiddenThinkingLabel,
+			getOutputPad: () => this.outputPad,
+			getMarkdownTransformers: () => this.getMarkdownTransformers(),
+			getToolOutputExpanded: () => this.toolOutputExpanded,
+		});
 		this.documentContainer = new Container();
 		this.documentContainer.addChild(this.headerContainer);
 		this.documentContainer.addChild(this.loadedResourcesContainer);
@@ -3607,27 +3630,21 @@ export class InteractiveMode {
 				break;
 			}
 			case "compactionSummary": {
-				this.chatContainer.addChild(new Spacer(1));
-				const component = new CompactionSummaryMessageComponent(message, this.getMarkdownThemeWithSettings());
-				component.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(component);
+				this.transcriptRenderer.addCompactionSummary(message);
 				break;
 			}
 			case "branchSummary": {
-				this.chatContainer.addChild(new Spacer(1));
-				const component = new BranchSummaryMessageComponent(message, this.getMarkdownThemeWithSettings());
-				component.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(component);
+				this.transcriptRenderer.addBranchSummary(message);
 				break;
 			}
 			case "user": {
 				const textContent = this.getUserMessageText(message);
 				if (textContent) {
-					if (this.chatContainer.children.length > 0) {
-						this.chatContainer.addChild(new Spacer(1));
-					}
 					const skillBlock = parseSkillBlock(textContent);
 					if (skillBlock) {
+						if (this.chatContainer.children.length > 0) {
+							this.chatContainer.addChild(new Spacer(1));
+						}
 						// Render skill block (collapsible)
 						const component = new SkillInvocationMessageComponent(
 							skillBlock,
@@ -3647,13 +3664,7 @@ export class InteractiveMode {
 							this.chatContainer.addChild(userComponent);
 						}
 					} else {
-						const userComponent = new UserMessageComponent(
-							textContent,
-							this.getMarkdownThemeWithSettings(),
-							this.outputPad,
-							this.getMarkdownTransformers(),
-						);
-						this.chatContainer.addChild(userComponent);
+						this.transcriptRenderer.addUser(textContent);
 					}
 					if (options?.populateHistory) {
 						this.editor.addToHistory?.(textContent);
@@ -3662,15 +3673,7 @@ export class InteractiveMode {
 				break;
 			}
 			case "assistant": {
-				const assistantComponent = new AssistantMessageComponent(
-					message,
-					this.hideThinkingBlock,
-					this.getMarkdownThemeWithSettings(),
-					this.hiddenThinkingLabel,
-					this.outputPad,
-					this.getMarkdownTransformers(),
-				);
-				this.chatContainer.addChild(assistantComponent);
+				this.transcriptRenderer.addAssistant(message);
 				break;
 			}
 			case "toolResult": {

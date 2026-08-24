@@ -1,7 +1,11 @@
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import { type Component, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import type { AssistantMessage } from "@earendil-works/pi-ai/compat";
+import { type Component, Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { TranscriptRenderer } from "../modes/interactive/components/transcript-renderer.ts";
+import { getMarkdownTheme } from "../modes/interactive/theme/theme.ts";
 import type { StatuslineCommand, StatuslineRunner, StatuslineSnapshot } from "../server/statusline.ts";
 import type { RemoteV2Session, RemoteV2SessionState } from "./remote-v2-session.ts";
+
+type RemoteTranscriptItem = NonNullable<RemoteV2SessionState["snapshot"]>["transcript"][number];
 
 export interface RemoteV2SessionViewOptions {
 	readonly maxTranscriptItems?: number;
@@ -138,14 +142,16 @@ export class RemoteV2StatuslineComponent implements Component {
 }
 
 /** Renderable TUI projection of one server-authoritative v2 session. */
-export class RemoteV2SessionView implements Component {
+export class RemoteV2SessionView extends Container {
 	readonly #options: Required<Omit<RemoteV2SessionViewOptions, "onUpdated">>;
+	readonly #transcriptRenderer: TranscriptRenderer;
 	#state: RemoteV2SessionState;
 	readonly #unsubscribe: () => void;
 	readonly #onUpdated?: () => void;
 	readonly #durationTimer?: ReturnType<typeof setInterval>;
 
 	constructor(session: RemoteV2Session, options: RemoteV2SessionViewOptions = {}) {
+		super();
 		this.#options = {
 			maxTranscriptItems: options.maxTranscriptItems ?? 48,
 			maxTranscriptCharacters: options.maxTranscriptCharacters ?? 6_000,
@@ -157,10 +163,21 @@ export class RemoteV2SessionView implements Component {
 		};
 		this.#state = session.state;
 		this.#onUpdated = options.onUpdated;
+		this.#transcriptRenderer = new TranscriptRenderer({
+			container: this,
+			getMarkdownTheme,
+			getHideThinkingBlock: () => false,
+			getHiddenThinkingLabel: () => "Thinking...",
+			getOutputPad: () => 1,
+			getMarkdownTransformers: () => [],
+			getToolOutputExpanded: () => false,
+		});
 		this.#unsubscribe = session.subscribe((state) => {
 			this.#state = state;
+			this.rebuild();
 			this.#onUpdated?.();
 		});
+		this.rebuild();
 		if (this.#onUpdated) {
 			this.#durationTimer = setInterval(() => {
 				if (
@@ -174,16 +191,94 @@ export class RemoteV2SessionView implements Component {
 		}
 	}
 
-	render(width: number): string[] {
-		return new Text(formatRemoteV2Session(this.#state, this.#options), 0, 0).render(Math.max(1, width));
-	}
-
-	invalidate(): void {}
-
 	dispose(): void {
 		if (this.#durationTimer) clearInterval(this.#durationTimer);
 		this.#unsubscribe();
 	}
+
+	private rebuild(): void {
+		this.clear();
+		const snapshot = this.#state.snapshot;
+		if (!snapshot) {
+			this.addChild(new Text(`Session ${this.#state.lifecycle.status}`, 1, 0));
+			return;
+		}
+		let characters = 0;
+		for (const item of snapshot.transcript.slice(-this.#options.maxTranscriptItems)) {
+			const text = transcriptText(item);
+			if (characters + text.length > this.#options.maxTranscriptCharacters) break;
+			characters += text.length;
+			this.addTranscriptItem(item);
+		}
+	}
+
+	private addTranscriptItem(item: RemoteTranscriptItem): void {
+		switch (item.role) {
+			case "user":
+				this.#transcriptRenderer.addUser(
+					item.content
+						.filter((part) => part.type === "text")
+						.map((part) => part.text)
+						.join(""),
+				);
+				break;
+			case "assistant":
+				this.#transcriptRenderer.addAssistant(toAssistantMessage(item));
+				break;
+			case "compactionSummary":
+				this.#transcriptRenderer.addCompactionSummary(item);
+				break;
+			case "branchSummary":
+				this.#transcriptRenderer.addBranchSummary(item);
+				break;
+			case "tool":
+				this.addChild(new Text(`${item.toolName}: ${transcriptText(item)}`, 1, 0));
+				break;
+			default: {
+				const _exhaustive: never = item;
+			}
+		}
+	}
+}
+
+function toAssistantMessage(item: Extract<RemoteTranscriptItem, { readonly role: "assistant" }>): AssistantMessage {
+	return {
+		role: "assistant",
+		content: item.content.map((part) => {
+			if (part.type === "text" || part.type === "thinking") return part;
+			return {
+				type: "toolCall" as const,
+				id: part.toolCallId,
+				name: part.toolName,
+				arguments:
+					typeof part.input === "object" && part.input !== null && !Array.isArray(part.input)
+						? part.input
+						: { input: part.input },
+			};
+		}),
+		api: "pi-messages",
+		provider: item.model.provider,
+		model: item.model.id,
+		...(item.responseModel === undefined ? {} : { responseModel: item.responseModel }),
+		usage: item.usage ?? {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason:
+			item.status === "error"
+				? "error"
+				: item.status === "aborted"
+					? "aborted"
+					: item.status === "streaming"
+						? "pending"
+						: "stop",
+		...("errorMessage" in item && item.errorMessage !== undefined ? { errorMessage: item.errorMessage } : {}),
+		timestamp: item.timestamp,
+	};
 }
 
 export function formatRemoteV2Session(state: RemoteV2SessionState, options: RemoteV2SessionViewOptions = {}): string {
@@ -332,7 +427,7 @@ export function createRemoteV2StatuslinePayload(
 	};
 }
 
-function transcriptText(item: TranscriptItem): string {
+function transcriptText(item: RemoteTranscriptItem): string {
 	if (item.role === "compactionSummary") return `[compaction] ${item.summary}`;
 	if (item.role === "branchSummary") return `[branch summary] ${item.summary}`;
 	if (item.role === "tool") {

@@ -1,6 +1,6 @@
 import type { SessionSnapshotV2 } from "@earendil-works/pi-protocol";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, test, vi } from "vitest";
+import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { RemoteV2SessionState } from "../../src/client/remote-v2-session.ts";
 import {
 	createRemoteV2StatuslinePayload,
@@ -10,7 +10,9 @@ import {
 	RemoteV2StatuslineComponent,
 	RemoteV2StatuslineController,
 } from "../../src/client/remote-v2-view.ts";
+import { initTheme } from "../../src/modes/interactive/theme/theme.ts";
 import { StatuslineRunner } from "../../src/server/statusline.ts";
+import { stripAnsi } from "../../src/utils/ansi.ts";
 
 const options: RemoteV2SessionViewOptions = { maxTranscriptItems: 1, maxTranscriptCharacters: 32 };
 const snapshot: SessionSnapshotV2 = {
@@ -50,6 +52,8 @@ const snapshot: SessionSnapshotV2 = {
 	createdAt: 1,
 	updatedAt: 2,
 };
+
+beforeAll(() => initTheme(undefined, false));
 
 describe("formatRemoteV2Session", () => {
 	test("keeps the active remote terminal projection stable", () => {
@@ -183,7 +187,7 @@ describe("formatRemoteV2Session", () => {
 		}
 	});
 
-	test("snapshots the authoritative remote work surface", () => {
+	test("renders the authoritative transcript through the shared message-card renderer", () => {
 		const source = {
 			state: {
 				lifecycle: { status: "ready" as const },
@@ -228,21 +232,11 @@ describe("formatRemoteV2Session", () => {
 		};
 		const view = new RemoteV2SessionView(source as never);
 		try {
-			expect(view.render(120).map((line) => line.trimEnd())).toMatchInlineSnapshot(`
-				[
-				  "Session session-1 · phase=turn · model=faux/model",
-				  "Usage input=0 output=0 cacheRead=0 cost=unknown",
-				  "Process process-1 · running · echo hi",
-				  "  hi",
-				  "Agent /root/worker · running · anthropic/sonnet",
-				  "Goal active · finish the remote implementation",
-				  "Plan v3",
-				  "Plan in_progress · verify the daemon",
-				  "Input request pending · input-1",
-				  "user: old",
-				  "assistant: a long assistant response",
-				]
-			`);
+			const rendered = view.render(120).map(stripAnsi).join("\n");
+			expect(rendered).toContain("old");
+			expect(rendered).toContain("a long assistant response");
+			expect(rendered).not.toContain("Session session-1 · phase=turn");
+			expect(rendered).not.toContain("user: old");
 		} finally {
 			view.dispose();
 		}
