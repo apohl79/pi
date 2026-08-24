@@ -1,9 +1,6 @@
 import Type, { type Static, type TSchema } from "typebox";
 import { Check } from "typebox/value";
-import {
-	type JsonValue,
-	ThinkingLevelSchema,
-} from "./schemas.ts";
+import { type JsonValue, ThinkingLevelSchema } from "./schemas.ts";
 
 export const PROTOCOL_V2_VERSION = 2 as const;
 
@@ -44,6 +41,21 @@ const BoundedJsonValueSchema = createBoundedJsonValueSchema(MAX_V2_JSON_DEPTH);
 const BoundedResponseJsonValueSchema = createBoundedJsonValueSchema(MAX_V2_RESPONSE_JSON_DEPTH);
 
 const BoundedModelRefSchema = StrictObject({ provider: IdSchema, id: IdSchema });
+const BoundedUsageSchema = StrictObject({
+	input: NonNegativeIntegerSchema,
+	output: NonNegativeIntegerSchema,
+	cacheRead: NonNegativeIntegerSchema,
+	cacheWrite: NonNegativeIntegerSchema,
+	reasoning: Type.Optional(NonNegativeIntegerSchema),
+	totalTokens: NonNegativeIntegerSchema,
+	cost: StrictObject({
+		input: Type.Number({ minimum: 0 }),
+		output: Type.Number({ minimum: 0 }),
+		cacheRead: Type.Number({ minimum: 0 }),
+		cacheWrite: Type.Number({ minimum: 0 }),
+		total: Type.Number({ minimum: 0 }),
+	}),
+});
 const BoundedModelMetadataSchema = StrictObject({
 	provider: IdSchema,
 	id: IdSchema,
@@ -103,6 +115,7 @@ const BoundedTranscriptItemSchema = Type.Union([
 		),
 		model: BoundedModelRefSchema,
 		responseModel: Type.Optional(BoundedNonEmptyStringSchema),
+		usage: Type.Optional(BoundedUsageSchema),
 		timestamp: TimestampSchema,
 		status: Type.Union([
 			Type.Literal("streaming"),
@@ -130,9 +143,29 @@ const BoundedTranscriptItemSchema = Type.Union([
 			]),
 			{ maxItems: MAX_V2_ARRAY_ITEMS },
 		),
+		details: Type.Optional(BoundedJsonContentSchema),
+		usage: Type.Optional(BoundedUsageSchema),
 		timestamp: TimestampSchema,
 		status: Type.Union([Type.Literal("running"), Type.Literal("complete"), Type.Literal("error")]),
 		isError: Type.Boolean(),
+	}),
+	StrictObject({
+		id: IdSchema,
+		role: Type.Literal("compactionSummary"),
+		summary: BoundedStringSchema,
+		tokensBefore: NonNegativeIntegerSchema,
+		usage: Type.Optional(BoundedUsageSchema),
+		details: Type.Optional(BoundedJsonContentSchema),
+		timestamp: TimestampSchema,
+	}),
+	StrictObject({
+		id: IdSchema,
+		role: Type.Literal("branchSummary"),
+		summary: BoundedStringSchema,
+		fromId: IdSchema,
+		usage: Type.Optional(BoundedUsageSchema),
+		details: Type.Optional(BoundedJsonContentSchema),
+		timestamp: TimestampSchema,
 	}),
 ]);
 

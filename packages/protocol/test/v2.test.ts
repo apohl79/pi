@@ -2,12 +2,10 @@ import { Check } from "typebox/value";
 import { describe, expect, test } from "vitest";
 import {
 	ClientMessageV2Decoder,
-	ProtocolValidationError,
-	ServerMessageV2Decoder,
 	encodeCbor,
 	encodeClientMessageV2,
-	encodeServerMessageV2,
 	encodeFrame,
+	encodeServerMessageV2,
 	isClientMessageV2,
 	isOperationRecordV2,
 	isOperationSummary,
@@ -19,10 +17,12 @@ import {
 	OperationRecordV2Schema,
 	OperationSummarySchema,
 	PromptContentSchema,
+	ProtocolValidationError,
+	parseClientMessageV2,
 	QueueSnapshotSchema,
+	ServerMessageV2Decoder,
 	ServerSnapshotV2Schema,
 	SessionSnapshotV2Schema,
-	parseClientMessageV2,
 } from "../src/index.ts";
 
 const clientHello = { type: "hello", version: 2 } as const;
@@ -165,6 +165,30 @@ describe("protocol v2 contract schemas", () => {
 			Check(SessionSnapshotV2Schema, {
 				...snapshot,
 				transcript: [
+					{
+						id: "assistant",
+						role: "assistant",
+						content: [{ type: "text", text: "ok" }],
+						model: { provider: "provider", id: "model" },
+						usage: {
+							input: 1,
+							output: 1,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 2,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						timestamp: 0,
+						status: "complete",
+						stopReason: "stop",
+					},
+				],
+			}),
+		).toBe(true);
+		expect(
+			Check(SessionSnapshotV2Schema, {
+				...snapshot,
+				transcript: [
 					{ ...snapshot.transcript[0], content: [{ type: "text", text: "x".repeat(MAX_V2_STRING_LENGTH + 1) }] },
 				],
 			}),
@@ -240,9 +264,9 @@ describe("protocol v2 contract schemas", () => {
 		expect(isServerMessageV2({ type: "response", id: "request-1", ok: true, result: Number.POSITIVE_INFINITY })).toBe(
 			false,
 		);
-		expect(() => parseClientMessageV2({ ...message, request: { ...message.request, payload: Number.NEGATIVE_INFINITY } })).toThrow(
-			ProtocolValidationError,
-		);
+		expect(() =>
+			parseClientMessageV2({ ...message, request: { ...message.request, payload: Number.NEGATIVE_INFINITY } }),
+		).toThrow(ProtocolValidationError);
 	});
 });
 

@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
+import { SessionSnapshotV2Schema } from "@earendil-works/pi-protocol";
+import { Check } from "typebox/value";
 import { afterEach, describe, expect, test } from "vitest";
 import { RemoteV2InteractiveAttachment, type RemoteV2Session, RemoteV2SessionSelector } from "../../src/index.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemon-runtime.ts";
@@ -55,7 +57,7 @@ describe("production remote v2 follow-up", () => {
 				await waitForPhase(attachment.session, "turn");
 				const followUp = await adapter.execute("/follow-up continue with verification");
 				expect(followUp.kind).toBe("operation");
-				await attachment.session.waitForOperation(initial);
+				expect(Check(SessionSnapshotV2Schema, await attachment.session.waitForOperation(initial))).toBe(true);
 				await waitForTranscript(attachment.session, "follow-up answer");
 			} finally {
 				await adapter.dispose();
