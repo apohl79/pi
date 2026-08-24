@@ -22,7 +22,7 @@ import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./core/defaults.
 import { FooterDataProvider } from "./core/footer-data-provider.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { KeybindingsManager } from "./core/keybindings.ts";
-import { resolveModelScopeFromModels } from "./core/model-resolver.ts";
+import { resolveModelScopeFromModels, selectScopedDefaultModel } from "./core/model-resolver.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
 import type { SessionEntry, SessionInfo, SessionTreeNode } from "./core/session-manager.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
@@ -229,7 +229,15 @@ async function runCli(): Promise<void> {
 		statuslineSettings.getEnabledModels() ?? [],
 		availableModels,
 	).scopedModels;
-	const model = scopedModels[0]?.model ?? availableModels[0];
+	const defaultProvider = statuslineSettings.getDefaultProvider();
+	const defaultModelId = statuslineSettings.getDefaultModel();
+	const model =
+		selectScopedDefaultModel(
+			scopedModels,
+			defaultProvider === undefined || defaultModelId === undefined
+				? undefined
+				: { provider: defaultProvider, id: defaultModelId },
+		)?.model ?? availableModels[0];
 	if (model === undefined) throw new Error("No configured model is available for the experimental daemon");
 	const harnessOptions =
 		parsedArgs.systemPrompt === undefined &&

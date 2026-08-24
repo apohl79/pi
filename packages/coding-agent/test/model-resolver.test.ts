@@ -8,6 +8,7 @@ import {
 	resolveCliModel,
 	resolveModelScope,
 	resolveModelScopeWithDiagnostics,
+	selectScopedDefaultModel,
 } from "../src/core/model-resolver.ts";
 
 // Mock models for testing
@@ -695,6 +696,15 @@ describe("resolveCliModel", () => {
 });
 
 describe("default model selection", () => {
+	test("selects the saved default when it is enabled in the scope", () => {
+		const selected = selectScopedDefaultModel(
+			[{ model: mockModels[0]! }, { model: mockModels[1]!, thinkingLevel: "low" }],
+			{ provider: "openai", id: "gpt-4o" },
+		);
+
+		expect(selected).toEqual({ model: mockModels[1], thinkingLevel: "low" });
+	});
+
 	test("openai defaults track current models", () => {
 		expect(defaultModelPerProvider.openai).toBe("gpt-5.5");
 		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-5.5");

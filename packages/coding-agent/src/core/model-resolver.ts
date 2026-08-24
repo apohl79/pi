@@ -278,6 +278,17 @@ export interface ResolveModelScopeResult {
 	diagnostics: ModelScopeDiagnostic[];
 }
 
+export function selectScopedDefaultModel(
+	scopedModels: readonly ScopedModel[],
+	defaultModel: { readonly provider: string; readonly id: string } | undefined,
+): ScopedModel | undefined {
+	return (
+		scopedModels.find(
+			(scoped) => scoped.model.provider === defaultModel?.provider && scoped.model.id === defaultModel.id,
+		) ?? scopedModels[0]
+	);
+}
+
 export function resolveModelScopeFromModels(
 	patterns: string[],
 	models: readonly Model<Api>[],
