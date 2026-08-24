@@ -612,6 +612,15 @@ async function runCli(): Promise<void> {
 			editor.onAction("app.model.cycleForward", () => cycleModel("forward"));
 			editor.onAction("app.model.cycleBackward", () => cycleModel("backward"));
 			editor.onAction("app.model.select", showModel);
+			editor.onAction("app.tools.expand", () => {
+				view.showStatus(`Tool output: ${view.toggleToolOutputExpansion() ? "expanded" : "collapsed"}`);
+			});
+			editor.onAction("app.thinking.toggle", () => {
+				const hidden = !statuslineSettings.getHideThinkingBlock();
+				statuslineSettings.setHideThinkingBlock(hidden);
+				view.refreshPresentation();
+				view.showStatus(`Thinking: ${hidden ? "collapsed" : "expanded"}`);
+			});
 			editor.onAction("app.session.resume", showResume);
 			editor.onAction("app.session.fork", showFork);
 			editor.onAction("app.session.new", () => {

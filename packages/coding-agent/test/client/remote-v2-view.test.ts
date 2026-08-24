@@ -343,6 +343,55 @@ describe("formatRemoteV2Session", () => {
 		}
 	});
 
+	test("toggles server tool output through the shared tool renderer", () => {
+		const source = {
+			state: {
+				lifecycle: { status: "ready" as const },
+				snapshot: {
+					...snapshot,
+					transcript: [
+						{
+							id: "assistant-tool-1",
+							role: "assistant" as const,
+							status: "complete" as const,
+							stopReason: "toolUse" as const,
+							content: [
+								{
+									type: "toolCall" as const,
+									toolCallId: "tool-1",
+									toolName: "bash",
+									input: { command: "echo lines" },
+								},
+							],
+							model: snapshot.model,
+							timestamp: 1,
+						},
+						{
+							id: "tool-1-result",
+							role: "tool" as const,
+							status: "complete" as const,
+							toolCallId: "tool-1",
+							toolName: "bash",
+							input: { command: "echo lines" },
+							content: [{ type: "text" as const, text: "one\ntwo\nthree\nfour\nfive\nsix" }],
+							isError: false as const,
+							timestamp: 2,
+						},
+					],
+				},
+			},
+			subscribe: (_listener: (state: RemoteV2SessionState) => void) => () => {},
+		};
+		const view = new RemoteV2SessionView(source as never, { tui: createFakeTui(), cwd: process.cwd() });
+		try {
+			expect(stripAnsi(view.render(120).join("\n"))).not.toContain("one");
+			expect(view.toggleToolOutputExpansion()).toBe(true);
+			expect(stripAnsi(view.render(120).join("\n"))).toContain("one");
+		} finally {
+			view.dispose();
+		}
+	});
+
 	test("renders bounded active-agent summaries", () => {
 		const output = formatRemoteV2Session(
 			{

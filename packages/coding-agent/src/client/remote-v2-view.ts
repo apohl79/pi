@@ -232,6 +232,7 @@ export class RemoteV2SessionView extends Container {
 	readonly #transcriptRenderer: TranscriptRenderer;
 	readonly #tui?: TUI;
 	readonly #cwd?: string;
+	readonly #getHideThinkingBlock: () => boolean;
 	readonly #getShowImages: () => boolean;
 	readonly #getImageWidthCells: () => number;
 	#state: RemoteV2SessionState;
@@ -239,6 +240,7 @@ export class RemoteV2SessionView extends Container {
 	readonly #onUpdated?: () => void;
 	readonly #durationTimer?: ReturnType<typeof setInterval>;
 	#status: string | undefined;
+	#toolOutputExpanded = false;
 
 	constructor(session: RemoteV2Session, options: RemoteV2SessionViewOptions = {}) {
 		super();
@@ -254,17 +256,18 @@ export class RemoteV2SessionView extends Container {
 		this.#state = session.state;
 		this.#tui = options.tui;
 		this.#cwd = options.cwd;
+		this.#getHideThinkingBlock = options.getHideThinkingBlock ?? (() => false);
 		this.#getShowImages = options.getShowImages ?? (() => true);
 		this.#getImageWidthCells = options.getImageWidthCells ?? (() => 60);
 		this.#onUpdated = options.onUpdated;
 		this.#transcriptRenderer = new TranscriptRenderer({
 			container: this,
 			getMarkdownTheme,
-			getHideThinkingBlock: options.getHideThinkingBlock ?? (() => false),
+			getHideThinkingBlock: () => this.#getHideThinkingBlock(),
 			getHiddenThinkingLabel: () => "Thinking...",
 			getOutputPad: options.getOutputPad ?? (() => 1),
 			getMarkdownTransformers: () => [],
-			getToolOutputExpanded: () => false,
+			getToolOutputExpanded: () => this.#toolOutputExpanded,
 		});
 		this.#unsubscribe = session.subscribe((state) => {
 			this.#state = state;
@@ -288,6 +291,18 @@ export class RemoteV2SessionView extends Container {
 	dispose(): void {
 		if (this.#durationTimer) clearInterval(this.#durationTimer);
 		this.#unsubscribe();
+	}
+
+	toggleToolOutputExpansion(): boolean {
+		this.#toolOutputExpanded = !this.#toolOutputExpanded;
+		this.rebuild();
+		this.#onUpdated?.();
+		return this.#toolOutputExpanded;
+	}
+
+	refreshPresentation(): void {
+		this.rebuild();
+		this.#onUpdated?.();
 	}
 
 	/** Shows transient client-side command feedback beside server-authoritative transcript entries. */
@@ -348,6 +363,7 @@ export class RemoteV2SessionView extends Container {
 						this.#tui,
 						this.#cwd,
 					);
+					component.setExpanded(this.#toolOutputExpanded);
 					this.addChild(component);
 					renderedTools.set(part.toolCallId, component);
 				}
