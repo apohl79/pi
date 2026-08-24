@@ -28,7 +28,7 @@ import type {
 	V2WebService,
 } from "@earendil-works/pi-server";
 import { hashV2PluginSet } from "@earendil-works/pi-server";
-import type { SqliteSessionMetadata, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
+import type { SqliteSessionMetadata } from "@earendil-works/pi-session-backend-sqlite-node";
 import { resolveCodexPluginResourceOnDisk } from "../core/codex-plugin.ts";
 import type { Extension } from "../core/extensions/types.ts";
 import { loadSkillsFromDir } from "../core/skills.ts";
@@ -49,6 +49,7 @@ import {
 	type CodingAgentV2SessionStore,
 	createCodingAgentV2ServiceFromStore,
 } from "./v2-service.ts";
+import type { SqliteSessionRepositoryLike } from "./worker-sqlite-session-repository.ts";
 
 const SERVER_EXTENSION_STATE = "server_extension_state";
 
@@ -63,7 +64,7 @@ function persistedExtensionState(entries: readonly Entry[], extensionId: string,
 }
 
 export interface CodingAgentV2SqliteServiceOptions {
-	repository: SqliteSessionRepository;
+	repository: SqliteSessionRepositoryLike;
 	legacySessionImport?: Omit<LegacySessionImportOptions, "repository">;
 	models: Models;
 	env: ExecutionEnv | ((metadata: SqliteSessionMetadata) => ExecutionEnv | Promise<ExecutionEnv>);

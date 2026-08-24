@@ -8,14 +8,14 @@ import {
 	type JsonlSessionRepoFileSystem,
 	type ProvisionedEntry,
 } from "@earendil-works/pi-agent-core";
-import type { SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import { loadEntriesFromFile, type SessionHeader } from "../core/session-manager.ts";
+import type { SqliteSessionRepositoryLike } from "./worker-sqlite-session-repository.ts";
 
 const LEGACY_IMPORT_VERSION = 1;
 const BACKUP_SUFFIX = ".legacy-backup";
 
 export interface LegacySessionImportOptions {
-	repository: SqliteSessionRepository;
+	repository: SqliteSessionRepositoryLike;
 	fs: JsonlSessionRepoFileSystem;
 	sessionsRoot: string;
 }
@@ -45,7 +45,7 @@ async function backupSource(path: string, sourceDigest: string): Promise<string>
 }
 
 async function importSession(
-	repository: SqliteSessionRepository,
+	repository: SqliteSessionRepositoryLike,
 	metadata: JsonlSessionMetadata,
 	entries: readonly Entry[],
 	content: string,

@@ -35,7 +35,6 @@ import {
 	type V2UsageLedger,
 	type V2WebService,
 } from "@earendil-works/pi-server";
-import { createNodeSqliteFactory, SqliteSessionRepository } from "@earendil-works/pi-session-backend-sqlite-node";
 import {
 	createExperimentalCliRuntime,
 	type ExperimentalCliRuntime,
@@ -61,9 +60,10 @@ import { SqliteV2OperationStore } from "./sqlite-operation-store.ts";
 import { SqliteV2PlanRegistry } from "./sqlite-plan-registry.ts";
 import { type CodingAgentV2SqliteServiceOptions, createCodingAgentV2SqliteService } from "./sqlite-service.ts";
 import { SqliteV2UsageLedger } from "./sqlite-usage-ledger.ts";
+import { type SqliteSessionRepositoryLike, WorkerSqliteSessionRepository } from "./worker-sqlite-session-repository.ts";
 
 export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOptions, "repository"> & {
-	repository: SqliteSessionRepository;
+	repository: SqliteSessionRepositoryLike;
 	socketPath: string;
 	planStorePath?: string;
 	diagnosticStorePath?: string;
@@ -132,7 +132,7 @@ export type ConfiguredCodingAgentDaemonRuntimeOptions = Omit<CodingAgentDaemonRu
 };
 
 export type ConfiguredCodingAgentDaemonRuntime = CodingAgentDaemonRuntime & {
-	repository: SqliteSessionRepository;
+	repository: SqliteSessionRepositoryLike;
 	env: NodeExecutionEnv;
 };
 
@@ -385,10 +385,9 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 	}
 	const env = new NodeExecutionEnv({ cwd: options.cwd });
 	const runtimeManifest = options.runtimeManifest ?? createRuntimeManifest();
-	const repository = new SqliteSessionRepository({
-		env,
-		sqlite: createNodeSqliteFactory(),
+	const repository = new WorkerSqliteSessionRepository({
 		databasePath: options.databasePath ?? join(options.agentDir, "server.sqlite"),
+		cwd: options.cwd,
 	});
 	try {
 		const usage =
