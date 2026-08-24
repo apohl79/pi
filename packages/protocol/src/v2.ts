@@ -354,7 +354,7 @@ export const SessionSnapshotV2Schema = StrictObject({
 	eventSeq: NonNegativeIntegerSchema,
 	phase: SessionPhaseV2Schema,
 	activeOperation: Type.Optional(OperationSummarySchema),
-	model: ModelRefSchema,
+	model: BoundedModelRefSchema,
 	thinkingLevel: ThinkingLevelSchema,
 	transcript: Type.Array(BoundedTranscriptItemSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
 	queues: QueueSnapshotSchema,
