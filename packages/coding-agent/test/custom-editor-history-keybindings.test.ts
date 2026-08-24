@@ -31,4 +31,22 @@ describe("CustomEditor prompt history keybindings", () => {
 		editor.handleInput("\x0e"); // Ctrl+N
 		expect(editor.getText()).toBe("draft");
 	});
+
+	it("delegates Ctrl+D to the interactive mode without changing editor text", () => {
+		const editor = new CustomEditor(
+			new TuiMainScreen(new VirtualTerminal()),
+			defaultEditorTheme,
+			new KeybindingsManager(),
+		);
+		let calls = 0;
+		editor.onCtrlD = () => {
+			calls++;
+		};
+		editor.setText("draft");
+
+		editor.handleInput("\x04");
+
+		expect(calls).toBe(1);
+		expect(editor.getText()).toBe("draft");
+	});
 });

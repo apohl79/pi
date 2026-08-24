@@ -224,11 +224,14 @@ async function runCli(): Promise<void> {
 						resolve();
 					});
 				};
+				editor.onAction("app.clear", () => {
+					if (editor.getText().length === 0) finish();
+					else editor.setText("");
+				});
+				editor.onCtrlD = () => {
+					if (session.phase === "turn") finish();
+				};
 				const inputListener = (data: string) => {
-					if (keybindings.matches(data, "tui.input.copy")) {
-						finish();
-						return { consume: true };
-					}
 					attachment.handleInput(data);
 					return { consume: true };
 				};

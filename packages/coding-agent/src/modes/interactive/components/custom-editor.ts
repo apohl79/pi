@@ -56,14 +56,11 @@ export class CustomEditor extends Editor {
 			return;
 		}
 
-		// Exit (Ctrl+D) - only when editor is empty
+		// Ctrl+D is owned by the active interactive mode.
 		if (this.keybindings.matches(data, "app.exit")) {
-			if (this.getText().length === 0) {
-				const handler = this.onCtrlD ?? this.actionHandlers.get("app.exit");
-				if (handler) handler();
-				return;
-			}
-			// Fall through to editor handling for delete-char-forward when not empty
+			const handler = this.onCtrlD ?? this.actionHandlers.get("app.exit");
+			if (handler) handler();
+			return;
 		}
 
 		// Explicit history bindings take precedence over app actions while the editor is focused.

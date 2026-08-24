@@ -457,7 +457,6 @@ export class InteractiveMode {
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
 	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
 
-	private lastSigintTime = 0;
 	private lastEscapeTime = 0;
 	private changelogMarkdown: string | undefined = undefined;
 	private startupNoticesShown = false;
@@ -949,7 +948,7 @@ export class InteractiveMode {
 		]);
 		// Accept text while startup completes, but only enable interrupt, exit, and submission feedback.
 		this.defaultEditor.onAction("app.clear", () => this.handleCtrlC());
-		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
+		this.defaultEditor.onCtrlD = () => undefined;
 		this.defaultEditor.onSubmit = (text) => this.handleStartupSubmit(text);
 		this.ui.setFocus(this.editor);
 
@@ -2877,7 +2876,7 @@ export class InteractiveMode {
 
 		// Register app action handlers
 		this.defaultEditor.onAction("app.clear", () => this.handleCtrlC());
-		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
+		this.defaultEditor.onCtrlD = () => undefined;
 		this.defaultEditor.onAction("app.suspend", () => this.handleCtrlZ());
 		this.defaultEditor.onAction("app.thinking.cycle", () => this.cycleThinkingLevel());
 		this.defaultEditor.onAction("app.model.cycleForward", () => this.cycleModel("forward"));
@@ -3903,18 +3902,8 @@ export class InteractiveMode {
 	// =========================================================================
 
 	private handleCtrlC(): void {
-		const now = Date.now();
-		if (now - this.lastSigintTime < 500) {
-			void this.shutdown();
-		} else {
-			this.clearEditor();
-			this.lastSigintTime = now;
-		}
-	}
-
-	private handleCtrlD(): void {
-		// Only called when editor is empty (enforced by CustomEditor)
-		void this.shutdown();
+		if (this.editor.getText().length === 0) void this.shutdown();
+		else this.clearEditor();
 	}
 
 	/**
