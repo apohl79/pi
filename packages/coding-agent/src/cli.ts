@@ -26,6 +26,7 @@ import { ModelRuntime } from "./core/model-runtime.ts";
 import type { SessionEntry, SessionInfo, SessionTreeNode } from "./core/session-manager.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { main } from "./main.ts";
+import { BashExecutionComponent } from "./modes/interactive/components/bash-execution.ts";
 import { CustomEditor } from "./modes/interactive/components/custom-editor.ts";
 import { ExtensionEditorComponent } from "./modes/interactive/components/extension-editor.ts";
 import { ExtensionSelectorComponent } from "./modes/interactive/components/extension-selector.ts";
@@ -802,6 +803,46 @@ async function runCli(): Promise<void> {
 					openScopedModels: showScopedModels,
 					openThinking: showThinking,
 					quit: () => finishInteractive(),
+					executeShell: async (command, excludeFromContext) => {
+						const component = new BashExecutionComponent(command, tui, excludeFromContext);
+						view.addTransientTranscriptComponent(component);
+						const shellProcess = await session.startProcess(command, { cwd: process.cwd(), pty: false });
+						let cursor = 0;
+						let reads = Promise.resolve();
+						const consumeOutput = () => {
+							reads = reads.then(async () => {
+								const output = await session.readProcess(shellProcess.processId, cursor);
+								if (output.output.length > 0) component.appendOutput(output.output);
+								cursor = output.cursor;
+								tui.requestRender();
+							});
+							return reads;
+						};
+						const unsubscribe = session.subscribe((state) => {
+							const updated = state.processes?.find(
+								(candidate) => candidate.processId === shellProcess.processId,
+							);
+							if (updated !== undefined && updated.cursor > cursor) void consumeOutput();
+						});
+						try {
+							await consumeOutput();
+							const completed = await session.waitProcess(shellProcess.processId);
+							await consumeOutput();
+							const cancelled = completed.state === "terminated" || completed.state === "lost";
+							component.setComplete(completed.exitCode, cancelled);
+							await session.recordBash({
+								command,
+								output: component.getOutput(),
+								...(completed.exitCode === undefined ? {} : { exitCode: completed.exitCode }),
+								cancelled,
+								truncated: completed.truncated,
+								excludeFromContext,
+							});
+							tui.requestRender();
+						} finally {
+							unsubscribe();
+						}
+					},
 					cwd: process.cwd(),
 				},
 			);

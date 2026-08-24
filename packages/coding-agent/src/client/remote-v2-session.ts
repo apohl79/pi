@@ -20,6 +20,7 @@ import type {
 	AgentSummary,
 	CommandV2,
 	GoalSnapshot,
+	InteractiveResourceV2,
 	JsonValue,
 	ModelMetadata,
 	ModelRef,
@@ -297,6 +298,27 @@ export class RemoteV2Session {
 	listModels(): Promise<readonly ModelMetadata[]> {
 		this.#assertNotDisposed();
 		return this.#client.listModels();
+	}
+
+	async listInteractiveResources(): Promise<readonly InteractiveResourceV2[]> {
+		this.#assertNotDisposed();
+		const result = await this.#direct({ command: "resource/list", sessionId: this.#requireHandle().sessionId });
+		if (!Array.isArray(result.resources)) throw new Error("Invalid resource/list response");
+		return result.resources.map((resource) => {
+			const record = asRecord(resource);
+			if (
+				record === undefined ||
+				(record.kind !== "prompt" && record.kind !== "skill") ||
+				typeof record.name !== "string" ||
+				(record.description !== undefined && typeof record.description !== "string")
+			)
+				throw new Error("Invalid resource/list response");
+			return {
+				kind: record.kind,
+				name: record.name,
+				...(typeof record.description === "string" ? { description: record.description } : {}),
+			};
+		});
 	}
 
 	/** Lists server-owned sessions available to this client connection. */
@@ -666,6 +688,22 @@ export class RemoteV2Session {
 		});
 		if (!isProcessSnapshot(result.process)) throw new Error("Invalid process/start response");
 		return structuredClone(result.process);
+	}
+
+	async recordBash(message: {
+		readonly command: string;
+		readonly output: string;
+		readonly exitCode?: number;
+		readonly cancelled: boolean;
+		readonly truncated: boolean;
+		readonly excludeFromContext: boolean;
+	}): Promise<void> {
+		this.#assertControl();
+		await this.#direct({
+			command: "session/bash/record",
+			sessionId: this.#handle!.sessionId,
+			payload: { ...message },
+		});
 	}
 
 	async listProcesses(): Promise<readonly RemoteV2ProcessSnapshot[]> {

@@ -356,6 +356,14 @@ export const InstructionProfileSummarySchema = StrictObject({
 });
 export type InstructionProfileSummary = Static<typeof InstructionProfileSummarySchema>;
 
+/** A daemon-owned command resource that a remote interactive client may invoke. */
+export const InteractiveResourceV2Schema = StrictObject({
+	kind: Type.Union([Type.Literal("prompt"), Type.Literal("skill")]),
+	name: IdSchema,
+	description: Type.Optional(BoundedStringSchema),
+});
+export type InteractiveResourceV2 = Static<typeof InteractiveResourceV2Schema>;
+
 export const DiagnosticsSnapshotSchema = StrictObject({
 	capture: Type.Union([Type.Literal("metadata"), Type.Literal("encrypted")]),
 	degraded: Type.Boolean(),
@@ -440,6 +448,7 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("session/read"),
 	Type.Literal("session/tree/read"),
 	Type.Literal("session/label/set"),
+	Type.Literal("session/bash/record"),
 	Type.Literal("session/delete"),
 	Type.Literal("session/fork"),
 	Type.Literal("session/name/set"),
@@ -456,6 +465,7 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("turn/compact"),
 	Type.Literal("operation/read"),
 	Type.Literal("model/list"),
+	Type.Literal("resource/list"),
 	Type.Literal("session/model/set"),
 	Type.Literal("session/thinking/set"),
 	Type.Literal("session/steering-mode/set"),

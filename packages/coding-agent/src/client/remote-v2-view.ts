@@ -256,6 +256,7 @@ export class RemoteV2SessionView extends Container {
 	readonly #unsubscribe: () => void;
 	readonly #onUpdated?: () => void;
 	readonly #durationTimer?: ReturnType<typeof setInterval>;
+	readonly #transientTranscriptComponents: Component[] = [];
 	#status: string | undefined;
 	#toolOutputExpanded = false;
 
@@ -330,6 +331,13 @@ export class RemoteV2SessionView extends Container {
 		this.#onUpdated?.();
 	}
 
+	/** Adds client-local interaction output without replacing the server-authoritative transcript. */
+	addTransientTranscriptComponent(component: Component): void {
+		this.#transientTranscriptComponents.push(component);
+		this.rebuild();
+		this.#onUpdated?.();
+	}
+
 	private rebuild(): void {
 		this.clear();
 		const snapshot = this.#state.snapshot;
@@ -346,6 +354,7 @@ export class RemoteV2SessionView extends Container {
 			characters += text.length;
 			this.addTranscriptItem(item, renderedTools);
 		}
+		for (const component of this.#transientTranscriptComponents) this.addChild(component);
 		if (this.#status !== undefined) {
 			this.addChild(new Spacer(1));
 			this.addChild(new Text(theme.fg("dim", this.#status), 1, 0));

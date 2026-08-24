@@ -152,7 +152,7 @@ export class RemoteV2AutocompleteProvider implements AutocompleteProvider {
 		if (model !== null) return model;
 		const thinking = await this.thinkingSuggestions(input, options.signal);
 		if (thinking !== null) return thinking;
-		const command = this.commandSuggestions(input);
+		const command = await this.commandSuggestions(input, options.signal);
 		if (command !== null) return command;
 
 		const tokenStart = Math.max(input.lastIndexOf(" "), input.lastIndexOf("\t")) + 1;
@@ -237,15 +237,24 @@ export class RemoteV2AutocompleteProvider implements AutocompleteProvider {
 		return input.slice(tokenStart).startsWith("@");
 	}
 
-	commandSuggestions(input: string): AutocompleteSuggestions | null {
+	async commandSuggestions(input: string, signal: AbortSignal): Promise<AutocompleteSuggestions | null> {
 		if (!input.startsWith("/") || /\s/u.test(input)) return null;
 		const prefix = input.slice(1);
+		const resources = await this.#session.listInteractiveResources();
+		if (signal.aborted) return null;
 		const items = fuzzyFilter(
-			REMOTE_V2_SLASH_COMMANDS.map((command) => ({
-				value: command.slice(1),
-				label: command.slice(1),
-				description: remoteV2CommandDescription(command),
-			})),
+			[
+				...REMOTE_V2_SLASH_COMMANDS.map((command) => ({
+					value: command.slice(1),
+					label: command.slice(1),
+					description: remoteV2CommandDescription(command),
+				})),
+				...resources.map((resource) => ({
+					value: resource.name,
+					label: resource.name,
+					description: resource.description ?? (resource.kind === "skill" ? "Server skill" : "Server prompt"),
+				})),
+			],
 			prefix,
 			(item) => `${item.value} ${item.description ?? ""}`,
 		);
@@ -474,6 +483,7 @@ export class RemoteV2InteractiveAttachment {
 	readonly #copyText: (text: string) => Promise<void>;
 	readonly #readClipboardImage: () => Promise<ClipboardImage | null>;
 	readonly #readClipboardText: () => Promise<string | null>;
+	readonly #executeShell: ((command: string, excludeFromContext: boolean) => Promise<void>) | undefined;
 	readonly #cwd: string | undefined;
 
 	constructor(
@@ -491,6 +501,7 @@ export class RemoteV2InteractiveAttachment {
 			readonly copyText?: (text: string) => Promise<void>;
 			readonly readClipboardImage?: () => Promise<ClipboardImage | null>;
 			readonly readClipboardText?: () => Promise<string | null>;
+			readonly executeShell?: (command: string, excludeFromContext: boolean) => Promise<void>;
 			readonly cwd?: string;
 		} = {},
 	) {
@@ -507,6 +518,7 @@ export class RemoteV2InteractiveAttachment {
 		this.#copyText = options.copyText ?? copyToClipboard;
 		this.#readClipboardImage = options.readClipboardImage ?? readClipboardImage;
 		this.#readClipboardText = options.readClipboardText ?? readClipboardText;
+		this.#executeShell = options.executeShell;
 		this.#cwd = options.cwd;
 		if (editor !== undefined) {
 			editor.setAutocompleteProvider(new RemoteV2AutocompleteProvider(attachment.session));
@@ -585,7 +597,13 @@ export class RemoteV2InteractiveAttachment {
 
 	async execute(input: string): Promise<RemoteV2CommandResult> {
 		this.#assertActive();
-		const command = parseRemoteV2Command(input);
+		let command: RemoteV2Command;
+		try {
+			command = parseRemoteV2Command(input);
+		} catch (error) {
+			if (await this.#isInteractiveResourceInvocation(input)) return operation(await this.session.submit(input));
+			throw error;
+		}
 		switch (command.name) {
 			case "abort":
 				return operation(await this.session.abort());
@@ -735,6 +753,13 @@ export class RemoteV2InteractiveAttachment {
 		}
 	}
 
+	async #isInteractiveResourceInvocation(input: string): Promise<boolean> {
+		const match = /^\/([^\s]+)(?:\s|$)/u.exec(input.trim());
+		if (match === null) return false;
+		const resources = await this.session.listInteractiveResources();
+		return resources.some((resource) => resource.name === match[1]);
+	}
+
 	private submitEditorText(text: string): void {
 		const input = text.trim();
 		const recalledContent = this.#recalledContent;
@@ -749,11 +774,13 @@ export class RemoteV2InteractiveAttachment {
 		this.#recalledText = undefined;
 		this.#pendingAttachments = [];
 		this.#editor?.setText("");
-		const action = input.startsWith("/")
-			? this.execute(input)
-			: (content === undefined ? this.submit(input) : this.session.submit(content)).then(
-					(operationId) => `operation ${operationId}`,
-				);
+		const action = input.startsWith("!")
+			? this.executeShell(input)
+			: input.startsWith("/")
+				? this.execute(input)
+				: (content === undefined ? this.submit(input) : this.session.submit(content)).then(
+						(operationId) => `operation ${operationId}`,
+					);
 		void action
 			.then((result) => {
 				if (typeof result !== "string") this.view.showStatus(formatRemoteV2CommandResult(result));
@@ -763,6 +790,14 @@ export class RemoteV2InteractiveAttachment {
 				this.view.showStatus(error instanceof Error ? error.message : String(error));
 				this.view.invalidate();
 			});
+	}
+
+	private executeShell(input: string): Promise<string> {
+		if (this.#executeShell === undefined) return Promise.reject(new Error("Remote shell execution is unavailable"));
+		const excludeFromContext = input.startsWith("!!");
+		const command = input.slice(excludeFromContext ? 2 : 1).trim();
+		if (command.length === 0) return Promise.resolve("shell command ignored");
+		return this.#executeShell(command, excludeFromContext).then(() => "shell command started");
 	}
 
 	dispose(): Promise<void> {

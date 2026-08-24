@@ -6,6 +6,7 @@ import {
 	type EventEnvelopeV2,
 	encodeServerMessageV2,
 	FrameDecoder,
+	type InteractiveResourceV2,
 	type ModelMetadata,
 	type OperationAccepted,
 	type OperationRecordV2,
@@ -99,6 +100,16 @@ export interface PiSessionRuntimeEventV2 {
 
 export interface PiSessionRuntimeV2 {
 	snapshot(): MaybePromise<SessionSnapshotV2>;
+	/** Optional daemon-owned prompt templates and skills available to this attached session. */
+	listInteractiveResources?(): MaybePromise<readonly InteractiveResourceV2[]>;
+	recordBash?(message: {
+		command: string;
+		output: string;
+		exitCode?: number;
+		cancelled: boolean;
+		truncated: boolean;
+		excludeFromContext: boolean;
+	}): Promise<void>;
 	/** Optional durable tree projection for runtimes that retain branch ancestry. */
 	readTree?(): MaybePromise<unknown>;
 	accept(operationId: string, command?: CommandV2): Promise<OperationAccepted>;
@@ -588,10 +599,12 @@ export class PiServerV2 {
 					command: command.command,
 					models: await this.service.listModels(),
 				}));
+			if (command.command === "resource/list") return void (await this.listInteractiveResources(state, id, command));
 			if (command.command === "operation/read") return void (await this.readOperation(state, id, command));
 			if (command.command === "session/attach") return void (await this.attach(state, id, command));
 			if (command.command === "session/read") return void (await this.readSession(state, id, command));
 			if (command.command === "session/tree/read") return void (await this.readSessionTree(state, id, command));
+			if (command.command === "session/bash/record") return void (await this.recordBash(state, id, command));
 			if (command.command === "goal/read") return void (await this.readGoal(state, id, command));
 			if (command.command === "turn/queue/cancel") return void (await this.cancelQueued(state, id, command));
 			if (command.command === "process/start") return void (await this.startProcess(state, id, command));
@@ -681,6 +694,43 @@ export class PiServerV2 {
 		} catch (error) {
 			await this.sendError(state, id, "request_failed", error instanceof Error ? error.message : String(error));
 		}
+	}
+
+	private async listInteractiveResources(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("resource/list requires sessionId");
+		const runtime = state.sessions.get(command.sessionId);
+		if (!runtime) throw new Error(`Session ${command.sessionId} is not attached`);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			resources: (await runtime.listInteractiveResources?.()) ?? [],
+		});
+	}
+
+	private async recordBash(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("session/bash/record requires sessionId");
+		this.requireControl(state, command.sessionId);
+		const runtime = state.sessions.get(command.sessionId);
+		if (!runtime) throw new Error(`Session ${command.sessionId} is not attached`);
+		if (runtime.recordBash === undefined) throw new Error("session/bash/record is not supported by this session");
+		const payload = objectPayload(command);
+		if (typeof payload.command !== "string" || typeof payload.output !== "string")
+			throw new Error("session/bash/record requires command and output");
+		if (typeof payload.cancelled !== "boolean" || typeof payload.truncated !== "boolean")
+			throw new Error("session/bash/record requires cancelled and truncated flags");
+		if (
+			payload.exitCode !== undefined &&
+			(typeof payload.exitCode !== "number" || !Number.isSafeInteger(payload.exitCode) || payload.exitCode < 0)
+		)
+			throw new Error("session/bash/record exitCode must be a non-negative integer");
+		await runtime.recordBash({
+			command: payload.command,
+			output: payload.output,
+			...(typeof payload.exitCode === "number" ? { exitCode: payload.exitCode } : {}),
+			cancelled: payload.cancelled,
+			truncated: payload.truncated,
+			excludeFromContext: payload.excludeFromContext === true,
+		});
+		await this.sendResponse(state, id, { command: command.command });
 	}
 
 	private async rejectDuplicateRequest(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

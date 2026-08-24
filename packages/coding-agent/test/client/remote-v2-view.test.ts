@@ -1,5 +1,5 @@
 import type { SessionSnapshotV2 } from "@earendil-works/pi-protocol";
-import { Container, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { Container, Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { RemoteV2SessionState } from "../../src/client/remote-v2-session.ts";
 import {
@@ -260,6 +260,25 @@ describe("formatRemoteV2Session", () => {
 		try {
 			view.showStatus("plan updated");
 			expect(stripAnsi(view.render(120).join("\n"))).toContain("plan updated");
+		} finally {
+			view.dispose();
+		}
+	});
+
+	test("preserves transient interaction output across server snapshot refreshes", () => {
+		let listener: ((state: RemoteV2SessionState) => void) | undefined;
+		const source = {
+			state: { lifecycle: { status: "ready" as const }, snapshot },
+			subscribe: (next: (state: RemoteV2SessionState) => void) => {
+				listener = next;
+				return () => {};
+			},
+		};
+		const view = new RemoteV2SessionView(source as never);
+		try {
+			view.addTransientTranscriptComponent(new Text("shell output", 1, 0));
+			listener?.({ lifecycle: { status: "ready" }, snapshot: { ...snapshot, revision: 3 } });
+			expect(stripAnsi(view.render(120).join("\n"))).toContain("shell output");
 		} finally {
 			view.dispose();
 		}

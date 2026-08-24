@@ -170,15 +170,22 @@ function clientWithRequests(withQueue = false, assistantText?: string): { client
 														},
 													],
 												}
-											: message.request.command === "plan/update"
-												? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
-												: message.request.command === "plugin/list"
-													? { plugins: [{ id: "demo", enabled: true }] }
-													: message.request.command === "process/list"
-														? { processes: [] }
-														: message.request.command === "blob/put"
-															? { blob: { digest: "b".repeat(64), mimeType: "image/png", size: 3 } }
-															: { command: message.request.command }) as JsonValue,
+											: message.request.command === "resource/list"
+												? {
+														resources: [
+															{ kind: "prompt", name: "commit", description: "Create a commit" },
+															{ kind: "skill", name: "skill:review", description: "Review code" },
+														],
+													}
+												: message.request.command === "plan/update"
+													? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
+													: message.request.command === "plugin/list"
+														? { plugins: [{ id: "demo", enabled: true }] }
+														: message.request.command === "process/list"
+															? { processes: [] }
+															: message.request.command === "blob/put"
+																? { blob: { digest: "b".repeat(64), mimeType: "image/png", size: 3 } }
+																: { command: message.request.command }) as JsonValue,
 					};
 			handlers?.onData(encodeServerMessageV2(response));
 		},
@@ -453,6 +460,23 @@ describe("remote v2 interactive command boundary", () => {
 		client.dispose();
 	});
 
+	test("routes shell input through the configured remote shell executor", async () => {
+		const { client, commands } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const editor = createEditor();
+		const executeShell = vi.fn(async () => {});
+		const adapter = new RemoteV2InteractiveAttachment(attached, editor, { executeShell });
+
+		editor.setText("!! echo detached");
+		editor.onSubmit?.(editor.getText());
+		await vi.waitFor(() => expect(executeShell).toHaveBeenCalledWith("echo detached", true));
+		expect(commands).not.toContain("turn/start");
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
 	test("binds remote submission and completion to the standard editor component", async () => {
 		const { client, commands } = clientWithRequests();
 		await client.connect();
@@ -650,7 +674,7 @@ describe("remote v2 interactive command boundary", () => {
 				]),
 			}),
 		);
-		expect(provider.commandSuggestions("/detach")).toEqual(
+		expect(await provider.commandSuggestions("/detach", new AbortController().signal)).toEqual(
 			expect.objectContaining({
 				items: expect.arrayContaining([
 					expect.objectContaining({
@@ -658,6 +682,11 @@ describe("remote v2 interactive command boundary", () => {
 						description: "Detach this TUI and leave the server session running",
 					}),
 				]),
+			}),
+		);
+		expect(await provider.getSuggestions(["/ski"], 0, 4, { signal: new AbortController().signal })).toEqual(
+			expect.objectContaining({
+				items: expect.arrayContaining([expect.objectContaining({ value: "skill:review" })]),
 			}),
 		);
 		expect(provider.applyCompletion(["/mo"], 0, 3, { value: "model", label: "model" }, "/mo")).toEqual({

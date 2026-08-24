@@ -28,6 +28,69 @@ describe("coding-agent v2 service adapter", () => {
 		);
 	});
 
+	test("lists daemon-owned interactive resources and expands skill invocations", async () => {
+		const models = createModels();
+		const faux = fauxProvider({
+			provider: "coding-agent-v2-resource-faux",
+			models: [{ id: "resource-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
+		});
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("resource response")]);
+		const session = new Session(new InMemorySessionStorage({ id: "resource-session", createdAt: 1 }));
+		const env = new NodeExecutionEnv({ cwd: process.cwd() });
+		const created = await createCodingAgentHarness({
+			session,
+			models,
+			model: faux.getModel(),
+			env,
+			tools: [],
+			activeToolNames: [],
+			resources: {
+				promptTemplates: [{ name: "commit", content: "Commit $1", description: "Create a commit" }],
+				skills: [
+					{
+						name: "review",
+						description: "Review code",
+						content: "Inspect the diff",
+						filePath: "/skills/review.md",
+					},
+				],
+			},
+		});
+		try {
+			const service = createCodingAgentV2Service(models, [
+				{ metadata: { id: "resource-session", createdAt: 1, updatedAt: 1 }, harness: created.harness },
+			]);
+			const runtime = await service.openSession("resource-session");
+			expect(await runtime.listInteractiveResources!()).toEqual([
+				{ kind: "prompt", name: "commit", description: "Create a commit" },
+				{ kind: "skill", name: "skill:review", description: "Review code" },
+			]);
+			await runtime.run("resource-turn", {
+				command: "turn/start",
+				sessionId: "resource-session",
+				payload: { text: "/skill:review focus on races" },
+			});
+			const messages = await session.findEntries({ order: "oldestFirst" });
+			expect(JSON.stringify(messages)).toContain('<skill name=\\"review\\"');
+			expect(JSON.stringify(messages)).toContain("focus on races");
+			await runtime.recordBash?.({
+				command: "git status",
+				output: "M src/index.ts",
+				exitCode: 0,
+				cancelled: false,
+				truncated: false,
+				excludeFromContext: false,
+			});
+			expect(JSON.stringify(await session.findEntries({ order: "oldestFirst" }))).toContain(
+				'"role":"bashExecution"',
+			);
+		} finally {
+			await created.harness.close();
+			await env.cleanup();
+		}
+	});
+
 	test("rejects goal pause and resume when goals are not configured", async () => {
 		const models = createModels();
 		const faux = fauxProvider({

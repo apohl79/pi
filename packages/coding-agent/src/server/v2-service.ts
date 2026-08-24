@@ -16,6 +16,7 @@ import type {
 	CompactionPolicy,
 	DiagnosticsSnapshot,
 	InstructionProfileSummary,
+	InteractiveResourceV2,
 	ModelMetadata,
 	OperationAccepted,
 	OperationSummary,
@@ -178,6 +179,15 @@ export interface CodingAgentV2SessionStore {
 
 export interface CodingAgentV2Runtime {
 	snapshot(): Promise<SessionSnapshotV2>;
+	listInteractiveResources?(): Promise<readonly InteractiveResourceV2[]>;
+	recordBash?(message: {
+		command: string;
+		output: string;
+		exitCode?: number;
+		cancelled: boolean;
+		truncated: boolean;
+		excludeFromContext: boolean;
+	}): Promise<void>;
 	readTree?(): Promise<{ leafId: string | null; entries: readonly Entry[]; labels: Readonly<Record<string, string>> }>;
 	onEvent?(listener: (event: PiSessionRuntimeEventV2) => void): () => void;
 	cancelQueued(entryId: string): Promise<void>;
@@ -415,6 +425,42 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 	onEvent(listener: (event: PiSessionRuntimeEventV2) => void): () => void {
 		this.eventListeners.add(listener);
 		return () => this.eventListeners.delete(listener);
+	}
+
+	async recordBash(message: {
+		command: string;
+		output: string;
+		exitCode?: number;
+		cancelled: boolean;
+		truncated: boolean;
+		excludeFromContext: boolean;
+	}): Promise<void> {
+		await this.definition.harness.session.appendMessage({
+			role: "bashExecution",
+			command: message.command,
+			output: message.output,
+			exitCode: message.exitCode,
+			cancelled: message.cancelled,
+			truncated: message.truncated,
+			excludeFromContext: message.excludeFromContext,
+			timestamp: Date.now(),
+		});
+	}
+
+	async listInteractiveResources(): Promise<readonly InteractiveResourceV2[]> {
+		const resources = await this.definition.harness.getResources();
+		return [
+			...(resources.promptTemplates ?? []).map((template) => ({
+				kind: "prompt" as const,
+				name: template.name,
+				...(template.description === undefined ? {} : { description: template.description }),
+			})),
+			...(resources.skills ?? []).map((skill) => ({
+				kind: "skill" as const,
+				name: `skill:${skill.name}`,
+				...(skill.description === undefined ? {} : { description: skill.description }),
+			})),
+		];
 	}
 
 	private emitRuntimeEvent(
@@ -1018,7 +1064,17 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 		try {
 			assertPromptCapabilities(await harness.getModel(), promptInput);
 			if (runCommand === "turn/start") {
-				const result = await harness.prompt(promptInput);
+				const skillInvocation = /^\/skill:([^\s]+)(?:\s+([\s\S]*))?$/u.exec(
+					promptInput.role === "user" &&
+						Array.isArray(promptInput.content) &&
+						promptInput.content.length === 1 &&
+						promptInput.content[0]?.type === "text"
+						? promptInput.content[0].text
+						: "",
+				);
+				const result = skillInvocation
+					? await harness.skill(skillInvocation[1]!, skillInvocation[2]?.trim() || undefined)
+					: await harness.prompt(promptInput);
 				if (!result.ok) throw new Error(result.error.message);
 				if (result.value.kind === "failed") throw new Error(result.value.error.message);
 				await this.recordUsageLedger(_operationId, beforeEntryIds);
