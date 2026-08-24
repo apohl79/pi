@@ -46,6 +46,17 @@ describe("SqliteV2InputRegistry", () => {
 		await restored.close();
 	});
 
+	test("resolves a live pending wait after durable response", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-inputs-live-wait-"));
+		directories.push(directory);
+		const registry = new SqliteV2InputRegistry(join(directory, "inputs.sqlite"));
+		const request = await registry.create("session-1", questions);
+		const waiting = registry.wait(request.id);
+		await registry.respond(request.id, { choice: "yes" });
+		expect(await waiting).toMatchObject({ status: "responded", answers: { choice: "yes" } });
+		await registry.close();
+	});
+
 	test("rejects malformed persisted input rows", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-inputs-invalid-"));
 		directories.push(directory);

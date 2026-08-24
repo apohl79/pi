@@ -83,6 +83,7 @@ describe("createServerAgentSession", () => {
 		models.setProvider(faux.provider);
 		faux.setResponses([
 			fauxAssistantMessage("reopen this durable session"),
+			fauxAssistantMessage("Restart test"),
 			fauxAssistantMessage("continued after daemon restart"),
 		]);
 		try {
@@ -92,6 +93,7 @@ describe("createServerAgentSession", () => {
 			try {
 				const operationId = await first.session.submit("save this before shutdown");
 				await first.session.waitForOperation(operationId);
+				expect(faux.getPendingResponseCount()).toBe(1);
 			} finally {
 				await first.close();
 			}
@@ -103,6 +105,7 @@ describe("createServerAgentSession", () => {
 				model: faux.getModel(),
 			});
 			try {
+				expect(faux.getPendingResponseCount()).toBe(1);
 				expect(reopened.session.snapshot?.transcript).toEqual(
 					expect.arrayContaining([
 						expect.objectContaining({

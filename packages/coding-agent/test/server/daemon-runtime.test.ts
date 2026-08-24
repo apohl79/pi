@@ -157,6 +157,7 @@ describe("coding-agent daemon runtime", () => {
 		expect(runtime.daemon.status()).toEqual({
 			state: "running",
 			serverId: "daemon-1",
+			pid: process.pid,
 			addresses: [`unix://${join(directory, "pi.sock")}`],
 		});
 		expect(await runtime.service.listSessions()).toEqual([]);
