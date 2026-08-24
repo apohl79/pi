@@ -1,97 +1,138 @@
+import { Worker } from "node:worker_threads";
 import type { EventEnvelopeV2, OperationRecordV2 } from "@earendil-works/pi-protocol";
 import { type V2OperationStore, validateV2EventEnvelope, validateV2OperationRecord } from "@earendil-works/pi-server";
-import type { SqliteDatabase, SqliteDatabaseFactory } from "@earendil-works/pi-session-backend-sqlite-node";
 
-interface OperationRow {
-	operation_id: string;
-	value: string;
-}
+type WorkerCommand =
+	| { readonly command: "load" }
+	| { readonly command: "putOperation"; readonly operationId: string; readonly value: string }
+	| { readonly command: "appendEvent"; readonly eventId: string; readonly value: string }
+	| { readonly command: "close" };
 
-interface EventRow {
-	value: string;
+type WorkerResponse = {
+	readonly id: number;
+	readonly result?: unknown;
+	readonly error?: string;
+};
+
+type LoadedJournal = {
+	readonly operations: readonly string[];
+	readonly events: readonly string[];
+};
+
+function isWorkerResponse(value: unknown): value is WorkerResponse {
+	return value !== null && typeof value === "object" && "id" in value && typeof value.id === "number";
 }
 
 /** SQLite-backed operation and event journal used by configured coding-agent daemons. */
 export class SqliteV2OperationStore implements V2OperationStore {
-	readonly #databaseFactory: SqliteDatabaseFactory;
 	readonly #databasePath: string;
-	#databasePromise: Promise<SqliteDatabase> | undefined;
-	#pendingWrite: Promise<void> = Promise.resolve();
+	readonly #pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+	#worker: Worker | undefined;
+	#nextRequestId = 1;
+	#closed = false;
 
-	constructor(databaseFactory: SqliteDatabaseFactory, databasePath: string) {
-		this.#databaseFactory = databaseFactory;
+	constructor(databasePath: string) {
 		this.#databasePath = databasePath;
 	}
 
 	async load(): Promise<{ operations: readonly OperationRecordV2[]; events: readonly EventEnvelopeV2[] }> {
-		const database = await this.#database();
-		const operations = database
-			.prepare("SELECT operation_id, value FROM v2_operations ORDER BY operation_id")
-			.all<OperationRow>()
-			.map((row) => {
-				const value = parseJson(row.value, "operation record");
-				validateV2OperationRecord(value);
-				return value;
-			});
-		const events = database
-			.prepare("SELECT value FROM v2_events ORDER BY rowid")
-			.all<EventRow>()
-			.map((row) => {
-				const value = parseJson(row.value, "event record");
-				validateV2EventEnvelope(value);
-				return value;
-			});
-		return { operations, events };
+		const loaded = await this.#request<LoadedJournal>({ command: "load" });
+		return {
+			operations: loaded.operations.map((value) => {
+				const record = parseJson(value, "operation record");
+				validateV2OperationRecord(record);
+				return record;
+			}),
+			events: loaded.events.map((value) => {
+				const event = parseJson(value, "event record");
+				validateV2EventEnvelope(event);
+				return event;
+			}),
+		};
 	}
 
 	putOperation(record: OperationRecordV2): Promise<void> {
-		return this.#enqueue(async () => {
-			const database = await this.#database();
-			database
-				.prepare(
-					"INSERT INTO v2_operations (operation_id, value) VALUES (?, ?) " +
-						"ON CONFLICT(operation_id) DO UPDATE SET value = excluded.value",
-				)
-				.run(record.operationId, JSON.stringify(record));
+		return this.#request({
+			command: "putOperation",
+			operationId: record.operationId,
+			value: JSON.stringify(record),
 		});
 	}
 
 	appendEvent(event: EventEnvelopeV2): Promise<void> {
-		return this.#enqueue(async () => {
-			const database = await this.#database();
-			database
-				.prepare("INSERT OR REPLACE INTO v2_events (event_id, value) VALUES (?, ?)")
-				.run(`${event.sessionId}:${event.seq}`, JSON.stringify(event));
+		return this.#request({
+			command: "appendEvent",
+			eventId: `${event.sessionId}:${event.seq}`,
+			value: JSON.stringify(event),
 		});
 	}
 
 	async close(): Promise<void> {
-		await this.#pendingWrite;
-		const database = await this.#databasePromise;
-		if (database !== undefined) database.close();
-		this.#databasePromise = undefined;
+		if (this.#closed) return;
+		this.#closed = true;
+		const worker = this.#worker;
+		if (worker === undefined) return;
+		try {
+			await this.#request({ command: "close" }, true);
+		} finally {
+			await worker.terminate();
+			this.#worker = undefined;
+		}
 	}
 
-	#database(): Promise<SqliteDatabase> {
-		this.#databasePromise ??= this.#open();
-		return this.#databasePromise;
+	#request<T>(command: WorkerCommand, closing = false): Promise<T> {
+		if (this.#closed && !closing) return Promise.reject(new Error("SQLite operation store is closed"));
+		const worker = this.#worker ?? this.#createWorker();
+		const id = this.#nextRequestId;
+		this.#nextRequestId += 1;
+		return new Promise<T>((resolve, reject) => {
+			this.#pending.set(id, { resolve, reject });
+			worker.postMessage({ id, command });
+		});
 	}
 
-	async #open(): Promise<SqliteDatabase> {
-		const database = await this.#databaseFactory.open(this.#databasePath);
-		database.exec(
-			"CREATE TABLE IF NOT EXISTS v2_operations (" +
-				"operation_id TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)" +
-				"; CREATE TABLE IF NOT EXISTS v2_events (" +
-				"event_id TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)",
+	#createWorker(): Worker {
+		if (typeof process.versions.bun === "string") {
+			const worker = new Worker("./src/server/sqlite-operation-store-worker.ts", {
+				workerData: { databasePath: this.#databasePath },
+			});
+			return this.#observeWorker(worker);
+		}
+		const workerUrl = new URL(
+			import.meta.url.endsWith(".ts") ? "./sqlite-operation-store-worker.ts" : "./sqlite-operation-store-worker.js",
+			import.meta.url,
 		);
-		return database;
+		const worker = new Worker(workerUrl, { workerData: { databasePath: this.#databasePath } });
+		return this.#observeWorker(worker);
 	}
 
-	#enqueue(operation: () => Promise<void>): Promise<void> {
-		const write = this.#pendingWrite.then(operation);
-		this.#pendingWrite = write.catch(() => undefined);
-		return write;
+	#observeWorker(worker: Worker): Worker {
+		worker.on("message", (message: unknown) => this.#handleResponse(message));
+		worker.once("error", (error) => this.#failPending(error));
+		worker.once("exit", (code) => {
+			if (!this.#closed && code !== 0)
+				this.#failPending(new Error(`SQLite operation worker exited with code ${code}`));
+			if (this.#worker === worker) this.#worker = undefined;
+		});
+		this.#worker = worker;
+		return worker;
+	}
+
+	#handleResponse(message: unknown): void {
+		if (!isWorkerResponse(message)) {
+			this.#failPending(new Error("Invalid SQLite operation worker response"));
+			return;
+		}
+		const request = this.#pending.get(message.id);
+		if (request === undefined) return;
+		this.#pending.delete(message.id);
+		if (message.error !== undefined) request.reject(new Error(message.error));
+		else request.resolve(message.result);
+	}
+
+	#failPending(error: Error): void {
+		for (const request of this.#pending.values()) request.reject(error);
+		this.#pending.clear();
 	}
 }
 

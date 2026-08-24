@@ -439,10 +439,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 			);
 		const operationStore =
 			options.operationStore ??
-			new SqliteV2OperationStore(
-				createNodeSqliteFactory(),
-				options.operationStorePath ?? join(options.agentDir, "operations.sqlite"),
-			);
+			new SqliteV2OperationStore(options.operationStorePath ?? join(options.agentDir, "operations.sqlite"));
 		const blobs = options.blobs ?? new FileV2BlobStore(options.blobStorePath ?? join(options.agentDir, "blobs"));
 		const integrity =
 			options.integrity ??

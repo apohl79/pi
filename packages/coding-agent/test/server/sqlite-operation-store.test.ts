@@ -37,7 +37,7 @@ describe("SqliteV2OperationStore", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-operations-"));
 		directories.push(directory);
 		const path = join(directory, "operations.sqlite");
-		const first = new SqliteV2OperationStore(createNodeSqliteFactory(), path);
+		const first = new SqliteV2OperationStore(path);
 
 		await Promise.all([
 			first.putOperation(operation()),
@@ -47,7 +47,7 @@ describe("SqliteV2OperationStore", () => {
 		await first.putOperation(operation("complete"));
 		await first.close();
 
-		const restored = new SqliteV2OperationStore(createNodeSqliteFactory(), path);
+		const restored = new SqliteV2OperationStore(path);
 		expect(await restored.load()).toEqual({
 			operations: [operation("complete")],
 			events: [event("session-1", 1), event("session-2", 1)],
@@ -58,7 +58,7 @@ describe("SqliteV2OperationStore", () => {
 	test("creates a SQLite journal with protocol-independent event ordering", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-operations-schema-"));
 		directories.push(directory);
-		const store = new SqliteV2OperationStore(createNodeSqliteFactory(), join(directory, "operations.sqlite"));
+		const store = new SqliteV2OperationStore(join(directory, "operations.sqlite"));
 		await store.appendEvent({ ...event("session-1", 2), revision: 8 });
 		await store.appendEvent({ ...event("session-1", 1), revision: 7 });
 		expect((await store.load()).events.map((item) => item.revision)).toEqual([8, 7]);
@@ -79,9 +79,9 @@ describe("SqliteV2OperationStore", () => {
 			.run("operation-1", JSON.stringify({ ...operation(), state: "corrupt" }));
 		database.close();
 
-		await expect(new SqliteV2OperationStore(createNodeSqliteFactory(), path).load()).rejects.toThrow(
-			"Invalid operation store operation state",
-		);
+		const store = new SqliteV2OperationStore(path);
+		await expect(store.load()).rejects.toThrow("Invalid operation store operation state");
+		await store.close();
 	});
 
 	test("rejects malformed persisted event records", async () => {
@@ -98,8 +98,8 @@ describe("SqliteV2OperationStore", () => {
 			.run("session-1:1", JSON.stringify({ seq: 1 }));
 		database.close();
 
-		await expect(new SqliteV2OperationStore(createNodeSqliteFactory(), path).load()).rejects.toThrow(
-			"Invalid operation store event identity",
-		);
+		const store = new SqliteV2OperationStore(path);
+		await expect(store.load()).rejects.toThrow("Invalid operation store event identity");
+		await store.close();
 	});
 });
