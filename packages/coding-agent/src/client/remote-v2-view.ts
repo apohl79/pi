@@ -15,6 +15,8 @@ export interface RemoteV2SessionViewOptions {
 	readonly maxProcessOutputCharacters?: number;
 	readonly maxPlanItems?: number;
 	readonly maxGoalCharacters?: number;
+	readonly getHideThinkingBlock?: () => boolean;
+	readonly getOutputPad?: () => number;
 	readonly onUpdated?: () => void;
 }
 
@@ -143,7 +145,7 @@ export class RemoteV2StatuslineComponent implements Component {
 
 /** Renderable TUI projection of one server-authoritative v2 session. */
 export class RemoteV2SessionView extends Container {
-	readonly #options: Required<Omit<RemoteV2SessionViewOptions, "onUpdated">>;
+	readonly #options: Required<Omit<RemoteV2SessionViewOptions, "onUpdated" | "getHideThinkingBlock" | "getOutputPad">>;
 	readonly #transcriptRenderer: TranscriptRenderer;
 	#state: RemoteV2SessionState;
 	readonly #unsubscribe: () => void;
@@ -166,9 +168,9 @@ export class RemoteV2SessionView extends Container {
 		this.#transcriptRenderer = new TranscriptRenderer({
 			container: this,
 			getMarkdownTheme,
-			getHideThinkingBlock: () => false,
+			getHideThinkingBlock: options.getHideThinkingBlock ?? (() => false),
 			getHiddenThinkingLabel: () => "Thinking...",
-			getOutputPad: () => 1,
+			getOutputPad: options.getOutputPad ?? (() => 1),
 			getMarkdownTransformers: () => [],
 			getToolOutputExpanded: () => false,
 		});

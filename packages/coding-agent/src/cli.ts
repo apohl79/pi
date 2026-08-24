@@ -192,7 +192,11 @@ async function runCli(): Promise<void> {
 				logDirectory: agentDir,
 			});
 			const editor = new CustomEditor(tui, getEditorTheme(), keybindings);
-			const view = new RemoteV2SessionView(session, { onUpdated: () => tui?.requestRender() });
+			const view = new RemoteV2SessionView(session, {
+				onUpdated: () => tui?.requestRender(),
+				getHideThinkingBlock: () => statuslineSettings.getHideThinkingBlock(),
+				getOutputPad: () => statuslineSettings.getOutputPad(),
+			});
 			const transcriptContainer = new Container();
 			const pendingContainer = new Container();
 			const statusContainer = new Container();
