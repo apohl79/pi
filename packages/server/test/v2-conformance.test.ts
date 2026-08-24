@@ -402,6 +402,41 @@ describe("PiServer v2 operation acceptance", () => {
 		service.sessions.get("session-1")!.release.resolve(undefined);
 	});
 
+	test("serializes conflicting session work without delaying acknowledgements or abort", async () => {
+		const service = new TestService();
+		const server = new PiServerV2(service, { listeners: [], serverId: "session-operation-scheduler" });
+		await server.start();
+		servers.push(server);
+		const client = connectInMemoryTestClientV2(server.accept.bind(server));
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const runtime = service.sessions.get("session-1")!;
+
+		const first = await client.request({ command: "turn/start", sessionId: "session-1", payload: { text: "first" } });
+		const queued = client.request({
+			command: "session/name/set",
+			sessionId: "session-1",
+			payload: { name: "after first" },
+		});
+		await new Promise((resolve) => setImmediate(resolve));
+		expect(runtime.accepted).toHaveLength(1);
+		expect(runtime.commands).toHaveLength(1);
+
+		const abort = await client.request({ command: "turn/abort", sessionId: "session-1" });
+		expect(first).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+		expect(abort).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+		expect(runtime.accepted).toHaveLength(2);
+
+		runtime.release.resolve(undefined);
+		expect(await queued).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+		expect(runtime.commands.map((command) => command.command)).toEqual([
+			"turn/start",
+			"turn/abort",
+			"session/name/set",
+		]);
+		await client.close();
+	});
+
 	test("resolves server filesystem mentions without dropping their target", async () => {
 		const root = await mkdtemp(join(tmpdir(), "pi-mention-"));
 		directories.push(root);

@@ -1972,7 +1972,12 @@ export class PiServerV2 {
 		await this.sendResponse(state, id, { command: command.command, sessionId: command.sessionId });
 	}
 
-	private async startTurn(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+	private async startTurn(
+		state: V2ConnectionState,
+		id: string,
+		command: CommandV2,
+		onAccepted?: () => void,
+	): Promise<void> {
 		if (!command.sessionId) throw new Error("turn/start requires sessionId");
 		const sessionId = command.sessionId;
 		this.requireControl(state, sessionId);
@@ -2067,24 +2072,41 @@ export class PiServerV2 {
 			"operation_accepted",
 			{ eventSeq: accepted.eventSeq, revision: accepted.sessionRevision },
 		);
+		onAccepted?.();
 		const execute = () => this.runOperation(runtime, sessionId, operationId, resolvedCommand);
-		if (command.command === "turn/abort" || command.command === "turn/steer" || command.command === "turn/followUp") void execute();
+		if (command.command === "turn/abort" || command.command === "turn/steer" || command.command === "turn/followUp")
+			void execute();
 		else await execute();
 	}
 
 	private runSessionCommand(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
-		const interactive = command.command === "turn/abort" || command.command === "turn/steer" || command.command === "turn/followUp";
+		const interactive =
+			command.command === "turn/abort" || command.command === "turn/steer" || command.command === "turn/followUp";
 		if (interactive || command.sessionId === undefined) return this.startTurn(state, id, command);
-		return this.enqueueSessionOperation(command.sessionId, () => this.startTurn(state, id, command));
+		let resolveAcknowledged: (() => void) | undefined;
+		let rejectAcknowledged: ((error: unknown) => void) | undefined;
+		const acknowledged = new Promise<void>((resolve, reject) => {
+			resolveAcknowledged = resolve;
+			rejectAcknowledged = reject;
+		});
+		void this.enqueueSessionOperation(command.sessionId, () =>
+			this.startTurn(state, id, command, () => resolveAcknowledged?.()),
+		).catch((error: unknown) => rejectAcknowledged?.(error));
+		return acknowledged;
 	}
 
 	private enqueueSessionOperation(sessionId: string, operation: () => Promise<void>): Promise<void> {
 		const previous = this.sessionOperationTails.get(sessionId) ?? Promise.resolve();
 		const next = previous.catch(() => undefined).then(operation);
 		this.sessionOperationTails.set(sessionId, next);
-		void next.finally(() => {
-			if (this.sessionOperationTails.get(sessionId) === next) this.sessionOperationTails.delete(sessionId);
-		});
+		void next.then(
+			() => {
+				if (this.sessionOperationTails.get(sessionId) === next) this.sessionOperationTails.delete(sessionId);
+			},
+			() => {
+				if (this.sessionOperationTails.get(sessionId) === next) this.sessionOperationTails.delete(sessionId);
+			},
+		);
 		return next;
 	}
 
