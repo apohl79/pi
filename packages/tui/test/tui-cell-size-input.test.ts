@@ -66,16 +66,23 @@ describe("TUI cell size responses", () => {
 			const terminal = new VirtualTerminal(80, 24);
 			const tui: TUI = new TuiMainScreen(terminal);
 			const recorder = new InputRecorder();
+			const listenerInputs: string[] = [];
 
 			tui.setFocus(recorder);
+			tui.addInputListener((data) => {
+				listenerInputs.push(data);
+				return {};
+			});
 			tui.start();
 
 			terminal.sendInput("\x1b[6;20;10t");
 			assert.deepStrictEqual(recorder.inputs, []);
+			assert.deepStrictEqual(listenerInputs, []);
 			assert.deepStrictEqual(getCellDimensions(), { widthPx: 10, heightPx: 20 });
 
 			terminal.sendInput("q");
 			assert.deepStrictEqual(recorder.inputs, ["q"]);
+			assert.deepStrictEqual(listenerInputs, ["q"]);
 			tui.stop();
 		});
 	});

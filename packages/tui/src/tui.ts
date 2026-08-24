@@ -830,6 +830,9 @@ export abstract class TuiBase extends Container implements TUI {
 		if (this.consumeTerminalColorSchemeReport(data)) {
 			return;
 		}
+		if (this.consumeCellSizeResponse(data)) {
+			return;
+		}
 
 		if (this.inputListeners.size > 0) {
 			let current = data;
@@ -846,11 +849,6 @@ export abstract class TuiBase extends Container implements TUI {
 				return;
 			}
 			data = current;
-		}
-
-		// Consume terminal cell size responses without blocking unrelated input.
-		if (this.consumeCellSizeResponse(data)) {
-			return;
 		}
 
 		// Global debug key handler (Shift+Ctrl+D)
