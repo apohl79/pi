@@ -21,7 +21,7 @@ import { SettingsManager } from "./core/settings-manager.ts";
 import { main } from "./main.ts";
 import { CustomEditor } from "./modes/interactive/components/custom-editor.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
-import { getEditorTheme } from "./modes/interactive/theme/theme.ts";
+import { getEditorTheme, initTheme } from "./modes/interactive/theme/theme.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "./server/daemon-runtime.ts";
 import { StatuslineRunner } from "./server/statusline.ts";
 
@@ -179,6 +179,7 @@ async function runCli(): Promise<void> {
 		writeText: (value) => process.stdout.write(`${value}\n`),
 		runInteractive: async (session, options) => {
 			const keybindings = KeybindingsManager.create(agentDir);
+			initTheme(statuslineSettings.getTheme(), true);
 			const tui = createInteractiveTui({
 				tuiMode: options.tuiMode ?? "regular",
 				showHardwareCursor: false,
@@ -187,15 +188,18 @@ async function runCli(): Promise<void> {
 			const editor = new CustomEditor(tui, getEditorTheme(), keybindings);
 			const view = new RemoteV2SessionView(session, { onUpdated: () => tui?.requestRender() });
 			let statusline: RemoteV2StatuslineComponent;
-			const attachment = new RemoteV2InteractiveAttachment({
-				session,
-				view,
-				setStatusline: async (command) => {
-					statuslineSettings.setStatusLineCommand(command);
-					await statusline.setCommand(command);
+			const attachment = new RemoteV2InteractiveAttachment(
+				{
+					session,
+					view,
+					setStatusline: async (command) => {
+						statuslineSettings.setStatusLineCommand(command);
+						await statusline.setCommand(command);
+					},
+					dispose: async () => view.dispose(),
 				},
-				dispose: async () => view.dispose(),
-			}, editor);
+				editor,
+			);
 			statusline = new RemoteV2StatuslineComponent(
 				session,
 				new StatuslineRunner(),

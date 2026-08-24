@@ -8,8 +8,9 @@ import {
 	parseClientMessageV2,
 	type SessionSnapshotV2,
 } from "@earendil-works/pi-protocol";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { TuiMainScreen, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
+import { VirtualTerminal } from "../../../tui/test/virtual-terminal.ts";
 import {
 	applyRemoteFileCompletion,
 	parseRemoteV2Command,
@@ -17,6 +18,10 @@ import {
 	RemoteV2InteractiveAttachment,
 } from "../../src/client/remote-v2-interactive.ts";
 import { RemoteV2SessionSelector } from "../../src/client/remote-v2-selector.ts";
+import { KeybindingsManager } from "../../src/core/keybindings.ts";
+import { CustomEditor } from "../../src/modes/interactive/components/custom-editor.ts";
+import { getEditorTheme, initTheme } from "../../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../../src/utils/ansi.ts";
 
 function snapshot(withQueue = false): SessionSnapshotV2 {
 	return {
@@ -339,6 +344,25 @@ describe("remote v2 interactive command boundary", () => {
 		expect(commands).toContain("turn/start");
 		expect(adapter.render(80).at(-1)).toContain("operation operation-1");
 		await adapter.execute("/detach");
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("renders and accepts input through the standard editor component", async () => {
+		initTheme(undefined, false);
+		const { client } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const editor = new CustomEditor(
+			new TuiMainScreen(new VirtualTerminal()),
+			getEditorTheme(),
+			new KeybindingsManager(),
+		);
+		const adapter = new RemoteV2InteractiveAttachment(attached, editor);
+
+		adapter.handleInput("hello");
+		expect(stripAnsi(adapter.render(80).join("\n"))).toContain("hello");
+
 		await adapter.dispose();
 		client.dispose();
 	});
