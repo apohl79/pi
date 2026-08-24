@@ -1,3 +1,4 @@
+import { Worker } from "node:worker_threads";
 import type {
 	V2InputChangeListener,
 	V2InputQuestion,
@@ -10,32 +11,36 @@ import {
 	InMemoryV2InputRegistry,
 	respondV2InputRequest,
 } from "@earendil-works/pi-server";
-import type { SqliteDatabase, SqliteDatabaseFactory } from "@earendil-works/pi-session-backend-sqlite-node";
 
-interface InputRow {
-	request_id: string;
-	value: string;
-}
+type WorkerCommand =
+	| { readonly command: "load" }
+	| { readonly command: "save"; readonly requestId: string; readonly value: string }
+	| { readonly command: "consume"; readonly requestId: string }
+	| { readonly command: "close" };
+type WorkerResponse = { readonly id: number; readonly result?: unknown; readonly error?: string };
+type InputStore = { readonly requests: readonly string[]; readonly consumed: readonly string[] };
 
-interface ConsumedRow {
-	request_id: string;
+function isWorkerResponse(value: unknown): value is WorkerResponse {
+	return value !== null && typeof value === "object" && "id" in value && typeof value.id === "number";
 }
 
 /** SQLite-backed structured-input registry used by configured coding-agent daemons. */
 export class SqliteV2InputRegistry implements V2InputRegistry {
-	readonly #databaseFactory: SqliteDatabaseFactory;
 	readonly #databasePath: string;
 	readonly #memory = new InMemoryV2InputRegistry();
-	#databasePromise: Promise<SqliteDatabase> | undefined;
+	readonly #pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+	#worker: Worker | undefined;
+	#nextRequestId = 1;
 	#pendingWrite: Promise<void> = Promise.resolve();
+	#loadPromise: Promise<void> | undefined;
 	#loaded = false;
+	#closed = false;
 	readonly #responded = new Map<string, string[]>();
 	readonly #consumed = new Set<string>();
 	readonly #requests = new Map<string, V2InputRequest>();
 	readonly #listeners = new Set<V2InputChangeListener>();
 
-	constructor(databaseFactory: SqliteDatabaseFactory, databasePath: string) {
-		this.#databaseFactory = databaseFactory;
+	constructor(databasePath: string) {
 		this.#databasePath = databasePath;
 		this.#memory.onChange?.((request) => this.#notify(request));
 	}
@@ -104,9 +109,7 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 			if (requestId === undefined) return undefined;
 			const request = this.#requests.get(requestId);
 			if (request?.status !== "responded") return undefined;
-			(await this.#database())
-				.prepare("INSERT OR IGNORE INTO v2_input_consumed (request_id) VALUES (?)")
-				.run(requestId);
+			await this.#request({ command: "consume", requestId });
 			this.#consumed.add(requestId);
 			return structuredClone(request.answers ?? {});
 		});
@@ -114,9 +117,16 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 
 	async close(): Promise<void> {
 		await this.#pendingWrite;
-		const database = await this.#databasePromise;
-		if (database !== undefined) database.close();
-		this.#databasePromise = undefined;
+		this.#closed = true;
+		const worker = this.#worker;
+		if (worker !== undefined) {
+			try {
+				await this.#request({ command: "close" }, true);
+			} finally {
+				await worker.terminate();
+				this.#worker = undefined;
+			}
+		}
 		this.#loaded = false;
 	}
 
@@ -139,25 +149,27 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 	}
 
 	async #save(request: V2InputRequest): Promise<void> {
-		(await this.#database())
-			.prepare(
-				"INSERT INTO v2_inputs (request_id, value) VALUES (?, ?) " +
-					"ON CONFLICT(request_id) DO UPDATE SET value = excluded.value",
-			)
-			.run(request.id, JSON.stringify(request));
+		await this.#request({ command: "save", requestId: request.id, value: JSON.stringify(request) });
 	}
 
 	async #ensureLoaded(): Promise<void> {
 		if (this.#loaded) return;
-		this.#loaded = true;
-		const database = await this.#database();
-		const requests = database.prepare("SELECT request_id, value FROM v2_inputs ORDER BY rowid").all<InputRow>();
-		for (const row of requests) {
-			const request = expireIfDue(parseJson(row.value));
+		const load = this.#loadPromise ?? this.#load();
+		this.#loadPromise = load;
+		try {
+			await load;
+		} finally {
+			if (this.#loadPromise === load) this.#loadPromise = undefined;
+		}
+	}
+
+	async #load(): Promise<void> {
+		const stored = await this.#request<InputStore>({ command: "load" });
+		const requests = stored.requests.map(parseJson);
+		for (const persisted of requests) {
+			const request = expireIfDue(persisted);
 			if (request.status === "expired") {
-				database
-					.prepare("UPDATE v2_inputs SET value = ? WHERE request_id = ?")
-					.run(JSON.stringify(request), request.id);
+				await this.#save(request);
 			}
 			this.#memory.restore(request);
 			this.#requests.set(request.id, request);
@@ -167,16 +179,13 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 				this.#responded.set(request.sessionId, ids);
 			}
 		}
-		for (const row of database
-			.prepare("SELECT request_id FROM v2_input_consumed ORDER BY rowid")
-			.all<ConsumedRow>()) {
-			const request = parseJson(
-				requests.find((candidate) => candidate.request_id === row.request_id)?.value ?? "{}",
-			);
-			if (request.status === "responded") {
+		for (const requestId of stored.consumed) {
+			const request = requests.find((candidate) => candidate.id === requestId);
+			if (request?.status === "responded") {
 				this.#consumed.add(request.id);
 			}
 		}
+		this.#loaded = true;
 	}
 
 	#persistExpired(request: V2InputRequest): Promise<V2InputRequest> {
@@ -192,18 +201,57 @@ export class SqliteV2InputRegistry implements V2InputRegistry {
 		});
 	}
 
-	#database(): Promise<SqliteDatabase> {
-		this.#databasePromise ??= this.#open();
-		return this.#databasePromise;
+	#request<T>(command: WorkerCommand, closing = false): Promise<T> {
+		if (this.#closed && !closing) return Promise.reject(new Error("SQLite input registry is closed"));
+		const worker = this.#worker ?? this.#createWorker();
+		const id = this.#nextRequestId;
+		this.#nextRequestId += 1;
+		return new Promise<T>((resolve, reject) => {
+			this.#pending.set(id, { resolve, reject });
+			worker.postMessage({ id, command });
+		});
 	}
 
-	async #open(): Promise<SqliteDatabase> {
-		const database = await this.#databaseFactory.open(this.#databasePath);
-		database.exec(
-			"CREATE TABLE IF NOT EXISTS v2_inputs (request_id TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);" +
-				"CREATE TABLE IF NOT EXISTS v2_input_consumed (request_id TEXT PRIMARY KEY NOT NULL)",
-		);
-		return database;
+	#createWorker(): Worker {
+		const worker =
+			typeof process.versions.bun === "string"
+				? new Worker("./src/server/sqlite-input-registry-worker.ts", {
+						workerData: { databasePath: this.#databasePath },
+					})
+				: new Worker(
+						new URL(
+							import.meta.url.endsWith(".ts")
+								? "./sqlite-input-registry-worker.ts"
+								: "./sqlite-input-registry-worker.js",
+							import.meta.url,
+						),
+						{ workerData: { databasePath: this.#databasePath } },
+					);
+		worker.on("message", (message: unknown) => this.#handleResponse(message));
+		worker.once("error", (error) => this.#failPending(error));
+		worker.once("exit", (code) => {
+			if (!this.#closed && code !== 0) this.#failPending(new Error(`SQLite input worker exited with code ${code}`));
+			if (this.#worker === worker) this.#worker = undefined;
+		});
+		this.#worker = worker;
+		return worker;
+	}
+
+	#handleResponse(message: unknown): void {
+		if (!isWorkerResponse(message)) {
+			this.#failPending(new Error("Invalid SQLite input worker response"));
+			return;
+		}
+		const request = this.#pending.get(message.id);
+		if (request === undefined) return;
+		this.#pending.delete(message.id);
+		if (message.error !== undefined) request.reject(new Error(message.error));
+		else request.resolve(message.result);
+	}
+
+	#failPending(error: Error): void {
+		for (const request of this.#pending.values()) request.reject(error);
+		this.#pending.clear();
 	}
 
 	#enqueue<T>(operation: () => Promise<T>): Promise<T> {

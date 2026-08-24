@@ -17,17 +17,17 @@ describe("SqliteV2InputRegistry", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-inputs-"));
 		directories.push(directory);
 		const path = join(directory, "inputs.sqlite");
-		const first = new SqliteV2InputRegistry(createNodeSqliteFactory(), path);
+		const first = new SqliteV2InputRegistry(path);
 		const request = await first.create("session-1", questions);
 		await first.respond(request.id, { choice: "yes" });
 		await first.close();
 
-		const restored = new SqliteV2InputRegistry(createNodeSqliteFactory(), path);
+		const restored = new SqliteV2InputRegistry(path);
 		expect(await restored.read(request.id)).toMatchObject({ status: "responded", answers: { choice: "yes" } });
 		expect(await restored.takeRespondedForSession("session-1")).toEqual({ choice: "yes" });
 		await restored.close();
 
-		const reopened = new SqliteV2InputRegistry(createNodeSqliteFactory(), path);
+		const reopened = new SqliteV2InputRegistry(path);
 		expect(await reopened.takeRespondedForSession("session-1")).toBeUndefined();
 		await reopened.close();
 	});
@@ -36,12 +36,12 @@ describe("SqliteV2InputRegistry", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-inputs-expiry-"));
 		directories.push(directory);
 		const path = join(directory, "inputs.sqlite");
-		const first = new SqliteV2InputRegistry(createNodeSqliteFactory(), path);
+		const first = new SqliteV2InputRegistry(path);
 		const request = await first.create("session-1", questions, 10);
 		await expect(first.wait(request.id)).resolves.toMatchObject({ status: "expired", answers: {} });
 		await first.close();
 
-		const restored = new SqliteV2InputRegistry(createNodeSqliteFactory(), path);
+		const restored = new SqliteV2InputRegistry(path);
 		expect(await restored.read(request.id)).toMatchObject({ status: "expired", answers: {} });
 		await restored.close();
 	});
@@ -63,7 +63,7 @@ describe("SqliteV2InputRegistry", () => {
 			);
 		database.close();
 
-		await expect(new SqliteV2InputRegistry(createNodeSqliteFactory(), path).read("request-1")).rejects.toThrow(
+		await expect(new SqliteV2InputRegistry(path).read("request-1")).rejects.toThrow(
 			"Input request must contain one to three questions",
 		);
 	});
