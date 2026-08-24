@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from "node:fs";
  */
 import { join } from "node:path";
 import { DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-agent-core";
+import { Container } from "@earendil-works/pi-tui";
 import { isServerDefaultCompatible, parseArgs } from "./cli/args.ts";
 import { dispatchExperimentalCommand, isExperimentalCommand } from "./cli/experimental/dispatch.ts";
 import { RemoteV2InteractiveAttachment } from "./client/remote-v2-interactive.ts";
@@ -21,6 +22,7 @@ import { ModelRuntime } from "./core/model-runtime.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { main } from "./main.ts";
 import { CustomEditor } from "./modes/interactive/components/custom-editor.ts";
+import { InteractiveLayout } from "./modes/interactive/components/interactive-layout.ts";
 import { ModelSelectorComponent } from "./modes/interactive/components/model-selector.ts";
 import { SettingsSelectorComponent } from "./modes/interactive/components/settings-selector.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
@@ -191,6 +193,21 @@ async function runCli(): Promise<void> {
 			});
 			const editor = new CustomEditor(tui, getEditorTheme(), keybindings);
 			const view = new RemoteV2SessionView(session, { onUpdated: () => tui?.requestRender() });
+			const transcriptContainer = new Container();
+			const pendingContainer = new Container();
+			const statusContainer = new Container();
+			const aboveEditorContainer = new Container();
+			const editorContainer = new Container();
+			editorContainer.addChild(editor);
+			const belowEditorContainer = new Container();
+			const footerContainer = new Container();
+			const restoreTranscript = () => {
+				transcriptContainer.clear();
+				transcriptContainer.addChild(view);
+				tui.setFocus(editor);
+				tui.requestRender();
+			};
+			restoreTranscript();
 			let statusline: RemoteV2StatuslineComponent;
 			let attachment: RemoteV2InteractiveAttachment;
 			const showModel = () => {
@@ -199,12 +216,7 @@ async function runCli(): Promise<void> {
 					(candidate) => candidate.provider === snapshot?.model.provider && candidate.id === snapshot?.model.id,
 				);
 				const done = () => {
-					tui.removeChild(selector);
-					tui.removeChild(statusline);
-					tui.addChild(attachment);
-					tui.addChild(statusline);
-					tui.setFocus(attachment);
-					tui.requestRender();
+					restoreTranscript();
 				};
 				const selectModel = (selected: (typeof availableModels)[number], persist: boolean) => {
 					void session
@@ -228,10 +240,8 @@ async function runCli(): Promise<void> {
 					(selected) => selectModel(selected, true),
 					defaultProvider && defaultModelId ? { provider: defaultProvider, id: defaultModelId } : undefined,
 				);
-				tui.removeChild(attachment);
-				tui.removeChild(statusline);
-				tui.addChild(selector);
-				tui.addChild(statusline);
+				transcriptContainer.clear();
+				transcriptContainer.addChild(selector);
 				tui.setFocus(selector);
 				tui.requestRender();
 			};
@@ -241,12 +251,7 @@ async function runCli(): Promise<void> {
 					(candidate) => candidate.provider === snapshot?.model.provider && candidate.id === snapshot?.model.id,
 				);
 				const done = () => {
-					tui.removeChild(selector);
-					tui.removeChild(statusline);
-					tui.addChild(attachment);
-					tui.addChild(statusline);
-					tui.setFocus(attachment);
-					tui.requestRender();
+					restoreTranscript();
 				};
 				const defaultProvider = statuslineSettings.getDefaultProvider();
 				const defaultModelId = statuslineSettings.getDefaultModel();
@@ -351,10 +356,8 @@ async function runCli(): Promise<void> {
 						onCancel: done,
 					},
 				);
-				tui.removeChild(attachment);
-				tui.removeChild(statusline);
-				tui.addChild(selector);
-				tui.addChild(statusline);
+				transcriptContainer.clear();
+				transcriptContainer.addChild(selector);
 				tui.setFocus(selector.getSettingsList());
 				tui.requestRender();
 			};
@@ -378,9 +381,20 @@ async function runCli(): Promise<void> {
 				() => tui?.requestRender(),
 			);
 			await statusline.setCommand(statuslineSettings.getStatusLineCommand());
-			tui.addChild(attachment);
-			tui.addChild(statusline);
-			tui.setFocus(attachment);
+			footerContainer.addChild(statusline);
+			const interactiveLayout = new InteractiveLayout({
+				transcript: transcriptContainer,
+				pending: pendingContainer,
+				status: statusContainer,
+				aboveEditor: aboveEditorContainer,
+				editor: editorContainer,
+				belowEditor: belowEditorContainer,
+				footer: footerContainer,
+				scrollbar: statuslineSettings.getFullscreenScrollbar(),
+				scrollbarStyle: (text) => text,
+			});
+			interactiveLayout.mount(tui);
+			tui.setFocus(editor);
 			await new Promise<void>((resolve) => {
 				let settled = false;
 				const finish = () => {
