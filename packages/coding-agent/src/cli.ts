@@ -21,7 +21,7 @@ import { SettingsManager } from "./core/settings-manager.ts";
 import { main } from "./main.ts";
 import { CustomEditor } from "./modes/interactive/components/custom-editor.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
-import { getEditorTheme, initTheme } from "./modes/interactive/theme/theme.ts";
+import { getEditorTheme, initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "./server/daemon-runtime.ts";
 import { StatuslineRunner } from "./server/statusline.ts";
 
@@ -220,6 +220,7 @@ async function runCli(): Promise<void> {
 					tui.stop();
 					void attachment.dispose().finally(() => {
 						statusline.dispose();
+						stopThemeWatcher();
 						resolve();
 					});
 				};
