@@ -42,6 +42,7 @@ import { InteractiveLayout } from "./modes/interactive/components/interactive-la
 import { formatInteractiveTerminalTitle } from "./modes/interactive/components/interactive-title.ts";
 import { LoginDialogComponent } from "./modes/interactive/components/login-dialog.ts";
 import { ModelSelectorComponent } from "./modes/interactive/components/model-selector.ts";
+import { type AuthSelectorProvider, OAuthSelectorComponent } from "./modes/interactive/components/oauth-selector.ts";
 import { ScopedModelsSelectorComponent } from "./modes/interactive/components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./modes/interactive/components/session-selector.ts";
 import { SettingsSelectorComponent } from "./modes/interactive/components/settings-selector.ts";
@@ -391,7 +392,7 @@ async function runCli(): Promise<void> {
 				footer.invalidate();
 				view.showStatus(`Model: ${selected.name || selected.id}`);
 			};
-			const showLogin = (providerId: string, type: "oauth" | "api_key") => {
+			const startLogin = (providerId: string, type: "oauth" | "api_key") => {
 				const providerName = modelRuntime.getProvider(providerId)?.name ?? providerId;
 				let loginId: string | undefined;
 				let restored = false;
@@ -475,6 +476,57 @@ async function runCli(): Promise<void> {
 						view.showStatus(error instanceof Error ? error.message : String(error));
 					},
 				);
+			};
+			const loginProviderOptions = (type?: "oauth" | "api_key"): AuthSelectorProvider[] => {
+				const options: AuthSelectorProvider[] = [];
+				for (const provider of modelRuntime.getProviders()) {
+					if ((!type || type === "oauth") && provider.auth.oauth)
+						options.push({
+							id: provider.id,
+							name: provider.name,
+							authType: "oauth",
+							method: provider.auth.oauth,
+						});
+					if ((!type || type === "api_key") && provider.auth.apiKey)
+						options.push({
+							id: provider.id,
+							name: provider.name,
+							authType: "api_key",
+							method: provider.auth.apiKey,
+						});
+				}
+				return options.sort((left, right) => left.name.localeCompare(right.name));
+			};
+			const showLogin = (providerId?: string, type?: "oauth" | "api_key") => {
+				const matching =
+					providerId === undefined
+						? loginProviderOptions(type)
+						: loginProviderOptions(type).filter(
+								(provider) =>
+									provider.id.toLowerCase() === providerId.toLowerCase() ||
+									provider.name.toLowerCase() === providerId.toLowerCase(),
+							);
+				if (matching.length === 1) {
+					startLogin(matching[0]!.id, matching[0]!.authType);
+					return;
+				}
+				if (matching.length === 0) {
+					view.showStatus(
+						providerId === undefined ? "No login providers available" : `Unknown login provider: ${providerId}`,
+					);
+					return;
+				}
+				const selector = new OAuthSelectorComponent(
+					"login",
+					matching,
+					(selectedProviderId, selectedType) => startLogin(selectedProviderId, selectedType),
+					restoreTranscript,
+					providerId,
+				);
+				transcriptContainer.clear();
+				transcriptContainer.addChild(selector);
+				tui.setFocus(selector);
+				tui.requestRender();
 			};
 			const showModel = () => {
 				const snapshot = session.snapshot;

@@ -385,7 +385,7 @@ describe("remote v2 interactive command boundary", () => {
 		await adapter.dispose();
 	});
 
-	test("opens a server-owned login dialog only for an explicit provider and method", async () => {
+	test("opens the server-owned login flow with optional provider and method selection", async () => {
 		const openLogin = vi.fn();
 		const adapter = new RemoteV2InteractiveAttachment(
 			{
@@ -402,9 +402,11 @@ describe("remote v2 interactive command boundary", () => {
 			providerId: "openai",
 			type: "oauth",
 		});
+		expect(parseRemoteV2Command("/login")).toEqual({ name: "login" });
+		expect(parseRemoteV2Command("/login openai")).toEqual({ name: "login", providerId: "openai" });
 		expect(await adapter.execute("/login openai oauth")).toEqual({ kind: "status", text: "login dialog opened" });
 		expect(openLogin).toHaveBeenCalledWith("openai", "oauth");
-		expect(() => parseRemoteV2Command("/login openai")).toThrow("/login requires <provider> <oauth|api_key>");
+		expect(() => parseRemoteV2Command("/login openai invalid")).toThrow("/login accepts [provider] [oauth|api_key]");
 	});
 
 	test("dispatches remote actions through the attached controller and shares cleanup", async () => {
