@@ -14,6 +14,7 @@ import {
 	isServerMessageV2,
 	MAX_V2_ARRAY_ITEMS,
 	MAX_V2_JSON_DEPTH,
+	MAX_V2_RESPONSE_JSON_DEPTH,
 	MAX_V2_STRING_LENGTH,
 	OperationRecordV2Schema,
 	OperationSummarySchema,
@@ -270,6 +271,17 @@ describe("protocol v2 wire codecs", () => {
 		const decoder = new ServerMessageV2Decoder();
 		const messages = [...decoder.push(wire.subarray(0, 2)), ...decoder.push(wire.subarray(2))];
 		expect(messages).toEqual([serverError]);
+		decoder.end();
+	});
+
+	test("round trips bounded deep server response results", () => {
+		const result = Array.from({ length: MAX_V2_RESPONSE_JSON_DEPTH }, () => 0).reduceRight(
+			(value) => ({ nested: value }),
+			true as unknown,
+		);
+		const wire = encodeServerMessageV2({ type: "response", id: "request-1", ok: true, result });
+		const decoder = new ServerMessageV2Decoder();
+		expect(decoder.push(wire)).toEqual([{ type: "response", id: "request-1", ok: true, result }]);
 		decoder.end();
 	});
 

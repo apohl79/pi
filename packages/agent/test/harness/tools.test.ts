@@ -1,5 +1,4 @@
-import { chmod, stat, symlink, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
 import { applyPatch } from "diff";
 import { describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
@@ -45,23 +44,6 @@ class SlowReadExecutionEnv extends NodeExecutionEnv {
 	override async readTextFile(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>> {
 		await delay(20);
 		return super.readTextFile(path, abortSignal);
-	}
-}
-
-class SwapAfterValidationEnv extends NodeExecutionEnv {
-	private swapped = false;
-	constructor(cwd: string, private readonly outsidePath: string) {
-		super({ cwd });
-	}
-
-	override async canonicalPath(path: string): Promise<Result<string, FileError>> {
-		const result = await super.canonicalPath(path);
-		if (!this.swapped && path === join(this.cwd, "target.txt") && result.ok) {
-			this.swapped = true;
-			await unlink(path);
-			await symlink(this.outsidePath, path);
-		}
-		return result;
 	}
 }
 
@@ -466,7 +448,7 @@ describe("AgentHarness tools", () => {
 		it("serializes concurrent edits through canonical and symlink paths", async () => {
 			const env = new SlowReadExecutionEnv({ cwd: createTempDir() });
 			getOrThrow(await env.writeFile("target.txt", "alpha\nbeta\ngamma\n"));
-			await symlink("target.txt", `${env.cwd}/link.txt`);
+			await fs.symlink("target.txt", `${env.cwd}/link.txt`);
 			const tool = createEditTool();
 
 			await Promise.all([
@@ -492,7 +474,7 @@ describe("AgentHarness tools", () => {
 		it("edits regular files through symlinks", async () => {
 			const context = createContext();
 			getOrThrow(await context.env.writeFile("target.txt", "before\n"));
-			await symlink("target.txt", `${context.env.cwd}/link.txt`);
+			await fs.symlink("target.txt", `${context.env.cwd}/link.txt`);
 
 			await createEditTool().execute(
 				"edit-symlink",

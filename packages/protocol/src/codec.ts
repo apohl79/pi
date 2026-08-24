@@ -20,6 +20,7 @@ import {
 	isServerMessageV2,
 	MAX_V2_ARRAY_ITEMS,
 	MAX_V2_JSON_DEPTH,
+	MAX_V2_RESPONSE_JSON_DEPTH,
 	PROTOCOL_V2_VERSION,
 	type ServerMessageV2,
 } from "./v2.ts";
@@ -232,7 +233,7 @@ export class ServerMessageV2Decoder {
 	constructor(options?: FrameDecoderOptions) {
 		this.decoder = new ValidatedMessageDecoder("server v2", parseServerMessageV2, options, {
 			maxContainerLength: MAX_V2_ARRAY_ITEMS,
-			maxDepth: MAX_V2_JSON_DEPTH + 3,
+			maxDepth: MAX_V2_RESPONSE_JSON_DEPTH + 3,
 		});
 	}
 

@@ -576,7 +576,7 @@ describe("JSONL v4 per-session storage", () => {
 		await expect(session.appendCustomEntry("rejected")).rejects.toMatchObject({ code: "invalid_entry" });
 		expect(await session.getEntry(valid.id)).toBeUndefined();
 
-		const durablePrefix = readFileSync(metadata.path, "utf8").split("\n").slice(0, -2).join("\n") + "\n";
+		const durablePrefix = `${readFileSync(metadata.path, "utf8").split("\n").slice(0, -2).join("\n")}\n`;
 		writeFileSync(metadata.path, durablePrefix);
 		const next = await session.appendCustomEntry("next");
 		expect(next.seq).toBe(2);

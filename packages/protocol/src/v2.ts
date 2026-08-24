@@ -9,6 +9,7 @@ export const PROTOCOL_V2_VERSION = 2 as const;
 
 export const MAX_V2_ARRAY_ITEMS = 10_000;
 export const MAX_V2_JSON_DEPTH = 8;
+export const MAX_V2_RESPONSE_JSON_DEPTH = MAX_V2_JSON_DEPTH + 6;
 export const MAX_V2_STRING_LENGTH = 1_048_576;
 
 const BoundedStringSchema = Type.String({ maxLength: MAX_V2_STRING_LENGTH });
@@ -40,6 +41,7 @@ const createBoundedJsonValueSchema = (remainingDepth: number): TSchema => {
 	]);
 };
 const BoundedJsonValueSchema = createBoundedJsonValueSchema(MAX_V2_JSON_DEPTH);
+const BoundedResponseJsonValueSchema = createBoundedJsonValueSchema(MAX_V2_RESPONSE_JSON_DEPTH);
 
 const BoundedModelRefSchema = StrictObject({ provider: IdSchema, id: IdSchema });
 const BoundedModelMetadataSchema = StrictObject({
@@ -595,7 +597,7 @@ export const ResponseEnvelopeV2Schema = Type.Union([
 		type: Type.Literal("response"),
 		id: IdSchema,
 		ok: Type.Literal(true),
-		result: BoundedJsonValueSchema,
+		result: BoundedResponseJsonValueSchema,
 	}),
 	StrictObject({
 		type: Type.Literal("response"),
@@ -625,11 +627,13 @@ export const isServerMessageV2 = (value: unknown): value is ServerMessageV2 => C
 export const isOperationSummary = (value: unknown): value is OperationSummary => {
 	if (!Check(OperationSummarySchema, value)) return false;
 	const summary = value as OperationSummary;
+	if (!("terminalSeq" in summary)) return true;
 	return summary.terminalSeq === undefined || summary.terminalSeq > summary.acceptedSeq;
 };
 export const isOperationRecordV2 = (value: unknown): value is OperationRecordV2 => {
 	if (!Check(OperationRecordV2Schema, value)) return false;
 	const record = value as OperationRecordV2;
+	if (!("terminalSeq" in record)) return record.accepted.operationId === record.operationId;
 	return (
 		record.accepted.operationId === record.operationId &&
 		(record.terminalSeq === undefined || record.terminalSeq > record.accepted.eventSeq)
