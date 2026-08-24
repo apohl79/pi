@@ -43,9 +43,8 @@ function snapshot(withQueue = false, id = "session-1", assistantText?: string): 
 							role: "assistant",
 							content: [{ type: "text", text: assistantText }],
 							timestamp: 1,
-							api: "faux",
-							provider: "faux",
-							model: "model",
+							model: { provider: "faux", id: "model" },
+							status: "complete",
 							stopReason: "stop",
 						},
 					],
@@ -406,6 +405,25 @@ describe("remote v2 interactive command boundary", () => {
 			"turn/start",
 			"session/detach",
 		]);
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("restores all queued structured drafts as one editor submission", async () => {
+		const { client } = clientWithRequests(true);
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const editor = createEditor();
+		const adapter = new RemoteV2InteractiveAttachment(attached, editor);
+		const submit = vi.spyOn(attached.session, "submit");
+
+		expect(await adapter.dequeueAll()).toBe(1);
+		expect(editor.getText()).toContain("restore me");
+		editor.onSubmit?.(editor.getText());
+		await vi.waitFor(() =>
+			expect(submit).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ type: "image" })])),
+		);
+
 		await adapter.dispose();
 		client.dispose();
 	});

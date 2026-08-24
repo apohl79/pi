@@ -522,6 +522,26 @@ export class RemoteV2InteractiveAttachment {
 		return this.session.submit(text);
 	}
 
+	async dequeueAll(): Promise<number> {
+		this.#assertActive();
+		const snapshot = this.session.snapshot;
+		const entries = snapshot === undefined ? [] : [...snapshot.queues.steer, ...snapshot.queues.followUp];
+		const content: RemoteV2PromptContent[number][] = [];
+		let recalledCount = 0;
+		for (const entry of entries) {
+			const recalled = await this.session.cancelQueued(entry.id);
+			if (recalled === undefined) continue;
+			recalledCount += 1;
+			if (content.length > 0) content.push({ type: "text", text: "\n\n" });
+			content.push(...recalled);
+		}
+		if (content.length === 0) return 0;
+		this.#recalledContent = content;
+		this.#recalledText = displayPromptContent(content);
+		this.#editor?.setText(this.#recalledText);
+		return recalledCount;
+	}
+
 	async execute(input: string): Promise<RemoteV2CommandResult> {
 		this.#assertActive();
 		const command = parseRemoteV2Command(input);

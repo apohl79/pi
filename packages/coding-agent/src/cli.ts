@@ -867,6 +867,14 @@ async function runCli(): Promise<void> {
 					.then((operationId) => view.showStatus(`Follow-up accepted: ${operationId}`))
 					.catch((error: unknown) => view.showStatus(error instanceof Error ? error.message : String(error)));
 			});
+			editor.onAction("app.message.dequeue", () => {
+				void attachment
+					.dequeueAll()
+					.then((count) =>
+						view.showStatus(count === 0 ? "No queued messages to restore" : `Restored ${count} queued messages`),
+					)
+					.catch((error: unknown) => view.showStatus(error instanceof Error ? error.message : String(error)));
+			});
 			editor.onAction("app.editor.external", () => {
 				const content = editor.getExpandedText?.() ?? editor.getText();
 				tui.stop();
