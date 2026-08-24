@@ -349,6 +349,31 @@ async function runCli(): Promise<void> {
 					.then(() => view.showStatus(`Thinking level: ${next}`))
 					.catch((error: unknown) => view.showStatus(error instanceof Error ? error.message : String(error)));
 			};
+			const cycleModel = (direction: "forward" | "backward") => {
+				const cycleModels =
+					scopedModels.length === 0 ? availableModels : scopedModels.map((scoped) => scoped.model);
+				if (cycleModels.length < 2) {
+					view.showStatus(scopedModels.length === 0 ? "Only one model available" : "Only one model in scope");
+					return;
+				}
+				const snapshot = session.snapshot;
+				const selectedIndex = cycleModels.findIndex(
+					(candidate) => candidate.provider === snapshot?.model.provider && candidate.id === snapshot?.model.id,
+				);
+				const currentIndex = selectedIndex === -1 ? 0 : selectedIndex;
+				const nextIndex =
+					direction === "forward"
+						? (currentIndex + 1) % cycleModels.length
+						: (currentIndex + cycleModels.length - 1) % cycleModels.length;
+				const next = cycleModels[nextIndex]!;
+				void session
+					.setModel({ provider: next.provider, id: next.id })
+					.then(() => {
+						footer.invalidate();
+						view.showStatus(`Switched to ${next.name || next.id}`);
+					})
+					.catch((error: unknown) => view.showStatus(error instanceof Error ? error.message : String(error)));
+			};
 			const showSettings = () => {
 				const snapshot = session.snapshot;
 				const currentModel = availableModels.find(
@@ -584,6 +609,8 @@ async function runCli(): Promise<void> {
 			});
 			interactiveLayout.mount(tui);
 			editor.onAction("app.thinking.cycle", cycleThinking);
+			editor.onAction("app.model.cycleForward", () => cycleModel("forward"));
+			editor.onAction("app.model.cycleBackward", () => cycleModel("backward"));
 			editor.onAction("app.model.select", showModel);
 			editor.onAction("app.session.resume", showResume);
 			editor.onAction("app.session.fork", showFork);
