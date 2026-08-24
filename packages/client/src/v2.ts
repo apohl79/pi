@@ -45,6 +45,11 @@ export interface CreateSessionV2Options {
 	readonly parentSessionId?: string;
 }
 
+export interface ImportSessionV2Options {
+	readonly jsonl: string;
+	readonly cwd?: string;
+}
+
 export interface ForkSessionV2Options {
 	readonly id?: string;
 	readonly name?: string;
@@ -209,6 +214,15 @@ export class PiClientV2 {
 		);
 		if (typeof result.session !== "object" || result.session === null || Array.isArray(result.session))
 			throw new Error("Invalid session/create result");
+		return result.session as SessionSnapshotV2;
+	}
+
+	async importSession(options: ImportSessionV2Options): Promise<SessionSnapshotV2> {
+		const result = commandResult(
+			await this.request({ command: "session/import", payload: { ...options } as Record<string, JsonValue> }),
+		);
+		if (typeof result.session !== "object" || result.session === null || Array.isArray(result.session))
+			throw new Error("Invalid session/import result");
 		return result.session as SessionSnapshotV2;
 	}
 

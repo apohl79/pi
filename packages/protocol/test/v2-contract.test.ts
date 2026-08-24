@@ -23,11 +23,14 @@ import {
 const commandNames = [
 	"session/list",
 	"session/create",
+	"session/import",
 	"session/attach",
 	"session/detach",
 	"session/read",
 	"session/tree/read",
+	"session/export",
 	"session/label/set",
+	"session/bash/record",
 	"session/delete",
 	"session/fork",
 	"session/name/set",
@@ -44,6 +47,7 @@ const commandNames = [
 	"turn/compact",
 	"operation/read",
 	"model/list",
+	"resource/list",
 	"session/model/set",
 	"session/thinking/set",
 	"session/steering-mode/set",
@@ -307,12 +311,11 @@ describe("protocol v2 contract", () => {
 	});
 
 	test("constrains V2 prompt reference MIME values", () => {
-		expect(Check(PromptContentSchema, { type: "image", digest: "sha256:image", mimeType: "image/png" })).toBe(true);
-		expect(Check(PromptContentSchema, { type: "blob", digest: "sha256:blob", mimeType: "text/plain" })).toBe(true);
-		expect(Check(PromptContentSchema, { type: "image", digest: "sha256:image", mimeType: "text/plain" })).toBe(false);
-		expect(
-			Check(PromptContentSchema, { type: "blob", digest: "sha256:blob", mimeType: "text/plain\nX-Injected: yes" }),
-		).toBe(false);
+		const digest = "a".repeat(64);
+		expect(Check(PromptContentSchema, { type: "image", digest, mimeType: "image/png" })).toBe(true);
+		expect(Check(PromptContentSchema, { type: "blob", digest, mimeType: "text/plain" })).toBe(true);
+		expect(Check(PromptContentSchema, { type: "image", digest, mimeType: "text/plain" })).toBe(false);
+		expect(Check(PromptContentSchema, { type: "blob", digest, mimeType: "text/plain\nX-Injected: yes" })).toBe(false);
 	});
 
 	test("round-trips v2 messages through framed CBOR", () => {

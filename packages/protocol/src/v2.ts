@@ -443,6 +443,7 @@ export type ServerSnapshotV2 = Static<typeof ServerSnapshotV2Schema>;
 export const CommandNameV2Schema = Type.Union([
 	Type.Literal("session/list"),
 	Type.Literal("session/create"),
+	Type.Literal("session/import"),
 	Type.Literal("session/attach"),
 	Type.Literal("session/detach"),
 	Type.Literal("session/read"),

@@ -19,6 +19,7 @@ export type {
 export type {
 	CreateSessionV2Options,
 	ForkSessionV2Options,
+	ImportSessionV2Options,
 	PiClientV2Options,
 	PiSessionV2Handle,
 	V2SessionLeaseMode,

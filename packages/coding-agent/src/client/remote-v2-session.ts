@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import type {
 	CreateSessionV2Options,
 	ForkSessionV2Options,
+	ImportSessionV2Options,
 	PiClientV2,
 	PiSessionV2Handle,
 	V2SessionLeaseMode,
@@ -271,6 +272,14 @@ export class RemoteV2Session {
 		const created = await this.#client.createSession(options);
 		await this.attach(created.id);
 		return created.id;
+	}
+
+	/** Imports a portable JSONL transcript into a new server-owned session and moves this attachment to it. */
+	async importAndAttach(options: ImportSessionV2Options): Promise<string> {
+		this.#assertNotDisposed();
+		const imported = await this.#client.importSession(options);
+		await this.attach(imported.id);
+		return imported.id;
 	}
 
 	get id(): string | undefined {

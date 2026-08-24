@@ -130,6 +130,10 @@ export interface PiServerServiceV2 {
 	listModels(): Promise<ModelMetadata[]>;
 	openSession(sessionId: string): Promise<PiSessionRuntimeV2>;
 	createSession?(options: Record<string, unknown>): Promise<{ sessionId: string; runtime: PiSessionRuntimeV2 }>;
+	importSession?(options: {
+		readonly jsonl: string;
+		readonly cwd?: string;
+	}): Promise<{ sessionId: string; runtime: PiSessionRuntimeV2 }>;
 	forkSession?(
 		sourceSessionId: string,
 		options: Record<string, unknown>,
@@ -589,6 +593,7 @@ export class PiServerV2 {
 				payload: { command: command.command, requestId: id },
 			});
 			if (command.command === "session/create") return void (await this.createSession(state, id, command));
+			if (command.command === "session/import") return void (await this.importSession(state, id, command));
 			if (command.command === "session/fork") return void (await this.forkSession(state, id, command));
 			if (command.command === "session/delete") return void (await this.deleteSession(state, id, command));
 			if (command.command === "session/list")
@@ -780,6 +785,26 @@ export class PiServerV2 {
 		await this.sendResponse(state, id, {
 			command: command.command,
 			session: toProtocolJsonValue(await this.snapshotForSession(created.sessionId, created.runtime)),
+		});
+	}
+
+	private async importSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!this.service.importSession) throw new Error("session/import is not supported by this service");
+		const payload = objectPayload(command);
+		if (typeof payload.jsonl !== "string") throw new Error("session/import requires JSONL content");
+		if (payload.cwd !== undefined && typeof payload.cwd !== "string")
+			throw new Error("session/import cwd must be a string");
+		const imported = await this.service.importSession({
+			jsonl: payload.jsonl,
+			...(payload.cwd === undefined ? {} : { cwd: payload.cwd }),
+		});
+		if (state.sessions.has(imported.sessionId)) throw new Error(`Session ${imported.sessionId} is already attached`);
+		this.trackRuntime(imported.runtime);
+		state.sessions.set(imported.sessionId, imported.runtime);
+		this.claimControl(state, imported.sessionId);
+		await this.sendResponse(state, id, {
+			command: command.command,
+			session: toProtocolJsonValue(await this.snapshotForSession(imported.sessionId, imported.runtime)),
 		});
 	}
 

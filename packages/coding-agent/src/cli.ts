@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 /**
  * CLI entry point for the refactored coding agent.
  * Uses main.ts with AgentSession and new mode modules.
@@ -649,6 +649,10 @@ async function runCli(): Promise<void> {
 					await rm(temporaryDirectory, { recursive: true, force: true });
 				}
 			};
+			const importSession = async (inputPath: string): Promise<string> => {
+				await session.importAndAttach({ jsonl: await readFile(inputPath, "utf8"), cwd: process.cwd() });
+				return inputPath;
+			};
 			const runGitHubCli = async (
 				args: string[],
 			): Promise<{ readonly stdout: string; readonly stderr: string; readonly code: number | null }> =>
@@ -934,6 +938,7 @@ async function runCli(): Promise<void> {
 					openThinking: showThinking,
 					openTrust: showTrust,
 					exportSession,
+					importSession,
 					shareSession,
 					quit: () => finishInteractive(),
 					executeShell: async (command, excludeFromContext) => {

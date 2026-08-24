@@ -31,6 +31,7 @@ import { hashV2PluginSet } from "@earendil-works/pi-server";
 import type { SqliteSessionMetadata } from "@earendil-works/pi-session-backend-sqlite-node";
 import { resolveCodexPluginResourceOnDisk } from "../core/codex-plugin.ts";
 import type { Extension } from "../core/extensions/types.ts";
+import { type FileEntry, parseSessionEntries, type SessionEntry } from "../core/session-manager.ts";
 import { loadSkillsFromDir } from "../core/skills.ts";
 import {
 	type CodingAgentAgentTools,
@@ -52,6 +53,41 @@ import {
 import type { SqliteSessionRepositoryLike } from "./worker-sqlite-session-repository.ts";
 
 const SERVER_EXTENSION_STATE = "server_extension_state";
+
+function importedEntries(jsonl: string): { readonly cwd: string | undefined; readonly entries: readonly Entry[] } {
+	const parsed = parseSessionEntries(jsonl);
+	const header = parsed[0];
+	if (header?.type !== "session" || typeof header.cwd !== "string" || header.cwd.length === 0) {
+		throw new Error("session/import requires a valid pi session JSONL document");
+	}
+	const entries = parsed
+		.slice(1)
+		.flatMap((entry): Entry[] => (isImportableEntry(entry) ? [toImportedEntry(entry)] : []));
+	return { cwd: header.cwd, entries };
+}
+
+function isImportableEntry(entry: FileEntry): entry is SessionEntry {
+	return (
+		entry.type === "message" ||
+		entry.type === "model_change" ||
+		entry.type === "thinking_level_change" ||
+		entry.type === "compaction" ||
+		entry.type === "branch_summary" ||
+		entry.type === "custom"
+	);
+}
+
+function toImportedEntry(entry: SessionEntry): Entry {
+	const {
+		parentId: _parentId,
+		seq: _seq,
+		timestamp: _timestamp,
+		...provisioned
+	} = entry as SessionEntry & {
+		readonly seq?: number;
+	};
+	return provisioned as Entry;
+}
 
 function persistedExtensionState(entries: readonly Entry[], extensionId: string, key: string): unknown {
 	for (const entry of [...entries].reverse()) {
@@ -622,6 +658,24 @@ export async function createCodingAgentV2SqliteService(
 			if (selectedModel && modelOverride === undefined)
 				throw new Error("Requested child model or role model is not available in the configured model catalog");
 			return definition(metadata, session, modelOverride);
+		},
+		import: async ({ jsonl, cwd: cwdOverride }) => {
+			const imported = importedEntries(jsonl);
+			const session = await options.repository.create({
+				cwd: cwdOverride ?? imported.cwd ?? process.cwd(),
+			});
+			try {
+				for (const entry of imported.entries) {
+					const { parentId: _parentId, seq: _seq, timestamp: _timestamp, ...provisioned } = entry;
+					await session.appendEntry(provisioned, "main");
+				}
+				const metadata = await session.getMetadata();
+				metadataById.set(metadata.id, metadata);
+				return definition(metadata, session);
+			} catch (error) {
+				await options.repository.delete(await session.getMetadata());
+				throw error;
+			}
 		},
 		fork: async (sourceSessionId, payload) => {
 			await ensureLegacyImport();

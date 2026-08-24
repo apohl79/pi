@@ -34,6 +34,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/input",
 	"/input-cancel",
 	"/hotkeys",
+	"/import",
 	"/interrupt-child",
 	"/name",
 	"/name-auto",
@@ -107,6 +108,7 @@ export type RemoteV2Command =
 	| { readonly name: "goal-resume" }
 	| { readonly name: "input"; readonly requestId: string; readonly answers: Readonly<Record<string, string>> }
 	| { readonly name: "input-cancel"; readonly requestId: string }
+	| { readonly name: "import"; readonly inputPath: string }
 	| { readonly name: "hotkeys" }
 	| { readonly name: "model" }
 	| { readonly name: "model"; readonly provider: string; readonly id: string }
@@ -328,6 +330,11 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		const outputPath = getRemoteV2PathCommandArgument(input, "/export");
 		return outputPath === undefined ? { name: "export" } : { name: "export", outputPath };
 	}
+	if (name === "/import") {
+		const inputPath = getRemoteV2PathCommandArgument(input, "/import");
+		if (inputPath === undefined) throw new Error("/import requires <path.jsonl>");
+		return { name: "import", inputPath };
+	}
 	if (name === "/follow-up") {
 		const text = arguments_.join(" ").trim();
 		if (!text) throw new Error("/follow-up requires text");
@@ -474,7 +481,7 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 	throw new Error(`Unknown remote session command: ${name || "<empty>"}`);
 }
 
-function getRemoteV2PathCommandArgument(text: string, command: "/export"): string | undefined {
+function getRemoteV2PathCommandArgument(text: string, command: "/export" | "/import"): string | undefined {
 	if (text === command || !text.startsWith(`${command} `)) return undefined;
 	const argsString = text.slice(command.length + 1).trimStart();
 	if (!argsString) return undefined;
@@ -518,6 +525,7 @@ export class RemoteV2InteractiveAttachment {
 	readonly #openThinking: (() => void) | undefined;
 	readonly #openTrust: (() => void) | undefined;
 	readonly #exportSession: ((outputPath?: string) => Promise<string>) | undefined;
+	readonly #importSession: ((inputPath: string) => Promise<string>) | undefined;
 	readonly #shareSession: (() => Promise<string>) | undefined;
 	readonly #quit: (() => void) | undefined;
 	readonly #copyText: (text: string) => Promise<void>;
@@ -543,6 +551,7 @@ export class RemoteV2InteractiveAttachment {
 			readonly openThinking?: () => void;
 			readonly openTrust?: () => void;
 			readonly exportSession?: (outputPath?: string) => Promise<string>;
+			readonly importSession?: (inputPath: string) => Promise<string>;
 			readonly shareSession?: () => Promise<string>;
 			readonly quit?: () => void;
 			readonly copyText?: (text: string) => Promise<void>;
@@ -567,6 +576,7 @@ export class RemoteV2InteractiveAttachment {
 		this.#openThinking = options.openThinking;
 		this.#openTrust = options.openTrust;
 		this.#exportSession = options.exportSession;
+		this.#importSession = options.importSession;
 		this.#shareSession = options.shareSession;
 		this.#quit = options.quit;
 		this.#copyText = options.copyText ?? copyToClipboard;
@@ -711,6 +721,9 @@ export class RemoteV2InteractiveAttachment {
 			case "export":
 				if (this.#exportSession === undefined) throw new Error("Remote session export is unavailable");
 				return { kind: "status", text: `Session exported to: ${await this.#exportSession(command.outputPath)}` };
+			case "import":
+				if (this.#importSession === undefined) throw new Error("Remote session import is unavailable");
+				return { kind: "status", text: `Session imported from: ${await this.#importSession(command.inputPath)}` };
 			case "share":
 				if (this.#shareSession === undefined) throw new Error("Remote session sharing is unavailable");
 				return { kind: "status", text: await this.#shareSession() };

@@ -243,6 +243,7 @@ describe("remote v2 interactive command boundary", () => {
 	test("parses discoverable commands without changing v1 slash commands", () => {
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/detach");
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/export");
+		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/import");
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/share");
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/trust");
 		expect(parseRemoteV2Command("/clone")).toEqual({ name: "clone" });
@@ -255,6 +256,10 @@ describe("remote v2 interactive command boundary", () => {
 		expect(parseRemoteV2Command('/export "session transcript.html"')).toEqual({
 			name: "export",
 			outputPath: "session transcript.html",
+		});
+		expect(parseRemoteV2Command('/import "session transcript.jsonl"')).toEqual({
+			name: "import",
+			inputPath: "session transcript.jsonl",
 		});
 		expect(parseRemoteV2Command("/changelog")).toEqual({ name: "changelog" });
 		expect(parseRemoteV2Command("/fork")).toEqual({ name: "fork" });
@@ -596,6 +601,24 @@ describe("remote v2 interactive command boundary", () => {
 			text: "Session exported to: transcript.jsonl",
 		});
 		expect(exportSession).toHaveBeenCalledWith("transcript.jsonl");
+		expect(commands).not.toContain("turn/start");
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("imports through the injected client-local input boundary", async () => {
+		const { client, commands } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const importSession = vi.fn(async (inputPath: string) => inputPath);
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { importSession });
+
+		expect(await adapter.execute("/import transcript.jsonl")).toEqual({
+			kind: "status",
+			text: "Session imported from: transcript.jsonl",
+		});
+		expect(importSession).toHaveBeenCalledWith("transcript.jsonl");
 		expect(commands).not.toContain("turn/start");
 
 		await adapter.dispose();
