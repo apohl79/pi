@@ -1016,21 +1016,22 @@ async function runCli(): Promise<void> {
 			});
 		},
 	};
-	const runtime =
-		runningServer === undefined
-			? await createConfiguredCodingAgentDaemonRuntime(runtimeOptions)
-			: createCodingAgentClientRuntime({
-					...runtimeOptions,
-					daemon: {
-						start: async (socket) => {
-							if (socket !== undefined && socket !== runtimeOptions.socketPath)
-								throw new Error(`Daemon is configured for socket ${runtimeOptions.socketPath}`);
-							return runningServer;
-						},
-						status: () => runningServer,
-						stop: async () => runningServer,
+	const attachedClientMode =
+		runningServer !== undefined && (serverDefaultInteractive || serverDefaultPrint || serverDefaultRpc);
+	const runtime = !attachedClientMode
+		? await createConfiguredCodingAgentDaemonRuntime(runtimeOptions)
+		: createCodingAgentClientRuntime({
+				...runtimeOptions,
+				daemon: {
+					start: async (socket) => {
+						if (socket !== undefined && socket !== runtimeOptions.socketPath)
+							throw new Error(`Daemon is configured for socket ${runtimeOptions.socketPath}`);
+						return runningServer;
 					},
-				});
+					status: () => runningServer,
+					stop: async () => runningServer,
+				},
+			});
 	if (foregroundServer) {
 		try {
 			await dispatchExperimentalCommand(args, runtime.cli);
