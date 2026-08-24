@@ -216,6 +216,7 @@ describe("remote v2 interactive command boundary", () => {
 		expect(parseRemoteV2Command("/clone")).toEqual({ name: "clone" });
 		expect(parseRemoteV2Command("/copy")).toEqual({ name: "copy" });
 		expect(parseRemoteV2Command("/fork")).toEqual({ name: "fork" });
+		expect(parseRemoteV2Command("/tree")).toEqual({ name: "tree" });
 		expect(parseRemoteV2Command("/follow-up  continue this")).toEqual({ name: "follow-up", text: "continue this" });
 		expect(parseRemoteV2Command("/agent-follow-up agent-1 continue work")).toEqual({
 			name: "agent-follow-up",

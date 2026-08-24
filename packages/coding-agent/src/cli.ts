@@ -8,7 +8,8 @@ import { existsSync, readFileSync } from "node:fs";
  * Test with: npx tsx src/cli-new.ts [args...]
  */
 import { join } from "node:path";
-import { DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-agent-core";
+import { type AgentMessage, DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-agent-core";
+import type { JsonValue } from "@earendil-works/pi-protocol";
 import { Container } from "@earendil-works/pi-tui";
 import { isServerDefaultCompatible, parseArgs } from "./cli/args.ts";
 import { dispatchExperimentalCommand, isExperimentalCommand } from "./cli/experimental/dispatch.ts";
@@ -21,7 +22,7 @@ import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { KeybindingsManager } from "./core/keybindings.ts";
 import { resolveModelScopeFromModels } from "./core/model-resolver.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
-import type { SessionInfo } from "./core/session-manager.ts";
+import type { SessionEntry, SessionInfo, SessionTreeNode } from "./core/session-manager.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { main } from "./main.ts";
 import { CustomEditor } from "./modes/interactive/components/custom-editor.ts";
@@ -32,6 +33,7 @@ import { ScopedModelsSelectorComponent } from "./modes/interactive/components/sc
 import { SessionSelectorComponent } from "./modes/interactive/components/session-selector.ts";
 import { SettingsSelectorComponent } from "./modes/interactive/components/settings-selector.ts";
 import { ThinkingSelectorComponent } from "./modes/interactive/components/thinking-selector.ts";
+import { TreeSelectorComponent } from "./modes/interactive/components/tree-selector.ts";
 import { UserMessageSelectorComponent } from "./modes/interactive/components/user-message-selector.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
 import { getAvailableThemes, getEditorTheme, initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
@@ -83,6 +85,76 @@ const waitForDetachedServer = async (agentDir: string, pid: number): Promise<Det
 	}
 	throw new Error("Detached server did not become ready");
 };
+
+function remoteTreeNodes(entries: readonly JsonValue[], labels: Readonly<Record<string, string>>): SessionTreeNode[] {
+	const nodes = new Map<string, SessionTreeNode>();
+	for (const value of entries) {
+		const entry = remoteTreeEntry(value);
+		if (entry !== undefined)
+			nodes.set(entry.id, { entry, children: [], ...(labels[entry.id] ? { label: labels[entry.id] } : {}) });
+	}
+	const roots: SessionTreeNode[] = [];
+	for (const node of nodes.values()) {
+		const parent = node.entry.parentId === null ? undefined : nodes.get(node.entry.parentId);
+		if (parent === undefined) roots.push(node);
+		else parent.children.push(node);
+	}
+	return roots;
+}
+
+function remoteTreeEntry(value: JsonValue): SessionEntry | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	const entry = value as Record<string, unknown>;
+	if (
+		typeof entry.id !== "string" ||
+		(entry.parentId !== null && typeof entry.parentId !== "string") ||
+		typeof entry.timestamp !== "number" ||
+		typeof entry.type !== "string"
+	)
+		return undefined;
+	const base = { id: entry.id, parentId: entry.parentId, timestamp: new Date(entry.timestamp).toISOString() };
+	switch (entry.type) {
+		case "message":
+			return typeof entry.message === "object" && entry.message !== null && !Array.isArray(entry.message)
+				? { ...base, type: "message", message: entry.message as AgentMessage }
+				: undefined;
+		case "model_change":
+			return typeof entry.provider === "string" && typeof entry.modelId === "string"
+				? { ...base, type: "model_change", provider: entry.provider, modelId: entry.modelId }
+				: undefined;
+		case "thinking_level_change":
+			return typeof entry.thinkingLevel === "string"
+				? { ...base, type: "thinking_level_change", thinkingLevel: entry.thinkingLevel }
+				: undefined;
+		case "compaction":
+			return typeof entry.summary === "string" && typeof entry.tokensBefore === "number"
+				? {
+						...base,
+						type: "compaction",
+						summary: entry.summary,
+						tokensBefore: entry.tokensBefore,
+						firstKeptEntryId: "",
+					}
+				: undefined;
+		case "branch_summary":
+			return typeof entry.fromId === "string" && typeof entry.summary === "string"
+				? { ...base, type: "branch_summary", fromId: entry.fromId, summary: entry.summary }
+				: undefined;
+		case "custom":
+			return typeof entry.customType === "string"
+				? {
+						...base,
+						type: "custom",
+						customType: entry.customType,
+						...(entry.data === undefined ? {} : { data: entry.data }),
+					}
+				: undefined;
+		case "active_tools_change":
+			return { ...base, type: "custom", customType: "active_tools_change" };
+		default:
+			return undefined;
+	}
+}
 
 async function runCli(): Promise<void> {
 	const args = process.argv.slice(2);
@@ -576,6 +648,42 @@ async function runCli(): Promise<void> {
 				tui.setFocus(selector.getMessageList());
 				tui.requestRender();
 			};
+			const showTree = () => {
+				void session
+					.readTree()
+					.then((tree) => {
+						const nodes = remoteTreeNodes(tree.entries, tree.labels);
+						if (nodes.length === 0) {
+							view.showStatus("No entries in session");
+							return;
+						}
+						const done = () => restoreTranscript();
+						const selector = new TreeSelectorComponent(
+							nodes,
+							tree.leafId,
+							tui.terminal.rows,
+							(entryId) => {
+								done();
+								void session
+									.navigateTree(entryId)
+									.then((operationId) => session.waitForOperation(operationId))
+									.then(() => view.showStatus("Navigated to selected point"))
+									.catch((error: unknown) =>
+										view.showStatus(error instanceof Error ? error.message : String(error)),
+									);
+							},
+							done,
+							undefined,
+							undefined,
+							statuslineSettings.getTreeFilterMode(),
+						);
+						transcriptContainer.clear();
+						transcriptContainer.addChild(selector);
+						tui.setFocus(selector);
+						tui.requestRender();
+					})
+					.catch((error: unknown) => view.showStatus(error instanceof Error ? error.message : String(error)));
+			};
 			attachment = new RemoteV2InteractiveAttachment(
 				{
 					session,
@@ -592,6 +700,7 @@ async function runCli(): Promise<void> {
 					openModel: showModel,
 					openResume: showResume,
 					openFork: showFork,
+					openTree: showTree,
 					openScopedModels: showScopedModels,
 					openThinking: showThinking,
 					cwd: process.cwd(),
@@ -632,6 +741,7 @@ async function runCli(): Promise<void> {
 			});
 			editor.onAction("app.session.resume", showResume);
 			editor.onAction("app.session.fork", showFork);
+			editor.onAction("app.session.tree", showTree);
 			editor.onAction("app.session.new", () => {
 				void attachment
 					.execute("/new")

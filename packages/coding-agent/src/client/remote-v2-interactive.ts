@@ -44,6 +44,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/steer",
 	"/take-control",
 	"/thinking",
+	"/tree",
 ] as const;
 
 export type RemoteV2Command =
@@ -81,7 +82,8 @@ export type RemoteV2Command =
 	| { readonly name: "steer"; readonly text: string }
 	| { readonly name: "take-control" }
 	| { readonly name: "thinking" }
-	| { readonly name: "thinking"; readonly level: ThinkingLevel };
+	| { readonly name: "thinking"; readonly level: ThinkingLevel }
+	| { readonly name: "tree" };
 
 export type RemoteV2CommandResult =
 	| { readonly kind: "operation"; readonly operationId: string }
@@ -222,7 +224,8 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		name === "/release-control" ||
 		name === "/resume" ||
 		name === "/scoped-models" ||
-		name === "/take-control"
+		name === "/take-control" ||
+		name === "/tree"
 	) {
 		if (arguments_.length > 0) throw new Error(`${name} does not accept arguments`);
 		return { name: name.slice(1) as RemoteV2Command["name"] } as RemoteV2Command;
@@ -398,6 +401,7 @@ export class RemoteV2InteractiveAttachment {
 	readonly #openModel: (() => void) | undefined;
 	readonly #openResume: (() => void) | undefined;
 	readonly #openFork: (() => void) | undefined;
+	readonly #openTree: (() => void) | undefined;
 	readonly #openScopedModels: (() => void) | undefined;
 	readonly #openThinking: (() => void) | undefined;
 	readonly #copyText: (text: string) => Promise<void>;
@@ -411,6 +415,7 @@ export class RemoteV2InteractiveAttachment {
 			readonly openModel?: () => void;
 			readonly openResume?: () => void;
 			readonly openFork?: () => void;
+			readonly openTree?: () => void;
 			readonly openScopedModels?: () => void;
 			readonly openThinking?: () => void;
 			readonly copyText?: (text: string) => Promise<void>;
@@ -423,6 +428,7 @@ export class RemoteV2InteractiveAttachment {
 		this.#openModel = options.openModel;
 		this.#openResume = options.openResume;
 		this.#openFork = options.openFork;
+		this.#openTree = options.openTree;
 		this.#openScopedModels = options.openScopedModels;
 		this.#openThinking = options.openThinking;
 		this.#copyText = options.copyText ?? copyToClipboard;
@@ -595,6 +601,10 @@ export class RemoteV2InteractiveAttachment {
 					return { kind: "status", text: "thinking selector opened" };
 				}
 				return operation(await this.session.setThinking(command.level));
+			case "tree":
+				if (this.#openTree === undefined) throw new Error("Remote session tree is unavailable");
+				this.#openTree();
+				return { kind: "status", text: "session tree opened" };
 		}
 	}
 
