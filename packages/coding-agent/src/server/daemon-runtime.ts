@@ -65,6 +65,7 @@ import { type SqliteSessionRepositoryLike, WorkerSqliteSessionRepository } from 
 export type CodingAgentDaemonRuntimeOptions = Omit<CodingAgentV2SqliteServiceOptions, "repository"> & {
 	repository: SqliteSessionRepositoryLike;
 	socketPath: string;
+	skipDaemonStart?: boolean;
 	planStorePath?: string;
 	diagnosticStorePath?: string;
 	diagnosticLogPath?: string;
@@ -244,6 +245,7 @@ export async function createCodingAgentDaemonRuntime(
 			start: async (socket) => {
 				if (socket !== undefined && socket !== options.socketPath)
 					throw new Error(`Daemon is configured for socket ${options.socketPath}`);
+				if (options.skipDaemonStart === true) return daemon.status();
 				return daemon.start();
 			},
 			status: () => daemon.status(),

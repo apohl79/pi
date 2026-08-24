@@ -216,6 +216,7 @@ async function runCli(): Promise<void> {
 		return;
 	}
 	const agentDir = getAgentDir();
+	const runningServer = detachedServerStatus(agentDir);
 	const statuslineSettings = SettingsManager.create(process.cwd(), agentDir);
 	const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false });
 	const availableModels = await modelRuntime.getAvailable();
@@ -283,6 +284,7 @@ async function runCli(): Promise<void> {
 		noPromptTemplates: parsedArgs.noPromptTemplates,
 		noContextFiles: parsedArgs.noContextFiles,
 		socketPath: join(agentDir, "pi.sock"),
+		...(runningServer === undefined ? {} : { skipDaemonStart: true }),
 		write: (value) => console.log(JSON.stringify(value)),
 		writeText: (value) => process.stdout.write(`${value}\n`),
 		runInteractive: async (session, options) => {
