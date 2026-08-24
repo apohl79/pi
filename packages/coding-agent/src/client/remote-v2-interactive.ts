@@ -52,6 +52,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/take-control",
 	"/thinking",
 	"/tree",
+	"/trust",
 ] as const;
 
 const REMOTE_V2_COMMAND_DESCRIPTIONS: Readonly<Partial<Record<(typeof REMOTE_V2_SLASH_COMMANDS)[number], string>>> = {
@@ -124,7 +125,8 @@ export type RemoteV2Command =
 	| { readonly name: "take-control" }
 	| { readonly name: "thinking" }
 	| { readonly name: "thinking"; readonly level: ThinkingLevel }
-	| { readonly name: "tree" };
+	| { readonly name: "tree" }
+	| { readonly name: "trust" };
 
 export type RemoteV2CommandResult =
 	| { readonly kind: "operation"; readonly operationId: string }
@@ -311,7 +313,8 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		name === "/session" ||
 		name === "/scoped-models" ||
 		name === "/take-control" ||
-		name === "/tree"
+		name === "/tree" ||
+		name === "/trust"
 	) {
 		if (arguments_.length > 0) throw new Error(`${name} does not accept arguments`);
 		return { name: name.slice(1) as RemoteV2Command["name"] } as RemoteV2Command;
@@ -491,6 +494,7 @@ export class RemoteV2InteractiveAttachment {
 	readonly #openTree: (() => void) | undefined;
 	readonly #openScopedModels: (() => void) | undefined;
 	readonly #openThinking: (() => void) | undefined;
+	readonly #openTrust: (() => void) | undefined;
 	readonly #quit: (() => void) | undefined;
 	readonly #copyText: (text: string) => Promise<void>;
 	readonly #readClipboardImage: () => Promise<ClipboardImage | null>;
@@ -513,6 +517,7 @@ export class RemoteV2InteractiveAttachment {
 			readonly openTree?: () => void;
 			readonly openScopedModels?: () => void;
 			readonly openThinking?: () => void;
+			readonly openTrust?: () => void;
 			readonly quit?: () => void;
 			readonly copyText?: (text: string) => Promise<void>;
 			readonly readClipboardImage?: () => Promise<ClipboardImage | null>;
@@ -534,6 +539,7 @@ export class RemoteV2InteractiveAttachment {
 		this.#openTree = options.openTree;
 		this.#openScopedModels = options.openScopedModels;
 		this.#openThinking = options.openThinking;
+		this.#openTrust = options.openTrust;
 		this.#quit = options.quit;
 		this.#copyText = options.copyText ?? copyToClipboard;
 		this.#readClipboardImage = options.readClipboardImage ?? readClipboardImage;
@@ -789,6 +795,10 @@ export class RemoteV2InteractiveAttachment {
 				if (this.#openTree === undefined) throw new Error("Remote session tree is unavailable");
 				this.#openTree();
 				return { kind: "status", text: "session tree opened" };
+			case "trust":
+				if (this.#openTrust === undefined) throw new Error("Remote project trust is unavailable");
+				this.#openTrust();
+				return { kind: "status", text: "project trust selector opened" };
 		}
 	}
 

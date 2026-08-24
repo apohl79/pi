@@ -26,6 +26,7 @@ import { resolveModelScopeFromModels, selectScopedDefaultModel } from "./core/mo
 import { ModelRuntime } from "./core/model-runtime.ts";
 import type { SessionEntry, SessionInfo, SessionTreeNode } from "./core/session-manager.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
+import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { main } from "./main.ts";
 import {
 	createChangelogCommandOutput,
@@ -44,6 +45,7 @@ import { SessionSelectorComponent } from "./modes/interactive/components/session
 import { SettingsSelectorComponent } from "./modes/interactive/components/settings-selector.ts";
 import { ThinkingSelectorComponent } from "./modes/interactive/components/thinking-selector.ts";
 import { TreeSelectorComponent } from "./modes/interactive/components/tree-selector.ts";
+import { TrustSelectorComponent } from "./modes/interactive/components/trust-selector.ts";
 import { UserMessageSelectorComponent } from "./modes/interactive/components/user-message-selector.ts";
 import { editInExternalEditor } from "./modes/interactive/external-editor.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
@@ -605,6 +607,29 @@ async function runCli(): Promise<void> {
 				tui.setFocus(selector.getSettingsList());
 				tui.requestRender();
 			};
+			const showTrust = () => {
+				const cwd = process.cwd();
+				const trustStore = new ProjectTrustStore(agentDir);
+				const projectTrusted = !hasTrustRequiringProjectResources(cwd) || trustStore.get(cwd) === true;
+				const done = () => restoreTranscript();
+				const selector = new TrustSelectorComponent({
+					cwd,
+					savedDecision: trustStore.getEntry(cwd),
+					projectTrusted,
+					onSelect: (selection) => {
+						trustStore.setMany(selection.updates);
+						done();
+						view.showStatus(
+							`Saved trust decision: ${selection.trusted ? "trusted" : "untrusted"}. Restart ${APP_NAME} for this to take effect.`,
+						);
+					},
+					onCancel: done,
+				});
+				transcriptContainer.clear();
+				transcriptContainer.addChild(selector);
+				tui.setFocus(selector);
+				tui.requestRender();
+			};
 			const showResume = () => {
 				const toSessionInfo = (entry: Awaited<ReturnType<typeof session.listSessions>>[number]): SessionInfo => ({
 					path: entry.id,
@@ -853,6 +878,7 @@ async function runCli(): Promise<void> {
 					openTree: showTree,
 					openScopedModels: showScopedModels,
 					openThinking: showThinking,
+					openTrust: showTrust,
 					quit: () => finishInteractive(),
 					executeShell: async (command, excludeFromContext) => {
 						const component = new BashExecutionComponent(command, tui, excludeFromContext);

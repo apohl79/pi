@@ -234,6 +234,7 @@ describe("remote v2 interactive command boundary", () => {
 
 	test("parses discoverable commands without changing v1 slash commands", () => {
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/detach");
+		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/trust");
 		expect(parseRemoteV2Command("/clone")).toEqual({ name: "clone" });
 		expect(parseRemoteV2Command("/copy")).toEqual({ name: "copy" });
 		expect(parseRemoteV2Command("/debug")).toEqual({ name: "debug" });
@@ -241,6 +242,7 @@ describe("remote v2 interactive command boundary", () => {
 		expect(parseRemoteV2Command("/fork")).toEqual({ name: "fork" });
 		expect(parseRemoteV2Command("/hotkeys")).toEqual({ name: "hotkeys" });
 		expect(parseRemoteV2Command("/tree")).toEqual({ name: "tree" });
+		expect(parseRemoteV2Command("/trust")).toEqual({ name: "trust" });
 		expect(parseRemoteV2Command("/follow-up  continue this")).toEqual({ name: "follow-up", text: "continue this" });
 		expect(parseRemoteV2Command("/agent-follow-up agent-1 continue work")).toEqual({
 			name: "agent-follow-up",
@@ -296,6 +298,7 @@ describe("remote v2 interactive command boundary", () => {
 		expect(parseRemoteV2Command("/session")).toEqual({ name: "session" });
 		expect(parseRemoteV2Command("/scoped-models")).toEqual({ name: "scoped-models" });
 		expect(() => parseRemoteV2Command("/plugins demo")).toThrow("does not accept arguments");
+		expect(() => parseRemoteV2Command("/trust project")).toThrow("does not accept arguments");
 		expect(parseRemoteV2Command("/statusline /bin/statusline --json")).toEqual({
 			name: "statusline",
 			command: "/bin/statusline --json",
@@ -543,6 +546,21 @@ describe("remote v2 interactive command boundary", () => {
 
 		expect(await adapter.execute("/settings")).toEqual({ kind: "status", text: "settings opened" });
 		expect(openSettings).toHaveBeenCalledOnce();
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("opens the injected project trust selector without a server command", async () => {
+		const { client, commands } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const openTrust = vi.fn();
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { openTrust });
+
+		expect(await adapter.execute("/trust")).toEqual({ kind: "status", text: "project trust selector opened" });
+		expect(openTrust).toHaveBeenCalledOnce();
+		expect(commands).not.toContain("turn/start");
 
 		await adapter.dispose();
 		client.dispose();
