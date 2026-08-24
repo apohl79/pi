@@ -1,23 +1,31 @@
+import { Worker } from "node:worker_threads";
 import type { V2UsageFilter, V2UsageLedger, V2UsageLedgerEntry } from "@earendil-works/pi-server";
 import { InMemoryV2UsageLedger, validateV2UsageEntry } from "@earendil-works/pi-server";
-import type { SqliteDatabase, SqliteDatabaseFactory } from "@earendil-works/pi-session-backend-sqlite-node";
 
-interface UsageRow {
-	response_id: string;
-	value: string;
+type WorkerCommand =
+	| { readonly command: "load" }
+	| { readonly command: "record"; readonly responseId: string; readonly value: string }
+	| { readonly command: "close" };
+
+type WorkerResponse = { readonly id: number; readonly result?: unknown; readonly error?: string };
+
+function isWorkerResponse(value: unknown): value is WorkerResponse {
+	return value !== null && typeof value === "object" && "id" in value && typeof value.id === "number";
 }
 
 /** SQLite-backed usage ledger used by configured coding-agent daemons. */
 export class SqliteV2UsageLedger implements V2UsageLedger {
-	readonly #databaseFactory: SqliteDatabaseFactory;
 	readonly #databasePath: string;
 	readonly #memory = new InMemoryV2UsageLedger();
-	#databasePromise: Promise<SqliteDatabase> | undefined;
+	readonly #pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+	#worker: Worker | undefined;
+	#nextRequestId = 1;
 	#pendingWrite: Promise<void> = Promise.resolve();
+	#loadPromise: Promise<void> | undefined;
 	#loaded = false;
+	#closed = false;
 
-	constructor(databaseFactory: SqliteDatabaseFactory, databasePath: string) {
-		this.#databaseFactory = databaseFactory;
+	constructor(databasePath: string) {
 		this.#databasePath = databasePath;
 	}
 
@@ -25,13 +33,7 @@ export class SqliteV2UsageLedger implements V2UsageLedger {
 		return this.#enqueue(async () => {
 			await this.#ensureLoaded();
 			const recorded = validateV2UsageEntry(entry);
-			const database = await this.#database();
-			database
-				.prepare(
-					"INSERT INTO v2_usage (response_id, value) VALUES (?, ?) " +
-						"ON CONFLICT(response_id) DO UPDATE SET value = excluded.value",
-				)
-				.run(recorded.responseId, JSON.stringify(recorded));
+			await this.#request({ command: "record", responseId: recorded.responseId, value: JSON.stringify(recorded) });
 			await this.#memory.record(recorded);
 			return recorded;
 		});
@@ -50,30 +52,89 @@ export class SqliteV2UsageLedger implements V2UsageLedger {
 	}
 
 	async close(): Promise<void> {
+		if (this.#closed) return;
 		await this.#pendingWrite;
-		const database = await this.#databasePromise;
-		if (database !== undefined) database.close();
-		this.#databasePromise = undefined;
+		this.#closed = true;
+		const worker = this.#worker;
+		if (worker !== undefined) {
+			try {
+				await this.#request({ command: "close" }, true);
+			} finally {
+				await worker.terminate();
+				this.#worker = undefined;
+			}
+		}
 		this.#loaded = false;
 	}
 
 	async #ensureLoaded(): Promise<void> {
 		if (this.#loaded) return;
+		const load = this.#loadPromise ?? this.#load();
+		this.#loadPromise = load;
+		try {
+			await load;
+		} finally {
+			if (this.#loadPromise === load) this.#loadPromise = undefined;
+		}
+	}
+
+	async #load(): Promise<void> {
+		const values = await this.#request<readonly string[]>({ command: "load" });
+		for (const value of values) await this.#memory.record(parseJson(value));
 		this.#loaded = true;
-		const database = await this.#database();
-		for (const row of database.prepare("SELECT response_id, value FROM v2_usage ORDER BY rowid").all<UsageRow>())
-			await this.#memory.record(parseJson(row.value));
 	}
 
-	#database(): Promise<SqliteDatabase> {
-		this.#databasePromise ??= this.#open();
-		return this.#databasePromise;
+	#request<T>(command: WorkerCommand, closing = false): Promise<T> {
+		if (this.#closed && !closing) return Promise.reject(new Error("SQLite usage ledger is closed"));
+		const worker = this.#worker ?? this.#createWorker();
+		const id = this.#nextRequestId;
+		this.#nextRequestId += 1;
+		return new Promise<T>((resolve, reject) => {
+			this.#pending.set(id, { resolve, reject });
+			worker.postMessage({ id, command });
+		});
 	}
 
-	async #open(): Promise<SqliteDatabase> {
-		const database = await this.#databaseFactory.open(this.#databasePath);
-		database.exec("CREATE TABLE IF NOT EXISTS v2_usage (response_id TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)");
-		return database;
+	#createWorker(): Worker {
+		const worker =
+			typeof process.versions.bun === "string"
+				? new Worker("./src/server/sqlite-usage-ledger-worker.ts", {
+						workerData: { databasePath: this.#databasePath },
+					})
+				: new Worker(
+						new URL(
+							import.meta.url.endsWith(".ts")
+								? "./sqlite-usage-ledger-worker.ts"
+								: "./sqlite-usage-ledger-worker.js",
+							import.meta.url,
+						),
+						{ workerData: { databasePath: this.#databasePath } },
+					);
+		worker.on("message", (message: unknown) => this.#handleResponse(message));
+		worker.once("error", (error) => this.#failPending(error));
+		worker.once("exit", (code) => {
+			if (!this.#closed && code !== 0) this.#failPending(new Error(`SQLite usage worker exited with code ${code}`));
+			if (this.#worker === worker) this.#worker = undefined;
+		});
+		this.#worker = worker;
+		return worker;
+	}
+
+	#handleResponse(message: unknown): void {
+		if (!isWorkerResponse(message)) {
+			this.#failPending(new Error("Invalid SQLite usage worker response"));
+			return;
+		}
+		const request = this.#pending.get(message.id);
+		if (request === undefined) return;
+		this.#pending.delete(message.id);
+		if (message.error !== undefined) request.reject(new Error(message.error));
+		else request.resolve(message.result);
+	}
+
+	#failPending(error: Error): void {
+		for (const request of this.#pending.values()) request.reject(error);
+		this.#pending.clear();
 	}
 
 	#enqueue<T>(operation: () => Promise<T>): Promise<T> {

@@ -35,7 +35,7 @@ describe("SqliteV2UsageLedger", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-usage-"));
 		directories.push(directory);
 		const path = join(directory, "usage.sqlite");
-		const first = new SqliteV2UsageLedger(createNodeSqliteFactory(), path);
+		const first = new SqliteV2UsageLedger(path);
 		await Promise.all([first.record(entry("response-1", 20)), first.record(entry("response-2", 30))]);
 		await first.record(entry("response-1", 25));
 		expect(await first.read({ provider: "test-provider" })).toHaveLength(2);
@@ -46,7 +46,7 @@ describe("SqliteV2UsageLedger", () => {
 		});
 		await first.close();
 
-		const restored = new SqliteV2UsageLedger(createNodeSqliteFactory(), path);
+		const restored = new SqliteV2UsageLedger(path);
 		expect(await restored.read()).toEqual([entry("response-1", 25), entry("response-2", 30)]);
 		await restored.close();
 	});
@@ -62,8 +62,8 @@ describe("SqliteV2UsageLedger", () => {
 			.run("response-1", JSON.stringify({ ...entry("response-1", 1), input: -1 }));
 		database.close();
 
-		await expect(new SqliteV2UsageLedger(createNodeSqliteFactory(), path).read()).rejects.toThrow(
-			"Usage field is invalid: input",
-		);
+		const ledger = new SqliteV2UsageLedger(path);
+		await expect(ledger.read()).rejects.toThrow("Usage field is invalid: input");
+		await ledger.close();
 	});
 });

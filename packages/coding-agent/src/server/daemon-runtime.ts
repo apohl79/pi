@@ -395,11 +395,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 	});
 	try {
 		const usage =
-			options.usage ??
-			new SqliteV2UsageLedger(
-				createNodeSqliteFactory(),
-				options.usageStorePath ?? join(options.agentDir, "usage.sqlite"),
-			);
+			options.usage ?? new SqliteV2UsageLedger(options.usageStorePath ?? join(options.agentDir, "usage.sqlite"));
 		const pluginAcquisition = options.pluginAcquisition;
 		const pluginMarketplaceResolver =
 			options.pluginMarketplaceResolver ??
