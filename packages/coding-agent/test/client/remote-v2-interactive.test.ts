@@ -385,6 +385,28 @@ describe("remote v2 interactive command boundary", () => {
 		await adapter.dispose();
 	});
 
+	test("opens a server-owned login dialog only for an explicit provider and method", async () => {
+		const openLogin = vi.fn();
+		const adapter = new RemoteV2InteractiveAttachment(
+			{
+				session: {},
+				view: { showStatus: () => {}, invalidate: () => {} },
+				dispose: async () => {},
+			} as unknown as ConstructorParameters<typeof RemoteV2InteractiveAttachment>[0],
+			undefined,
+			{ openLogin },
+		);
+
+		expect(parseRemoteV2Command("/login openai oauth")).toEqual({
+			name: "login",
+			providerId: "openai",
+			type: "oauth",
+		});
+		expect(await adapter.execute("/login openai oauth")).toEqual({ kind: "status", text: "login dialog opened" });
+		expect(openLogin).toHaveBeenCalledWith("openai", "oauth");
+		expect(() => parseRemoteV2Command("/login openai")).toThrow("/login requires <provider> <oauth|api_key>");
+	});
+
 	test("dispatches remote actions through the attached controller and shares cleanup", async () => {
 		const { client, commands } = clientWithRequests(true);
 		await client.connect();

@@ -113,6 +113,35 @@ export interface RemoteV2BlobRead {
 	readonly data: string;
 }
 
+export type RemoteV2AuthPrompt =
+	| { readonly type: "text" | "secret" | "manual_code"; readonly message: string; readonly placeholder?: string }
+	| {
+			readonly type: "select";
+			readonly message: string;
+			readonly options: readonly { readonly id: string; readonly label: string; readonly description?: string }[];
+	  };
+
+export type RemoteV2AuthEvent =
+	| {
+			readonly type: "info";
+			readonly message: string;
+			readonly links?: readonly { readonly url: string; readonly label?: string }[];
+	  }
+	| { readonly type: "auth_url"; readonly url: string; readonly instructions?: string }
+	| {
+			readonly type: "device_code";
+			readonly userCode: string;
+			readonly verificationUri: string;
+			readonly intervalSeconds?: number;
+			readonly expiresInSeconds?: number;
+	  }
+	| { readonly type: "progress"; readonly message: string };
+
+export type RemoteV2AuthInteraction =
+	| { readonly loginId: string; readonly kind: "prompt"; readonly prompt: RemoteV2AuthPrompt }
+	| { readonly loginId: string; readonly kind: "notify"; readonly event: RemoteV2AuthEvent }
+	| { readonly loginId: string; readonly kind: "completed"; readonly success: boolean; readonly message?: string };
+
 /** Complete durable entry graph for a session, independent of the active transcript branch. */
 export interface RemoteV2SessionTree {
 	readonly leafId: string | null;
@@ -329,6 +358,46 @@ export class RemoteV2Session {
 		const response = await this.#client.request({ command: "auth/logout", payload: { providerId } });
 		if (!response.ok || !("result" in response) || asRecord(response.result)?.providerId !== providerId)
 			throw new Error("Invalid auth/logout response");
+	}
+
+	async startLogin(providerId: string, type: "oauth" | "api_key"): Promise<string> {
+		this.#assertControl();
+		const result = await this.#direct({
+			command: "auth/login",
+			sessionId: this.#handle!.sessionId,
+			payload: { providerId, type },
+		});
+		if (typeof result.loginId !== "string") throw new Error("Invalid auth/login response");
+		return result.loginId;
+	}
+
+	async respondLogin(loginId: string, value: string): Promise<void> {
+		this.#assertControl();
+		await this.#direct({ command: "auth/respond", sessionId: this.#handle!.sessionId, payload: { loginId, value } });
+	}
+
+	async cancelLogin(loginId: string): Promise<void> {
+		this.#assertControl();
+		await this.#direct({ command: "auth/cancel", sessionId: this.#handle!.sessionId, payload: { loginId } });
+	}
+
+	getAuthInteraction(): RemoteV2AuthInteraction | undefined {
+		const event = this.#lastEvent;
+		if (event?.event !== "auth_interaction") return undefined;
+		const payload = asRecord(event.payload);
+		if (!payload || typeof payload.loginId !== "string" || typeof payload.kind !== "string") return undefined;
+		if (payload.kind === "prompt" && isRemoteAuthPrompt(payload.prompt))
+			return { loginId: payload.loginId, kind: "prompt", prompt: payload.prompt };
+		if (payload.kind === "notify" && isRemoteAuthEvent(payload.event))
+			return { loginId: payload.loginId, kind: "notify", event: payload.event };
+		if (payload.kind === "completed" && typeof payload.success === "boolean")
+			return {
+				loginId: payload.loginId,
+				kind: "completed",
+				success: payload.success,
+				...(typeof payload.message === "string" ? { message: payload.message } : {}),
+			};
+		return undefined;
 	}
 
 	async listInteractiveResources(): Promise<readonly InteractiveResourceV2[]> {
@@ -1398,6 +1467,53 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 		? (value as Record<string, unknown>)
 		: undefined;
+}
+
+function isRemoteAuthPrompt(value: unknown): value is RemoteV2AuthPrompt {
+	const prompt = asRecord(value);
+	if (!prompt || typeof prompt.type !== "string" || typeof prompt.message !== "string") return false;
+	if (prompt.type === "text" || prompt.type === "secret" || prompt.type === "manual_code")
+		return prompt.placeholder === undefined || typeof prompt.placeholder === "string";
+	if (prompt.type !== "select" || !Array.isArray(prompt.options)) return false;
+	return prompt.options.every((option) => {
+		const candidate = asRecord(option);
+		return (
+			candidate !== undefined &&
+			typeof candidate.id === "string" &&
+			typeof candidate.label === "string" &&
+			(candidate.description === undefined || typeof candidate.description === "string")
+		);
+	});
+}
+
+function isRemoteAuthEvent(value: unknown): value is RemoteV2AuthEvent {
+	const event = asRecord(value);
+	if (!event || typeof event.type !== "string") return false;
+	if (event.type === "progress") return typeof event.message === "string";
+	if (event.type === "auth_url")
+		return (
+			typeof event.url === "string" && (event.instructions === undefined || typeof event.instructions === "string")
+		);
+	if (event.type === "device_code")
+		return (
+			typeof event.userCode === "string" &&
+			typeof event.verificationUri === "string" &&
+			(event.intervalSeconds === undefined || typeof event.intervalSeconds === "number") &&
+			(event.expiresInSeconds === undefined || typeof event.expiresInSeconds === "number")
+		);
+	if (event.type !== "info" || typeof event.message !== "string") return false;
+	return (
+		event.links === undefined ||
+		(Array.isArray(event.links) &&
+			event.links.every((link) => {
+				const candidate = asRecord(link);
+				return (
+					candidate !== undefined &&
+					typeof candidate.url === "string" &&
+					(candidate.label === undefined || typeof candidate.label === "string")
+				);
+			}))
+	);
 }
 
 function record(value: unknown, command: string): Record<string, unknown> {

@@ -14,6 +14,7 @@ import type { RemoteV2FileCompletion, RemoteV2PromptContent } from "./remote-v2-
 
 export const REMOTE_V2_SLASH_COMMANDS = [
 	"/model",
+	"/login",
 	"/logout",
 	"/abort",
 	"/agent-follow-up",
@@ -75,6 +76,7 @@ const REMOTE_V2_COMMAND_DESCRIPTIONS: Readonly<Partial<Record<(typeof REMOTE_V2_
 	"/interrupt-child": "Interrupt a child agent",
 	"/name-auto": "Enable or disable automatic session names",
 	"/logout": "Remove a server-stored provider credential",
+	"/login": "Authenticate a provider through the server",
 	"/plan": "Replace the server session plan",
 	"/plan-clear": "Clear the server session plan",
 	"/plugins": "List server session plugins",
@@ -110,6 +112,7 @@ export type RemoteV2Command =
 	| { readonly name: "goal-resume" }
 	| { readonly name: "input"; readonly requestId: string; readonly answers: Readonly<Record<string, string>> }
 	| { readonly name: "input-cancel"; readonly requestId: string }
+	| { readonly name: "login"; readonly providerId: string; readonly type: "oauth" | "api_key" }
 	| { readonly name: "import"; readonly inputPath: string }
 	| { readonly name: "hotkeys" }
 	| { readonly name: "model" }
@@ -397,6 +400,11 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		if (arguments_.length !== 1) throw new Error("/input-cancel requires <request-id>");
 		return { name: "input-cancel", requestId: arguments_[0] };
 	}
+	if (name === "/login") {
+		if (arguments_.length !== 2 || (arguments_[1] !== "oauth" && arguments_[1] !== "api_key"))
+			throw new Error("/login requires <provider> <oauth|api_key>");
+		return { name: "login", providerId: arguments_[0]!, type: arguments_[1] };
+	}
 	if (name === "/model") {
 		if (arguments_.length === 0) return { name: "model" };
 		if (arguments_.length !== 1) throw new Error("/model requires <provider/model>");
@@ -526,6 +534,7 @@ export class RemoteV2InteractiveAttachment {
 	#pendingAttachments: RemoteV2PromptContent = [];
 	readonly #openSettings: (() => void) | undefined;
 	readonly #openModel: (() => void) | undefined;
+	readonly #openLogin: ((providerId: string, type: "oauth" | "api_key") => void) | undefined;
 	readonly #openResume: (() => void) | undefined;
 	readonly #openFork: (() => void) | undefined;
 	readonly #openTree: (() => void) | undefined;
@@ -552,6 +561,7 @@ export class RemoteV2InteractiveAttachment {
 		options: {
 			readonly openSettings?: () => void;
 			readonly openModel?: () => void;
+			readonly openLogin?: (providerId: string, type: "oauth" | "api_key") => void;
 			readonly openResume?: () => void;
 			readonly openFork?: () => void;
 			readonly openTree?: () => void;
@@ -577,6 +587,7 @@ export class RemoteV2InteractiveAttachment {
 		this.#editor = editor;
 		this.#openSettings = options.openSettings;
 		this.#openModel = options.openModel;
+		this.#openLogin = options.openLogin;
 		this.#openResume = options.openResume;
 		this.#openFork = options.openFork;
 		this.#openTree = options.openTree;
@@ -760,6 +771,10 @@ export class RemoteV2InteractiveAttachment {
 			case "input-cancel":
 				await this.session.cancelInput(command.requestId);
 				return { kind: "status", text: "input cancelled" };
+			case "login":
+				if (this.#openLogin === undefined) throw new Error("Remote login is unavailable");
+				this.#openLogin(command.providerId, command.type);
+				return { kind: "status", text: "login dialog opened" };
 			case "hotkeys":
 				if (this.#showHotkeys === undefined) throw new Error("Remote hotkeys are unavailable");
 				this.#showHotkeys();

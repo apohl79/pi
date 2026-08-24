@@ -98,6 +98,36 @@ export interface PiSessionRuntimeEventV2 {
 	readonly operationId?: string;
 }
 
+export type ServerAuthPromptV2 =
+	| {
+			type: "text" | "secret" | "manual_code";
+			message: string;
+			placeholder?: string;
+	  }
+	| {
+			type: "select";
+			message: string;
+			options: readonly { id: string; label: string; description?: string }[];
+	  };
+
+export type ServerAuthEventV2 =
+	| { type: "info"; message: string; links?: readonly { url: string; label?: string }[] }
+	| { type: "auth_url"; url: string; instructions?: string }
+	| {
+			type: "device_code";
+			userCode: string;
+			verificationUri: string;
+			intervalSeconds?: number;
+			expiresInSeconds?: number;
+	  }
+	| { type: "progress"; message: string };
+
+export interface ServerAuthInteractionV2 {
+	signal: AbortSignal;
+	prompt(prompt: ServerAuthPromptV2): Promise<string>;
+	notify(event: ServerAuthEventV2): void;
+}
+
 export interface PiSessionRuntimeV2 {
 	snapshot(): MaybePromise<SessionSnapshotV2>;
 	/** Optional daemon-owned prompt templates and skills available to this attached session. */
@@ -129,6 +159,7 @@ export interface PiServerServiceV2 {
 	listSessions(): Promise<SessionMetadataV2[]>;
 	listModels(): Promise<ModelMetadata[]>;
 	listAuthenticatedProviders?(): Promise<readonly { id: string; name: string }[]>;
+	login?(providerId: string, type: "oauth" | "api_key", interaction: ServerAuthInteractionV2): Promise<void>;
 	logout?(providerId: string): Promise<void>;
 	openSession(sessionId: string): Promise<PiSessionRuntimeV2>;
 	createSession?(options: Record<string, unknown>): Promise<{ sessionId: string; runtime: PiSessionRuntimeV2 }>;
@@ -180,6 +211,14 @@ type V2ConnectionState = {
 	closed: boolean;
 	clientDiagnostics?: ClientHelloV2["diagnostics"];
 	handshakeTimeout: NodeJS.Timeout;
+};
+
+type PendingAuthInteraction = {
+	readonly id: string;
+	readonly sessionId: string;
+	readonly connectionId: string;
+	readonly controller: AbortController;
+	pending?: { resolve(value: string): void; reject(error: Error): void };
 };
 
 const DEFAULT_MAX_FRAME_LENGTH = 4 * 1024 * 1024;
@@ -319,6 +358,7 @@ export class PiServerV2 {
 	private readonly operations = new Map<string, OperationRecordV2>();
 	private readonly pendingRecoveryReports = new Map<string, OperationRecordV2[]>();
 	private readonly pendingRequests = new Map<string, CommandV2>();
+	private readonly authInteractions = new Map<string, PendingAuthInteraction>();
 	private readonly completionControllers = new Map<string, AbortController>();
 	private readonly disposedRuntimes = new WeakSet<PiSessionRuntimeV2>();
 	private readonly runtimeEventUnsubscribers = new WeakMap<PiSessionRuntimeV2, () => void>();
@@ -609,6 +649,9 @@ export class PiServerV2 {
 					models: await this.service.listModels(),
 				}));
 			if (command.command === "auth/list") return void (await this.listAuthenticatedProviders(state, id));
+			if (command.command === "auth/login") return void (await this.startAuthLogin(state, id, command));
+			if (command.command === "auth/respond") return void (await this.respondAuthPrompt(state, id, command));
+			if (command.command === "auth/cancel") return void (await this.cancelAuthLogin(state, id, command));
 			if (command.command === "auth/logout") return void (await this.logoutProvider(state, id, command));
 			if (command.command === "resource/list") return void (await this.listInteractiveResources(state, id, command));
 			if (command.command === "operation/read") return void (await this.readOperation(state, id, command));
@@ -713,6 +756,104 @@ export class PiServerV2 {
 		await this.sendResponse(state, id, {
 			command: "auth/list",
 			providers: await this.service.listAuthenticatedProviders(),
+		});
+	}
+
+	private async startAuthLogin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!this.service.login) throw new Error("auth/login is not supported by this server");
+		if (!command.sessionId) throw new Error("auth/login requires sessionId");
+		this.requireControl(state, command.sessionId);
+		const payload = objectPayload(command);
+		if (typeof payload.providerId !== "string" || payload.providerId.length === 0)
+			throw new Error("auth/login requires a non-empty providerId");
+		if (payload.type !== "oauth" && payload.type !== "api_key")
+			throw new Error("auth/login requires oauth or api_key type");
+		const auth = {
+			id: randomUUID(),
+			sessionId: command.sessionId,
+			connectionId: state.id,
+			controller: new AbortController(),
+		} satisfies PendingAuthInteraction;
+		this.authInteractions.set(auth.id, auth);
+		await this.sendResponse(state, id, { command: "auth/login", loginId: auth.id });
+		void this.service
+			.login(payload.providerId, payload.type, {
+				signal: auth.controller.signal,
+				prompt: (prompt) => this.requestAuthPrompt(state, auth, prompt),
+				notify: (event) => this.sendAuthInteraction(state, auth, { kind: "notify", event }),
+			})
+			.then(() => this.sendAuthInteraction(state, auth, { kind: "completed", success: true }))
+			.catch((error: unknown) =>
+				this.sendAuthInteraction(state, auth, {
+					kind: "completed",
+					success: false,
+					message: error instanceof Error ? error.message : String(error),
+				}),
+			)
+			.finally(() => this.authInteractions.delete(auth.id));
+	}
+
+	private async requestAuthPrompt(
+		state: V2ConnectionState,
+		auth: PendingAuthInteraction,
+		prompt: ServerAuthPromptV2,
+	): Promise<string> {
+		if (auth.controller.signal.aborted) throw new Error("Login cancelled");
+		return new Promise<string>((resolve, reject) => {
+			auth.pending = { resolve, reject };
+			void this.sendAuthInteraction(state, auth, { kind: "prompt", prompt }).catch(reject);
+		});
+	}
+
+	private async respondAuthPrompt(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const payload = objectPayload(command);
+		const auth = this.requireAuthInteraction(state, command, payload);
+		if (typeof payload.value !== "string") throw new Error("auth/respond requires a string value");
+		if (!auth.pending) throw new Error("auth/respond has no pending prompt");
+		const pending = auth.pending;
+		auth.pending = undefined;
+		pending.resolve(payload.value);
+		await this.sendResponse(state, id, { command: "auth/respond", loginId: auth.id });
+	}
+
+	private async cancelAuthLogin(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		const auth = this.requireAuthInteraction(state, command, objectPayload(command));
+		auth.controller.abort(new Error("Login cancelled"));
+		auth.pending?.reject(new Error("Login cancelled"));
+		auth.pending = undefined;
+		await this.sendResponse(state, id, { command: "auth/cancel", loginId: auth.id });
+	}
+
+	private requireAuthInteraction(
+		state: V2ConnectionState,
+		command: CommandV2,
+		payload: Record<string, unknown>,
+	): PendingAuthInteraction {
+		if (!command.sessionId) throw new Error(`${command.command} requires sessionId`);
+		this.requireControl(state, command.sessionId);
+		if (typeof payload.loginId !== "string") throw new Error(`${command.command} requires loginId`);
+		const auth = this.authInteractions.get(payload.loginId);
+		if (!auth || auth.sessionId !== command.sessionId || auth.connectionId !== state.id)
+			throw new Error("Unknown auth interaction");
+		return auth;
+	}
+
+	private async sendAuthInteraction(
+		state: V2ConnectionState,
+		auth: PendingAuthInteraction,
+		payload: Record<string, unknown>,
+	): Promise<void> {
+		if (state.closed || auth.connectionId !== state.id) return;
+		const runtime = state.sessions.get(auth.sessionId);
+		if (!runtime) return;
+		const snapshot = await runtime.snapshot();
+		await this.sendEvent(state, {
+			type: "event",
+			sessionId: auth.sessionId,
+			seq: snapshot.eventSeq + 1,
+			revision: snapshot.revision + 1,
+			event: "auth_interaction",
+			payload: toProtocolJsonValue({ loginId: auth.id, ...payload }),
 		});
 	}
 
@@ -2652,6 +2793,7 @@ export class PiServerV2 {
 		if (state.closed) return;
 		state.closed = true;
 		clearTimeout(state.handshakeTimeout);
+		this.cancelAuthInteractionsForConnection(state.id);
 		for (const sessionId of state.controlSessions) this.releaseControlFor(state, sessionId);
 		await Promise.allSettled(Array.from(state.sessions.values(), (runtime) => this.disposeRuntime(runtime)));
 		await state.connection.close();
@@ -2662,8 +2804,18 @@ export class PiServerV2 {
 		if (state.closed) return;
 		state.closed = true;
 		clearTimeout(state.handshakeTimeout);
+		this.cancelAuthInteractionsForConnection(state.id);
 		for (const sessionId of state.controlSessions) this.releaseControlFor(state, sessionId);
 		this.connections.delete(state);
+	}
+
+	private cancelAuthInteractionsForConnection(connectionId: string): void {
+		for (const auth of this.authInteractions.values()) {
+			if (auth.connectionId !== connectionId) continue;
+			auth.controller.abort(new Error("Login cancelled"));
+			auth.pending?.reject(new Error("Login cancelled"));
+			auth.pending = undefined;
+		}
 	}
 
 	private claimControl(state: V2ConnectionState, sessionId: string): void {

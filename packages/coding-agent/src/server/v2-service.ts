@@ -30,6 +30,7 @@ import type {
 import type {
 	ForensicRecorder,
 	PiSessionRuntimeEventV2,
+	ServerAuthInteractionV2,
 	V2InputRegistry,
 	V2UsageLedger,
 } from "@earendil-works/pi-server";
@@ -141,6 +142,7 @@ export interface CodingAgentV2Service {
 	listSessions(): Promise<SessionMetadataV2[]>;
 	listModels(): Promise<ModelMetadata[]>;
 	listAuthenticatedProviders?(): Promise<readonly { id: string; name: string }[]>;
+	login?(providerId: string, type: "oauth" | "api_key", interaction: ServerAuthInteractionV2): Promise<void>;
 	logout?(providerId: string): Promise<void>;
 	openSession(sessionId: string): Promise<CodingAgentV2Runtime>;
 	createSession?(options: Record<string, unknown>): Promise<{ sessionId: string; runtime: CodingAgentV2Runtime }>;
@@ -1355,6 +1357,9 @@ export function createCodingAgentV2Service(
 					),
 			);
 			return providers.filter((provider): provider is { id: string; name: string } => provider !== undefined);
+		},
+		login: async (providerId, type, interaction) => {
+			await models.login(providerId, type, interaction);
 		},
 		logout: (providerId) => models.logout(providerId),
 		createSession: sessionFactory

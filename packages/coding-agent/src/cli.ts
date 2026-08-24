@@ -40,6 +40,7 @@ import { ExtensionEditorComponent } from "./modes/interactive/components/extensi
 import { ExtensionSelectorComponent } from "./modes/interactive/components/extension-selector.ts";
 import { InteractiveLayout } from "./modes/interactive/components/interactive-layout.ts";
 import { formatInteractiveTerminalTitle } from "./modes/interactive/components/interactive-title.ts";
+import { LoginDialogComponent } from "./modes/interactive/components/login-dialog.ts";
 import { ModelSelectorComponent } from "./modes/interactive/components/model-selector.ts";
 import { ScopedModelsSelectorComponent } from "./modes/interactive/components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./modes/interactive/components/session-selector.ts";
@@ -389,6 +390,91 @@ async function runCli(): Promise<void> {
 				if (persist) statuslineSettings.setDefaultModelAndProvider(selected.provider, selected.id);
 				footer.invalidate();
 				view.showStatus(`Model: ${selected.name || selected.id}`);
+			};
+			const showLogin = (providerId: string, type: "oauth" | "api_key") => {
+				const providerName = modelRuntime.getProvider(providerId)?.name ?? providerId;
+				let loginId: string | undefined;
+				let restored = false;
+				const unsubscribe = session.subscribe(() => {
+					const interaction = session.getAuthInteraction();
+					if (interaction === undefined || interaction.loginId !== loginId || restored) return;
+					if (interaction.kind === "completed") {
+						restore();
+						view.showStatus(
+							interaction.success
+								? `Logged in to ${providerName}`
+								: `Login failed: ${interaction.message ?? "unknown error"}`,
+						);
+						return;
+					}
+					if (interaction.kind === "notify") {
+						const event = interaction.event;
+						if (event.type === "auth_url") dialog.showAuth(event.url, event.instructions);
+						else if (event.type === "device_code") {
+							dialog.showDeviceCode(event);
+							dialog.showWaiting("Waiting for authentication...");
+						} else if (event.type === "info") dialog.showInfo(event.message, event.links);
+						else dialog.showProgress(event.message);
+						return;
+					}
+					if (interaction.prompt.type === "select") {
+						const options = interaction.prompt.options;
+						const selector = new ExtensionSelectorComponent(
+							interaction.prompt.message,
+							options.map((option) => option.label),
+							(label) => {
+								showDialog();
+								const option = options.find((candidate) => candidate.label === label);
+								if (option) void session.respondLogin(interaction.loginId, option.id);
+							},
+							() => {
+								if (loginId !== undefined) void session.cancelLogin(loginId).catch(() => undefined);
+								restore();
+							},
+						);
+						transcriptContainer.clear();
+						transcriptContainer.addChild(selector);
+						tui.setFocus(selector);
+						tui.requestRender();
+						return;
+					}
+					const prompt =
+						interaction.prompt.type === "manual_code"
+							? dialog.showManualInput(interaction.prompt.message)
+							: dialog.showPrompt(interaction.prompt.message, interaction.prompt.placeholder);
+					void prompt.then((value) => session.respondLogin(interaction.loginId, value)).catch(() => undefined);
+				});
+				const restore = () => {
+					if (restored) return;
+					restored = true;
+					unsubscribe();
+					restoreTranscript();
+				};
+				const dialog = new LoginDialogComponent(
+					tui,
+					providerId,
+					() => {
+						if (loginId !== undefined) void session.cancelLogin(loginId).catch(() => undefined);
+						restore();
+					},
+					providerName,
+				);
+				const showDialog = () => {
+					transcriptContainer.clear();
+					transcriptContainer.addChild(dialog);
+					tui.setFocus(dialog);
+					tui.requestRender();
+				};
+				showDialog();
+				void session.startLogin(providerId, type).then(
+					(id) => {
+						loginId = id;
+					},
+					(error: unknown) => {
+						restore();
+						view.showStatus(error instanceof Error ? error.message : String(error));
+					},
+				);
 			};
 			const showModel = () => {
 				const snapshot = session.snapshot;
@@ -951,6 +1037,7 @@ async function runCli(): Promise<void> {
 						),
 					openSettings: showSettings,
 					openModel: showModel,
+					openLogin: showLogin,
 					openResume: showResume,
 					openFork: showFork,
 					openTree: showTree,
