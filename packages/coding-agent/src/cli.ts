@@ -205,10 +205,13 @@ async function runCli(): Promise<void> {
 					tui.setFocus(attachment);
 					tui.requestRender();
 				};
+				const defaultProvider = statuslineSettings.getDefaultProvider();
+				const defaultModelId = statuslineSettings.getDefaultModel();
+				const defaultModel = defaultProvider && defaultModelId ? `${defaultProvider}/${defaultModelId}` : "not set";
 				const selector = new SettingsSelectorComponent(
 					{
 						autoCompact: snapshot?.compactionPolicy.enabled ?? true,
-						defaultModel: statuslineSettings.getDefaultModel() ?? "not set",
+						defaultModel,
 						currentModel,
 						availableDefaultModels: availableModels,
 						showImages: statuslineSettings.getShowImages(),
