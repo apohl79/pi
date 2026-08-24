@@ -35,6 +35,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/plan",
 	"/plan-clear",
 	"/plugins",
+	"/quit",
 	"/release-control",
 	"/resume",
 	"/rollback",
@@ -73,6 +74,7 @@ export type RemoteV2Command =
 	| { readonly name: "plan"; readonly items: readonly PlanItem[] }
 	| { readonly name: "plan-clear" }
 	| { readonly name: "plugins" }
+	| { readonly name: "quit" }
 	| { readonly name: "release-control" }
 	| { readonly name: "resume" }
 	| { readonly name: "rollback"; readonly turns: number }
@@ -221,6 +223,7 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		name === "/copy" ||
 		name === "/detach" ||
 		name === "/fork" ||
+		name === "/quit" ||
 		name === "/release-control" ||
 		name === "/resume" ||
 		name === "/scoped-models" ||
@@ -404,6 +407,7 @@ export class RemoteV2InteractiveAttachment {
 	readonly #openTree: (() => void) | undefined;
 	readonly #openScopedModels: (() => void) | undefined;
 	readonly #openThinking: (() => void) | undefined;
+	readonly #quit: (() => void) | undefined;
 	readonly #copyText: (text: string) => Promise<void>;
 	readonly #cwd: string | undefined;
 
@@ -418,6 +422,7 @@ export class RemoteV2InteractiveAttachment {
 			readonly openTree?: () => void;
 			readonly openScopedModels?: () => void;
 			readonly openThinking?: () => void;
+			readonly quit?: () => void;
 			readonly copyText?: (text: string) => Promise<void>;
 			readonly cwd?: string;
 		} = {},
@@ -431,6 +436,7 @@ export class RemoteV2InteractiveAttachment {
 		this.#openTree = options.openTree;
 		this.#openScopedModels = options.openScopedModels;
 		this.#openThinking = options.openThinking;
+		this.#quit = options.quit;
 		this.#copyText = options.copyText ?? copyToClipboard;
 		this.#cwd = options.cwd;
 		if (editor !== undefined) {
@@ -563,6 +569,10 @@ export class RemoteV2InteractiveAttachment {
 					.join(", ");
 				return { kind: "status", text: summary || "no installed plugins" };
 			}
+			case "quit":
+				if (this.#quit === undefined) throw new Error("Remote session quit is unavailable");
+				this.#quit();
+				return { kind: "status", text: "Detached from session" };
 			case "release-control":
 				await this.session.relinquishControl();
 				return { kind: "control", mode: "observer" };

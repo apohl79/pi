@@ -267,6 +267,7 @@ describe("remote v2 interactive command boundary", () => {
 		});
 		expect(parseRemoteV2Command("/plan-clear")).toEqual({ name: "plan-clear" });
 		expect(parseRemoteV2Command("/plugins")).toEqual({ name: "plugins" });
+		expect(parseRemoteV2Command("/quit")).toEqual({ name: "quit" });
 		expect(parseRemoteV2Command("/settings")).toEqual({ name: "settings" });
 		expect(parseRemoteV2Command("/scoped-models")).toEqual({ name: "scoped-models" });
 		expect(() => parseRemoteV2Command("/plugins demo")).toThrow("does not accept arguments");
@@ -443,6 +444,20 @@ describe("remote v2 interactive command boundary", () => {
 
 		expect(await adapter.execute("/settings")).toEqual({ kind: "status", text: "settings opened" });
 		expect(openSettings).toHaveBeenCalledOnce();
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("detaches the local TUI through the injected quit callback", async () => {
+		const { client } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const quit = vi.fn();
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { quit });
+
+		expect(await adapter.execute("/quit")).toEqual({ kind: "status", text: "Detached from session" });
+		expect(quit).toHaveBeenCalledOnce();
 
 		await adapter.dispose();
 		client.dispose();

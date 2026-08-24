@@ -317,6 +317,7 @@ async function runCli(): Promise<void> {
 			restoreTranscript();
 			let statusline: RemoteV2StatuslineComponent;
 			let attachment: RemoteV2InteractiveAttachment;
+			let finishInteractive: () => void = () => {};
 			const setSelectedModel = async (
 				selected: (typeof availableModels)[number],
 				persist: boolean,
@@ -797,6 +798,7 @@ async function runCli(): Promise<void> {
 					openTree: showTree,
 					openScopedModels: showScopedModels,
 					openThinking: showThinking,
+					quit: () => finishInteractive(),
 					cwd: process.cwd(),
 				},
 			);
@@ -858,6 +860,7 @@ async function runCli(): Promise<void> {
 						resolve();
 					});
 				};
+				finishInteractive = finish;
 				editor.onAction("app.clear", () => {
 					if (editor.getText().length === 0) finish();
 					else editor.setText("");
