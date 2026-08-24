@@ -340,6 +340,15 @@ async function runCli(): Promise<void> {
 				tui.setFocus(selector);
 				tui.requestRender();
 			};
+			const cycleThinking = () => {
+				const current = session.snapshot?.thinkingLevel ?? DEFAULT_THINKING_LEVEL;
+				const currentIndex = THINKING_LEVEL_OPTIONS.indexOf(current);
+				const next = THINKING_LEVEL_OPTIONS[(currentIndex + 1) % THINKING_LEVEL_OPTIONS.length]!;
+				void session
+					.setThinking(next)
+					.then(() => view.showStatus(`Thinking level: ${next}`))
+					.catch((error: unknown) => view.showStatus(error instanceof Error ? error.message : String(error)));
+			};
 			const showSettings = () => {
 				const snapshot = session.snapshot;
 				const currentModel = availableModels.find(
@@ -574,6 +583,7 @@ async function runCli(): Promise<void> {
 				scrollbarStyle: (text) => text,
 			});
 			interactiveLayout.mount(tui);
+			editor.onAction("app.thinking.cycle", cycleThinking);
 			editor.onAction("app.model.select", showModel);
 			editor.onAction("app.session.resume", showResume);
 			editor.onAction("app.session.fork", showFork);
