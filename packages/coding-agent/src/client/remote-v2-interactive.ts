@@ -1,5 +1,13 @@
 import type { PlanItem, ThinkingLevel } from "@earendil-works/pi-protocol";
-import { type Component, type Editor, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+	type AutocompleteItem,
+	type AutocompleteProvider,
+	type AutocompleteSuggestions,
+	type Component,
+	type Editor,
+	fuzzyFilter,
+	truncateToWidth,
+} from "@earendil-works/pi-tui";
 import type { RemoteV2SessionAttachment } from "./remote-v2-selector.ts";
 import type { RemoteV2FileCompletion, RemoteV2PromptContent } from "./remote-v2-session.ts";
 
@@ -67,6 +75,84 @@ export type RemoteV2CommandResult =
 	| { readonly kind: "control"; readonly mode: "control" | "observer" }
 	| { readonly kind: "status"; readonly text: string }
 	| { readonly kind: "detached" };
+
+type RemoteFileAutocompleteItem = AutocompleteItem & Pick<RemoteV2FileCompletion, "kind" | "reference">;
+
+/** Async editor completions backed by the authoritative remote filesystem service. */
+export class RemoteV2AutocompleteProvider implements AutocompleteProvider {
+	readonly triggerCharacters = ["/", "@"];
+	readonly #session: RemoteV2SessionAttachment["session"];
+	#requestSequence = 0;
+
+	constructor(session: RemoteV2SessionAttachment["session"]) {
+		this.#session = session;
+	}
+
+	async getSuggestions(
+		lines: string[],
+		cursorLine: number,
+		cursorCol: number,
+		options: { signal: AbortSignal; force?: boolean },
+	): Promise<AutocompleteSuggestions | null> {
+		const input = (lines[cursorLine] ?? "").slice(0, cursorCol);
+		const command = this.commandSuggestions(input);
+		if (command !== null) return command;
+
+		const tokenStart = Math.max(input.lastIndexOf(" "), input.lastIndexOf("\t")) + 1;
+		const prefix = input.slice(tokenStart);
+		if (!prefix.startsWith("@")) return null;
+		const requestId = `autocomplete-${++this.#requestSequence}`;
+		const completions = await this.#session.completeFiles(prefix, { requestId });
+		if (options.signal.aborted) return null;
+		const items: RemoteFileAutocompleteItem[] = completions.map((completion) => ({
+			value: completion.reference,
+			label: completion.reference,
+			description: completion.kind,
+			kind: completion.kind,
+			reference: completion.reference,
+		}));
+		return items.length === 0 ? null : { items, prefix };
+	}
+
+	applyCompletion(
+		lines: string[],
+		cursorLine: number,
+		cursorCol: number,
+		item: AutocompleteItem,
+		prefix: string,
+	): { lines: string[]; cursorLine: number; cursorCol: number } {
+		const input = lines[cursorLine] ?? "";
+		const beforeCursor = input.slice(0, cursorCol);
+		const afterCursor = input.slice(cursorCol);
+		const beforePrefix = beforeCursor.slice(0, Math.max(0, beforeCursor.length - prefix.length));
+		const remoteFile = item as RemoteFileAutocompleteItem;
+		const completed =
+			remoteFile.kind === "file" || remoteFile.kind === "directory"
+				? applyRemoteFileCompletion(beforeCursor, beforePrefix.length, remoteFile)
+				: `${beforePrefix}/${item.value} `;
+		const nextLine = `${completed}${afterCursor}`;
+		const nextLines = [...lines];
+		nextLines[cursorLine] = nextLine;
+		return { lines: nextLines, cursorLine, cursorCol: completed.length };
+	}
+
+	shouldTriggerFileCompletion(lines: string[], cursorLine: number, cursorCol: number): boolean {
+		const input = (lines[cursorLine] ?? "").slice(0, cursorCol);
+		const tokenStart = Math.max(input.lastIndexOf(" "), input.lastIndexOf("\t")) + 1;
+		return input.slice(tokenStart).startsWith("@");
+	}
+
+	commandSuggestions(input: string): AutocompleteSuggestions | null {
+		if (!input.startsWith("/") || /\s/u.test(input)) return null;
+		const prefix = input.slice(1);
+		const items = fuzzyFilter(
+			REMOTE_V2_SLASH_COMMANDS.map((command) => ({ value: command.slice(1), label: command.slice(1) })),
+			prefix,
+			(item) => item.value,
+		);
+		return items.length === 0 ? null : { items, prefix: input };
+	}
+}
 
 /** Applies a server completion while keeping directory navigation composable across Tab presses. */
 export function applyRemoteFileCompletion(
@@ -256,6 +342,7 @@ export class RemoteV2InteractiveAttachment implements Component {
 		this.#attachment = attachment;
 		this.#editor = editor;
 		if (editor !== undefined) {
+			editor.setAutocompleteProvider(new RemoteV2AutocompleteProvider(attachment.session));
 			editor.onSubmit = (text) => this.submitEditorText(text);
 		}
 	}
@@ -453,7 +540,9 @@ export class RemoteV2InteractiveAttachment implements Component {
 		if (!input) return;
 		this.#editor?.setText("");
 		const action = input.startsWith("/")
-			? this.execute(input).then((result) => (result.kind === "operation" ? `operation ${result.operationId}` : result.kind))
+			? this.execute(input).then((result) =>
+					result.kind === "operation" ? `operation ${result.operationId}` : result.kind,
+				)
 			: this.submit(input).then((operationId) => `operation ${operationId}`);
 		void action
 			.then((result) => {

@@ -9,12 +9,13 @@ import {
 	type SessionSnapshotV2,
 } from "@earendil-works/pi-protocol";
 import { TuiMainScreen, visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { VirtualTerminal } from "../../../tui/test/virtual-terminal.ts";
 import {
 	applyRemoteFileCompletion,
 	parseRemoteV2Command,
 	REMOTE_V2_SLASH_COMMANDS,
+	RemoteV2AutocompleteProvider,
 	RemoteV2InteractiveAttachment,
 } from "../../src/client/remote-v2-interactive.ts";
 import { RemoteV2SessionSelector } from "../../src/client/remote-v2-selector.ts";
@@ -362,8 +363,51 @@ describe("remote v2 interactive command boundary", () => {
 
 		adapter.handleInput("hello");
 		expect(stripAnsi(adapter.render(80).join("\n"))).toContain("hello");
+		editor.setText("");
+		adapter.handleInput("/");
+		await vi.waitFor(() => expect(stripAnsi(adapter.render(80).join("\n"))).toContain("model"));
 
 		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("provides remote command and file completions to the standard editor", async () => {
+		const { client } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const provider = new RemoteV2AutocompleteProvider(attached.session);
+
+		expect(await provider.getSuggestions(["/mo"], 0, 3, { signal: new AbortController().signal })).toEqual(
+			expect.objectContaining({
+				prefix: "/mo",
+				items: expect.arrayContaining([expect.objectContaining({ value: "model" })]),
+			}),
+		);
+		expect(provider.applyCompletion(["/mo"], 0, 3, { value: "model", label: "model" }, "/mo")).toEqual({
+			lines: ["/model "],
+			cursorLine: 0,
+			cursorCol: 7,
+		});
+
+		vi.spyOn(attached.session, "completeFiles").mockResolvedValue([
+			{
+				reference: "@server:src/",
+				display: "src/",
+				hostScope: "server",
+				path: "/project/src",
+				canonicalPath: "/project/src",
+				kind: "directory",
+			},
+		]);
+		const suggestions = await provider.getSuggestions(["read @server:src"], 0, 16, {
+			signal: new AbortController().signal,
+		});
+		expect(suggestions).toMatchObject({ prefix: "@server:src", items: [{ value: "@server:src/" }] });
+		expect(
+			provider.applyCompletion(["read @server:src"], 0, 16, suggestions!.items[0]!, suggestions!.prefix),
+		).toEqual({ lines: ["read @server:src/"], cursorLine: 0, cursorCol: 17 });
+
+		await attached.dispose();
 		client.dispose();
 	});
 });
