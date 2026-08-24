@@ -428,7 +428,15 @@ describe("PiServer v2 operation acceptance", () => {
 		expect(runtime.accepted).toHaveLength(2);
 
 		runtime.release.resolve(undefined);
-		expect(await queued).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+		const queuedAccepted = await queued;
+		expect(queuedAccepted).toMatchObject({ ok: true, accepted: { operationId: expect.any(String) } });
+		const queuedOperationId = (queuedAccepted as { accepted: { operationId: string } }).accepted.operationId;
+		await client.next(
+			(message) =>
+				message.type === "event" &&
+				message.event === "operation_terminal" &&
+				message.operationId === queuedOperationId,
+		);
 		expect(runtime.commands.map((command) => command.command)).toEqual([
 			"turn/start",
 			"turn/abort",
