@@ -467,6 +467,8 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("turn/compact"),
 	Type.Literal("operation/read"),
 	Type.Literal("model/list"),
+	Type.Literal("auth/list"),
+	Type.Literal("auth/logout"),
 	Type.Literal("resource/list"),
 	Type.Literal("session/model/set"),
 	Type.Literal("session/thinking/set"),

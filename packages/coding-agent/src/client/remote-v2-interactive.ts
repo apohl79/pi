@@ -14,6 +14,7 @@ import type { RemoteV2FileCompletion, RemoteV2PromptContent } from "./remote-v2-
 
 export const REMOTE_V2_SLASH_COMMANDS = [
 	"/model",
+	"/logout",
 	"/abort",
 	"/agent-follow-up",
 	"/agent-interrupt",
@@ -73,6 +74,7 @@ const REMOTE_V2_COMMAND_DESCRIPTIONS: Readonly<Partial<Record<(typeof REMOTE_V2_
 	"/input-cancel": "Cancel a server input request",
 	"/interrupt-child": "Interrupt a child agent",
 	"/name-auto": "Enable or disable automatic session names",
+	"/logout": "Remove a server-stored provider credential",
 	"/plan": "Replace the server session plan",
 	"/plan-clear": "Clear the server session plan",
 	"/plugins": "List server session plugins",
@@ -112,6 +114,7 @@ export type RemoteV2Command =
 	| { readonly name: "hotkeys" }
 	| { readonly name: "model" }
 	| { readonly name: "model"; readonly provider: string; readonly id: string }
+	| { readonly name: "logout"; readonly providerId?: string }
 	| { readonly name: "name"; readonly value?: string; readonly clear?: boolean; readonly generate?: boolean }
 	| { readonly name: "name-auto"; readonly enabled: boolean }
 	| { readonly name: "new" }
@@ -400,6 +403,10 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		const separator = arguments_[0].indexOf("/");
 		if (separator < 1 || separator === arguments_[0].length - 1) throw new Error("/model requires <provider/model>");
 		return { name: "model", provider: arguments_[0].slice(0, separator), id: arguments_[0].slice(separator + 1) };
+	}
+	if (name === "/logout") {
+		if (arguments_.length > 1) throw new Error("/logout accepts at most one provider");
+		return arguments_[0] === undefined ? { name: "logout" } : { name: "logout", providerId: arguments_[0] };
 	}
 	if (name === "/name") {
 		if (arguments_.length === 0) return { name: "name" };
@@ -764,6 +771,20 @@ export class RemoteV2InteractiveAttachment {
 					return { kind: "status", text: "model selector opened" };
 				}
 				return operation(await this.session.setModel({ provider: command.provider, id: command.id }));
+			case "logout": {
+				if (command.providerId === undefined) {
+					const providers = await this.session.listAuthenticatedProviders();
+					return {
+						kind: "status",
+						text:
+							providers.length === 0
+								? "No server-stored credentials to remove"
+								: `Use /logout <provider>: ${providers.map((provider) => provider.id).join(", ")}`,
+					};
+				}
+				await this.session.logout(command.providerId);
+				return { kind: "status", text: `Logged out of ${command.providerId}` };
+			}
 			case "name":
 				if (command.generate) return operation(await this.session.generateName());
 				if (command.clear) return operation(await this.session.setName(null));

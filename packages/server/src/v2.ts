@@ -128,6 +128,8 @@ export interface PiSessionRuntimeV2 {
 export interface PiServerServiceV2 {
 	listSessions(): Promise<SessionMetadataV2[]>;
 	listModels(): Promise<ModelMetadata[]>;
+	listAuthenticatedProviders?(): Promise<readonly { id: string; name: string }[]>;
+	logout?(providerId: string): Promise<void>;
 	openSession(sessionId: string): Promise<PiSessionRuntimeV2>;
 	createSession?(options: Record<string, unknown>): Promise<{ sessionId: string; runtime: PiSessionRuntimeV2 }>;
 	importSession?(options: {
@@ -606,6 +608,8 @@ export class PiServerV2 {
 					command: command.command,
 					models: await this.service.listModels(),
 				}));
+			if (command.command === "auth/list") return void (await this.listAuthenticatedProviders(state, id));
+			if (command.command === "auth/logout") return void (await this.logoutProvider(state, id, command));
 			if (command.command === "resource/list") return void (await this.listInteractiveResources(state, id, command));
 			if (command.command === "operation/read") return void (await this.readOperation(state, id, command));
 			if (command.command === "session/attach") return void (await this.attach(state, id, command));
@@ -702,6 +706,23 @@ export class PiServerV2 {
 		} catch (error) {
 			await this.sendError(state, id, "request_failed", error instanceof Error ? error.message : String(error));
 		}
+	}
+
+	private async listAuthenticatedProviders(state: V2ConnectionState, id: string): Promise<void> {
+		if (!this.service.listAuthenticatedProviders) throw new Error("auth/list is not supported by this server");
+		await this.sendResponse(state, id, {
+			command: "auth/list",
+			providers: await this.service.listAuthenticatedProviders(),
+		});
+	}
+
+	private async logoutProvider(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!this.service.logout) throw new Error("auth/logout is not supported by this server");
+		const providerId = objectPayload(command).providerId;
+		if (typeof providerId !== "string" || providerId.length === 0)
+			throw new Error("auth/logout requires a non-empty providerId");
+		await this.service.logout(providerId);
+		await this.sendResponse(state, id, { command: "auth/logout", providerId });
 	}
 
 	private async listInteractiveResources(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

@@ -188,28 +188,40 @@ function clientWithRequests(
 															},
 														],
 													}
-												: message.request.command === "resource/list"
-													? {
-															resources: [
-																{ kind: "prompt", name: "commit", description: "Create a commit" },
-																{ kind: "skill", name: "skill:review", description: "Review code" },
-															],
-														}
-													: message.request.command === "plan/update"
-														? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
-														: message.request.command === "plugin/list"
-															? { plugins: [{ id: "demo", enabled: true }] }
-															: message.request.command === "process/list"
-																? { processes: [] }
-																: message.request.command === "blob/put"
-																	? {
-																			blob: {
-																				digest: "b".repeat(64),
-																				mimeType: "image/png",
-																				size: 3,
-																			},
-																		}
-																	: { command: message.request.command }) as JsonValue,
+												: message.request.command === "auth/list"
+													? { providers: [{ id: "openai", name: "OpenAI" }] }
+													: message.request.command === "auth/logout"
+														? { providerId: "openai" }
+														: message.request.command === "resource/list"
+															? {
+																	resources: [
+																		{
+																			kind: "prompt",
+																			name: "commit",
+																			description: "Create a commit",
+																		},
+																		{
+																			kind: "skill",
+																			name: "skill:review",
+																			description: "Review code",
+																		},
+																	],
+																}
+															: message.request.command === "plan/update"
+																? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
+																: message.request.command === "plugin/list"
+																	? { plugins: [{ id: "demo", enabled: true }] }
+																	: message.request.command === "process/list"
+																		? { processes: [] }
+																		: message.request.command === "blob/put"
+																			? {
+																					blob: {
+																						digest: "b".repeat(64),
+																						mimeType: "image/png",
+																						size: 3,
+																					},
+																				}
+																			: { command: message.request.command }) as JsonValue,
 					};
 			handlers?.onData(encodeServerMessageV2(response));
 		},
@@ -262,6 +274,7 @@ describe("remote v2 interactive command boundary", () => {
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/import");
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/share");
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/trust");
+		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/logout");
 		expect(parseRemoteV2Command("/clone")).toEqual({ name: "clone" });
 		expect(parseRemoteV2Command("/copy")).toEqual({ name: "copy" });
 		expect(parseRemoteV2Command("/debug")).toEqual({ name: "debug" });
@@ -309,6 +322,8 @@ describe("remote v2 interactive command boundary", () => {
 		});
 		expect(parseRemoteV2Command("/model")).toEqual({ name: "model" });
 		expect(parseRemoteV2Command("/model faux/model-2")).toEqual({ name: "model", provider: "faux", id: "model-2" });
+		expect(parseRemoteV2Command("/logout")).toEqual({ name: "logout" });
+		expect(parseRemoteV2Command("/logout faux")).toEqual({ name: "logout", providerId: "faux" });
 		expect(parseRemoteV2Command("/rollback")).toEqual({ name: "rollback", turns: 1 });
 		expect(parseRemoteV2Command("/thinking")).toEqual({ name: "thinking" });
 		expect(parseRemoteV2Command("/thinking high")).toEqual({ name: "thinking", level: "high" });
@@ -348,6 +363,26 @@ describe("remote v2 interactive command boundary", () => {
 		expect(() => parseRemoteV2Command("/agent-interrupt")).toThrow("requires <agent-id>");
 		expect(() => parseRemoteV2Command('/input request-1 {"choice":true}')).toThrow("only strings");
 		expect(() => parseRemoteV2Command('/plan [{"step":"ship","status":"bad"}]')).toThrow("valid status");
+	});
+
+	test("lists and removes credentials through the server", async () => {
+		const listAuthenticatedProviders = vi.fn(async () => [{ id: "openai", name: "OpenAI" }]);
+		const logout = vi.fn(async () => {});
+		const adapter = new RemoteV2InteractiveAttachment({
+			session: { listAuthenticatedProviders, logout },
+			view: { showStatus: () => {}, invalidate: () => {} },
+			dispose: async () => {},
+		} as unknown as ConstructorParameters<typeof RemoteV2InteractiveAttachment>[0]);
+
+		expect(await adapter.execute("/logout")).toEqual({
+			kind: "status",
+			text: "Use /logout <provider>: openai",
+		});
+		expect(await adapter.execute("/logout openai")).toEqual({ kind: "status", text: "Logged out of openai" });
+		expect(listAuthenticatedProviders).toHaveBeenCalledOnce();
+		expect(logout).toHaveBeenCalledWith("openai");
+
+		await adapter.dispose();
 	});
 
 	test("dispatches remote actions through the attached controller and shares cleanup", async () => {

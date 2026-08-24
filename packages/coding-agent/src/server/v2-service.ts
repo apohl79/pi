@@ -140,6 +140,8 @@ export interface QueuedPrompt {
 export interface CodingAgentV2Service {
 	listSessions(): Promise<SessionMetadataV2[]>;
 	listModels(): Promise<ModelMetadata[]>;
+	listAuthenticatedProviders?(): Promise<readonly { id: string; name: string }[]>;
+	logout?(providerId: string): Promise<void>;
 	openSession(sessionId: string): Promise<CodingAgentV2Runtime>;
 	createSession?(options: Record<string, unknown>): Promise<{ sessionId: string; runtime: CodingAgentV2Runtime }>;
 	importSession?(options: {
@@ -1342,6 +1344,19 @@ export function createCodingAgentV2Service(
 				? structuredClone(await options.listSessions())
 				: [...byId.values()].map((definition) => structuredClone(definition.metadata)),
 		listModels: async () => models.getModels().map((model) => modelMetadata(model)),
+		listAuthenticatedProviders: async () => {
+			const providers = await Promise.all(
+				models
+					.getProviders()
+					.map(async (provider) =>
+						(await models.checkAuth(provider.id)) === undefined
+							? undefined
+							: { id: provider.id, name: provider.name },
+					),
+			);
+			return providers.filter((provider): provider is { id: string; name: string } => provider !== undefined);
+		},
+		logout: (providerId) => models.logout(providerId),
 		createSession: sessionFactory
 			? async (payload) => {
 					const definition = await sessionFactory(payload);

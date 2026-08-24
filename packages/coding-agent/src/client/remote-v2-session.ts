@@ -309,6 +309,28 @@ export class RemoteV2Session {
 		return this.#client.listModels();
 	}
 
+	listAuthenticatedProviders(): Promise<readonly { id: string; name: string }[]> {
+		this.#assertNotDisposed();
+		return this.#client.request({ command: "auth/list" }).then((response) => {
+			if (!response.ok || !("result" in response)) throw new Error("Invalid auth/list response");
+			const result = asRecord(response.result);
+			if (!Array.isArray(result?.providers)) throw new Error("Invalid auth/list response");
+			return result.providers.map((provider) => {
+				const record = asRecord(provider);
+				if (typeof record?.id !== "string" || typeof record.name !== "string")
+					throw new Error("Invalid auth/list provider");
+				return { id: record.id, name: record.name };
+			});
+		});
+	}
+
+	async logout(providerId: string): Promise<void> {
+		this.#assertNotDisposed();
+		const response = await this.#client.request({ command: "auth/logout", payload: { providerId } });
+		if (!response.ok || !("result" in response) || asRecord(response.result)?.providerId !== providerId)
+			throw new Error("Invalid auth/logout response");
+	}
+
 	async listInteractiveResources(): Promise<readonly InteractiveResourceV2[]> {
 		this.#assertNotDisposed();
 		const result = await this.#direct({ command: "resource/list", sessionId: this.#requireHandle().sessionId });

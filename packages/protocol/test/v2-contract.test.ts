@@ -47,6 +47,8 @@ const commandNames = [
 	"turn/compact",
 	"operation/read",
 	"model/list",
+	"auth/list",
+	"auth/logout",
 	"resource/list",
 	"session/model/set",
 	"session/thinking/set",
