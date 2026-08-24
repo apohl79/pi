@@ -228,6 +228,7 @@ describe("remote v2 interactive command boundary", () => {
 		expect(parseRemoteV2Command("/model")).toEqual({ name: "model" });
 		expect(parseRemoteV2Command("/model faux/model-2")).toEqual({ name: "model", provider: "faux", id: "model-2" });
 		expect(parseRemoteV2Command("/rollback")).toEqual({ name: "rollback", turns: 1 });
+		expect(parseRemoteV2Command("/thinking")).toEqual({ name: "thinking" });
 		expect(parseRemoteV2Command("/thinking high")).toEqual({ name: "thinking", level: "high" });
 		expect(parseRemoteV2Command("/goal ship the feature")).toEqual({ name: "goal", objective: "ship the feature" });
 		expect(parseRemoteV2Command("/goal-pause")).toEqual({ name: "goal-pause" });
@@ -453,6 +454,20 @@ describe("remote v2 interactive command boundary", () => {
 
 		expect(await adapter.execute("/scoped-models")).toEqual({ kind: "status", text: "model scope opened" });
 		expect(openScopedModels).toHaveBeenCalledOnce();
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("opens the injected thinking selector without a server command", async () => {
+		const { client } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const openThinking = vi.fn();
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { openThinking });
+
+		expect(await adapter.execute("/thinking")).toEqual({ kind: "status", text: "thinking selector opened" });
+		expect(openThinking).toHaveBeenCalledOnce();
 
 		await adapter.dispose();
 		client.dispose();

@@ -31,6 +31,7 @@ import { ModelSelectorComponent } from "./modes/interactive/components/model-sel
 import { ScopedModelsSelectorComponent } from "./modes/interactive/components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./modes/interactive/components/session-selector.ts";
 import { SettingsSelectorComponent } from "./modes/interactive/components/settings-selector.ts";
+import { ThinkingSelectorComponent } from "./modes/interactive/components/thinking-selector.ts";
 import { UserMessageSelectorComponent } from "./modes/interactive/components/user-message-selector.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
 import { getAvailableThemes, getEditorTheme, initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
@@ -311,6 +312,34 @@ async function runCli(): Promise<void> {
 				tui.setFocus(selector);
 				tui.requestRender();
 			};
+			const showThinking = () => {
+				const done = () => restoreTranscript();
+				const selectThinking = (level: (typeof THINKING_LEVEL_OPTIONS)[number], persist: boolean) => {
+					void session
+						.setThinking(level)
+						.then(() => {
+							if (persist) statuslineSettings.setDefaultThinkingLevel(level);
+							view.showStatus(persist ? `Default thinking level: ${level}` : `Thinking level: ${level}`);
+							done();
+						})
+						.catch((error: unknown) => {
+							view.showStatus(error instanceof Error ? error.message : String(error));
+							done();
+						});
+				};
+				const selector = new ThinkingSelectorComponent(
+					session.snapshot?.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+					[...THINKING_LEVEL_OPTIONS],
+					(level) => selectThinking(level, false),
+					done,
+					(level) => selectThinking(level, true),
+					statuslineSettings.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+				);
+				transcriptContainer.clear();
+				transcriptContainer.addChild(selector);
+				tui.setFocus(selector);
+				tui.requestRender();
+			};
 			const showSettings = () => {
 				const snapshot = session.snapshot;
 				const currentModel = availableModels.find(
@@ -521,6 +550,7 @@ async function runCli(): Promise<void> {
 					openResume: showResume,
 					openFork: showFork,
 					openScopedModels: showScopedModels,
+					openThinking: showThinking,
 					cwd: process.cwd(),
 				},
 			);

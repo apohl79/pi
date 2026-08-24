@@ -77,6 +77,7 @@ export type RemoteV2Command =
 	| { readonly name: "statusline"; readonly command?: string }
 	| { readonly name: "steer"; readonly text: string }
 	| { readonly name: "take-control" }
+	| { readonly name: "thinking" }
 	| { readonly name: "thinking"; readonly level: ThinkingLevel };
 
 export type RemoteV2CommandResult =
@@ -360,6 +361,7 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		return { name: "steer", text };
 	}
 	if (name === "/thinking") {
+		if (arguments_.length === 0) return { name: "thinking" };
 		if (arguments_.length !== 1 || !isThinkingLevel(arguments_[0]))
 			throw new Error("/thinking requires a valid level");
 		return { name: "thinking", level: arguments_[0] };
@@ -379,6 +381,7 @@ export class RemoteV2InteractiveAttachment {
 	readonly #openResume: (() => void) | undefined;
 	readonly #openFork: (() => void) | undefined;
 	readonly #openScopedModels: (() => void) | undefined;
+	readonly #openThinking: (() => void) | undefined;
 	readonly #cwd: string | undefined;
 
 	constructor(
@@ -390,6 +393,7 @@ export class RemoteV2InteractiveAttachment {
 			readonly openResume?: () => void;
 			readonly openFork?: () => void;
 			readonly openScopedModels?: () => void;
+			readonly openThinking?: () => void;
 			readonly cwd?: string;
 		} = {},
 	) {
@@ -400,6 +404,7 @@ export class RemoteV2InteractiveAttachment {
 		this.#openResume = options.openResume;
 		this.#openFork = options.openFork;
 		this.#openScopedModels = options.openScopedModels;
+		this.#openThinking = options.openThinking;
 		this.#cwd = options.cwd;
 		if (editor !== undefined) {
 			editor.setAutocompleteProvider(new RemoteV2AutocompleteProvider(attachment.session));
@@ -557,6 +562,11 @@ export class RemoteV2InteractiveAttachment {
 				await this.session.acquireControl();
 				return { kind: "control", mode: "control" };
 			case "thinking":
+				if (!("level" in command)) {
+					if (this.#openThinking === undefined) throw new Error("Remote thinking selection is unavailable");
+					this.#openThinking();
+					return { kind: "status", text: "thinking selector opened" };
+				}
 				return operation(await this.session.setThinking(command.level));
 		}
 	}
