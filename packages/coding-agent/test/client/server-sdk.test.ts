@@ -81,7 +81,10 @@ describe("createServerAgentSession", () => {
 			models: [{ id: "server-sdk-reopen-model", reasoning: false, contextWindow: 32_000, maxTokens: 1_000 }],
 		});
 		models.setProvider(faux.provider);
-		faux.setResponses([fauxAssistantMessage("reopen this durable session")]);
+		faux.setResponses([
+			fauxAssistantMessage("reopen this durable session"),
+			fauxAssistantMessage("continued after daemon restart"),
+		]);
 		try {
 			const first = await createServerAgentSession({ agentDir, cwd: agentDir, models, model: faux.getModel() });
 			const sessionId = first.session.id;
@@ -105,6 +108,17 @@ describe("createServerAgentSession", () => {
 						expect.objectContaining({
 							content: expect.arrayContaining([
 								expect.objectContaining({ text: "reopen this durable session" }),
+							]),
+						}),
+					]),
+				);
+				const operationId = await reopened.session.submit("continue after restart");
+				await reopened.session.waitForOperation(operationId);
+				expect(reopened.session.snapshot?.transcript).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							content: expect.arrayContaining([
+								expect.objectContaining({ text: "continued after daemon restart" }),
 							]),
 						}),
 					]),
