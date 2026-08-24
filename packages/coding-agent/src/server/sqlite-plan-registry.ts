@@ -1,29 +1,38 @@
+import { Worker } from "node:worker_threads";
 import type { PlanItem, PlanSnapshot } from "@earendil-works/pi-protocol";
 import type { V2PlanRegistry } from "@earendil-works/pi-server";
 import { InMemoryV2PlanRegistry, validateV2Plan } from "@earendil-works/pi-server";
-import type { SqliteDatabase, SqliteDatabaseFactory } from "@earendil-works/pi-session-backend-sqlite-node";
 
-interface PlanRow {
-	session_id: string;
-	value: string | null;
+type Command =
+	| { command: "load" }
+	| { command: "update"; sessionId: string; value: string }
+	| { command: "clear"; sessionId: string }
+	| { command: "close" };
+type Response = { id: number; result?: unknown; error?: string };
+type Row = { sessionId: string; value: string };
+
+function isResponse(value: unknown): value is Response {
+	return value !== null && typeof value === "object" && "id" in value && typeof value.id === "number";
 }
 
 /** SQLite-backed plan snapshot registry used by configured coding-agent daemons. */
 export class SqliteV2PlanRegistry implements V2PlanRegistry {
-	readonly #databaseFactory: SqliteDatabaseFactory;
-	readonly #databasePath: string;
+	readonly #path: string;
 	readonly #memory = new InMemoryV2PlanRegistry();
-	#databasePromise: Promise<SqliteDatabase> | undefined;
-	#pendingWrite: Promise<void> = Promise.resolve();
+	readonly #pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+	#worker: Worker | undefined;
+	#nextId = 1;
+	#write = Promise.resolve();
+	#load: Promise<void> | undefined;
 	#loaded = false;
+	#closed = false;
 
-	constructor(databaseFactory: SqliteDatabaseFactory, databasePath: string) {
-		this.#databaseFactory = databaseFactory;
-		this.#databasePath = databasePath;
+	constructor(path: string) {
+		this.#path = path;
 	}
 
 	async read(sessionId: string): Promise<PlanSnapshot | undefined> {
-		await this.#pendingWrite;
+		await this.#write;
 		await this.#ensureLoaded();
 		return this.#memory.read(sessionId);
 	}
@@ -31,14 +40,8 @@ export class SqliteV2PlanRegistry implements V2PlanRegistry {
 	update(sessionId: string, input: { readonly items: readonly PlanItem[]; readonly version?: number }) {
 		return this.#enqueue(async () => {
 			await this.#ensureLoaded();
-			const current = await this.#memory.read(sessionId);
-			const plan = validateV2Plan(current, input);
-			(await this.#database())
-				.prepare(
-					"INSERT INTO v2_plans (session_id, value) VALUES (?, ?) " +
-						"ON CONFLICT(session_id) DO UPDATE SET value = excluded.value",
-				)
-				.run(sessionId, JSON.stringify(plan));
+			const plan = validateV2Plan(await this.#memory.read(sessionId), input);
+			await this.#request({ command: "update", sessionId, value: JSON.stringify(plan) });
 			await this.#memory.update(sessionId, input);
 			return plan;
 		});
@@ -47,42 +50,96 @@ export class SqliteV2PlanRegistry implements V2PlanRegistry {
 	clear(sessionId: string): Promise<void> {
 		return this.#enqueue(async () => {
 			await this.#ensureLoaded();
-			(await this.#database()).prepare("DELETE FROM v2_plans WHERE session_id = ?").run(sessionId);
+			await this.#request({ command: "clear", sessionId });
 			await this.#memory.clear(sessionId);
 		});
 	}
 
 	async close(): Promise<void> {
-		await this.#pendingWrite;
-		const database = await this.#databasePromise;
-		if (database !== undefined) database.close();
-		this.#databasePromise = undefined;
+		if (this.#closed) return;
+		await this.#write;
+		this.#closed = true;
+		const worker = this.#worker;
+		if (worker !== undefined) {
+			try {
+				await this.#request({ command: "close" }, true);
+			} finally {
+				await worker.terminate();
+				this.#worker = undefined;
+			}
+		}
 		this.#loaded = false;
 	}
 
 	async #ensureLoaded(): Promise<void> {
 		if (this.#loaded) return;
+		const load = this.#load ?? this.#hydrate();
+		this.#load = load;
+		try {
+			await load;
+		} finally {
+			if (this.#load === load) this.#load = undefined;
+		}
+	}
+
+	async #hydrate(): Promise<void> {
+		for (const row of await this.#request<readonly Row[]>({ command: "load" }))
+			await this.#memory.update(row.sessionId, parseJson(row.value));
 		this.#loaded = true;
-		for (const row of (await this.#database())
-			.prepare("SELECT session_id, value FROM v2_plans ORDER BY session_id")
-			.all<PlanRow>())
-			if (row.value !== null) await this.#memory.update(row.session_id, parseJson(row.value));
 	}
 
-	#database(): Promise<SqliteDatabase> {
-		this.#databasePromise ??= this.#open();
-		return this.#databasePromise;
+	#request<T>(command: Command, closing = false): Promise<T> {
+		if (this.#closed && !closing) return Promise.reject(new Error("SQLite plan registry is closed"));
+		const worker = this.#worker ?? this.#createWorker();
+		const id = this.#nextId++;
+		return new Promise<T>((resolve, reject) => {
+			this.#pending.set(id, { resolve, reject });
+			worker.postMessage({ id, command });
+		});
 	}
 
-	async #open(): Promise<SqliteDatabase> {
-		const database = await this.#databaseFactory.open(this.#databasePath);
-		database.exec("CREATE TABLE IF NOT EXISTS v2_plans (session_id TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)");
-		return database;
+	#createWorker(): Worker {
+		const worker =
+			typeof process.versions.bun === "string"
+				? new Worker("./src/server/sqlite-plan-registry-worker.ts", { workerData: { path: this.#path } })
+				: new Worker(
+						new URL(
+							import.meta.url.endsWith(".ts")
+								? "./sqlite-plan-registry-worker.ts"
+								: "./sqlite-plan-registry-worker.js",
+							import.meta.url,
+						),
+						{ workerData: { path: this.#path } },
+					);
+		worker.on("message", (value: unknown) => this.#handle(value));
+		worker.once("error", (error) => this.#fail(error));
+		worker.once("exit", (code) => {
+			if (!this.#closed && code !== 0) this.#fail(new Error(`SQLite plan worker exited with code ${code}`));
+			if (this.#worker === worker) this.#worker = undefined;
+		});
+		this.#worker = worker;
+		return worker;
 	}
 
+	#handle(value: unknown): void {
+		if (!isResponse(value)) {
+			this.#fail(new Error("Invalid SQLite plan worker response"));
+			return;
+		}
+		const pending = this.#pending.get(value.id);
+		if (pending === undefined) return;
+		this.#pending.delete(value.id);
+		if (value.error !== undefined) pending.reject(new Error(value.error));
+		else pending.resolve(value.result);
+	}
+
+	#fail(error: Error): void {
+		for (const pending of this.#pending.values()) pending.reject(error);
+		this.#pending.clear();
+	}
 	#enqueue<T>(operation: () => Promise<T>): Promise<T> {
-		const write = this.#pendingWrite.then(operation);
-		this.#pendingWrite = write.then(
+		const write = this.#write.then(operation);
+		this.#write = write.then(
 			() => undefined,
 			() => undefined,
 		);

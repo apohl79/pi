@@ -20,16 +20,16 @@ describe("SqliteV2PlanRegistry", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-plans-"));
 		directories.push(directory);
 		const path = join(directory, "plans.sqlite");
-		const first = new SqliteV2PlanRegistry(createNodeSqliteFactory(), path);
+		const first = new SqliteV2PlanRegistry(path);
 		expect(await first.update("session-1", { items })).toEqual({ version: 1, items });
 		await first.close();
 
-		const restored = new SqliteV2PlanRegistry(createNodeSqliteFactory(), path);
+		const restored = new SqliteV2PlanRegistry(path);
 		expect(await restored.read("session-1")).toEqual({ version: 1, items });
 		await restored.clear("session-1");
 		await restored.close();
 
-		const empty = new SqliteV2PlanRegistry(createNodeSqliteFactory(), path);
+		const empty = new SqliteV2PlanRegistry(path);
 		expect(await empty.read("session-1")).toBeUndefined();
 		await empty.close();
 	});
@@ -45,8 +45,8 @@ describe("SqliteV2PlanRegistry", () => {
 			.run("session-1", JSON.stringify({ version: 0, items }));
 		database.close();
 
-		await expect(new SqliteV2PlanRegistry(createNodeSqliteFactory(), path).read("session-1")).rejects.toThrow(
-			"Plan version must be 1",
-		);
+		const plans = new SqliteV2PlanRegistry(path);
+		await expect(plans.read("session-1")).rejects.toThrow("Plan version must be 1");
+		await plans.close();
 	});
 });

@@ -422,11 +422,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 					})()
 				: options.pluginRegistry;
 		const plans =
-			options.plans ??
-			new SqliteV2PlanRegistry(
-				createNodeSqliteFactory(),
-				options.planStorePath ?? join(options.agentDir, "plans.sqlite"),
-			);
+			options.plans ?? new SqliteV2PlanRegistry(options.planStorePath ?? join(options.agentDir, "plans.sqlite"));
 		const inputs =
 			options.inputs ??
 			new SqliteV2InputRegistry(
