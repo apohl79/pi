@@ -15,6 +15,7 @@ import { RemoteV2InteractiveAttachment } from "./client/remote-v2-interactive.ts
 import { RemoteV2SessionView, RemoteV2StatuslineComponent } from "./client/remote-v2-view.ts";
 import { APP_NAME, getAgentDir } from "./config.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
+import { KeybindingsManager } from "./core/keybindings.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { main } from "./main.ts";
@@ -112,7 +113,7 @@ async function runCli(): Promise<void> {
 	const agentDir = getAgentDir();
 	const statuslineSettings = SettingsManager.create(process.cwd(), agentDir);
 	const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false });
-	const model = modelRuntime.getModels()[0];
+	const model = (await modelRuntime.getAvailable())[0];
 	if (model === undefined) throw new Error("No configured model is available for the experimental daemon");
 	const harnessOptions =
 		parsedArgs.systemPrompt === undefined &&
@@ -175,6 +176,7 @@ async function runCli(): Promise<void> {
 		write: (value) => console.log(JSON.stringify(value)),
 		writeText: (value) => process.stdout.write(`${value}\n`),
 		runInteractive: async (session, options) => {
+			const keybindings = KeybindingsManager.create(agentDir);
 			let tui: ReturnType<typeof createInteractiveTui>;
 			const view = new RemoteV2SessionView(session, { onUpdated: () => tui?.requestRender() });
 			let statusline: RemoteV2StatuslineComponent;
@@ -216,7 +218,7 @@ async function runCli(): Promise<void> {
 					});
 				};
 				const inputListener = (data: string) => {
-					if (data === "\u0003") {
+					if (keybindings.matches(data, "tui.input.copy")) {
 						finish();
 						return { consume: true };
 					}
