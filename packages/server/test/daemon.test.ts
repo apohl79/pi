@@ -90,6 +90,39 @@ describe("ServerDaemon", () => {
 		}
 	});
 
+	test("replaces a stale persisted marker and socket when its daemon PID is dead", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-stale-"));
+		try {
+			const socketPath = join(directory, "daemon.sock");
+			const markerPath = join(directory, "daemon-state.json");
+			await writeFile(socketPath, "");
+			await writeFile(
+				markerPath,
+				JSON.stringify({
+					schemaVersion: 1,
+					daemonInstanceId: "dead-daemon",
+					state: "running",
+					timestamp: 1,
+					pid: Number.MAX_SAFE_INTEGER,
+				}),
+			);
+			const start = vi.fn(async () => {});
+			const daemon = new ServerDaemon({
+				service: service(),
+				socketPath,
+				lifecycleMarkerPath: markerPath,
+				createServer: () => fakeServer(start, async () => {}),
+			});
+
+			expect(daemon.status()).toEqual({ state: "stopped", addresses: [] });
+			expect(await daemon.start()).toMatchObject({ state: "running", serverId: "daemon-test" });
+			expect(start).toHaveBeenCalledOnce();
+			await daemon.stop();
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("marks owned processes lost before clean shutdown", async () => {
 		const processes = new InMemoryV2ProcessRegistry();
 		const process = await processes.start({ sessionId: "session-clean-stop", command: "demo" });

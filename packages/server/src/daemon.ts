@@ -283,7 +283,9 @@ export class ServerDaemon {
 		if (this.options.lifecycleMarkerPath === undefined) return undefined;
 		try {
 			const marker = JSON.parse(readFileSync(this.options.lifecycleMarkerPath, "utf8")) as DaemonLifecycleMarker;
-			return marker.state === "running" && Number.isSafeInteger(marker.pid) ? marker : undefined;
+			if (marker.state !== "running" || !Number.isSafeInteger(marker.pid) || marker.pid <= 0) return undefined;
+			process.kill(marker.pid, 0);
+			return marker;
 		} catch {
 			return undefined;
 		}
