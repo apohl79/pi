@@ -193,9 +193,13 @@ async function runCli(): Promise<void> {
 			});
 			const editor = new CustomEditor(tui, getEditorTheme(), keybindings);
 			const view = new RemoteV2SessionView(session, {
+				tui,
+				cwd: process.cwd(),
 				onUpdated: () => tui?.requestRender(),
 				getHideThinkingBlock: () => statuslineSettings.getHideThinkingBlock(),
 				getOutputPad: () => statuslineSettings.getOutputPad(),
+				getShowImages: () => statuslineSettings.getShowImages(),
+				getImageWidthCells: () => statuslineSettings.getImageWidthCells(),
 			});
 			const transcriptContainer = new Container();
 			const pendingContainer = new Container();

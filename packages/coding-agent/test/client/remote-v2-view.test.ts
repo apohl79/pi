@@ -1,5 +1,5 @@
 import type { SessionSnapshotV2 } from "@earendil-works/pi-protocol";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { RemoteV2SessionState } from "../../src/client/remote-v2-session.ts";
 import {
@@ -15,6 +15,10 @@ import { StatuslineRunner } from "../../src/server/statusline.ts";
 import { stripAnsi } from "../../src/utils/ansi.ts";
 
 const options: RemoteV2SessionViewOptions = { maxTranscriptItems: 1, maxTranscriptCharacters: 32 };
+
+function createFakeTui(): TUI {
+	return { requestRender: () => {} } as unknown as TUI;
+}
 const snapshot: SessionSnapshotV2 = {
 	id: "session-1",
 	nameRevision: 0,
@@ -176,7 +180,11 @@ describe("formatRemoteV2Session", () => {
 					return () => {};
 				},
 			};
-			const view = new RemoteV2SessionView(source as never, { onUpdated: () => updates.push(Date.now()) });
+			const view = new RemoteV2SessionView(source as never, {
+				tui: createFakeTui(),
+				cwd: process.cwd(),
+				onUpdated: () => updates.push(Date.now()),
+			});
 			vi.advanceTimersByTime(2_000);
 			expect(updates).toHaveLength(2);
 			view.dispose();
@@ -230,13 +238,63 @@ describe("formatRemoteV2Session", () => {
 			},
 			subscribe: (_listener: (state: RemoteV2SessionState) => void) => () => {},
 		};
-		const view = new RemoteV2SessionView(source as never);
+		const view = new RemoteV2SessionView(source as never, { tui: createFakeTui(), cwd: process.cwd() });
 		try {
 			const rendered = view.render(120).map(stripAnsi).join("\n");
 			expect(rendered).toContain("old");
 			expect(rendered).toContain("a long assistant response");
 			expect(rendered).not.toContain("Session session-1 · phase=turn");
 			expect(rendered).not.toContain("user: old");
+		} finally {
+			view.dispose();
+		}
+	});
+
+	test("renders server tool calls and results through the direct-mode tool component", () => {
+		const source = {
+			state: {
+				lifecycle: { status: "ready" as const },
+				snapshot: {
+					...snapshot,
+					transcript: [
+						{
+							id: "assistant-tool-1",
+							role: "assistant" as const,
+							status: "complete" as const,
+							stopReason: "toolUse" as const,
+							content: [
+								{
+									type: "toolCall" as const,
+									toolCallId: "tool-1",
+									toolName: "bash",
+									input: { command: "echo hi" },
+								},
+							],
+							model: snapshot.model,
+							timestamp: 1,
+						},
+						{
+							id: "tool-1-result",
+							role: "tool" as const,
+							status: "complete" as const,
+							toolCallId: "tool-1",
+							toolName: "bash",
+							input: { command: "echo hi" },
+							content: [{ type: "text" as const, text: "hi" }],
+							isError: false as const,
+							timestamp: 2,
+						},
+					],
+				},
+			},
+			subscribe: (_listener: (state: RemoteV2SessionState) => void) => () => {},
+		};
+		const view = new RemoteV2SessionView(source as never, { tui: createFakeTui(), cwd: process.cwd() });
+		try {
+			const rendered = view.render(120).map(stripAnsi).join("\n");
+			expect(rendered).toContain("echo hi");
+			expect(rendered).toContain("hi");
+			expect(rendered).not.toContain("bash: hi");
 		} finally {
 			view.dispose();
 		}

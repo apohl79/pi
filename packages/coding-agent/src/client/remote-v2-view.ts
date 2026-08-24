@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai/compat";
-import { type Component, Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { type Component, Container, Text, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
+import { ToolExecutionComponent } from "../modes/interactive/components/tool-execution.ts";
 import { TranscriptRenderer } from "../modes/interactive/components/transcript-renderer.ts";
 import { getMarkdownTheme } from "../modes/interactive/theme/theme.ts";
 import type { StatuslineCommand, StatuslineRunner, StatuslineSnapshot } from "../server/statusline.ts";
@@ -8,6 +9,8 @@ import type { RemoteV2Session, RemoteV2SessionState } from "./remote-v2-session.
 type RemoteTranscriptItem = NonNullable<RemoteV2SessionState["snapshot"]>["transcript"][number];
 
 export interface RemoteV2SessionViewOptions {
+	readonly tui?: TUI;
+	readonly cwd?: string;
 	readonly maxTranscriptItems?: number;
 	readonly maxTranscriptCharacters?: number;
 	readonly maxAgentItems?: number;
@@ -17,6 +20,8 @@ export interface RemoteV2SessionViewOptions {
 	readonly maxGoalCharacters?: number;
 	readonly getHideThinkingBlock?: () => boolean;
 	readonly getOutputPad?: () => number;
+	readonly getShowImages?: () => boolean;
+	readonly getImageWidthCells?: () => number;
 	readonly onUpdated?: () => void;
 }
 
@@ -145,8 +150,17 @@ export class RemoteV2StatuslineComponent implements Component {
 
 /** Renderable TUI projection of one server-authoritative v2 session. */
 export class RemoteV2SessionView extends Container {
-	readonly #options: Required<Omit<RemoteV2SessionViewOptions, "onUpdated" | "getHideThinkingBlock" | "getOutputPad">>;
+	readonly #options: Required<
+		Omit<
+			RemoteV2SessionViewOptions,
+			"tui" | "cwd" | "onUpdated" | "getHideThinkingBlock" | "getOutputPad" | "getShowImages" | "getImageWidthCells"
+		>
+	>;
 	readonly #transcriptRenderer: TranscriptRenderer;
+	readonly #tui?: TUI;
+	readonly #cwd?: string;
+	readonly #getShowImages: () => boolean;
+	readonly #getImageWidthCells: () => number;
 	#state: RemoteV2SessionState;
 	readonly #unsubscribe: () => void;
 	readonly #onUpdated?: () => void;
@@ -164,6 +178,10 @@ export class RemoteV2SessionView extends Container {
 			maxGoalCharacters: options.maxGoalCharacters ?? 240,
 		};
 		this.#state = session.state;
+		this.#tui = options.tui;
+		this.#cwd = options.cwd;
+		this.#getShowImages = options.getShowImages ?? (() => true);
+		this.#getImageWidthCells = options.getImageWidthCells ?? (() => 60);
 		this.#onUpdated = options.onUpdated;
 		this.#transcriptRenderer = new TranscriptRenderer({
 			container: this,
@@ -206,15 +224,16 @@ export class RemoteV2SessionView extends Container {
 			return;
 		}
 		let characters = 0;
+		const renderedTools = new Map<string, ToolExecutionComponent>();
 		for (const item of snapshot.transcript.slice(-this.#options.maxTranscriptItems)) {
 			const text = transcriptText(item);
 			if (characters + text.length > this.#options.maxTranscriptCharacters) break;
 			characters += text.length;
-			this.addTranscriptItem(item);
+			this.addTranscriptItem(item, renderedTools);
 		}
 	}
 
-	private addTranscriptItem(item: RemoteTranscriptItem): void {
+	private addTranscriptItem(item: RemoteTranscriptItem, renderedTools: Map<string, ToolExecutionComponent>): void {
 		switch (item.role) {
 			case "user":
 				this.#transcriptRenderer.addUser(
@@ -226,6 +245,27 @@ export class RemoteV2SessionView extends Container {
 				break;
 			case "assistant":
 				this.#transcriptRenderer.addAssistant(toAssistantMessage(item));
+				for (const part of item.content) {
+					if (part.type !== "toolCall") continue;
+					if (this.#tui === undefined || this.#cwd === undefined) {
+						this.addChild(new Text(`${part.toolName}: [pending]`, 1, 0));
+						continue;
+					}
+					const component = new ToolExecutionComponent(
+						part.toolName,
+						part.toolCallId,
+						toToolArguments(part.input),
+						{
+							showImages: this.#getShowImages(),
+							imageWidthCells: this.#getImageWidthCells(),
+						},
+						undefined,
+						this.#tui,
+						this.#cwd,
+					);
+					this.addChild(component);
+					renderedTools.set(part.toolCallId, component);
+				}
 				break;
 			case "compactionSummary":
 				this.#transcriptRenderer.addCompactionSummary(item);
@@ -233,14 +273,32 @@ export class RemoteV2SessionView extends Container {
 			case "branchSummary":
 				this.#transcriptRenderer.addBranchSummary(item);
 				break;
-			case "tool":
-				this.addChild(new Text(`${item.toolName}: ${transcriptText(item)}`, 1, 0));
+			case "tool": {
+				const component = renderedTools.get(item.toolCallId);
+				if (component === undefined) {
+					this.addChild(new Text(`${item.toolName}: ${transcriptText(item)}`, 1, 0));
+					break;
+				}
+				component.updateArgs(toToolArguments(item.input));
+				component.markExecutionStarted();
+				component.updateResult(
+					{ content: item.content, details: item.details, isError: item.isError },
+					item.status === "running",
+				);
+				if (item.status !== "running") renderedTools.delete(item.toolCallId);
 				break;
+			}
 			default: {
 				const _exhaustive: never = item;
 			}
 		}
 	}
+}
+
+function toToolArguments(input: unknown): Record<string, unknown> {
+	return typeof input === "object" && input !== null && !Array.isArray(input)
+		? Object.fromEntries(Object.entries(input))
+		: { input };
 }
 
 function toAssistantMessage(item: Extract<RemoteTranscriptItem, { readonly role: "assistant" }>): AssistantMessage {
