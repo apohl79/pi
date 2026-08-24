@@ -215,7 +215,6 @@ async function runCli(): Promise<void> {
 				const finish = () => {
 					if (settled) return;
 					settled = true;
-					removeInputListener();
 					process.stdin.off("end", finish);
 					tui.stop();
 					void attachment.dispose().finally(() => {
@@ -231,11 +230,6 @@ async function runCli(): Promise<void> {
 				editor.onCtrlD = () => {
 					if (session.phase === "turn") finish();
 				};
-				const inputListener = (data: string) => {
-					attachment.handleInput(data);
-					return { consume: true };
-				};
-				const removeInputListener = tui.addInputListener(inputListener);
 				process.stdin.once("end", finish);
 				tui.start();
 			});
