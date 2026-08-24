@@ -1,20 +1,19 @@
-import Type, { type Static } from "typebox";
+import Type, { type Static, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import {
 	type JsonValue,
-	JsonValueSchema,
-	ModelMetadataSchema,
-	ModelRefSchema,
 	ThinkingLevelSchema,
-	TranscriptItemSchema,
 } from "./schemas.ts";
 
 export const PROTOCOL_V2_VERSION = 2 as const;
 
 export const MAX_V2_ARRAY_ITEMS = 10_000;
 export const MAX_V2_JSON_DEPTH = 8;
+export const MAX_V2_STRING_LENGTH = 1_048_576;
 
-const IdSchema = Type.String({ minLength: 1 });
+const BoundedStringSchema = Type.String({ maxLength: MAX_V2_STRING_LENGTH });
+const BoundedNonEmptyStringSchema = Type.String({ minLength: 1, maxLength: MAX_V2_STRING_LENGTH });
+const IdSchema = Type.String({ minLength: 1, maxLength: 256 });
 const TimestampSchema = Type.Integer({ minimum: 0 });
 const NonNegativeIntegerSchema = Type.Integer({ minimum: 0 });
 const MimeTypeSchema = Type.String({
@@ -23,8 +22,117 @@ const MimeTypeSchema = Type.String({
 const ImageMimeTypeSchema = Type.String({
 	pattern: "^image/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$",
 });
+const DigestSchema = Type.String({ pattern: "^[0-9a-f]{64}$" });
 const StrictObject = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
 	Type.Object(properties, { additionalProperties: false });
+
+const createBoundedJsonValueSchema = (remainingDepth: number): TSchema => {
+	if (remainingDepth <= 0)
+		return Type.Union([Type.String({ maxLength: MAX_V2_STRING_LENGTH }), Type.Number(), Type.Boolean(), Type.Null()]);
+	const value = createBoundedJsonValueSchema(remainingDepth - 1);
+	return Type.Union([
+		Type.String({ maxLength: MAX_V2_STRING_LENGTH }),
+		Type.Number(),
+		Type.Boolean(),
+		Type.Null(),
+		Type.Array(value, { maxItems: MAX_V2_ARRAY_ITEMS }),
+		Type.Record(Type.String({ maxLength: 256 }), value, { maxProperties: MAX_V2_ARRAY_ITEMS }),
+	]);
+};
+const BoundedJsonValueSchema = createBoundedJsonValueSchema(MAX_V2_JSON_DEPTH);
+
+const BoundedModelRefSchema = StrictObject({ provider: IdSchema, id: IdSchema });
+const BoundedModelMetadataSchema = StrictObject({
+	provider: IdSchema,
+	id: IdSchema,
+	name: BoundedNonEmptyStringSchema,
+	api: IdSchema,
+	reasoning: Type.Boolean(),
+	input: Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]), { maxItems: MAX_V2_ARRAY_ITEMS }),
+	contextWindow: Type.Integer({ minimum: 1 }),
+	maxTokens: Type.Integer({ minimum: 1 }),
+	cost: StrictObject({
+		input: Type.Number({ minimum: 0 }),
+		output: Type.Number({ minimum: 0 }),
+		cacheRead: Type.Number({ minimum: 0 }),
+		cacheWrite: Type.Number({ minimum: 0 }),
+	}),
+	supportedThinkingLevels: Type.Array(ThinkingLevelSchema, { minItems: 1, maxItems: MAX_V2_ARRAY_ITEMS }),
+	authenticated: Type.Boolean(),
+});
+const BoundedTextContentSchema = StrictObject({ type: Type.Literal("text"), text: BoundedStringSchema });
+const BoundedJsonContentSchema = createBoundedJsonValueSchema(MAX_V2_JSON_DEPTH);
+const BoundedTranscriptItemSchema = Type.Union([
+	StrictObject({
+		id: IdSchema,
+		role: Type.Literal("user"),
+		content: Type.Array(
+			Type.Union([
+				BoundedTextContentSchema,
+				StrictObject({
+					type: Type.Literal("image"),
+					data: BoundedStringSchema,
+					mimeType: BoundedNonEmptyStringSchema,
+				}),
+			]),
+			{ maxItems: MAX_V2_ARRAY_ITEMS },
+		),
+		timestamp: TimestampSchema,
+	}),
+	StrictObject({
+		id: IdSchema,
+		role: Type.Literal("assistant"),
+		content: Type.Array(
+			Type.Union([
+				BoundedTextContentSchema,
+				StrictObject({
+					type: Type.Literal("thinking"),
+					thinking: BoundedStringSchema,
+					redacted: Type.Optional(Type.Boolean()),
+				}),
+				StrictObject({
+					type: Type.Literal("toolCall"),
+					toolCallId: IdSchema,
+					toolName: IdSchema,
+					input: BoundedJsonContentSchema,
+				}),
+			]),
+			{ maxItems: MAX_V2_ARRAY_ITEMS },
+		),
+		model: BoundedModelRefSchema,
+		responseModel: Type.Optional(BoundedNonEmptyStringSchema),
+		timestamp: TimestampSchema,
+		status: Type.Union([
+			Type.Literal("streaming"),
+			Type.Literal("complete"),
+			Type.Literal("error"),
+			Type.Literal("aborted"),
+		]),
+		stopReason: Type.Optional(Type.String({ maxLength: 64 })),
+		errorMessage: Type.Optional(BoundedStringSchema),
+	}),
+	StrictObject({
+		id: IdSchema,
+		role: Type.Literal("tool"),
+		toolCallId: IdSchema,
+		toolName: IdSchema,
+		input: BoundedJsonContentSchema,
+		content: Type.Array(
+			Type.Union([
+				BoundedTextContentSchema,
+				StrictObject({
+					type: Type.Literal("image"),
+					data: BoundedStringSchema,
+					mimeType: BoundedNonEmptyStringSchema,
+				}),
+			]),
+			{ maxItems: MAX_V2_ARRAY_ITEMS },
+		),
+		timestamp: TimestampSchema,
+		status: Type.Union([Type.Literal("running"), Type.Literal("complete"), Type.Literal("error")]),
+		isError: Type.Boolean(),
+	}),
+]);
 
 export const CompactionPolicySchema = StrictObject({
 	enabled: Type.Boolean(),
@@ -56,34 +164,58 @@ export const OperationStateSchema = Type.Union([
 ]);
 export type OperationState = Static<typeof OperationStateSchema>;
 
-export const OperationSummarySchema = StrictObject({
+const NonTerminalOperationSummarySchema = StrictObject({
 	operationId: IdSchema,
-	kind: Type.String({ minLength: 1 }),
-	state: OperationStateSchema,
+	kind: Type.String({ minLength: 1, maxLength: 256 }),
+	state: Type.Union([Type.Literal("accepted"), Type.Literal("running")]),
 	acceptedSeq: NonNegativeIntegerSchema,
-	terminalSeq: Type.Optional(NonNegativeIntegerSchema),
-	model: Type.Optional(ModelRefSchema),
+	model: Type.Optional(BoundedModelRefSchema),
 	compactionPolicy: Type.Optional(CompactionPolicySchema),
 });
+const TerminalOperationSummarySchema = StrictObject({
+	...NonTerminalOperationSummarySchema.properties,
+	state: Type.Union([
+		Type.Literal("complete"),
+		Type.Literal("failed"),
+		Type.Literal("aborted"),
+		Type.Literal("suspended"),
+	]),
+	terminalSeq: Type.Optional(NonNegativeIntegerSchema),
+});
+export const OperationSummarySchema = Type.Union([NonTerminalOperationSummarySchema, TerminalOperationSummarySchema]);
 export type OperationSummary = Static<typeof OperationSummarySchema>;
 
 export const OperationAcceptedSchema = StrictObject({
 	operationId: IdSchema,
 	sessionRevision: NonNegativeIntegerSchema,
 	eventSeq: NonNegativeIntegerSchema,
-	model: Type.Optional(ModelRefSchema),
+	model: Type.Optional(BoundedModelRefSchema),
 	compactionPolicy: Type.Optional(CompactionPolicySchema),
 });
 export type OperationAccepted = Static<typeof OperationAcceptedSchema>;
 
-export const OperationRecordV2Schema = StrictObject({
+const NonTerminalOperationRecordV2Schema = StrictObject({
 	operationId: IdSchema,
 	sessionId: IdSchema,
-	state: OperationStateSchema,
+	state: Type.Union([Type.Literal("accepted"), Type.Literal("running")]),
 	accepted: OperationAcceptedSchema,
-	terminalSeq: Type.Optional(NonNegativeIntegerSchema),
 	error: Type.Optional(Type.String()),
 });
+const TerminalOperationRecordV2Schema = StrictObject({
+	...NonTerminalOperationRecordV2Schema.properties,
+	state: Type.Union([
+		Type.Literal("complete"),
+		Type.Literal("failed"),
+		Type.Literal("aborted"),
+		Type.Literal("suspended"),
+	]),
+	terminalSeq: Type.Optional(NonNegativeIntegerSchema),
+	error: Type.Optional(BoundedStringSchema),
+});
+export const OperationRecordV2Schema = Type.Union([
+	NonTerminalOperationRecordV2Schema,
+	TerminalOperationRecordV2Schema,
+]);
 export type OperationRecordV2 = Static<typeof OperationRecordV2Schema>;
 
 export const EventCursorSchema = StrictObject({
@@ -93,22 +225,22 @@ export const EventCursorSchema = StrictObject({
 export type EventCursor = Static<typeof EventCursorSchema>;
 
 export const PromptContentSchema = Type.Union([
-	StrictObject({ type: Type.Literal("text"), text: Type.String() }),
-	StrictObject({ type: Type.Literal("image"), digest: IdSchema, mimeType: ImageMimeTypeSchema }),
-	StrictObject({ type: Type.Literal("blob"), digest: IdSchema, mimeType: MimeTypeSchema }),
+	StrictObject({ type: Type.Literal("text"), text: BoundedStringSchema }),
+	StrictObject({ type: Type.Literal("image"), digest: DigestSchema, mimeType: ImageMimeTypeSchema }),
+	StrictObject({ type: Type.Literal("blob"), digest: DigestSchema, mimeType: MimeTypeSchema }),
 	StrictObject({ type: Type.Literal("mention"), name: IdSchema, path: IdSchema }),
 ]);
 export type PromptContent = Static<typeof PromptContentSchema>;
 
 export const QueuedInputSchema = StrictObject({
 	id: IdSchema,
-	content: Type.Array(PromptContentSchema, { minItems: 1 }),
+	content: Type.Array(PromptContentSchema, { minItems: 1, maxItems: MAX_V2_ARRAY_ITEMS }),
 	createdAt: TimestampSchema,
 });
 
 export const QueueSnapshotSchema = StrictObject({
-	steer: Type.Array(QueuedInputSchema),
-	followUp: Type.Array(QueuedInputSchema),
+	steer: Type.Array(QueuedInputSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
+	followUp: Type.Array(QueuedInputSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
 	pendingInputRequestId: Type.Optional(IdSchema),
 });
 
@@ -168,7 +300,7 @@ export const AgentSummarySchema = StrictObject({
 		Type.Literal("failed"),
 		Type.Literal("interrupted"),
 	]),
-	model: ModelRefSchema,
+	model: BoundedModelRefSchema,
 	startedAt: Type.Optional(TimestampSchema),
 	usage: Type.Optional(UsageAggregateSchema),
 });
@@ -224,14 +356,14 @@ export const SessionSnapshotV2Schema = StrictObject({
 	activeOperation: Type.Optional(OperationSummarySchema),
 	model: ModelRefSchema,
 	thinkingLevel: ThinkingLevelSchema,
-	transcript: Type.Array(TranscriptItemSchema),
+	transcript: Type.Array(BoundedTranscriptItemSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
 	queues: QueueSnapshotSchema,
 	steeringMode: Type.Optional(Type.Union([Type.Literal("all"), Type.Literal("one-at-a-time")])),
 	followUpMode: Type.Optional(Type.Union([Type.Literal("all"), Type.Literal("one-at-a-time")])),
 	autoRetryEnabled: Type.Optional(Type.Boolean()),
 	plan: Type.Optional(PlanSnapshotSchema),
 	goal: Type.Optional(GoalSnapshotSchema),
-	agents: Type.Array(AgentSummarySchema),
+	agents: Type.Array(AgentSummarySchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
 	usage: UsageAggregateSchema,
 	context: ContextUsageSchema,
 	instructionProfile: Type.Optional(InstructionProfileSummarySchema),
@@ -261,7 +393,7 @@ export const ServerSnapshotV2Schema = StrictObject({
 	revision: NonNegativeIntegerSchema,
 	eventSeq: NonNegativeIntegerSchema,
 	sessions: Type.Array(SessionMetadataV2Schema),
-	models: Type.Array(ModelMetadataSchema),
+	models: Type.Array(BoundedModelMetadataSchema, { maxItems: MAX_V2_ARRAY_ITEMS }),
 });
 export type ServerSnapshotV2 = Static<typeof ServerSnapshotV2Schema>;
 
@@ -353,7 +485,7 @@ export const CommandV2Schema = StrictObject({
 	sessionId: Type.Optional(IdSchema),
 	operationId: Type.Optional(IdSchema),
 	requestId: Type.Optional(IdSchema),
-	payload: Type.Optional(JsonValueSchema),
+	payload: Type.Optional(BoundedJsonValueSchema),
 });
 export type CommandV2 = Static<typeof CommandV2Schema>;
 
@@ -398,7 +530,7 @@ export const EventEnvelopeV2Schema = StrictObject({
 	revision: NonNegativeIntegerSchema,
 	operationId: Type.Optional(IdSchema),
 	event: EventNameV2Schema,
-	payload: Type.Unsafe<JsonValue>(JsonValueSchema),
+	payload: Type.Unsafe<JsonValue>(BoundedJsonValueSchema),
 });
 export type EventEnvelopeV2 = Static<typeof EventEnvelopeV2Schema>;
 
@@ -437,7 +569,11 @@ export type ServerHelloV2 = Static<typeof ServerHelloV2Schema>;
 
 export const ServerHelloErrorV2Schema = StrictObject({
 	type: Type.Literal("hello_error"),
-	error: StrictObject({ code: IdSchema, message: Type.String(), details: Type.Optional(JsonValueSchema) }),
+	error: StrictObject({
+		code: IdSchema,
+		message: BoundedStringSchema,
+		details: Type.Optional(BoundedJsonValueSchema),
+	}),
 });
 export type ServerHelloErrorV2 = Static<typeof ServerHelloErrorV2Schema>;
 
@@ -459,13 +595,17 @@ export const ResponseEnvelopeV2Schema = Type.Union([
 		type: Type.Literal("response"),
 		id: IdSchema,
 		ok: Type.Literal(true),
-		result: JsonValueSchema,
+		result: BoundedJsonValueSchema,
 	}),
 	StrictObject({
 		type: Type.Literal("response"),
 		id: IdSchema,
 		ok: Type.Literal(false),
-		error: StrictObject({ code: IdSchema, message: Type.String(), details: Type.Optional(JsonValueSchema) }),
+		error: StrictObject({
+			code: IdSchema,
+			message: BoundedStringSchema,
+			details: Type.Optional(BoundedJsonValueSchema),
+		}),
 	}),
 ]);
 export type ResponseEnvelopeV2 = Static<typeof ResponseEnvelopeV2Schema>;
@@ -482,3 +622,16 @@ export type ServerMessageV2 = Static<typeof ServerMessageV2Schema>;
 
 export const isClientMessageV2 = (value: unknown): value is ClientMessageV2 => Check(ClientMessageV2Schema, value);
 export const isServerMessageV2 = (value: unknown): value is ServerMessageV2 => Check(ServerMessageV2Schema, value);
+export const isOperationSummary = (value: unknown): value is OperationSummary => {
+	if (!Check(OperationSummarySchema, value)) return false;
+	const summary = value as OperationSummary;
+	return summary.terminalSeq === undefined || summary.terminalSeq > summary.acceptedSeq;
+};
+export const isOperationRecordV2 = (value: unknown): value is OperationRecordV2 => {
+	if (!Check(OperationRecordV2Schema, value)) return false;
+	const record = value as OperationRecordV2;
+	return (
+		record.accepted.operationId === record.operationId &&
+		(record.terminalSeq === undefined || record.terminalSeq > record.accepted.eventSeq)
+	);
+};
