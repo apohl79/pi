@@ -1145,6 +1145,12 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 				if (typeof payload.enabled !== "boolean") throw new Error("session/name/auto/set requires enabled");
 				this.autoName = payload.enabled;
 				await harness.session.appendCustomEntry("auto_name_setting", payload.enabled);
+			} else if (runCommand === "session/label/set") {
+				if (typeof payload.entryId !== "string" || payload.entryId.length === 0)
+					throw new Error("session/label/set requires a non-empty entryId");
+				if (payload.label !== null && typeof payload.label !== "string")
+					throw new Error("session/label/set requires a label or null");
+				await harness.session.setLabel(payload.entryId, payload.label === null ? undefined : payload.label);
 			}
 		} catch (error) {
 			this.activeOperationId = undefined;

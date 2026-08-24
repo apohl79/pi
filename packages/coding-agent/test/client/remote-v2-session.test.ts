@@ -461,6 +461,7 @@ function memoryTransport() {
 				message.request.command.startsWith("turn/") ||
 				message.request.command === "goal/update" ||
 				message.request.command.startsWith("session/name/") ||
+				message.request.command === "session/label/set" ||
 				message.request.command.startsWith("session/model") ||
 				message.request.command.startsWith("session/thinking")
 					? {
@@ -1260,12 +1261,15 @@ describe("RemoteV2Session", () => {
 		await session.setName("Renamed");
 		await session.generateName();
 		await session.setAutoName(true);
-		expect(pair.requests.slice(-4).map((request) => request.command)).toEqual([
+		await session.setTreeLabel("entry-1", "Bookmark");
+		expect(pair.requests.slice(-5).map((request) => request.command)).toEqual([
 			"goal/update",
 			"session/name/set",
 			"session/name/generate",
 			"session/name/auto/set",
+			"session/label/set",
 		]);
+		expect(pair.requests.at(-1)?.payload).toEqual({ entryId: "entry-1", label: "Bookmark" });
 		await session.dispose();
 	});
 

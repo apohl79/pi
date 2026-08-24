@@ -453,6 +453,11 @@ export class RemoteV2Session {
 		return this.#accept("turn/navigate", { targetId, ...options });
 	}
 
+	async setTreeLabel(entryId: string, label: string | undefined): Promise<string> {
+		if (entryId.length === 0) throw new Error("Tree entry ID cannot be empty");
+		return this.#accept("session/label/set", { entryId, label: label ?? null });
+	}
+
 	async abort(): Promise<string> {
 		return this.#accept("turn/abort");
 	}

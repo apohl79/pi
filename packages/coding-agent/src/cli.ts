@@ -746,7 +746,17 @@ async function runCli(): Promise<void> {
 								);
 							},
 							done,
-							undefined,
+							(entryId, label) => {
+								void session
+									.setTreeLabel(entryId, label)
+									.then((operationId) => session.waitForOperation(operationId))
+									.then(() =>
+										view.showStatus(label === undefined ? "Removed tree label" : "Updated tree label"),
+									)
+									.catch((error: unknown) =>
+										view.showStatus(error instanceof Error ? error.message : String(error)),
+									);
+							},
 							initialSelectedId,
 							statuslineSettings.getTreeFilterMode(),
 						);

@@ -247,6 +247,14 @@ function validateTurnCommand(command: CommandV2, payload: Record<string, unknown
 	}
 }
 
+function validateSessionLabelCommand(command: CommandV2, payload: Record<string, unknown>): void {
+	if (command.command !== "session/label/set") return;
+	if (typeof payload.entryId !== "string" || payload.entryId.length === 0)
+		throw new Error("session/label/set requires a non-empty entryId");
+	if (payload.label !== null && typeof payload.label !== "string")
+		throw new Error("session/label/set requires a label or null");
+}
+
 function referenceFrom(command: CommandV2, payload: Record<string, unknown>): string {
 	const reference = payload.reference ?? command.operationId;
 	if (typeof reference !== "string" || reference.length === 0) throw new Error("file reference is required");
@@ -660,7 +668,8 @@ export class PiServerV2 {
 				command.command === "session/retry/set" ||
 				command.command === "session/name/set" ||
 				command.command === "session/name/generate" ||
-				command.command === "session/name/auto/set"
+				command.command === "session/name/auto/set" ||
+				command.command === "session/label/set"
 			)
 				return void (await this.runSessionCommand(state, id, command));
 			await this.sendError(
@@ -2015,6 +2024,7 @@ export class PiServerV2 {
 		const payload = objectPayload(command);
 		validateGoalCommand(command, payload);
 		validateTurnCommand(command, payload);
+		validateSessionLabelCommand(command, payload);
 		const resolvedCommand = await this.resolveTurnContent(command);
 		const operationId = randomUUID();
 		const capsule = this.diagnosticContent
