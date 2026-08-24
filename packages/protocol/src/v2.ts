@@ -447,6 +447,7 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("session/detach"),
 	Type.Literal("session/read"),
 	Type.Literal("session/tree/read"),
+	Type.Literal("session/export"),
 	Type.Literal("session/label/set"),
 	Type.Literal("session/bash/record"),
 	Type.Literal("session/delete"),

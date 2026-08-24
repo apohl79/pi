@@ -467,6 +467,16 @@ export class RemoteV2Session {
 		return parseRemoteV2SessionTree(result.tree);
 	}
 
+	async exportJsonl(): Promise<string> {
+		this.#assertControl();
+		const result = await this.#direct({
+			command: "session/export",
+			sessionId: this.#requireHandle().sessionId,
+		});
+		if (typeof result.jsonl !== "string") throw new Error("Invalid session/export response");
+		return result.jsonl;
+	}
+
 	async navigateTree(
 		targetId: string | null,
 		options: { readonly summarize?: boolean; readonly customInstructions?: string; readonly label?: string } = {},

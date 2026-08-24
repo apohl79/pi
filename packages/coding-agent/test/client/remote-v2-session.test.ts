@@ -496,6 +496,19 @@ function memoryTransport() {
 }
 
 describe("RemoteV2Session", () => {
+	test("exports the full server-owned session through the control attachment", async () => {
+		const pair = memoryTransport();
+		const client = new PiClientV2({ transportFactory: pair.factory });
+		await client.connect();
+		const session = await RemoteV2Session.open(client, "session-1");
+		pair.overrideNextResult("session/export", { jsonl: '{"type":"session"}\n' });
+
+		expect(await session.exportJsonl()).toBe('{"type":"session"}\n');
+		expect(pair.requests.at(-1)?.command).toBe("session/export");
+
+		await session.dispose();
+	});
+
 	test("creates and opens a server-owned session", async () => {
 		const pair = memoryTransport();
 		const client = new PiClientV2({ transportFactory: pair.factory });

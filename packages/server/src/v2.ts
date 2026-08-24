@@ -112,6 +112,8 @@ export interface PiSessionRuntimeV2 {
 	}): Promise<void>;
 	/** Optional durable tree projection for runtimes that retain branch ancestry. */
 	readTree?(): MaybePromise<unknown>;
+	/** Optional full portable JSONL export for runtimes with durable entry storage. */
+	exportJsonl?(): MaybePromise<string>;
 	accept(operationId: string, command?: CommandV2): Promise<OperationAccepted>;
 	/** Subscribe to provider/tool lifecycle events that must reach detached clients. */
 	onEvent?(listener: (event: PiSessionRuntimeEventV2) => void): () => void;
@@ -604,6 +606,7 @@ export class PiServerV2 {
 			if (command.command === "session/attach") return void (await this.attach(state, id, command));
 			if (command.command === "session/read") return void (await this.readSession(state, id, command));
 			if (command.command === "session/tree/read") return void (await this.readSessionTree(state, id, command));
+			if (command.command === "session/export") return void (await this.exportSession(state, id, command));
 			if (command.command === "session/bash/record") return void (await this.recordBash(state, id, command));
 			if (command.command === "goal/read") return void (await this.readGoal(state, id, command));
 			if (command.command === "turn/queue/cancel") return void (await this.cancelQueued(state, id, command));
@@ -870,6 +873,17 @@ export class PiServerV2 {
 			command: command.command,
 			tree: toProtocolJsonValue(await runtime.readTree()),
 		});
+	}
+
+	private async exportSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("session/export requires sessionId");
+		this.requireControl(state, command.sessionId);
+		const runtime = state.sessions.get(command.sessionId);
+		if (!runtime) throw new Error(`Session ${command.sessionId} is not attached`);
+		if (runtime.exportJsonl === undefined) throw new Error("Session export is unavailable");
+		const jsonl = await runtime.exportJsonl();
+		if (jsonl.length > 1_048_576) throw new Error("Session export exceeds the V2 response limit");
+		await this.sendResponse(state, id, { command: command.command, jsonl });
 	}
 
 	private async readGoal(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {

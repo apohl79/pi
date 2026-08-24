@@ -34,6 +34,7 @@ import type {
 	V2UsageLedger,
 } from "@earendil-works/pi-server";
 import { normalizeGeneratedName } from "@earendil-works/pi-session-naming";
+import { CURRENT_SESSION_VERSION, type SessionHeader } from "../core/session-manager.ts";
 import type { ServerRuntimeExtensionHookResult, ServerRuntimeExtensionHost } from "./extension-host.ts";
 
 export { normalizeGeneratedName } from "@earendil-works/pi-session-naming";
@@ -189,6 +190,7 @@ export interface CodingAgentV2Runtime {
 		excludeFromContext: boolean;
 	}): Promise<void>;
 	readTree?(): Promise<{ leafId: string | null; entries: readonly Entry[]; labels: Readonly<Record<string, string>> }>;
+	exportJsonl?(): Promise<string>;
 	onEvent?(listener: (event: PiSessionRuntimeEventV2) => void): () => void;
 	cancelQueued(entryId: string): Promise<void>;
 	accept(operationId: string, command?: CommandV2): Promise<OperationAccepted>;
@@ -958,6 +960,24 @@ class CodingAgentV2RuntimeImpl implements CodingAgentV2Runtime {
 			).flatMap((label) => (label === undefined ? [] : [label])),
 		);
 		return { leafId, entries, labels };
+	}
+
+	async exportJsonl(): Promise<string> {
+		const entries = await this.definition.harness.session.findEntriesOnBranch({ order: "oldestFirst" });
+		const header: SessionHeader = {
+			type: "session",
+			version: CURRENT_SESSION_VERSION,
+			id: this.definition.metadata.id,
+			timestamp: new Date().toISOString(),
+			cwd: this.definition.metadata.cwd ?? process.cwd(),
+		};
+		let parentId: string | null = null;
+		const lines = [JSON.stringify(header)];
+		for (const entry of entries) {
+			lines.push(JSON.stringify({ ...entry, parentId }));
+			parentId = entry.id;
+		}
+		return `${lines.join("\n")}\n`;
 	}
 
 	async accept(_operationId: string, command?: CommandV2): Promise<OperationAccepted> {

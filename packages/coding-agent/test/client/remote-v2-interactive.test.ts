@@ -137,9 +137,11 @@ function clientWithRequests(withQueue = false, assistantText?: string): { client
 								? { session: snapshot(withQueue, message.request.sessionId ?? "session-1", assistantText) }
 								: message.request.command === "session/create"
 									? { session: snapshot(false, "session-2") }
-									: message.request.command === "session/fork"
-										? { session: snapshot(false, "session-2") }
-										: message.request.command === "model/list"
+								: message.request.command === "session/fork"
+									? { session: snapshot(false, "session-2") }
+									: message.request.command === "session/export"
+										? { jsonl: '{"type":"session"}\n' }
+									: message.request.command === "model/list"
 											? {
 													models: [
 														{
