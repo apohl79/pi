@@ -614,6 +614,9 @@ describe("remote v2 interactive command boundary", () => {
 		editor.setText("/plugins");
 		editor.onSubmit?.(editor.getText());
 		await vi.waitFor(() => expect(showStatus).toHaveBeenCalledWith("demo"));
+		editor.setText("/model openai/gpt-5");
+		editor.onSubmit?.(editor.getText());
+		await vi.waitFor(() => expect(commands).toContain("session/model/set"));
 
 		await adapter.dispose();
 		client.dispose();
