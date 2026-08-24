@@ -250,6 +250,7 @@ describe("remote v2 interactive command boundary", () => {
 		expect(parseRemoteV2Command("/plan-clear")).toEqual({ name: "plan-clear" });
 		expect(parseRemoteV2Command("/plugins")).toEqual({ name: "plugins" });
 		expect(parseRemoteV2Command("/settings")).toEqual({ name: "settings" });
+		expect(parseRemoteV2Command("/scoped-models")).toEqual({ name: "scoped-models" });
 		expect(() => parseRemoteV2Command("/plugins demo")).toThrow("does not accept arguments");
 		expect(parseRemoteV2Command("/statusline /bin/statusline --json")).toEqual({
 			name: "statusline",
@@ -438,6 +439,20 @@ describe("remote v2 interactive command boundary", () => {
 
 		expect(await adapter.execute("/model")).toEqual({ kind: "status", text: "model selector opened" });
 		expect(openModel).toHaveBeenCalledOnce();
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("opens the injected scoped model selector without a server command", async () => {
+		const { client } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const openScopedModels = vi.fn();
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { openScopedModels });
+
+		expect(await adapter.execute("/scoped-models")).toEqual({ kind: "status", text: "model scope opened" });
+		expect(openScopedModels).toHaveBeenCalledOnce();
 
 		await adapter.dispose();
 		client.dispose();

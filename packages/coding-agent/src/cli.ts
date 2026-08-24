@@ -19,6 +19,7 @@ import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./core/defaults.
 import { FooterDataProvider } from "./core/footer-data-provider.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { KeybindingsManager } from "./core/keybindings.ts";
+import { resolveModelScopeFromModels } from "./core/model-resolver.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
 import type { SessionInfo } from "./core/session-manager.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
@@ -27,6 +28,7 @@ import { CustomEditor } from "./modes/interactive/components/custom-editor.ts";
 import { InteractiveLayout } from "./modes/interactive/components/interactive-layout.ts";
 import { formatInteractiveTerminalTitle } from "./modes/interactive/components/interactive-title.ts";
 import { ModelSelectorComponent } from "./modes/interactive/components/model-selector.ts";
+import { ScopedModelsSelectorComponent } from "./modes/interactive/components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./modes/interactive/components/session-selector.ts";
 import { SettingsSelectorComponent } from "./modes/interactive/components/settings-selector.ts";
 import { UserMessageSelectorComponent } from "./modes/interactive/components/user-message-selector.ts";
@@ -126,7 +128,11 @@ async function runCli(): Promise<void> {
 	const statuslineSettings = SettingsManager.create(process.cwd(), agentDir);
 	const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false });
 	const availableModels = await modelRuntime.getAvailable();
-	const model = availableModels[0];
+	let scopedModels = resolveModelScopeFromModels(
+		statuslineSettings.getEnabledModels() ?? [],
+		availableModels,
+	).scopedModels;
+	const model = scopedModels[0]?.model ?? availableModels[0];
 	if (model === undefined) throw new Error("No configured model is available for the experimental daemon");
 	const harnessOptions =
 		parsedArgs.systemPrompt === undefined &&
@@ -257,12 +263,48 @@ async function runCli(): Promise<void> {
 					tui,
 					currentModel,
 					modelRuntime,
-					[],
+					scopedModels,
 					(selected) => selectModel(selected, false),
 					done,
 					undefined,
 					(selected) => selectModel(selected, true),
 					defaultProvider && defaultModelId ? { provider: defaultProvider, id: defaultModelId } : undefined,
+				);
+				transcriptContainer.clear();
+				transcriptContainer.addChild(selector);
+				tui.setFocus(selector);
+				tui.requestRender();
+			};
+			const showScopedModels = () => {
+				const configuredPatterns = statuslineSettings.getEnabledModels();
+				const configuredIds = (patterns: string[] | undefined): string[] | null => {
+					if (!patterns || patterns.length === 0) return null;
+					return resolveModelScopeFromModels(patterns, availableModels).scopedModels.map(
+						(scoped) => `${scoped.model.provider}/${scoped.model.id}`,
+					);
+				};
+				let enabledIds = configuredIds(configuredPatterns);
+				const applyScope = (nextIds: string[] | null) => {
+					enabledIds = nextIds === null ? null : [...nextIds];
+					scopedModels =
+						enabledIds === null ? [] : resolveModelScopeFromModels(enabledIds, availableModels).scopedModels;
+					tui.requestRender();
+				};
+				const done = () => restoreTranscript();
+				const selector = new ScopedModelsSelectorComponent(
+					{ allModels: availableModels, enabledModelIds: enabledIds },
+					{
+						onChange: applyScope,
+						onPersist: (nextIds) => {
+							const allEnabled =
+								nextIds !== null &&
+								nextIds.length === availableModels.length &&
+								nextIds.every((id) => availableModels.some((model) => `${model.provider}/${model.id}` === id));
+							statuslineSettings.setEnabledModels(nextIds === null || allEnabled ? undefined : [...nextIds]);
+							view.showStatus("Model selection saved to settings");
+						},
+						onCancel: done,
+					},
 				);
 				transcriptContainer.clear();
 				transcriptContainer.addChild(selector);
@@ -478,6 +520,7 @@ async function runCli(): Promise<void> {
 					openModel: showModel,
 					openResume: showResume,
 					openFork: showFork,
+					openScopedModels: showScopedModels,
 					cwd: process.cwd(),
 				},
 			);

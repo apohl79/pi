@@ -37,6 +37,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/resume",
 	"/rollback",
 	"/settings",
+	"/scoped-models",
 	"/statusline",
 	"/steer",
 	"/take-control",
@@ -72,6 +73,7 @@ export type RemoteV2Command =
 	| { readonly name: "resume" }
 	| { readonly name: "rollback"; readonly turns: number }
 	| { readonly name: "settings" }
+	| { readonly name: "scoped-models" }
 	| { readonly name: "statusline"; readonly command?: string }
 	| { readonly name: "steer"; readonly text: string }
 	| { readonly name: "take-control" }
@@ -214,6 +216,7 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		name === "/fork" ||
 		name === "/release-control" ||
 		name === "/resume" ||
+		name === "/scoped-models" ||
 		name === "/take-control"
 	) {
 		if (arguments_.length > 0) throw new Error(`${name} does not accept arguments`);
@@ -375,6 +378,7 @@ export class RemoteV2InteractiveAttachment {
 	readonly #openModel: (() => void) | undefined;
 	readonly #openResume: (() => void) | undefined;
 	readonly #openFork: (() => void) | undefined;
+	readonly #openScopedModels: (() => void) | undefined;
 	readonly #cwd: string | undefined;
 
 	constructor(
@@ -385,6 +389,7 @@ export class RemoteV2InteractiveAttachment {
 			readonly openModel?: () => void;
 			readonly openResume?: () => void;
 			readonly openFork?: () => void;
+			readonly openScopedModels?: () => void;
 			readonly cwd?: string;
 		} = {},
 	) {
@@ -394,6 +399,7 @@ export class RemoteV2InteractiveAttachment {
 		this.#openModel = options.openModel;
 		this.#openResume = options.openResume;
 		this.#openFork = options.openFork;
+		this.#openScopedModels = options.openScopedModels;
 		this.#cwd = options.cwd;
 		if (editor !== undefined) {
 			editor.setAutocompleteProvider(new RemoteV2AutocompleteProvider(attachment.session));
@@ -534,6 +540,10 @@ export class RemoteV2InteractiveAttachment {
 				if (this.#openSettings === undefined) throw new Error("Remote settings are unavailable");
 				this.#openSettings();
 				return { kind: "status", text: "settings opened" };
+			case "scoped-models":
+				if (this.#openScopedModels === undefined) throw new Error("Remote model scope is unavailable");
+				this.#openScopedModels();
+				return { kind: "status", text: "model scope opened" };
 			case "statusline":
 				if (!this.#attachment.setStatusline) throw new Error("Remote statusline is unavailable");
 				await this.#attachment.setStatusline(command.command);
