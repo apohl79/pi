@@ -8,6 +8,82 @@ import type { StatuslineCommand, StatuslineRunner, StatuslineSnapshot } from "..
 import { stripAnsi } from "../../../utils/ansi.ts";
 import { theme } from "../theme/theme.ts";
 
+export interface FooterPresentationState {
+	readonly model?: {
+		readonly id: string;
+		readonly name: string;
+		readonly provider: string;
+		readonly reasoning: boolean;
+	};
+	readonly thinkingLevel: string;
+	readonly usage: ReturnType<typeof createUsageTotals>;
+	readonly latestCacheHitRate?: number;
+	readonly contextWindow: number;
+	readonly contextPercent: number | null;
+	readonly cwd: string;
+	readonly sessionName?: string;
+	readonly sessionId: string;
+	readonly transcriptPath: string;
+	readonly isStreaming: boolean;
+	readonly connected: boolean;
+	readonly detachable: boolean;
+	readonly usingSubscription: boolean;
+}
+
+export interface FooterPresentationSource {
+	getFooterPresentation(): FooterPresentationState;
+}
+
+export function createAgentSessionFooterPresentation(session: AgentSession): FooterPresentationSource {
+	return {
+		getFooterPresentation: () => {
+			const usage = createUsageTotals();
+			let latestCacheHitRate: number | undefined;
+			for (const entry of session.sessionManager.getEntries()) {
+				if (entry.type === "message" && entry.message.role === "assistant") {
+					addUsageToTotals(usage, entry.message.usage);
+					const promptTokens =
+						entry.message.usage.input + entry.message.usage.cacheRead + entry.message.usage.cacheWrite;
+					latestCacheHitRate = promptTokens > 0 ? (entry.message.usage.cacheRead / promptTokens) * 100 : undefined;
+				} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
+					addUsageToTotals(usage, entry.message.usage);
+				} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
+					addUsageToTotals(usage, entry.usage);
+				}
+			}
+			const contextUsage = session.getContextUsage();
+			const model = session.state.model;
+			return {
+				...(model === undefined
+					? {}
+					: {
+							model: {
+								id: model.id,
+								name: model.name,
+								provider: model.provider,
+								reasoning: model.reasoning,
+							},
+						}),
+				thinkingLevel: session.state.thinkingLevel ?? "off",
+				usage,
+				...(latestCacheHitRate === undefined ? {} : { latestCacheHitRate }),
+				contextWindow: contextUsage?.contextWindow ?? model?.contextWindow ?? 0,
+				contextPercent: contextUsage?.percent ?? null,
+				cwd: session.sessionManager.getCwd(),
+				...(session.sessionManager.getSessionName() === undefined
+					? {}
+					: { sessionName: session.sessionManager.getSessionName() }),
+				sessionId: session.sessionId ?? "",
+				transcriptPath: session.sessionManager.getSessionFile?.() ?? "",
+				isStreaming: session.isStreaming ?? false,
+				connected: true,
+				detachable: false,
+				usingSubscription: model === undefined ? false : session.modelRuntime.isUsingSubscription(model.provider),
+			};
+		},
+	};
+}
+
 /**
  * Sanitize text for display in a single-line status.
  * Removes newlines, tabs, carriage returns, and other control characters.
@@ -58,7 +134,7 @@ export interface FooterStatuslineOptions {
  */
 export class FooterComponent implements Component {
 	private autoCompactEnabled = true;
-	private session: AgentSession;
+	private source: FooterPresentationSource;
 	private footerData: ReadonlyFooterDataProvider;
 	private statuslineRunner: StatuslineRunner | undefined;
 	private statuslineCommand: StatuslineCommand | undefined;
@@ -66,8 +142,12 @@ export class FooterComponent implements Component {
 	private statuslineSnapshot: StatuslineSnapshot = { pending: false };
 	private onStatuslineUpdated: (() => void) | undefined;
 
-	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider, options: FooterStatuslineOptions = {}) {
-		this.session = session;
+	constructor(
+		source: FooterPresentationSource | AgentSession,
+		footerData: ReadonlyFooterDataProvider,
+		options: FooterStatuslineOptions = {},
+	) {
+		this.source = "getFooterPresentation" in source ? source : createAgentSessionFooterPresentation(source);
 		this.footerData = footerData;
 		this.statuslineRunner = options.runner;
 		this.statuslineCommand = options.command;
@@ -80,7 +160,11 @@ export class FooterComponent implements Component {
 	}
 
 	setSession(session: AgentSession): void {
-		this.session = session;
+		this.source = createAgentSessionFooterPresentation(session);
+	}
+
+	setSource(source: FooterPresentationSource): void {
+		this.source = source;
 	}
 
 	setAutoCompactEnabled(enabled: boolean): void {
@@ -105,36 +189,14 @@ export class FooterComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		const state = this.session.state;
-
-		// Calculate cumulative usage from ALL session entries (not just post-compaction messages)
-		const usageTotals = createUsageTotals();
-		let latestCacheHitRate: number | undefined;
-
-		for (const entry of this.session.sessionManager.getEntries()) {
-			if (entry.type === "message" && entry.message.role === "assistant") {
-				addUsageToTotals(usageTotals, entry.message.usage);
-
-				const latestPromptTokens =
-					entry.message.usage.input + entry.message.usage.cacheRead + entry.message.usage.cacheWrite;
-				latestCacheHitRate =
-					latestPromptTokens > 0 ? (entry.message.usage.cacheRead / latestPromptTokens) * 100 : undefined;
-			} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
-				addUsageToTotals(usageTotals, entry.message.usage);
-			} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
-				addUsageToTotals(usageTotals, entry.usage);
-			}
-		}
-
-		// Calculate context usage from session (handles compaction correctly).
-		// After compaction, tokens are unknown until the next LLM response.
-		const contextUsage = this.session.getContextUsage();
-		const contextWindow = contextUsage?.contextWindow ?? state.model?.contextWindow ?? 0;
-		const contextPercentValue = contextUsage?.percent ?? 0;
-		const contextPercent = contextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
+		const state = this.source.getFooterPresentation();
+		const usageTotals = state.usage;
+		const contextWindow = state.contextWindow;
+		const contextPercentValue = state.contextPercent ?? 0;
+		const contextPercent = state.contextPercent === null ? "?" : state.contextPercent.toFixed(1);
 
 		// Replace home directory with ~
-		let pwd = formatCwdForFooter(this.session.sessionManager.getCwd(), process.env.HOME || process.env.USERPROFILE);
+		let pwd = formatCwdForFooter(state.cwd, process.env.HOME || process.env.USERPROFILE);
 
 		// Add git branch if available
 		const branch = this.footerData.getGitBranch();
@@ -143,7 +205,7 @@ export class FooterComponent implements Component {
 		}
 
 		// Add session name if set
-		const sessionName = this.session.sessionManager.getSessionName();
+		const sessionName = state.sessionName;
 		if (sessionName) {
 			pwd = `${pwd} • ${sessionName}`;
 		}
@@ -154,14 +216,12 @@ export class FooterComponent implements Component {
 		if (usageTotals.output) statsParts.push(`↓${formatTokens(usageTotals.output)}`);
 		if (usageTotals.cacheRead) statsParts.push(`R${formatTokens(usageTotals.cacheRead)}`);
 		if (usageTotals.cacheWrite) statsParts.push(`W${formatTokens(usageTotals.cacheWrite)}`);
-		if ((usageTotals.cacheRead > 0 || usageTotals.cacheWrite > 0) && latestCacheHitRate !== undefined) {
-			statsParts.push(`CH${latestCacheHitRate.toFixed(1)}%`);
+		if ((usageTotals.cacheRead > 0 || usageTotals.cacheWrite > 0) && state.latestCacheHitRate !== undefined) {
+			statsParts.push(`CH${state.latestCacheHitRate.toFixed(1)}%`);
 		}
 
 		// Kimi Coding is subscription-backed despite using API-key authentication.
-		const usingSubscription = state.model
-			? state.model.provider === "kimi-coding" || this.session.modelRuntime.isUsingSubscription(state.model.provider)
-			: false;
+		const usingSubscription = state.model ? state.model.provider === "kimi-coding" || state.usingSubscription : false;
 		if (usageTotals.cost || usingSubscription) {
 			const costStr = `$${usageTotals.cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
 			statsParts.push(costStr);
@@ -266,15 +326,15 @@ export class FooterComponent implements Component {
 		if (this.statuslineRunner) {
 			const payload = {
 				harness: "pi",
-				session_id: this.session.sessionId,
-				transcript_path: this.session.sessionManager.getSessionFile() ?? "",
-				cwd: this.session.sessionManager.getCwd(),
-				session_name: this.session.sessionManager.getSessionName() ?? "",
+				session_id: state.sessionId,
+				transcript_path: state.transcriptPath,
+				cwd: state.cwd,
+				session_name: state.sessionName ?? "",
 				model: state.model
 					? { id: state.model.id, display_name: state.model.name, provider: state.model.provider }
 					: undefined,
-				effort: { level: state.thinkingLevel ?? "off" },
-				workspace: { current_dir: this.session.sessionManager.getCwd() },
+				effort: { level: state.thinkingLevel },
+				workspace: { current_dir: state.cwd },
 				cost: { total_cost_usd: usageTotals.cost },
 				context_window: {
 					total_input_tokens: usageTotals.input,
@@ -283,7 +343,11 @@ export class FooterComponent implements Component {
 					used_percentage: contextPercentValue,
 					remaining_percentage: Math.max(0, 100 - contextPercentValue),
 				},
-				server: { connected: true, phase: this.session.isStreaming ? "turn" : "idle", detachable: false },
+				server: {
+					connected: state.connected,
+					phase: state.isStreaming ? "turn" : "idle",
+					detachable: state.detachable,
+				},
 			};
 			void this.statuslineRunner.update(payload, this.statuslineCommand).then((snapshot) => {
 				if (JSON.stringify(snapshot) === JSON.stringify(this.statuslineSnapshot)) return;

@@ -1,5 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai/compat";
 import { type Component, Container, Text, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
+import type { ReadonlyFooterDataProvider } from "../core/footer-data-provider.ts";
+import { FooterComponent } from "../modes/interactive/components/footer.ts";
 import { ToolExecutionComponent } from "../modes/interactive/components/tool-execution.ts";
 import { TranscriptRenderer } from "../modes/interactive/components/transcript-renderer.ts";
 import { getMarkdownTheme } from "../modes/interactive/theme/theme.ts";
@@ -145,6 +147,77 @@ export class RemoteV2StatuslineComponent implements Component {
 
 	dispose(): void {
 		void this.#controller.dispose();
+	}
+}
+
+export class RemoteV2FooterComponent implements Component {
+	readonly #source: RemoteV2StatuslineSource;
+	readonly #cwd: string;
+	readonly #footer: FooterComponent;
+
+	constructor(source: RemoteV2StatuslineSource, footerData: ReadonlyFooterDataProvider, cwd: string) {
+		this.#source = source;
+		this.#cwd = cwd;
+		this.#footer = new FooterComponent(
+			{
+				getFooterPresentation: () => {
+					const snapshot = this.#source.state.snapshot;
+					const usage = snapshot?.usage ?? {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						costUsd: 0,
+					};
+					const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+					return {
+						...(snapshot === undefined
+							? {}
+							: {
+									model: {
+										id: snapshot.model.id,
+										name: snapshot.model.id,
+										provider: snapshot.model.provider,
+										reasoning: snapshot.thinkingLevel !== "off",
+									},
+								}),
+						thinkingLevel: snapshot?.thinkingLevel ?? "off",
+						usage: {
+							input: usage.input,
+							output: usage.output,
+							cacheRead: usage.cacheRead,
+							cacheWrite: usage.cacheWrite,
+							cost: usage.costUsd ?? 0,
+						},
+						...(promptTokens === 0 ? {} : { latestCacheHitRate: (usage.cacheRead / promptTokens) * 100 }),
+						contextWindow: snapshot?.context.contextWindow ?? 0,
+						contextPercent: snapshot?.context.usedPercentage ?? null,
+						cwd: this.#cwd,
+						...(snapshot?.name === undefined ? {} : { sessionName: snapshot.name }),
+						sessionId: snapshot?.id ?? "",
+						transcriptPath: "",
+						isStreaming: snapshot?.phase === "turn",
+						connected: this.#source.state.lifecycle.status !== "detached",
+						detachable: this.#source.state.lifecycle.status !== "disposed",
+						usingSubscription: false,
+					};
+				},
+			},
+			footerData,
+		);
+	}
+
+	render(width: number): string[] {
+		this.#footer.setAutoCompactEnabled(this.#source.state.snapshot?.compactionPolicy.enabled ?? true);
+		return this.#footer.render(width);
+	}
+
+	invalidate(): void {
+		this.#footer.invalidate();
+	}
+
+	dispose(): void {
+		this.#footer.dispose();
 	}
 }
 

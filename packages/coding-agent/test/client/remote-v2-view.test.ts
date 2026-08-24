@@ -5,6 +5,7 @@ import type { RemoteV2SessionState } from "../../src/client/remote-v2-session.ts
 import {
 	createRemoteV2StatuslinePayload,
 	formatRemoteV2Session,
+	RemoteV2FooterComponent,
 	RemoteV2SessionView,
 	type RemoteV2SessionViewOptions,
 	RemoteV2StatuslineComponent,
@@ -247,6 +248,34 @@ describe("formatRemoteV2Session", () => {
 			expect(rendered).not.toContain("user: old");
 		} finally {
 			view.dispose();
+		}
+	});
+
+	test("renders the server snapshot through the direct-mode footer renderer", () => {
+		const source = {
+			state: {
+				lifecycle: { status: "ready" as const },
+				snapshot: { ...snapshot, name: "Remote task" },
+			},
+			subscribe: (_listener: (state: RemoteV2SessionState) => void) => () => {},
+		};
+		const footer = new RemoteV2FooterComponent(
+			source,
+			{
+				getGitBranch: () => "main",
+				getExtensionStatuses: () => new Map(),
+				getAvailableProviderCount: () => 1,
+				onBranchChange: () => () => {},
+			},
+			"/workspace/pi",
+		);
+		try {
+			const rendered = footer.render(120).map(stripAnsi).join("\n");
+			expect(rendered).toContain("Remote task");
+			expect(rendered).toContain("model");
+			expect(rendered).not.toContain("Session session-1 · phase=turn");
+		} finally {
+			footer.dispose();
 		}
 	});
 

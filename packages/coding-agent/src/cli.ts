@@ -13,9 +13,10 @@ import { Container } from "@earendil-works/pi-tui";
 import { isServerDefaultCompatible, parseArgs } from "./cli/args.ts";
 import { dispatchExperimentalCommand, isExperimentalCommand } from "./cli/experimental/dispatch.ts";
 import { RemoteV2InteractiveAttachment } from "./client/remote-v2-interactive.ts";
-import { RemoteV2SessionView, RemoteV2StatuslineComponent } from "./client/remote-v2-view.ts";
+import { RemoteV2FooterComponent, RemoteV2SessionView, RemoteV2StatuslineComponent } from "./client/remote-v2-view.ts";
 import { APP_NAME, getAgentDir } from "./config.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./core/defaults.ts";
+import { FooterDataProvider } from "./core/footer-data-provider.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { KeybindingsManager } from "./core/keybindings.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
@@ -217,6 +218,10 @@ async function runCli(): Promise<void> {
 			editorContainer.addChild(editor);
 			const belowEditorContainer = new Container();
 			const footerContainer = new Container();
+			const footerData = new FooterDataProvider(process.cwd());
+			footerData.setAvailableProviderCount(new Set(availableModels.map((candidate) => candidate.provider)).size);
+			const footer = new RemoteV2FooterComponent(session, footerData, process.cwd());
+			footerContainer.addChild(footer);
 			const restoreTranscript = () => {
 				transcriptContainer.clear();
 				transcriptContainer.addChild(view);
@@ -419,6 +424,8 @@ async function runCli(): Promise<void> {
 					process.stdin.off("end", finish);
 					tui.stop();
 					void attachment.dispose().finally(() => {
+						footer.dispose();
+						footerData.dispose();
 						statusline.dispose();
 						stopThemeWatcher();
 						resolve();
