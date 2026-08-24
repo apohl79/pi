@@ -7,7 +7,8 @@ import {
 	fuzzyFilter,
 } from "@earendil-works/pi-tui";
 import { BUILTIN_SLASH_COMMANDS } from "../core/slash-commands.ts";
-import { copyToClipboard } from "../utils/clipboard.ts";
+import { copyToClipboard, readClipboardText } from "../utils/clipboard.ts";
+import { type ClipboardImage, readClipboardImage } from "../utils/clipboard-image.ts";
 import type { RemoteV2SessionAttachment } from "./remote-v2-selector.ts";
 import type { RemoteV2FileCompletion, RemoteV2PromptContent } from "./remote-v2-session.ts";
 
@@ -124,6 +125,11 @@ export type RemoteV2CommandResult =
 	| { readonly kind: "detached" };
 
 type RemoteFileAutocompleteItem = AutocompleteItem & Pick<RemoteV2FileCompletion, "kind" | "reference">;
+
+type RemoteInteractiveEditor = Editor & {
+	onPasteImage?: () => void;
+	insertTextAtCursor?: (text: string) => void;
+};
 
 /** Async editor completions backed by the authoritative remote filesystem service. */
 export class RemoteV2AutocompleteProvider implements AutocompleteProvider {
@@ -452,10 +458,11 @@ export function getLastRemoteAssistantText(snapshot: SessionSnapshotV2 | undefin
 /** Binds server-backed commands and completions to the shared interactive editor. */
 export class RemoteV2InteractiveAttachment {
 	readonly #attachment: RemoteV2SessionAttachment;
-	readonly #editor: Editor | undefined;
+	readonly #editor: RemoteInteractiveEditor | undefined;
 	#disposed = false;
 	#recalledContent: RemoteV2PromptContent | undefined;
 	#recalledText: string | undefined;
+	#pendingAttachments: RemoteV2PromptContent = [];
 	readonly #openSettings: (() => void) | undefined;
 	readonly #openModel: (() => void) | undefined;
 	readonly #openResume: (() => void) | undefined;
@@ -465,11 +472,13 @@ export class RemoteV2InteractiveAttachment {
 	readonly #openThinking: (() => void) | undefined;
 	readonly #quit: (() => void) | undefined;
 	readonly #copyText: (text: string) => Promise<void>;
+	readonly #readClipboardImage: () => Promise<ClipboardImage | null>;
+	readonly #readClipboardText: () => Promise<string | null>;
 	readonly #cwd: string | undefined;
 
 	constructor(
 		attachment: RemoteV2SessionAttachment,
-		editor?: Editor,
+		editor?: RemoteInteractiveEditor,
 		options: {
 			readonly openSettings?: () => void;
 			readonly openModel?: () => void;
@@ -480,6 +489,8 @@ export class RemoteV2InteractiveAttachment {
 			readonly openThinking?: () => void;
 			readonly quit?: () => void;
 			readonly copyText?: (text: string) => Promise<void>;
+			readonly readClipboardImage?: () => Promise<ClipboardImage | null>;
+			readonly readClipboardText?: () => Promise<string | null>;
 			readonly cwd?: string;
 		} = {},
 	) {
@@ -494,16 +505,25 @@ export class RemoteV2InteractiveAttachment {
 		this.#openThinking = options.openThinking;
 		this.#quit = options.quit;
 		this.#copyText = options.copyText ?? copyToClipboard;
+		this.#readClipboardImage = options.readClipboardImage ?? readClipboardImage;
+		this.#readClipboardText = options.readClipboardText ?? readClipboardText;
 		this.#cwd = options.cwd;
 		if (editor !== undefined) {
 			editor.setAutocompleteProvider(new RemoteV2AutocompleteProvider(attachment.session));
 			editor.onSubmit = (text) => this.submitEditorText(text);
+			editor.onPasteImage = () => {
+				void this.pasteClipboard().catch((error: unknown) => {
+					this.view.showStatus(error instanceof Error ? error.message : String(error));
+					this.view.invalidate();
+				});
+			};
 			const previousOnChange = editor.onChange;
 			editor.onChange = (text) => {
 				if (this.#recalledContent !== undefined && text !== this.#recalledText) {
 					this.#recalledContent = undefined;
 					this.#recalledText = undefined;
 				}
+				if (text.length === 0) this.#pendingAttachments = [];
 				previousOnChange?.(text);
 			};
 		}
@@ -540,6 +560,27 @@ export class RemoteV2InteractiveAttachment {
 		this.#recalledText = displayPromptContent(content);
 		this.#editor?.setText(this.#recalledText);
 		return recalledCount;
+	}
+
+	private async pasteClipboard(): Promise<void> {
+		this.#assertActive();
+		const image = await this.#readClipboardImage();
+		if (image !== null) {
+			const blob = await this.session.putBlob(Buffer.from(image.bytes).toString("base64"), image.mimeType);
+			this.#recalledContent = undefined;
+			this.#recalledText = undefined;
+			this.#pendingAttachments = [
+				...this.#pendingAttachments,
+				{ type: "image", digest: blob.digest, mimeType: blob.mimeType },
+			];
+			this.view.showStatus(`Image attached: ${blob.mimeType}`);
+			this.view.invalidate();
+			return;
+		}
+		const text = await this.#readClipboardText();
+		if (text === null) return;
+		this.#editor?.insertTextAtCursor?.(text);
+		this.view.invalidate();
 	}
 
 	async execute(input: string): Promise<RemoteV2CommandResult> {
@@ -696,14 +737,21 @@ export class RemoteV2InteractiveAttachment {
 
 	private submitEditorText(text: string): void {
 		const input = text.trim();
-		if (!input) return;
 		const recalledContent = this.#recalledContent;
+		const pendingAttachments = this.#pendingAttachments;
+		const content =
+			recalledContent ??
+			(pendingAttachments.length === 0
+				? undefined
+				: [...pendingAttachments, ...(input.length === 0 ? [] : [{ type: "text" as const, text }])]);
+		if (input.length === 0 && content === undefined) return;
 		this.#recalledContent = undefined;
 		this.#recalledText = undefined;
+		this.#pendingAttachments = [];
 		this.#editor?.setText("");
 		const action = input.startsWith("/")
 			? this.execute(input)
-			: (recalledContent === undefined ? this.submit(input) : this.session.submit(recalledContent)).then(
+			: (content === undefined ? this.submit(input) : this.session.submit(content)).then(
 					(operationId) => `operation ${operationId}`,
 				);
 		void action

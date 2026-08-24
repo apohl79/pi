@@ -176,7 +176,9 @@ function clientWithRequests(withQueue = false, assistantText?: string): { client
 													? { plugins: [{ id: "demo", enabled: true }] }
 													: message.request.command === "process/list"
 														? { processes: [] }
-														: { command: message.request.command }) as JsonValue,
+														: message.request.command === "blob/put"
+															? { blob: { digest: "b".repeat(64), mimeType: "image/png", size: 3 } }
+															: { command: message.request.command }) as JsonValue,
 					};
 			handlers?.onData(encodeServerMessageV2(response));
 		},
@@ -422,6 +424,29 @@ describe("remote v2 interactive command boundary", () => {
 		editor.onSubmit?.(editor.getText());
 		await vi.waitFor(() =>
 			expect(submit).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ type: "image" })])),
+		);
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("uploads a pasted image from the client and submits it as structured content", async () => {
+		const { client, commands } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const editor = createEditor();
+		const adapter = new RemoteV2InteractiveAttachment(attached, editor, {
+			readClipboardImage: async () => ({ bytes: Uint8Array.from([1, 2, 3]), mimeType: "image/png" }),
+		});
+		const submit = vi.spyOn(attached.session, "submit");
+
+		editor.onPasteImage?.();
+		await vi.waitFor(() => expect(commands).toContain("blob/put"));
+		editor.onSubmit?.(editor.getText());
+		await vi.waitFor(() =>
+			expect(submit).toHaveBeenCalledWith([
+				expect.objectContaining({ type: "image", digest: "b".repeat(64), mimeType: "image/png" }),
+			]),
 		);
 
 		await adapter.dispose();
