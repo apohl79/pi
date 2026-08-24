@@ -53,7 +53,11 @@ import {
 	initTheme,
 	stopThemeWatcher,
 } from "./modes/interactive/theme/theme.ts";
-import { createConfiguredCodingAgentDaemonRuntime } from "./server/daemon-runtime.ts";
+import {
+	type ConfiguredCodingAgentDaemonRuntimeOptions,
+	createCodingAgentClientRuntime,
+	createConfiguredCodingAgentDaemonRuntime,
+} from "./server/daemon-runtime.ts";
 import { StatuslineRunner } from "./server/statusline.ts";
 import { copyToClipboard } from "./utils/clipboard.ts";
 
@@ -260,7 +264,7 @@ async function runCli(): Promise<void> {
 					...(parsedArgs.excludeTools === undefined ? {} : { excludedToolNames: [...parsedArgs.excludeTools] }),
 					...(parsedArgs.noBuiltinTools === true ? { disableBuiltinTools: true } : {}),
 				};
-	const runtime = await createConfiguredCodingAgentDaemonRuntime({
+	const runtimeOptions: ConfiguredCodingAgentDaemonRuntimeOptions = {
 		agentDir,
 		cwd: process.cwd(),
 		models: modelRuntime,
@@ -284,7 +288,6 @@ async function runCli(): Promise<void> {
 		noPromptTemplates: parsedArgs.noPromptTemplates,
 		noContextFiles: parsedArgs.noContextFiles,
 		socketPath: join(agentDir, "pi.sock"),
-		...(runningServer === undefined ? {} : { skipDaemonStart: true }),
 		write: (value) => console.log(JSON.stringify(value)),
 		writeText: (value) => process.stdout.write(`${value}\n`),
 		runInteractive: async (session, options) => {
@@ -813,7 +816,9 @@ async function runCli(): Promise<void> {
 					showHotkeys: () =>
 						view.addTransientTranscriptComponent(createHotkeysCommandOutput(keybindings, getMarkdownTheme())),
 					showSession: () =>
-						view.addTransientTranscriptComponent(createSessionCommandOutput(session.snapshot, getMarkdownTheme())),
+						view.addTransientTranscriptComponent(
+							createSessionCommandOutput(session.snapshot, getMarkdownTheme()),
+						),
 					openSettings: showSettings,
 					openModel: showModel,
 					openResume: showResume,
@@ -1010,7 +1015,22 @@ async function runCli(): Promise<void> {
 				tui.start();
 			});
 		},
-	});
+	};
+	const runtime =
+		runningServer === undefined
+			? await createConfiguredCodingAgentDaemonRuntime(runtimeOptions)
+			: createCodingAgentClientRuntime({
+					...runtimeOptions,
+					daemon: {
+						start: async (socket) => {
+							if (socket !== undefined && socket !== runtimeOptions.socketPath)
+								throw new Error(`Daemon is configured for socket ${runtimeOptions.socketPath}`);
+							return runningServer;
+						},
+						status: () => runningServer,
+						stop: async () => runningServer,
+					},
+				});
 	if (foregroundServer) {
 		try {
 			await dispatchExperimentalCommand(args, runtime.cli);

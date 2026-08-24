@@ -17,6 +17,7 @@ import {
 import { describe, expect, test, vi } from "vitest";
 import { createExperimentalCliRuntime, type ExperimentalDaemonController } from "../src/cli/experimental/runtime.ts";
 import { main } from "../src/main.ts";
+import { createCodingAgentClientRuntime } from "../src/server/daemon-runtime.ts";
 
 const snapshot: ServerSnapshotV2 = {
 	serverId: "server-1",
@@ -376,6 +377,20 @@ describe("experimental CLI runtime", () => {
 		expect(controller.start).toHaveBeenCalledWith("/tmp/pi.sock");
 		await runtime.runSessions({ command: "sessions" });
 		expect(output).toEqual([{ state: "running" }, []]);
+		runtime.close();
+	});
+
+	test("delegates server start to the supplied live daemon controller", async () => {
+		const controller = daemon();
+		const output: unknown[] = [];
+		const runtime = createCodingAgentClientRuntime({
+			socketPath: "/tmp/pi.sock",
+			daemon: controller,
+			write: (value) => output.push(value),
+		});
+		await runtime.cli.runServer({ command: "server", action: "start" });
+		expect(controller.start).toHaveBeenCalledTimes(1);
+		expect(output).toEqual([{ state: "running" }]);
 		runtime.close();
 	});
 

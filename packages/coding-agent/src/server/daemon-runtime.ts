@@ -39,6 +39,7 @@ import {
 	createExperimentalCliRuntime,
 	type ExperimentalCliRuntime,
 	type ExperimentalCliRuntimeOptions,
+	type ExperimentalDaemonController,
 } from "../cli/experimental/runtime.ts";
 import type { TransportAddress } from "../cli/experimental/transport-address.ts";
 import { acquireCodexMarketplacePlugin, type CodexPluginAcquisitionOptions } from "../core/codex-plugin-acquisition.ts";
@@ -136,6 +137,78 @@ export type ConfiguredCodingAgentDaemonRuntime = CodingAgentDaemonRuntime & {
 	repository: SqliteSessionRepositoryLike;
 	env: NodeExecutionEnv;
 };
+
+export type CodingAgentClientRuntimeOptions = Readonly<{
+	socketPath: string;
+	daemon: ExperimentalDaemonController;
+	clientDiagnosticSpoolPath?: string;
+	clientInstanceId?: string;
+	runtimeManifest?: ServerDaemonOptions["runtimeManifest"];
+	write: (value: unknown) => void;
+	writeText?: (value: string) => void;
+	rpcInput?: ExperimentalCliRuntimeOptions["rpcInput"];
+	rpcOutput?: ExperimentalCliRuntimeOptions["rpcOutput"];
+	runInteractive?: ExperimentalCliRuntimeOptions["runInteractive"];
+	onAttach?: ExperimentalCliRuntimeOptions["onAttach"];
+}>;
+
+export type CodingAgentClientRuntime = Readonly<{
+	cli: ExperimentalCliRuntime;
+	close(): void;
+}>;
+
+export function createCodingAgentClientRuntime(options: CodingAgentClientRuntimeOptions): CodingAgentClientRuntime {
+	const clientRuntimeManifest = options.runtimeManifest ?? createRuntimeManifest();
+	const clientSpool =
+		options.clientDiagnosticSpoolPath === undefined
+			? undefined
+			: new ClientDiagnosticSpool({
+					path: options.clientDiagnosticSpoolPath,
+					clientInstanceId: options.clientInstanceId ?? `client-${process.pid}`,
+				});
+	const defaultConnect: TransportAddress = { transport: "unix", path: options.socketPath };
+	const cli = createExperimentalCliRuntime({
+		daemon: options.daemon,
+		defaultConnect,
+		diagnosticsSpool: clientSpool,
+		createClient: (address) =>
+			new PiClientV2({
+				transportFactory: createUnixTransportFactory({ path: address.path }),
+				...(clientSpool === undefined
+					? {}
+					: {
+							diagnostics: {
+								manifest: {
+									clientInstanceId: clientSpool.clientInstanceId,
+									runtime: clientRuntimeManifest.runtime,
+									platform: clientRuntimeManifest.platform,
+									arch: clientRuntimeManifest.arch,
+									...(clientRuntimeManifest.buildVersion === undefined
+										? {}
+										: { buildVersion: clientRuntimeManifest.buildVersion }),
+									...(clientRuntimeManifest.forkCommit === undefined
+										? {}
+										: { forkCommit: clientRuntimeManifest.forkCommit }),
+									...(clientRuntimeManifest.upstreamBaseCommit === undefined
+										? {}
+										: { upstreamBaseCommit: clientRuntimeManifest.upstreamBaseCommit }),
+									...(clientRuntimeManifest.configHash === undefined
+										? {}
+										: { configHash: clientRuntimeManifest.configHash }),
+								},
+								spool: clientSpool,
+							},
+						}),
+			}),
+		write: options.write,
+		...(options.writeText === undefined ? {} : { writeText: options.writeText }),
+		...(options.rpcInput === undefined ? {} : { rpcInput: options.rpcInput }),
+		...(options.rpcOutput === undefined ? {} : { rpcOutput: options.rpcOutput }),
+		...(options.runInteractive === undefined ? {} : { runInteractive: options.runInteractive }),
+		onAttach: options.onAttach,
+	});
+	return { cli, close: () => cli.close() };
+}
 
 export async function createCodingAgentDaemonRuntime(
 	options: CodingAgentDaemonRuntimeOptions,
