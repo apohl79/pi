@@ -236,6 +236,7 @@ describe("remote v2 interactive command boundary", () => {
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/detach");
 		expect(parseRemoteV2Command("/clone")).toEqual({ name: "clone" });
 		expect(parseRemoteV2Command("/copy")).toEqual({ name: "copy" });
+		expect(parseRemoteV2Command("/debug")).toEqual({ name: "debug" });
 		expect(parseRemoteV2Command("/changelog")).toEqual({ name: "changelog" });
 		expect(parseRemoteV2Command("/fork")).toEqual({ name: "fork" });
 		expect(parseRemoteV2Command("/hotkeys")).toEqual({ name: "hotkeys" });
@@ -554,7 +555,11 @@ describe("remote v2 interactive command boundary", () => {
 		const showChangelog = vi.fn();
 		const showHotkeys = vi.fn();
 		const showSession = vi.fn();
-		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { showChangelog, showHotkeys, showSession });
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, {
+			showChangelog,
+			showHotkeys,
+			showSession,
+		});
 
 		expect(await adapter.execute("/changelog")).toEqual({ kind: "status", text: "changelog opened" });
 		expect(await adapter.execute("/hotkeys")).toEqual({ kind: "status", text: "keyboard shortcuts opened" });
@@ -562,6 +567,21 @@ describe("remote v2 interactive command boundary", () => {
 		expect(showChangelog).toHaveBeenCalledOnce();
 		expect(showHotkeys).toHaveBeenCalledOnce();
 		expect(showSession).toHaveBeenCalledOnce();
+		expect(commands).not.toContain("turn/start");
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("captures attached TUI diagnostics without starting a server turn", async () => {
+		const { client, commands } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const showDebug = vi.fn(async () => "/tmp/pi-debug.log");
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { showDebug });
+
+		expect(await adapter.execute("/debug")).toEqual({ kind: "status", text: "Debug log written: /tmp/pi-debug.log" });
+		expect(showDebug).toHaveBeenCalledOnce();
 		expect(commands).not.toContain("turn/start");
 
 		await adapter.dispose();

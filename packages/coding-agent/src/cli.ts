@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 /**
  * CLI entry point for the refactored coding agent.
  * Uses main.ts with AgentSession and new mode modules.
  *
  * Test with: npx tsx src/cli-new.ts [args...]
  */
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type AgentMessage, DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-agent-core";
 import { contentText } from "@earendil-works/pi-ai";
 import type { JsonValue } from "@earendil-works/pi-protocol";
@@ -16,7 +17,7 @@ import { isServerDefaultCompatible, parseArgs } from "./cli/args.ts";
 import { dispatchExperimentalCommand, isExperimentalCommand } from "./cli/experimental/dispatch.ts";
 import { RemoteV2InteractiveAttachment } from "./client/remote-v2-interactive.ts";
 import { RemoteV2FooterComponent, RemoteV2SessionView, RemoteV2StatuslineComponent } from "./client/remote-v2-view.ts";
-import { APP_NAME, getAgentDir } from "./config.ts";
+import { APP_NAME, getAgentDir, getDebugLogPath } from "./config.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./core/defaults.ts";
 import { FooterDataProvider } from "./core/footer-data-provider.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
@@ -811,6 +812,24 @@ async function runCli(): Promise<void> {
 				},
 				editor,
 				{
+					showDebug: async () => {
+						const width = tui.terminal.columns;
+						const debugLogPath = getDebugLogPath();
+						const content = [
+							`Debug output at ${new Date().toISOString()}`,
+							`Terminal width: ${width}`,
+							"",
+							"=== Rendered lines ===",
+							...tui.render(width).map((line, index) => `[${index}] ${JSON.stringify(line)}`),
+							"",
+							"=== Server snapshot ===",
+							JSON.stringify(session.snapshot),
+							"",
+						].join("\n");
+						await mkdir(dirname(debugLogPath), { recursive: true });
+						await writeFile(debugLogPath, content);
+						return debugLogPath;
+					},
 					showChangelog: () =>
 						view.addTransientTranscriptComponent(createChangelogCommandOutput(getMarkdownTheme())),
 					showHotkeys: () =>

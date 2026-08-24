@@ -21,6 +21,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/compact",
 	"/clone",
 	"/copy",
+	"/debug",
 	"/changelog",
 	"/dequeue",
 	"/detach",
@@ -91,6 +92,7 @@ export type RemoteV2Command =
 	| { readonly name: "compact"; readonly instructions?: string }
 	| { readonly name: "clone" }
 	| { readonly name: "copy" }
+	| { readonly name: "debug" }
 	| { readonly name: "changelog" }
 	| { readonly name: "dequeue"; readonly entryId: string }
 	| { readonly name: "detach" }
@@ -298,6 +300,7 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		name === "/abort" ||
 		name === "/clone" ||
 		name === "/copy" ||
+		name === "/debug" ||
 		name === "/changelog" ||
 		name === "/detach" ||
 		name === "/fork" ||
@@ -494,6 +497,7 @@ export class RemoteV2InteractiveAttachment {
 	readonly #readClipboardText: () => Promise<string | null>;
 	readonly #executeShell: ((command: string, excludeFromContext: boolean) => Promise<void>) | undefined;
 	readonly #showChangelog: (() => void) | undefined;
+	readonly #showDebug: (() => Promise<string>) | undefined;
 	readonly #showHotkeys: (() => void) | undefined;
 	readonly #showSession: (() => void) | undefined;
 	readonly #cwd: string | undefined;
@@ -515,6 +519,7 @@ export class RemoteV2InteractiveAttachment {
 			readonly readClipboardText?: () => Promise<string | null>;
 			readonly executeShell?: (command: string, excludeFromContext: boolean) => Promise<void>;
 			readonly showChangelog?: () => void;
+			readonly showDebug?: () => Promise<string>;
 			readonly showHotkeys?: () => void;
 			readonly showSession?: () => void;
 			readonly cwd?: string;
@@ -535,6 +540,7 @@ export class RemoteV2InteractiveAttachment {
 		this.#readClipboardText = options.readClipboardText ?? readClipboardText;
 		this.#executeShell = options.executeShell;
 		this.#showChangelog = options.showChangelog;
+		this.#showDebug = options.showDebug;
 		this.#showHotkeys = options.showHotkeys;
 		this.#showSession = options.showSession;
 		this.#cwd = options.cwd;
@@ -653,6 +659,9 @@ export class RemoteV2InteractiveAttachment {
 				await this.#copyText(text);
 				return { kind: "status", text: "Copied last agent message to clipboard" };
 			}
+			case "debug":
+				if (this.#showDebug === undefined) throw new Error("Remote debug capture is unavailable");
+				return { kind: "status", text: `Debug log written: ${await this.#showDebug()}` };
 			case "changelog":
 				if (this.#showChangelog === undefined) throw new Error("Remote changelog is unavailable");
 				this.#showChangelog();
