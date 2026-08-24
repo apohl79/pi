@@ -964,6 +964,7 @@ export class InteractiveMode {
 		this.transcriptScrollView = interactiveLayout.transcriptScrollView;
 		this.fullscreenLayoutRoot = interactiveLayout.fullscreenRoot;
 		interactiveLayout.mount(this.renderer);
+		this.mountInteractiveTui(this.renderer, []);
 		// Accept text while startup completes, but only enable interrupt, exit, and submission feedback.
 		this.defaultEditor.onAction("app.clear", () => this.handleCtrlC());
 		this.defaultEditor.onCtrlD = () => undefined;

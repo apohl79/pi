@@ -128,6 +128,48 @@ describe("createInteractiveTui", () => {
 	});
 });
 
+describe("InteractiveMode initial renderer mount", () => {
+	it("routes Ctrl+C through the shared clear handler", () => {
+		const inputListeners: ((data: string) => { consume?: boolean } | undefined)[] = [];
+		const addChild = vi.fn();
+		const removeClearInputListener = vi.fn();
+		const handleCtrlC = vi.fn();
+		const context = {
+			removeClearInputListener,
+			keybindings: { matches: (data: string, action: string) => data === "\u0003" && action === "app.clear" },
+			handleCtrlC,
+			fullscreenLayoutRoot: undefined,
+		};
+		const tui = {
+			addInputListener: (listener: (data: string) => { consume?: boolean } | undefined) => {
+				inputListeners.push(listener);
+				return vi.fn();
+			},
+			addChild,
+			mode: "regular" as const,
+		};
+		const { mountInteractiveTui } = InteractiveMode.prototype as unknown as {
+			mountInteractiveTui(
+				this: typeof context,
+				tui: {
+					addInputListener: (listener: (data: string) => { consume?: boolean } | undefined) => () => void;
+					addChild: (component: Component) => void;
+					mode: "regular";
+				},
+				components: readonly Component[],
+			): void;
+		};
+
+		mountInteractiveTui.call(context, tui, []);
+
+		expect(removeClearInputListener).toHaveBeenCalledOnce();
+		expect(inputListeners).toHaveLength(1);
+		expect(inputListeners[0]("\u0003")).toEqual({ consume: true });
+		expect(handleCtrlC).toHaveBeenCalledOnce();
+		expect(addChild).not.toHaveBeenCalled();
+	});
+});
+
 describe("InteractiveMode right-click paste", () => {
 	it("feeds clipboard text to the focused component as a bracketed paste", async () => {
 		clipboardMocks.readClipboardText.mockResolvedValue("clipboard text");
