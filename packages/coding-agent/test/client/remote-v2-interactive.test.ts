@@ -13,6 +13,7 @@ import { describe, expect, test, vi } from "vitest";
 import { VirtualTerminal } from "../../../tui/test/virtual-terminal.ts";
 import {
 	applyRemoteFileCompletion,
+	getLastRemoteAssistantText,
 	parseRemoteV2Command,
 	REMOTE_V2_SLASH_COMMANDS,
 	RemoteV2AutocompleteProvider,
@@ -24,7 +25,7 @@ import { CustomEditor } from "../../src/modes/interactive/components/custom-edit
 import { getEditorTheme, initTheme } from "../../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../src/utils/ansi.ts";
 
-function snapshot(withQueue = false, id = "session-1"): SessionSnapshotV2 {
+function snapshot(withQueue = false, id = "session-1", assistantText?: string): SessionSnapshotV2 {
 	return {
 		id,
 		nameRevision: 0,
@@ -33,7 +34,21 @@ function snapshot(withQueue = false, id = "session-1"): SessionSnapshotV2 {
 		phase: "idle",
 		model: { provider: "faux", id: "model" },
 		thinkingLevel: "off",
-		transcript: [],
+		transcript:
+			assistantText === undefined
+				? []
+				: [
+						{
+							id: "assistant-1",
+							role: "assistant",
+							content: [{ type: "text", text: assistantText }],
+							timestamp: 1,
+							api: "faux",
+							provider: "faux",
+							model: "model",
+							stopReason: "stop",
+						},
+					],
 		queues: {
 			steer: withQueue
 				? [
@@ -68,7 +83,7 @@ function snapshot(withQueue = false, id = "session-1"): SessionSnapshotV2 {
 	};
 }
 
-function clientWithRequests(withQueue = false): { client: PiClientV2; commands: string[] } {
+function clientWithRequests(withQueue = false, assistantText?: string): { client: PiClientV2; commands: string[] } {
 	let handlers: ByteTransportHandlers | undefined;
 	const commands: string[] = [];
 	const transport: ByteTransport = {
@@ -120,7 +135,7 @@ function clientWithRequests(withQueue = false): { client: PiClientV2; commands: 
 									},
 								}
 							: message.request.command === "session/read"
-								? { session: snapshot(withQueue, message.request.sessionId ?? "session-1") }
+								? { session: snapshot(withQueue, message.request.sessionId ?? "session-1", assistantText) }
 								: message.request.command === "session/create"
 									? { session: snapshot(false, "session-2") }
 									: message.request.command === "session/fork"
@@ -199,6 +214,7 @@ describe("remote v2 interactive command boundary", () => {
 	test("parses discoverable commands without changing v1 slash commands", () => {
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/detach");
 		expect(parseRemoteV2Command("/clone")).toEqual({ name: "clone" });
+		expect(parseRemoteV2Command("/copy")).toEqual({ name: "copy" });
 		expect(parseRemoteV2Command("/fork")).toEqual({ name: "fork" });
 		expect(parseRemoteV2Command("/follow-up  continue this")).toEqual({ name: "follow-up", text: "continue this" });
 		expect(parseRemoteV2Command("/agent-follow-up agent-1 continue work")).toEqual({
@@ -426,6 +442,24 @@ describe("remote v2 interactive command boundary", () => {
 
 		expect(await adapter.execute("/settings")).toEqual({ kind: "status", text: "settings opened" });
 		expect(openSettings).toHaveBeenCalledOnce();
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("copies the latest server assistant text through the local clipboard boundary", async () => {
+		const { client } = clientWithRequests(false, "  copied response  ");
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const copyText = vi.fn(async () => undefined);
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { copyText });
+
+		expect(getLastRemoteAssistantText(attached.session.snapshot)).toBe("copied response");
+		expect(await adapter.execute("/copy")).toEqual({
+			kind: "status",
+			text: "Copied last agent message to clipboard",
+		});
+		expect(copyText).toHaveBeenCalledWith("copied response");
 
 		await adapter.dispose();
 		client.dispose();

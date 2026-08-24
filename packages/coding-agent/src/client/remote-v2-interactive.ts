@@ -1,4 +1,4 @@
-import type { PlanItem, ThinkingLevel } from "@earendil-works/pi-protocol";
+import type { PlanItem, SessionSnapshotV2, ThinkingLevel } from "@earendil-works/pi-protocol";
 import {
 	type AutocompleteItem,
 	type AutocompleteProvider,
@@ -6,6 +6,7 @@ import {
 	type Editor,
 	fuzzyFilter,
 } from "@earendil-works/pi-tui";
+import { copyToClipboard } from "../utils/clipboard.ts";
 import type { RemoteV2SessionAttachment } from "./remote-v2-selector.ts";
 import type { RemoteV2FileCompletion, RemoteV2PromptContent } from "./remote-v2-session.ts";
 
@@ -17,6 +18,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/agent-message",
 	"/compact",
 	"/clone",
+	"/copy",
 	"/dequeue",
 	"/detach",
 	"/follow-up",
@@ -52,6 +54,7 @@ export type RemoteV2Command =
 	| { readonly name: "agent-message"; readonly agentId: string; readonly text: string }
 	| { readonly name: "compact"; readonly instructions?: string }
 	| { readonly name: "clone" }
+	| { readonly name: "copy" }
 	| { readonly name: "dequeue"; readonly entryId: string }
 	| { readonly name: "detach" }
 	| { readonly name: "follow-up"; readonly text: string }
@@ -213,6 +216,7 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 	if (
 		name === "/abort" ||
 		name === "/clone" ||
+		name === "/copy" ||
 		name === "/detach" ||
 		name === "/fork" ||
 		name === "/release-control" ||
@@ -369,6 +373,20 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 	throw new Error(`Unknown remote session command: ${name || "<empty>"}`);
 }
 
+export function getLastRemoteAssistantText(snapshot: SessionSnapshotV2 | undefined): string | undefined {
+	const message = snapshot?.transcript
+		.slice()
+		.reverse()
+		.find((candidate) => candidate.role === "assistant");
+	if (message === undefined) return undefined;
+	const text = message.content
+		.filter((content) => content.type === "text")
+		.map((content) => content.text)
+		.join("")
+		.trim();
+	return text || undefined;
+}
+
 /** Binds server-backed commands and completions to the shared interactive editor. */
 export class RemoteV2InteractiveAttachment {
 	readonly #attachment: RemoteV2SessionAttachment;
@@ -382,6 +400,7 @@ export class RemoteV2InteractiveAttachment {
 	readonly #openFork: (() => void) | undefined;
 	readonly #openScopedModels: (() => void) | undefined;
 	readonly #openThinking: (() => void) | undefined;
+	readonly #copyText: (text: string) => Promise<void>;
 	readonly #cwd: string | undefined;
 
 	constructor(
@@ -394,6 +413,7 @@ export class RemoteV2InteractiveAttachment {
 			readonly openFork?: () => void;
 			readonly openScopedModels?: () => void;
 			readonly openThinking?: () => void;
+			readonly copyText?: (text: string) => Promise<void>;
 			readonly cwd?: string;
 		} = {},
 	) {
@@ -405,6 +425,7 @@ export class RemoteV2InteractiveAttachment {
 		this.#openFork = options.openFork;
 		this.#openScopedModels = options.openScopedModels;
 		this.#openThinking = options.openThinking;
+		this.#copyText = options.copyText ?? copyToClipboard;
 		this.#cwd = options.cwd;
 		if (editor !== undefined) {
 			editor.setAutocompleteProvider(new RemoteV2AutocompleteProvider(attachment.session));
@@ -461,6 +482,12 @@ export class RemoteV2InteractiveAttachment {
 					kind: "status",
 					text: `Cloned to new session: ${await this.session.forkAndAttach({ scope: "tree" })}`,
 				};
+			case "copy": {
+				const text = getLastRemoteAssistantText(this.session.snapshot);
+				if (text === undefined) throw new Error("No agent messages to copy yet.");
+				await this.#copyText(text);
+				return { kind: "status", text: "Copied last agent message to clipboard" };
+			}
 			case "dequeue":
 				this.#recalledContent = await this.session.cancelQueued(command.entryId);
 				this.#recalledText = this.#recalledContent === undefined ? "" : displayPromptContent(this.#recalledContent);
