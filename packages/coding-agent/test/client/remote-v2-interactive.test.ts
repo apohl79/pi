@@ -8,7 +8,7 @@ import {
 	parseClientMessageV2,
 	type SessionSnapshotV2,
 } from "@earendil-works/pi-protocol";
-import { TuiMainScreen, visibleWidth } from "@earendil-works/pi-tui";
+import { TuiMainScreen } from "@earendil-works/pi-tui";
 import { describe, expect, test, vi } from "vitest";
 import { VirtualTerminal } from "../../../tui/test/virtual-terminal.ts";
 import {
@@ -162,6 +162,11 @@ function clientWithRequests(withQueue = false): { client: PiClientV2; commands: 
 	};
 }
 
+function createEditor(): CustomEditor {
+	initTheme(undefined, false);
+	return new CustomEditor(new TuiMainScreen(new VirtualTerminal()), getEditorTheme(), new KeybindingsManager());
+}
+
 describe("remote v2 interactive command boundary", () => {
 	test("keeps directory completions open for descent while files submit exactly", () => {
 		expect(applyRemoteFileCompletion("inspect @src", 8, { reference: "src/nested", kind: "directory" })).toBe(
@@ -262,7 +267,9 @@ describe("remote v2 interactive command boundary", () => {
 				statuslineCommands.push(command);
 			},
 		};
-		const adapter = new RemoteV2InteractiveAttachment(attachment);
+		const editor = createEditor();
+		const adapter = new RemoteV2InteractiveAttachment(attachment, editor);
+		const submit = vi.spyOn(attachment.session, "submit");
 		expect(await adapter.execute("/follow-up continue")).toEqual({ kind: "operation", operationId: "operation-1" });
 		expect(await adapter.execute("/agent-follow-up agent-1 continue work")).toEqual({
 			kind: "status",
@@ -288,7 +295,8 @@ describe("remote v2 interactive command boundary", () => {
 			kind: "status",
 			text: "queued message recalled",
 		});
-		adapter.handleInput("\n");
+		editor.onSubmit?.(editor.getText());
+		await vi.waitFor(() => expect(submit).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ type: "image" })])));
 		expect(await adapter.execute("/release-control")).toEqual({ kind: "control", mode: "observer" });
 		await adapter.execute("/take-control");
 		expect(await adapter.execute("/thinking high")).toEqual({ kind: "operation", operationId: "operation-1" });
@@ -353,39 +361,20 @@ describe("remote v2 interactive command boundary", () => {
 		client.dispose();
 	});
 
-	test("handles bounded terminal lines through the Component boundary", async () => {
+	test("binds remote submission and completion to the standard editor component", async () => {
 		const { client, commands } = clientWithRequests();
 		await client.connect();
-		const attachment = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
-		const adapter = new RemoteV2InteractiveAttachment(attachment);
-		for (const character of "a long prompt that exceeds the terminal") adapter.handleInput(character);
-		expect(visibleWidth(adapter.render(12).at(-1) ?? "")).toBe(12);
-		adapter.handleInput("\n");
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(commands).toContain("turn/start");
-		expect(adapter.render(80).at(-1)).toContain("operation operation-1");
-		await adapter.execute("/detach");
-		await adapter.dispose();
-		client.dispose();
-	});
-
-	test("renders and accepts input through the standard editor component", async () => {
-		initTheme(undefined, false);
-		const { client } = clientWithRequests();
-		await client.connect();
 		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
-		const editor = new CustomEditor(
-			new TuiMainScreen(new VirtualTerminal()),
-			getEditorTheme(),
-			new KeybindingsManager(),
-		);
+		const editor = createEditor();
 		const adapter = new RemoteV2InteractiveAttachment(attached, editor);
 
-		adapter.handleInput("hello");
-		expect(stripAnsi(adapter.render(80).join("\n"))).toContain("hello");
+		editor.handleInput("hello");
+		expect(stripAnsi(editor.render(80).join("\n"))).toContain("hello");
+		editor.onSubmit?.(editor.getText());
+		await vi.waitFor(() => expect(commands).toContain("turn/start"));
 		editor.setText("");
-		adapter.handleInput("/");
-		await vi.waitFor(() => expect(stripAnsi(adapter.render(80).join("\n"))).toContain("model"));
+		editor.handleInput("/");
+		await vi.waitFor(() => expect(stripAnsi(editor.render(80).join("\n"))).toContain("model"));
 
 		await adapter.dispose();
 		client.dispose();

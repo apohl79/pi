@@ -3,10 +3,8 @@ import {
 	type AutocompleteItem,
 	type AutocompleteProvider,
 	type AutocompleteSuggestions,
-	type Component,
 	type Editor,
 	fuzzyFilter,
-	truncateToWidth,
 } from "@earendil-works/pi-tui";
 import type { RemoteV2SessionAttachment } from "./remote-v2-selector.ts";
 import type { RemoteV2FileCompletion, RemoteV2PromptContent } from "./remote-v2-session.ts";
@@ -354,17 +352,13 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 	throw new Error(`Unknown remote session command: ${name || "<empty>"}`);
 }
 
-/** Compatibility-safe command and rendering boundary for a remote v2 attachment. */
-export class RemoteV2InteractiveAttachment implements Component {
+/** Binds server-backed commands and completions to the shared interactive editor. */
+export class RemoteV2InteractiveAttachment {
 	readonly #attachment: RemoteV2SessionAttachment;
 	readonly #editor: Editor | undefined;
-	static readonly MAX_INPUT_LENGTH = 4_000;
-	focused = false;
 	#disposed = false;
-	#input = "";
 	#recalledContent: RemoteV2PromptContent | undefined;
-	#status = "";
-	#completionSequence = 0;
+	#recalledText: string | undefined;
 	readonly #openSettings: (() => void) | undefined;
 	readonly #openModel: (() => void) | undefined;
 
@@ -380,6 +374,14 @@ export class RemoteV2InteractiveAttachment implements Component {
 		if (editor !== undefined) {
 			editor.setAutocompleteProvider(new RemoteV2AutocompleteProvider(attachment.session));
 			editor.onSubmit = (text) => this.submitEditorText(text);
+			const previousOnChange = editor.onChange;
+			editor.onChange = (text) => {
+				if (this.#recalledContent !== undefined && text !== this.#recalledText) {
+					this.#recalledContent = undefined;
+					this.#recalledText = undefined;
+				}
+				previousOnChange?.(text);
+			};
 		}
 	}
 
@@ -421,7 +423,8 @@ export class RemoteV2InteractiveAttachment implements Component {
 				return operation(await this.session.compact(command.instructions));
 			case "dequeue":
 				this.#recalledContent = await this.session.cancelQueued(command.entryId);
-				this.#input = this.#recalledContent === undefined ? "" : displayPromptContent(this.#recalledContent);
+				this.#recalledText = this.#recalledContent === undefined ? "" : displayPromptContent(this.#recalledContent);
+				this.#editor?.setText(this.#recalledText);
 				return { kind: "status", text: "queued message recalled" };
 			case "detach":
 				await this.dispose();
@@ -507,117 +510,21 @@ export class RemoteV2InteractiveAttachment implements Component {
 		}
 	}
 
-	render(width: number): string[] {
-		this.#assertActive();
-		if (this.#editor !== undefined) {
-			this.#editor.focused = this.focused;
-			return [...this.view.render(width), ...this.#editor.render(width)];
-		}
-		const prompt = `${this.#status ? `${this.#status} ` : ""}> ${this.#input}`;
-		return [...this.view.render(width), truncateToWidth(prompt, Math.max(1, width), "")];
-	}
-
-	invalidate(): void {
-		this.view.invalidate();
-	}
-
-	handleInput(data: string): void {
-		this.#assertActive();
-		if (this.#editor !== undefined) {
-			this.#editor.handleInput(data);
-			return;
-		}
-		if (data.length > 1) {
-			for (const character of data) this.handleInput(character);
-			return;
-		}
-		if (data === "\r" || data === "\n") {
-			const input = this.#input.trim();
-			const recalledContent = this.#recalledContent;
-			this.#recalledContent = undefined;
-			this.#input = "";
-			if (!input) return;
-			const action = input.startsWith("/")
-				? this.execute(input).then((result) =>
-						result.kind === "operation" ? `operation ${result.operationId}` : result.kind,
-					)
-				: (recalledContent === undefined ? this.submit(input) : this.session.submit(recalledContent)).then(
-						(operationId) => `operation ${operationId}`,
-					);
-			void action
-				.then((result) => {
-					this.#status = result;
-					this.invalidate();
-				})
-				.catch((error: unknown) => {
-					this.#status = error instanceof Error ? error.message : String(error);
-					this.invalidate();
-				});
-			return;
-		}
-		if (data === "\u007f" || data === "\b") {
-			this.#recalledContent = undefined;
-			this.#completionSequence++;
-			this.#input = this.#input.slice(0, -1);
-			this.invalidate();
-			return;
-		}
-		if (data === "\t") {
-			this.#recalledContent = undefined;
-			void this.completeInput();
-			return;
-		}
-		if (
-			data.length === 1 &&
-			data >= " " &&
-			data !== "\u007f" &&
-			this.#input.length < RemoteV2InteractiveAttachment.MAX_INPUT_LENGTH
-		) {
-			this.#recalledContent = undefined;
-			this.#completionSequence++;
-			this.#input += data;
-			this.invalidate();
-		}
-	}
-
 	private submitEditorText(text: string): void {
 		const input = text.trim();
 		if (!input) return;
+		const recalledContent = this.#recalledContent;
+		this.#recalledContent = undefined;
+		this.#recalledText = undefined;
 		this.#editor?.setText("");
 		const action = input.startsWith("/")
 			? this.execute(input).then((result) =>
 					result.kind === "operation" ? `operation ${result.operationId}` : result.kind,
 				)
-			: this.submit(input).then((operationId) => `operation ${operationId}`);
-		void action
-			.then((result) => {
-				this.#status = result;
-				this.invalidate();
-			})
-			.catch((error: unknown) => {
-				this.#status = error instanceof Error ? error.message : String(error);
-				this.invalidate();
-			});
-	}
-
-	private async completeInput(): Promise<void> {
-		const sequence = ++this.#completionSequence;
-		this.#recalledContent = undefined;
-		const tokenStart = Math.max(this.#input.lastIndexOf(" "), this.#input.lastIndexOf("\t")) + 1;
-		const prefix = this.#input.slice(tokenStart);
-		if (!prefix.startsWith("@")) return;
-		try {
-			const items = await this.session.completeFiles(prefix, { requestId: `completion-${sequence}` });
-			if (sequence !== this.#completionSequence || this.#input.slice(tokenStart) !== prefix) return;
-			const item = items[0];
-			if (item === undefined) return;
-			this.#input = applyRemoteFileCompletion(this.#input, tokenStart, item);
-			this.invalidate();
-		} catch (error: unknown) {
-			if (sequence === this.#completionSequence)
-				this.#status = error instanceof Error ? error.message : String(error);
-			this.invalidate();
-		}
+			: (recalledContent === undefined ? this.submit(input) : this.session.submit(recalledContent)).then(
+					(operationId) => `operation ${operationId}`,
+				);
+		void action.then(() => this.view.invalidate()).catch(() => this.view.invalidate());
 	}
 
 	dispose(): Promise<void> {

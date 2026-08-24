@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { PiClientV2 } from "@earendil-works/pi-client";
 import { createUnixTransportFactory } from "@earendil-works/pi-client/unix";
-import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, test } from "vitest";
+import { RemoteV2AutocompleteProvider } from "../../src/client/remote-v2-interactive.ts";
 import { type RemoteV2CommandResult, RemoteV2InteractiveAttachment, RemoteV2SessionSelector } from "../../src/index.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "../../src/server/daemon-runtime.ts";
 
@@ -48,33 +48,7 @@ function operationId(result: RemoteV2CommandResult): string {
 }
 
 describe("production remote v2 interactive attachment", () => {
-	test("keeps the editable prompt within narrow daemon-attached terminal width", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-remote-interactive-width-"));
-		directories.push(directory);
-		const runtime = await createRemoteRuntime(directory);
-		const client = new PiClientV2({
-			transportFactory: createUnixTransportFactory({ path: join(directory, "server.sock") }),
-		});
-		try {
-			await runtime.daemon.start();
-			await client.connect();
-			const created = await client.request({ command: "session/create", payload: { cwd: directory } });
-			const sessionId = (created as unknown as { result: { session: { id: string } } }).result.session.id;
-			const attachment = await new RemoteV2SessionSelector(client).attachView(sessionId, { mode: "control" });
-			const adapter = new RemoteV2InteractiveAttachment(attachment);
-			try {
-				for (const character of "a long prompt that exceeds the terminal") adapter.handleInput(character);
-				expect(visibleWidth(adapter.render(12).at(-1) ?? "")).toBe(12);
-			} finally {
-				await adapter.dispose();
-			}
-		} finally {
-			client.dispose();
-			await runtime.close();
-		}
-	});
-
-	test("dispatches goal slash commands and renders the updated goal state", async () => {
+	test("dispatches goal slash commands and preserves the updated server state", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-remote-interactive-"));
 		directories.push(directory);
 		const runtime = await createRemoteRuntime(directory);
@@ -94,9 +68,10 @@ describe("production remote v2 interactive attachment", () => {
 				await attachment.session.waitForOperation(operationId(createdGoal));
 				const pausedGoal = await adapter.execute("/goal-pause");
 				await attachment.session.waitForOperation(operationId(pausedGoal));
-				const rendered = adapter.render(120).join("\n");
-				expect(rendered).toContain("Goal paused · ship the remote workflow");
-				expect(rendered).toContain("> ");
+				expect(attachment.session.snapshot?.goal).toMatchObject({
+					objective: "ship the remote workflow",
+					status: "paused",
+				});
 			} finally {
 				await adapter.dispose();
 			}
@@ -122,9 +97,11 @@ describe("production remote v2 interactive attachment", () => {
 			const attachment = await new RemoteV2SessionSelector(client).attachView(sessionId, { mode: "control" });
 			const adapter = new RemoteV2InteractiveAttachment(attachment);
 			try {
-				for (const character of "@README") adapter.handleInput(character);
-				adapter.handleInput("\t");
-				await waitForRenderedText(adapter, "README.md");
+				const provider = new RemoteV2AutocompleteProvider(attachment.session);
+				const suggestions = await provider.getSuggestions(["@README"], 0, 7, {
+					signal: new AbortController().signal,
+				});
+				expect(suggestions?.items).toContainEqual(expect.objectContaining({ value: "README.md" }));
 			} finally {
 				await adapter.dispose();
 			}
@@ -196,11 +173,3 @@ describe("production remote v2 interactive attachment", () => {
 		}
 	});
 });
-
-async function waitForRenderedText(adapter: RemoteV2InteractiveAttachment, text: string): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt++) {
-		if (adapter.render(120).join("\n").includes(text)) return;
-		await new Promise((resolve) => setTimeout(resolve, 10));
-	}
-	throw new Error(`Timed out waiting for rendered text: ${text}`);
-}
