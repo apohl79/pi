@@ -308,11 +308,15 @@ async function runCli(): Promise<void> {
 			setKeybindings(keybindings);
 			initTheme(statuslineSettings.getTheme(), true);
 			const tui = createInteractiveTui({
-				tuiMode: options.tuiMode ?? "regular",
-				showHardwareCursor: false,
+				tuiMode: options.tuiMode ?? statuslineSettings.getTuiMode(),
+				showHardwareCursor: statuslineSettings.getShowHardwareCursor(),
 				logDirectory: agentDir,
 			});
-			const editor = new CustomEditor(tui, getEditorTheme(), keybindings);
+			tui.setClearOnShrink(statuslineSettings.getClearOnShrink());
+			const editor = new CustomEditor(tui, getEditorTheme(), keybindings, {
+				paddingX: statuslineSettings.getEditorPaddingX(),
+				autocompleteMaxVisible: statuslineSettings.getAutocompleteMaxVisible(),
+			});
 			const pendingContainer = new Container();
 			const updateTerminalTitle = () => {
 				tui.terminal.setTitle(formatInteractiveTerminalTitle(process.cwd(), session.snapshot?.name));
