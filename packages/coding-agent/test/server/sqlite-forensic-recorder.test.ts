@@ -15,7 +15,7 @@ describe("SqliteForensicRecorder", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-sqlite-diagnostics-"));
 		directories.push(directory);
 		const path = join(directory, "diagnostics.sqlite");
-		const first = new SqliteForensicRecorder(createNodeSqliteFactory(), path, { maxEvents: 2 });
+		const first = new SqliteForensicRecorder(path, { maxEvents: 2 });
 		await first.record({ kind: "one", payload: { apiKey: "secret" } });
 		await first.record({ kind: "two" });
 		await first.record({ kind: "three" });
@@ -23,7 +23,7 @@ describe("SqliteForensicRecorder", () => {
 		expect((await first.read())[1].payload).toEqual({});
 		await first.close();
 
-		const restored = new SqliteForensicRecorder(createNodeSqliteFactory(), path, { maxEvents: 2 });
+		const restored = new SqliteForensicRecorder(path, { maxEvents: 2 });
 		expect((await restored.read()).map((event) => event.seq)).toEqual([2, 3]);
 		const event = await restored.record({ kind: "four" });
 		expect(event.seq).toBe(4);
@@ -39,8 +39,6 @@ describe("SqliteForensicRecorder", () => {
 		database.prepare("INSERT INTO v2_diagnostics (seq, value) VALUES (?, ?)").run(1, JSON.stringify({ seq: 1 }));
 		database.close();
 
-		await expect(new SqliteForensicRecorder(createNodeSqliteFactory(), path).read()).rejects.toThrow(
-			"Invalid forensic event",
-		);
+		await expect(new SqliteForensicRecorder(path).read()).rejects.toThrow("Invalid forensic event");
 	});
 });

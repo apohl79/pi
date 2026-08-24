@@ -1,23 +1,30 @@
+import { Worker } from "node:worker_threads";
 import type { ForensicEvent, ForensicEventInput, ForensicRecorder } from "@earendil-works/pi-server";
 import { InMemoryForensicRecorder } from "@earendil-works/pi-server";
-import type { SqliteDatabase, SqliteDatabaseFactory } from "@earendil-works/pi-session-backend-sqlite-node";
 
-interface EventRow {
-	seq: number;
-	value: string;
+type WorkerCommand =
+	| { readonly command: "load" }
+	| { readonly command: "record"; readonly seq: number; readonly value: string }
+	| { readonly command: "close" };
+type WorkerResponse = { readonly id: number; readonly result?: unknown; readonly error?: string };
+
+function isWorkerResponse(value: unknown): value is WorkerResponse {
+	return value !== null && typeof value === "object" && "id" in value && typeof value.id === "number";
 }
 
 /** SQLite-backed bounded forensic recorder used by configured coding-agent daemons. */
 export class SqliteForensicRecorder implements ForensicRecorder {
-	readonly #databaseFactory: SqliteDatabaseFactory;
 	readonly #databasePath: string;
 	readonly #memory: InMemoryForensicRecorder;
-	#databasePromise: Promise<SqliteDatabase> | undefined;
+	readonly #pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+	#worker: Worker | undefined;
+	#nextRequestId = 1;
 	#pendingWrite: Promise<void> = Promise.resolve();
+	#loadPromise: Promise<void> | undefined;
 	#loaded = false;
+	#closed = false;
 
-	constructor(databaseFactory: SqliteDatabaseFactory, databasePath: string, options: { maxEvents?: number } = {}) {
-		this.#databaseFactory = databaseFactory;
+	constructor(databasePath: string, options: { maxEvents?: number } = {}) {
 		this.#databasePath = databasePath;
 		this.#memory = new InMemoryForensicRecorder(options);
 	}
@@ -26,9 +33,7 @@ export class SqliteForensicRecorder implements ForensicRecorder {
 		return this.#enqueue(async () => {
 			await this.#ensureLoaded();
 			const event = this.#memory.prepare(input);
-			(await this.#database())
-				.prepare("INSERT OR REPLACE INTO v2_diagnostics (seq, value) VALUES (?, ?)")
-				.run(event.seq, JSON.stringify(event));
+			await this.#request({ command: "record", seq: event.seq, value: JSON.stringify(event) });
 			this.#memory.commit(event);
 			return event;
 		});
@@ -41,33 +46,90 @@ export class SqliteForensicRecorder implements ForensicRecorder {
 	}
 
 	async close(): Promise<void> {
+		if (this.#closed) return;
 		await this.#pendingWrite;
-		const database = await this.#databasePromise;
-		if (database !== undefined) database.close();
-		this.#databasePromise = undefined;
+		this.#closed = true;
+		const worker = this.#worker;
+		if (worker !== undefined) {
+			try {
+				await this.#request({ command: "close" }, true);
+			} finally {
+				await worker.terminate();
+				this.#worker = undefined;
+			}
+		}
 		this.#loaded = false;
 	}
 
 	async #ensureLoaded(): Promise<void> {
 		if (this.#loaded) return;
+		const load = this.#loadPromise ?? this.#load();
+		this.#loadPromise = load;
+		try {
+			await load;
+		} finally {
+			if (this.#loadPromise === load) this.#loadPromise = undefined;
+		}
+	}
+
+	async #load(): Promise<void> {
+		const values = await this.#request<readonly string[]>({ command: "load" });
+		for (const value of values) this.#memory.restore(parseJson(value));
 		this.#loaded = true;
-		for (const row of (await this.#database())
-			.prepare("SELECT seq, value FROM v2_diagnostics ORDER BY seq")
-			.all<EventRow>())
-			this.#memory.restore(parseJson(row.value));
 	}
 
-	#database(): Promise<SqliteDatabase> {
-		this.#databasePromise ??= this.#open();
-		return this.#databasePromise;
+	#request<T>(command: WorkerCommand, closing = false): Promise<T> {
+		if (this.#closed && !closing) return Promise.reject(new Error("SQLite forensic recorder is closed"));
+		const worker = this.#worker ?? this.#createWorker();
+		const id = this.#nextRequestId;
+		this.#nextRequestId += 1;
+		return new Promise<T>((resolve, reject) => {
+			this.#pending.set(id, { resolve, reject });
+			worker.postMessage({ id, command });
+		});
 	}
 
-	async #open(): Promise<SqliteDatabase> {
-		const database = await this.#databaseFactory.open(this.#databasePath);
-		database.exec(
-			"CREATE TABLE IF NOT EXISTS v2_diagnostics (seq INTEGER PRIMARY KEY NOT NULL, value TEXT NOT NULL)",
-		);
-		return database;
+	#createWorker(): Worker {
+		const worker =
+			typeof process.versions.bun === "string"
+				? new Worker("./src/server/sqlite-forensic-recorder-worker.ts", {
+						workerData: { databasePath: this.#databasePath },
+					})
+				: new Worker(
+						new URL(
+							import.meta.url.endsWith(".ts")
+								? "./sqlite-forensic-recorder-worker.ts"
+								: "./sqlite-forensic-recorder-worker.js",
+							import.meta.url,
+						),
+						{ workerData: { databasePath: this.#databasePath } },
+					);
+		worker.on("message", (message: unknown) => this.#handleResponse(message));
+		worker.once("error", (error) => this.#failPending(error));
+		worker.once("exit", (code) => {
+			if (!this.#closed && code !== 0)
+				this.#failPending(new Error(`SQLite forensic worker exited with code ${code}`));
+			if (this.#worker === worker) this.#worker = undefined;
+		});
+		this.#worker = worker;
+		return worker;
+	}
+
+	#handleResponse(message: unknown): void {
+		if (!isWorkerResponse(message)) {
+			this.#failPending(new Error("Invalid SQLite forensic worker response"));
+			return;
+		}
+		const request = this.#pending.get(message.id);
+		if (request === undefined) return;
+		this.#pending.delete(message.id);
+		if (message.error !== undefined) request.reject(new Error(message.error));
+		else request.resolve(message.result);
+	}
+
+	#failPending(error: Error): void {
+		for (const request of this.#pending.values()) request.reject(error);
+		this.#pending.clear();
 	}
 
 	#enqueue<T>(operation: () => Promise<T>): Promise<T> {

@@ -303,10 +303,7 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 ): Promise<ConfiguredCodingAgentDaemonRuntime> {
 	const primaryDiagnostics =
 		options.diagnostics ??
-		new SqliteForensicRecorder(
-			createNodeSqliteFactory(),
-			options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.sqlite"),
-		);
+		new SqliteForensicRecorder(options.diagnosticStorePath ?? join(options.agentDir, "diagnostics.sqlite"));
 	const diagnostics = new TeeForensicRecorder(
 		primaryDiagnostics,
 		new JsonlForensicRecorder(options.diagnosticLogPath ?? join(options.agentDir, "diagnostic-log.jsonl"), {
