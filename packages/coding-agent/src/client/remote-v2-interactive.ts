@@ -1,5 +1,5 @@
 import type { PlanItem, ThinkingLevel } from "@earendil-works/pi-protocol";
-import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
+import { type Component, type Editor, truncateToWidth } from "@earendil-works/pi-tui";
 import type { RemoteV2SessionAttachment } from "./remote-v2-selector.ts";
 import type { RemoteV2FileCompletion, RemoteV2PromptContent } from "./remote-v2-session.ts";
 
@@ -243,15 +243,21 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 /** Compatibility-safe command and rendering boundary for a remote v2 attachment. */
 export class RemoteV2InteractiveAttachment implements Component {
 	readonly #attachment: RemoteV2SessionAttachment;
+	readonly #editor: Editor | undefined;
 	static readonly MAX_INPUT_LENGTH = 4_000;
+	focused = false;
 	#disposed = false;
 	#input = "";
 	#recalledContent: RemoteV2PromptContent | undefined;
 	#status = "";
 	#completionSequence = 0;
 
-	constructor(attachment: RemoteV2SessionAttachment) {
+	constructor(attachment: RemoteV2SessionAttachment, editor?: Editor) {
 		this.#attachment = attachment;
+		this.#editor = editor;
+		if (editor !== undefined) {
+			editor.onSubmit = (text) => this.submitEditorText(text);
+		}
 	}
 
 	get session(): RemoteV2SessionAttachment["session"] {
@@ -371,6 +377,10 @@ export class RemoteV2InteractiveAttachment implements Component {
 
 	render(width: number): string[] {
 		this.#assertActive();
+		if (this.#editor !== undefined) {
+			this.#editor.focused = this.focused;
+			return [...this.view.render(width), ...this.#editor.render(width)];
+		}
 		const prompt = `${this.#status ? `${this.#status} ` : ""}> ${this.#input}`;
 		return [...this.view.render(width), truncateToWidth(prompt, Math.max(1, width), "")];
 	}
@@ -381,6 +391,10 @@ export class RemoteV2InteractiveAttachment implements Component {
 
 	handleInput(data: string): void {
 		this.#assertActive();
+		if (this.#editor !== undefined) {
+			this.#editor.handleInput(data);
+			return;
+		}
 		if (data.length > 1) {
 			for (const character of data) this.handleInput(character);
 			return;
@@ -432,6 +446,24 @@ export class RemoteV2InteractiveAttachment implements Component {
 			this.#input += data;
 			this.invalidate();
 		}
+	}
+
+	private submitEditorText(text: string): void {
+		const input = text.trim();
+		if (!input) return;
+		this.#editor?.setText("");
+		const action = input.startsWith("/")
+			? this.execute(input).then((result) => (result.kind === "operation" ? `operation ${result.operationId}` : result.kind))
+			: this.submit(input).then((operationId) => `operation ${operationId}`);
+		void action
+			.then((result) => {
+				this.#status = result;
+				this.invalidate();
+			})
+			.catch((error: unknown) => {
+				this.#status = error instanceof Error ? error.message : String(error);
+				this.invalidate();
+			});
 	}
 
 	private async completeInput(): Promise<void> {

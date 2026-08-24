@@ -19,7 +19,9 @@ import { KeybindingsManager } from "./core/keybindings.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { main } from "./main.ts";
+import { CustomEditor } from "./modes/interactive/components/custom-editor.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
+import { getEditorTheme } from "./modes/interactive/theme/theme.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "./server/daemon-runtime.ts";
 import { StatuslineRunner } from "./server/statusline.ts";
 
@@ -107,7 +109,7 @@ async function runCli(): Promise<void> {
 		!args.some((arg) => arg === "--help" || arg === "-h" || arg === "--version" || arg === "-v") &&
 		(args.length === 0 || !LEGACY_COMMANDS.has(args[0]!));
 	if (!isExperimentalCommand(args) && !serverDefaultPrint && !serverDefaultInteractive && !serverDefaultRpc) {
-		await main(args);
+		await main(args.filter((arg) => arg !== "--no-server"));
 		return;
 	}
 	const agentDir = getAgentDir();
@@ -177,7 +179,12 @@ async function runCli(): Promise<void> {
 		writeText: (value) => process.stdout.write(`${value}\n`),
 		runInteractive: async (session, options) => {
 			const keybindings = KeybindingsManager.create(agentDir);
-			let tui: ReturnType<typeof createInteractiveTui>;
+			const tui = createInteractiveTui({
+				tuiMode: options.tuiMode ?? "regular",
+				showHardwareCursor: false,
+				logDirectory: agentDir,
+			});
+			const editor = new CustomEditor(tui, getEditorTheme(), keybindings);
 			const view = new RemoteV2SessionView(session, { onUpdated: () => tui?.requestRender() });
 			let statusline: RemoteV2StatuslineComponent;
 			const attachment = new RemoteV2InteractiveAttachment({
@@ -188,7 +195,7 @@ async function runCli(): Promise<void> {
 					await statusline.setCommand(command);
 				},
 				dispose: async () => view.dispose(),
-			});
+			}, editor);
 			statusline = new RemoteV2StatuslineComponent(
 				session,
 				new StatuslineRunner(),
@@ -196,11 +203,6 @@ async function runCli(): Promise<void> {
 				() => tui?.requestRender(),
 			);
 			await statusline.setCommand(statuslineSettings.getStatusLineCommand());
-			tui = createInteractiveTui({
-				tuiMode: options.tuiMode ?? "regular",
-				showHardwareCursor: false,
-				logDirectory: agentDir,
-			});
 			tui.addChild(attachment);
 			tui.addChild(statusline);
 			tui.setFocus(attachment);
