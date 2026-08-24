@@ -21,6 +21,7 @@ import { ModelRuntime } from "./core/model-runtime.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { main } from "./main.ts";
 import { CustomEditor } from "./modes/interactive/components/custom-editor.ts";
+import { ModelSelectorComponent } from "./modes/interactive/components/model-selector.ts";
 import { SettingsSelectorComponent } from "./modes/interactive/components/settings-selector.ts";
 import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
 import { getAvailableThemes, getEditorTheme, initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
@@ -192,6 +193,48 @@ async function runCli(): Promise<void> {
 			const view = new RemoteV2SessionView(session, { onUpdated: () => tui?.requestRender() });
 			let statusline: RemoteV2StatuslineComponent;
 			let attachment: RemoteV2InteractiveAttachment;
+			const showModel = () => {
+				const snapshot = session.snapshot;
+				const currentModel = availableModels.find(
+					(candidate) => candidate.provider === snapshot?.model.provider && candidate.id === snapshot?.model.id,
+				);
+				const done = () => {
+					tui.removeChild(selector);
+					tui.removeChild(statusline);
+					tui.addChild(attachment);
+					tui.addChild(statusline);
+					tui.setFocus(attachment);
+					tui.requestRender();
+				};
+				const selectModel = (selected: (typeof availableModels)[number], persist: boolean) => {
+					void session
+						.setModel({ provider: selected.provider, id: selected.id })
+						.then(() => {
+							if (persist) statuslineSettings.setDefaultModelAndProvider(selected.provider, selected.id);
+							done();
+						})
+						.catch(() => done());
+				};
+				const defaultProvider = statuslineSettings.getDefaultProvider();
+				const defaultModelId = statuslineSettings.getDefaultModel();
+				const selector = new ModelSelectorComponent(
+					tui,
+					currentModel,
+					modelRuntime,
+					[],
+					(selected) => selectModel(selected, false),
+					done,
+					undefined,
+					(selected) => selectModel(selected, true),
+					defaultProvider && defaultModelId ? { provider: defaultProvider, id: defaultModelId } : undefined,
+				);
+				tui.removeChild(attachment);
+				tui.removeChild(statusline);
+				tui.addChild(selector);
+				tui.addChild(statusline);
+				tui.setFocus(selector);
+				tui.requestRender();
+			};
 			const showSettings = () => {
 				const snapshot = session.snapshot;
 				const currentModel = availableModels.find(
@@ -326,7 +369,7 @@ async function runCli(): Promise<void> {
 					dispose: async () => view.dispose(),
 				},
 				editor,
-				{ openSettings: showSettings },
+				{ openSettings: showSettings, openModel: showModel },
 			);
 			statusline = new RemoteV2StatuslineComponent(
 				session,

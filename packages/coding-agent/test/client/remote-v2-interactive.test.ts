@@ -196,6 +196,7 @@ describe("remote v2 interactive command boundary", () => {
 			name: "compact",
 			instructions: "preserve the API contract",
 		});
+		expect(parseRemoteV2Command("/model")).toEqual({ name: "model" });
 		expect(parseRemoteV2Command("/model faux/model-2")).toEqual({ name: "model", provider: "faux", id: "model-2" });
 		expect(parseRemoteV2Command("/rollback")).toEqual({ name: "rollback", turns: 1 });
 		expect(parseRemoteV2Command("/thinking high")).toEqual({ name: "thinking", level: "high" });
@@ -381,6 +382,20 @@ describe("remote v2 interactive command boundary", () => {
 
 		expect(await adapter.execute("/settings")).toEqual({ kind: "status", text: "settings opened" });
 		expect(openSettings).toHaveBeenCalledOnce();
+
+		await adapter.dispose();
+		client.dispose();
+	});
+
+	test("opens the injected model selector without a server command", async () => {
+		const { client } = clientWithRequests();
+		await client.connect();
+		const attached = await new RemoteV2SessionSelector(client).attachView("session-1", { mode: "control" });
+		const openModel = vi.fn();
+		const adapter = new RemoteV2InteractiveAttachment(attached, undefined, { openModel });
+
+		expect(await adapter.execute("/model")).toEqual({ kind: "status", text: "model selector opened" });
+		expect(openModel).toHaveBeenCalledOnce();
 
 		await adapter.dispose();
 		client.dispose();

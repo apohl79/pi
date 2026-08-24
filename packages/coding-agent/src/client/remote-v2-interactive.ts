@@ -57,6 +57,7 @@ export type RemoteV2Command =
 	| { readonly name: "goal-resume" }
 	| { readonly name: "input"; readonly requestId: string; readonly answers: Readonly<Record<string, string>> }
 	| { readonly name: "input-cancel"; readonly requestId: string }
+	| { readonly name: "model" }
 	| { readonly name: "model"; readonly provider: string; readonly id: string }
 	| { readonly name: "name"; readonly value?: string; readonly clear?: boolean; readonly generate?: boolean }
 	| { readonly name: "name-auto"; readonly enabled: boolean }
@@ -251,6 +252,7 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		return { name: "input-cancel", requestId: arguments_[0] };
 	}
 	if (name === "/model") {
+		if (arguments_.length === 0) return { name: "model" };
 		if (arguments_.length !== 1) throw new Error("/model requires <provider/model>");
 		const separator = arguments_[0].indexOf("/");
 		if (separator < 1 || separator === arguments_[0].length - 1) throw new Error("/model requires <provider/model>");
@@ -344,15 +346,17 @@ export class RemoteV2InteractiveAttachment implements Component {
 	#status = "";
 	#completionSequence = 0;
 	readonly #openSettings: (() => void) | undefined;
+	readonly #openModel: (() => void) | undefined;
 
 	constructor(
 		attachment: RemoteV2SessionAttachment,
 		editor?: Editor,
-		options: { readonly openSettings?: () => void } = {},
+		options: { readonly openSettings?: () => void; readonly openModel?: () => void } = {},
 	) {
 		this.#attachment = attachment;
 		this.#editor = editor;
 		this.#openSettings = options.openSettings;
+		this.#openModel = options.openModel;
 		if (editor !== undefined) {
 			editor.setAutocompleteProvider(new RemoteV2AutocompleteProvider(attachment.session));
 			editor.onSubmit = (text) => this.submitEditorText(text);
@@ -417,6 +421,11 @@ export class RemoteV2InteractiveAttachment implements Component {
 				await this.session.cancelInput(command.requestId);
 				return { kind: "status", text: "input cancelled" };
 			case "model":
+				if (!("provider" in command)) {
+					if (this.#openModel === undefined) throw new Error("Remote model selection is unavailable");
+					this.#openModel();
+					return { kind: "status", text: "model selector opened" };
+				}
 				return operation(await this.session.setModel({ provider: command.provider, id: command.id }));
 			case "name":
 				if (command.generate) return operation(await this.session.generateName());
