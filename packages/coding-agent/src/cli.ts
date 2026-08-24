@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from "node:fs";
  */
 import { join } from "node:path";
 import { type AgentMessage, DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-agent-core";
+import { contentText } from "@earendil-works/pi-ai";
 import type { JsonValue } from "@earendil-works/pi-protocol";
 import { Container } from "@earendil-works/pi-tui";
 import { isServerDefaultCompatible, parseArgs } from "./cli/args.ts";
@@ -26,6 +27,8 @@ import type { SessionEntry, SessionInfo, SessionTreeNode } from "./core/session-
 import { SettingsManager } from "./core/settings-manager.ts";
 import { main } from "./main.ts";
 import { CustomEditor } from "./modes/interactive/components/custom-editor.ts";
+import { ExtensionEditorComponent } from "./modes/interactive/components/extension-editor.ts";
+import { ExtensionSelectorComponent } from "./modes/interactive/components/extension-selector.ts";
 import { InteractiveLayout } from "./modes/interactive/components/interactive-layout.ts";
 import { formatInteractiveTerminalTitle } from "./modes/interactive/components/interactive-title.ts";
 import { ModelSelectorComponent } from "./modes/interactive/components/model-selector.ts";
@@ -39,6 +42,7 @@ import { createInteractiveTui } from "./modes/interactive/interactive-mode.ts";
 import { getAvailableThemes, getEditorTheme, initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { createConfiguredCodingAgentDaemonRuntime } from "./server/daemon-runtime.ts";
 import { StatuslineRunner } from "./server/statusline.ts";
+import { copyToClipboard } from "./utils/clipboard.ts";
 
 process.title = APP_NAME;
 process.env.PI_CODING_AGENT = "true";
@@ -648,11 +652,17 @@ async function runCli(): Promise<void> {
 				tui.setFocus(selector.getMessageList());
 				tui.requestRender();
 			};
-			const showTree = () => {
+			const showTree = (initialSelectedId?: string) => {
 				void session
 					.readTree()
 					.then((tree) => {
 						const nodes = remoteTreeNodes(tree.entries, tree.labels);
+						const entries = new Map(
+							tree.entries.flatMap((value) => {
+								const entry = remoteTreeEntry(value);
+								return entry === undefined ? [] : [[entry.id, entry] as const];
+							}),
+						);
 						if (nodes.length === 0) {
 							view.showStatus("No entries in session");
 							return;
@@ -663,20 +673,94 @@ async function runCli(): Promise<void> {
 							tree.leafId,
 							tui.terminal.rows,
 							(entryId) => {
+								if (entryId === tree.leafId) {
+									done();
+									view.showStatus("Already at this point");
+									return;
+								}
+
+								const entry = entries.get(entryId);
+								if (entry === undefined) {
+									done();
+									view.showStatus("Selected tree entry is unavailable");
+									return;
+								}
+
 								done();
-								void session
-									.navigateTree(entryId)
-									.then((operationId) => session.waitForOperation(operationId))
-									.then(() => view.showStatus("Navigated to selected point"))
-									.catch((error: unknown) =>
-										view.showStatus(error instanceof Error ? error.message : String(error)),
-									);
+								void (async () => {
+									let summarize = false;
+									let customInstructions: string | undefined;
+									if (!statuslineSettings.getBranchSummarySkipPrompt()) {
+										while (true) {
+											const summaryChoice = await new Promise<string | undefined>((resolve) => {
+												const summarySelector = new ExtensionSelectorComponent(
+													"Summarize branch?",
+													["No summary", "Summarize", "Summarize with custom prompt"],
+													(option) => resolve(option),
+													() => resolve(undefined),
+													{ tui, onToggleToolsExpanded: () => view.toggleToolOutputExpansion() },
+												);
+												transcriptContainer.clear();
+												transcriptContainer.addChild(summarySelector);
+												tui.setFocus(summarySelector);
+												tui.requestRender();
+											});
+											if (summaryChoice === undefined) {
+												showTree(entryId);
+												return;
+											}
+											summarize = summaryChoice !== "No summary";
+											if (summaryChoice === "Summarize with custom prompt") {
+												customInstructions = await new Promise<string | undefined>((resolve) => {
+													const summaryEditor = new ExtensionEditorComponent(
+														tui,
+														keybindings,
+														"Custom summarization instructions",
+														undefined,
+														(value) => resolve(value),
+														() => resolve(undefined),
+														undefined,
+														statuslineSettings.getExternalEditorCommand(),
+													);
+													transcriptContainer.clear();
+													transcriptContainer.addChild(summaryEditor);
+													tui.setFocus(summaryEditor);
+													tui.requestRender();
+												});
+												if (customInstructions === undefined) continue;
+											}
+											break;
+										}
+									}
+
+									const targetId =
+										entry.type === "message" && entry.message.role === "user" ? entry.parentId : entry.id;
+									const operationId = await session.navigateTree(targetId, { summarize, customInstructions });
+									await session.waitForOperation(operationId);
+									if (entry.type === "message" && entry.message.role === "user" && !editor.getText().trim()) {
+										editor.setText(contentText(entry.message.content, ""));
+									}
+									view.showStatus("Navigated to selected point");
+								})().catch((error: unknown) =>
+									view.showStatus(error instanceof Error ? error.message : String(error)),
+								);
 							},
 							done,
 							undefined,
-							undefined,
+							initialSelectedId,
 							statuslineSettings.getTreeFilterMode(),
 						);
+						selector.onCopy = (text) => {
+							if (!text) {
+								view.showStatus("Selected entry has no text to copy");
+								return;
+							}
+							void copyToClipboard(text)
+								.then(() => view.showStatus("Copied selected message to clipboard"))
+								.catch((error: unknown) =>
+									view.showStatus(error instanceof Error ? error.message : String(error)),
+								);
+						};
 						transcriptContainer.clear();
 						transcriptContainer.addChild(selector);
 						tui.setFocus(selector);
