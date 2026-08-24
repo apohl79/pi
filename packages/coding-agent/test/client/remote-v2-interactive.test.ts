@@ -24,9 +24,9 @@ import { CustomEditor } from "../../src/modes/interactive/components/custom-edit
 import { getEditorTheme, initTheme } from "../../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../src/utils/ansi.ts";
 
-function snapshot(withQueue = false): SessionSnapshotV2 {
+function snapshot(withQueue = false, id = "session-1"): SessionSnapshotV2 {
 	return {
-		id: "session-1",
+		id,
 		nameRevision: 0,
 		revision: 1,
 		eventSeq: 1,
@@ -120,32 +120,34 @@ function clientWithRequests(withQueue = false): { client: PiClientV2; commands: 
 									},
 								}
 							: message.request.command === "session/read"
-								? { session: snapshot(withQueue) }
-								: message.request.command === "model/list"
-									? {
-											models: [
-												{
-													provider: "openai",
-													id: "gpt-5",
-													name: "GPT-5",
-													api: "openai-responses",
-													reasoning: true,
-													input: ["text"],
-													contextWindow: 128_000,
-													maxTokens: 16_000,
-													cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-													supportedThinkingLevels: ["off"],
-													authenticated: true,
-												},
-											],
-										}
-									: message.request.command === "plan/update"
-										? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
-										: message.request.command === "plugin/list"
-											? { plugins: [{ id: "demo", enabled: true }] }
-											: message.request.command === "process/list"
-												? { processes: [] }
-												: { command: message.request.command }) as JsonValue,
+								? { session: snapshot(withQueue, message.request.sessionId ?? "session-1") }
+								: message.request.command === "session/create"
+									? { session: snapshot(false, "session-2") }
+									: message.request.command === "model/list"
+										? {
+												models: [
+													{
+														provider: "openai",
+														id: "gpt-5",
+														name: "GPT-5",
+														api: "openai-responses",
+														reasoning: true,
+														input: ["text"],
+														contextWindow: 128_000,
+														maxTokens: 16_000,
+														cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+														supportedThinkingLevels: ["off"],
+														authenticated: true,
+													},
+												],
+											}
+										: message.request.command === "plan/update"
+											? { plan: { version: 1, items: [{ step: "ship", status: "pending" }] } }
+											: message.request.command === "plugin/list"
+												? { plugins: [{ id: "demo", enabled: true }] }
+												: message.request.command === "process/list"
+													? { processes: [] }
+													: { command: message.request.command }) as JsonValue,
 					};
 			handlers?.onData(encodeServerMessageV2(response));
 		},
@@ -235,6 +237,7 @@ describe("remote v2 interactive command boundary", () => {
 		expect(parseRemoteV2Command("/name --clear")).toEqual({ name: "name", clear: true });
 		expect(parseRemoteV2Command("/name --generate")).toEqual({ name: "name", generate: true });
 		expect(parseRemoteV2Command("/name-auto off")).toEqual({ name: "name-auto", enabled: false });
+		expect(parseRemoteV2Command("/new")).toEqual({ name: "new" });
 		expect(parseRemoteV2Command("/name --auto on")).toEqual({ name: "name-auto", enabled: true });
 		expect(parseRemoteV2Command('/plan [{"step":"ship","status":"pending"}]')).toEqual({
 			name: "plan",
@@ -319,6 +322,8 @@ describe("remote v2 interactive command boundary", () => {
 			text: "plan updated",
 		});
 		expect(await adapter.execute("/plan-clear")).toEqual({ kind: "status", text: "plan cleared" });
+		expect(await adapter.execute("/new")).toEqual({ kind: "status", text: "New session started: session-2" });
+		expect(adapter.session.id).toBe("session-2");
 		expect(await adapter.execute("/plugins")).toEqual({ kind: "status", text: "demo" });
 		expect(await adapter.execute("/statusline /bin/statusline --json")).toEqual({
 			kind: "status",
@@ -355,6 +360,11 @@ describe("remote v2 interactive command boundary", () => {
 			"input/request/cancel",
 			"plan/update",
 			"plan/clear",
+			"session/create",
+			"session/attach",
+			"session/read",
+			"process/list",
+			"session/detach",
 			"plugin/list",
 			"turn/start",
 			"session/detach",

@@ -27,6 +27,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/interrupt-child",
 	"/name",
 	"/name-auto",
+	"/new",
 	"/plan",
 	"/plan-clear",
 	"/plugins",
@@ -59,6 +60,7 @@ export type RemoteV2Command =
 	| { readonly name: "model"; readonly provider: string; readonly id: string }
 	| { readonly name: "name"; readonly value?: string; readonly clear?: boolean; readonly generate?: boolean }
 	| { readonly name: "name-auto"; readonly enabled: boolean }
+	| { readonly name: "new" }
 	| { readonly name: "plan"; readonly items: readonly PlanItem[] }
 	| { readonly name: "plan-clear" }
 	| { readonly name: "plugins" }
@@ -293,6 +295,10 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 			throw new Error("/name-auto requires on or off");
 		return { name: "name-auto", enabled: arguments_[0] === "on" };
 	}
+	if (name === "/new") {
+		if (arguments_.length > 0) throw new Error("/new does not accept arguments");
+		return { name: "new" };
+	}
 	if (name === "/plan") {
 		if (arguments_.length === 0) throw new Error("/plan requires an items JSON array");
 		let parsed: unknown;
@@ -361,16 +367,18 @@ export class RemoteV2InteractiveAttachment {
 	#recalledText: string | undefined;
 	readonly #openSettings: (() => void) | undefined;
 	readonly #openModel: (() => void) | undefined;
+	readonly #cwd: string | undefined;
 
 	constructor(
 		attachment: RemoteV2SessionAttachment,
 		editor?: Editor,
-		options: { readonly openSettings?: () => void; readonly openModel?: () => void } = {},
+		options: { readonly openSettings?: () => void; readonly openModel?: () => void; readonly cwd?: string } = {},
 	) {
 		this.#attachment = attachment;
 		this.#editor = editor;
 		this.#openSettings = options.openSettings;
 		this.#openModel = options.openModel;
+		this.#cwd = options.cwd;
 		if (editor !== undefined) {
 			editor.setAutocompleteProvider(new RemoteV2AutocompleteProvider(attachment.session));
 			editor.onSubmit = (text) => this.submitEditorText(text);
@@ -466,6 +474,10 @@ export class RemoteV2InteractiveAttachment {
 				return operation(await this.session.setName(command.value));
 			case "name-auto":
 				return operation(await this.session.setAutoName(command.enabled));
+			case "new": {
+				const sessionId = await this.session.createAndAttach(this.#cwd === undefined ? {} : { cwd: this.#cwd });
+				return { kind: "status", text: `New session started: ${sessionId}` };
+			}
 			case "plan":
 				await this.session.updatePlan(command.items);
 				return { kind: "status", text: "plan updated" };

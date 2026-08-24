@@ -249,6 +249,14 @@ export class RemoteV2Session {
 		});
 	}
 
+	/** Creates a server-owned session and moves this live attachment to it. */
+	async createAndAttach(options: CreateSessionV2Options = {}): Promise<string> {
+		this.#assertNotDisposed();
+		const created = await this.#client.createSession(options);
+		await this.attach(created.id);
+		return created.id;
+	}
+
 	get id(): string | undefined {
 		return this.#handle?.sessionId;
 	}

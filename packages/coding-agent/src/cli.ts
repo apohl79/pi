@@ -393,7 +393,7 @@ async function runCli(): Promise<void> {
 					dispose: async () => view.dispose(),
 				},
 				editor,
-				{ openSettings: showSettings, openModel: showModel },
+				{ openSettings: showSettings, openModel: showModel, cwd: process.cwd() },
 			);
 			statusline = new RemoteV2StatuslineComponent(
 				session,
