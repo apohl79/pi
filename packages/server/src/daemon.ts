@@ -114,6 +114,8 @@ export class ServerDaemon {
 			return this.status();
 		}
 		if (this.state !== "stopped") throw new Error(`Cannot start daemon while it is ${this.state}`);
+		const persistedStatus = this.status();
+		if (persistedStatus.state === "running") return persistedStatus;
 		this.state = "starting";
 		this.transition = this.startInternal();
 		try {

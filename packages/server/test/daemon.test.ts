@@ -35,6 +35,7 @@ describe("ServerDaemon", () => {
 		expect(await daemon.start()).toEqual({
 			state: "running",
 			serverId: "daemon-test",
+			pid: process.pid,
 			addresses: ["unix:///tmp/daemon-test.sock"],
 		});
 		expect(start).toHaveBeenCalledOnce();
@@ -42,6 +43,51 @@ describe("ServerDaemon", () => {
 		expect(start).toHaveBeenCalledOnce();
 		expect(await daemon.stop()).toEqual({ state: "stopped", addresses: [] });
 		expect(close).toHaveBeenCalledOnce();
+	});
+
+	test("attaches to a persisted daemon instead of creating a second listener", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-daemon-existing-"));
+		try {
+			const socketPath = join(directory, "daemon.sock");
+			const markerPath = join(directory, "daemon-state.json");
+			const ownerClose = vi.fn(async () => {});
+			const owner = new ServerDaemon({
+				service: service(),
+				socketPath,
+				lifecycleMarkerPath: markerPath,
+				createServer: () => fakeServer(async () => {}, ownerClose),
+			});
+			await owner.start();
+			await writeFile(socketPath, "");
+			const createServer = vi.fn(() =>
+				fakeServer(
+					async () => {},
+					async () => {},
+				),
+			);
+			const client = new ServerDaemon({
+				service: service(),
+				socketPath,
+				lifecycleMarkerPath: markerPath,
+				createServer,
+			});
+
+			const persistedStatus = await client.start();
+			expect(persistedStatus).toEqual({
+				state: "running",
+				serverId: expect.any(String),
+				pid: process.pid,
+				addresses: [socketPath],
+			});
+			expect(createServer).not.toHaveBeenCalled();
+			expect(await client.stop()).toEqual(persistedStatus);
+			expect(ownerClose).not.toHaveBeenCalled();
+
+			await owner.stop();
+			expect(ownerClose).toHaveBeenCalledOnce();
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	test("marks owned processes lost before clean shutdown", async () => {
