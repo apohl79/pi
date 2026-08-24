@@ -501,6 +501,15 @@ async function runCli(): Promise<void> {
 				scrollbarStyle: (text) => text,
 			});
 			interactiveLayout.mount(tui);
+			editor.onAction("app.model.select", showModel);
+			editor.onAction("app.session.resume", showResume);
+			editor.onAction("app.session.fork", showFork);
+			editor.onAction("app.session.new", () => {
+				void attachment
+					.execute("/new")
+					.then((result) => view.showStatus(result.kind === "status" ? result.text : "New session started"))
+					.catch((error: unknown) => view.showStatus(error instanceof Error ? error.message : String(error)));
+			});
 			tui.setFocus(editor);
 			await new Promise<void>((resolve) => {
 				let settled = false;
