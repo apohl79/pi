@@ -36,6 +36,7 @@ const commandNames = [
 	"session/name/set",
 	"session/name/generate",
 	"session/name/auto/set",
+	"session/reload",
 	"turn/start",
 	"turn/steer",
 	"turn/followUp",

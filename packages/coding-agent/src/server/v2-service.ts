@@ -154,6 +154,7 @@ export interface CodingAgentV2Service {
 		sourceSessionId: string,
 		options: Record<string, unknown>,
 	): Promise<{ sessionId: string; runtime: CodingAgentV2Runtime }>;
+	reloadSession?(sessionId: string): Promise<CodingAgentV2Runtime>;
 	deleteSession?(sessionId: string): Promise<void>;
 }
 
@@ -178,6 +179,8 @@ export interface CodingAgentV2ServiceOptions {
 	listSessions?: () => Promise<SessionMetadataV2[]>;
 	/** Durable owner opens a definition for a catalogued session. */
 	openSession?: (sessionId: string) => Promise<CodingAgentV2SessionDefinition>;
+	/** Reload server-owned interactive resources before rebuilding a durable session runtime. */
+	reloadResources?: () => Promise<void>;
 	/** Catalog entries known before their harness is opened. */
 	initialSessions?: readonly SessionMetadataV2[];
 }
@@ -1340,6 +1343,22 @@ export function createCodingAgentV2Service(
 	const sessionImporter = options?.importSession;
 	const sessionForker = options?.forkSession;
 	const sessionDeleter = options?.deleteSession;
+	const openSession = async (sessionId: string): Promise<CodingAgentV2Runtime> => {
+		let definition = byId.get(sessionId);
+		if (!definition && options?.openSession) {
+			definition = await options.openSession(sessionId);
+			if (definition.metadata.id !== sessionId) throw new Error(`Opened session id mismatch: ${sessionId}`);
+			byId.set(sessionId, definition);
+			knownIds.add(sessionId);
+		}
+		if (!definition) throw new Error(`Unknown session ${sessionId}`);
+		const existing = runtimes.get(sessionId);
+		if (existing) return existing;
+		const model = await definition.harness.getModel();
+		const runtime = new CodingAgentV2RuntimeImpl(definition, models, model, options);
+		runtimes.set(sessionId, runtime);
+		return runtime;
+	};
 	return {
 		listSessions: async () =>
 			options?.listSessions
@@ -1414,29 +1433,28 @@ export function createCodingAgentV2Service(
 					await sessionDeleter(sessionId);
 				}
 			: undefined,
-		openSession: async (sessionId) => {
-			let definition = byId.get(sessionId);
-			if (!definition && options?.openSession) {
-				definition = await options.openSession(sessionId);
-				if (definition.metadata.id !== sessionId) throw new Error(`Opened session id mismatch: ${sessionId}`);
-				byId.set(sessionId, definition);
-				knownIds.add(sessionId);
-			}
-			if (!definition) throw new Error(`Unknown session ${sessionId}`);
-			const existing = runtimes.get(sessionId);
-			if (existing) return existing;
-			const model = await definition.harness.getModel();
-			const runtime = new CodingAgentV2RuntimeImpl(definition, models, model, options);
-			runtimes.set(sessionId, runtime);
-			return runtime;
-		},
+		openSession,
+		reloadSession: options?.openSession
+			? async (sessionId) => {
+					const previous = runtimes.get(sessionId);
+					if (previous !== undefined && (await previous.snapshot()).phase !== "idle")
+						throw new Error("Wait for the current response to finish before reloading.");
+					await options.reloadResources?.();
+					runtimes.delete(sessionId);
+					byId.delete(sessionId);
+					return openSession(sessionId);
+				}
+			: undefined,
 	};
 }
 
 export async function createCodingAgentV2ServiceFromStore(
 	models: Models,
 	store: CodingAgentV2SessionStore,
-	options?: Pick<CodingAgentV2ServiceOptions, "fastModel" | "fastModelResolver" | "awaitAutomaticNaming">,
+	options?: Pick<
+		CodingAgentV2ServiceOptions,
+		"fastModel" | "fastModelResolver" | "awaitAutomaticNaming" | "reloadResources"
+	>,
 ): Promise<CodingAgentV2Service> {
 	const initialSessions = await store.list();
 	return createCodingAgentV2Service(models, [], {

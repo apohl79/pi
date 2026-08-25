@@ -46,6 +46,7 @@ export const REMOTE_V2_SLASH_COMMANDS = [
 	"/plugins",
 	"/quit",
 	"/release-control",
+	"/reload",
 	"/resume",
 	"/rollback",
 	"/settings",
@@ -126,6 +127,7 @@ export type RemoteV2Command =
 	| { readonly name: "plugins" }
 	| { readonly name: "quit" }
 	| { readonly name: "release-control" }
+	| { readonly name: "reload" }
 	| { readonly name: "resume" }
 	| { readonly name: "rollback"; readonly turns: number }
 	| { readonly name: "settings" }
@@ -322,6 +324,7 @@ export function parseRemoteV2Command(input: string): RemoteV2Command {
 		name === "/hotkeys" ||
 		name === "/quit" ||
 		name === "/release-control" ||
+		name === "/reload" ||
 		name === "/resume" ||
 		name === "/session" ||
 		name === "/scoped-models" ||
@@ -845,6 +848,9 @@ export class RemoteV2InteractiveAttachment {
 			case "release-control":
 				await this.session.relinquishControl();
 				return { kind: "control", mode: "observer" };
+			case "reload":
+				await this.session.reload();
+				return { kind: "status", text: "Reloaded server resources" };
 			case "resume":
 				if (this.#openResume !== undefined) {
 					this.#openResume();

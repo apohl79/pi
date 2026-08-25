@@ -171,6 +171,8 @@ export interface PiServerServiceV2 {
 		sourceSessionId: string,
 		options: Record<string, unknown>,
 	): Promise<{ sessionId: string; runtime: PiSessionRuntimeV2 }>;
+	/** Rebuilds an idle session runtime after server-owned interactive resources change. */
+	reloadSession?(sessionId: string): Promise<PiSessionRuntimeV2>;
 	deleteSession?(sessionId: string): Promise<void>;
 }
 
@@ -656,6 +658,7 @@ export class PiServerV2 {
 			if (command.command === "resource/list") return void (await this.listInteractiveResources(state, id, command));
 			if (command.command === "operation/read") return void (await this.readOperation(state, id, command));
 			if (command.command === "session/attach") return void (await this.attach(state, id, command));
+			if (command.command === "session/reload") return void (await this.reloadSession(state, id, command));
 			if (command.command === "session/read") return void (await this.readSession(state, id, command));
 			if (command.command === "session/tree/read") return void (await this.readSessionTree(state, id, command));
 			if (command.command === "session/export") return void (await this.exportSession(state, id, command));
@@ -1413,6 +1416,32 @@ export class PiServerV2 {
 				...(pendingInputRequestId === undefined ? {} : { pendingInputRequestId }),
 			},
 		};
+	}
+
+	private async reloadSession(state: V2ConnectionState, id: string, command: CommandV2): Promise<void> {
+		if (!command.sessionId) throw new Error("session/reload requires sessionId");
+		if (this.service.reloadSession === undefined) throw new Error("session/reload is not supported by this server");
+		this.requireControl(state, command.sessionId);
+		const previous = state.sessions.get(command.sessionId);
+		if (previous === undefined) throw new Error(`Session ${command.sessionId} is not attached`);
+		if ((await previous.snapshot()).phase !== "idle")
+			throw new Error("Wait for the current response to finish before reloading.");
+		const runtime = await this.service.reloadSession(command.sessionId);
+		for (const connection of this.connections) {
+			if (connection.sessions.get(command.sessionId) === previous)
+				connection.sessions.set(command.sessionId, runtime);
+		}
+		this.trackRuntime(runtime);
+		await this.disposeRuntime(previous);
+		const snapshot = await this.snapshotForSession(command.sessionId, runtime);
+		await this.sendResponse(state, id, { command: command.command, reloaded: true, session: snapshot });
+		await this.broadcastEvent(
+			command.sessionId,
+			runtime,
+			{ snapshot: toProtocolJsonValue(snapshot) },
+			undefined,
+			"session_snapshot",
+		);
 	}
 
 	private watchAgent(sessionId: string, runtime: PiSessionRuntimeV2, agentId: string): void {

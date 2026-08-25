@@ -300,6 +300,14 @@ class TestService implements PiServerServiceV2 {
 		return { sessionId, runtime };
 	}
 
+	async reloadSession(sessionId: string): Promise<PiSessionRuntimeV2> {
+		if (!this.sessions.has(sessionId)) throw new Error(`Unknown session ${sessionId}`);
+		const runtime = new TestRuntime(sessionId);
+		this.sessions.set(sessionId, runtime);
+		runtimes.push(runtime);
+		return runtime;
+	}
+
 	async deleteSession(sessionId: string): Promise<void> {
 		if (!this.sessions.delete(sessionId)) throw new Error(`Unknown session ${sessionId}`);
 	}
@@ -314,6 +322,25 @@ afterEach(async () => {
 });
 
 describe("PiServer v2 operation acceptance", () => {
+	test("rebuilds an idle attached runtime and publishes the replacement snapshot", async () => {
+		const service = new TestService();
+		const previous = service.sessions.get("session-1")!;
+		const server = new PiServerV2(service, { listeners: [], serverId: "session-reload" });
+		await server.start();
+		servers.push(server);
+		const client = connectInMemoryTestClientV2(server.accept.bind(server));
+		await client.hello();
+		await client.request({ command: "session/attach", sessionId: "session-1" });
+		const snapshotEvent = client.next((message) => message.type === "event" && message.event === "session_snapshot");
+		expect(await client.request({ command: "session/reload", sessionId: "session-1" })).toMatchObject({
+			ok: true,
+			result: { command: "session/reload", reloaded: true, session: { id: "session-1" } },
+		});
+		expect(await snapshotEvent).toMatchObject({ event: "session_snapshot", sessionId: "session-1" });
+		expect(previous.disposeCount).toBe(1);
+		await client.close();
+	});
+
 	test("rejects malformed optional plugin and diagnostic flags", async () => {
 		const server = new PiServerV2(new TestService(), { listeners: [], serverId: "strict-options-server" });
 		await server.start();

@@ -598,6 +598,12 @@ export class RemoteV2Session {
 		return this.#accept("turn/compact", customInstructions === undefined ? undefined : { customInstructions });
 	}
 
+	async reload(): Promise<void> {
+		this.#assertControl();
+		const result = await this.#direct({ command: "session/reload", sessionId: this.#requireHandle().sessionId });
+		if (result.reloaded !== true) throw new Error("Invalid session/reload response");
+	}
+
 	async setModel(model: ModelRef): Promise<string> {
 		return this.#accept("session/model/set", model);
 	}

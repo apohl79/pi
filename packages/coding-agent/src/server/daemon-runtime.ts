@@ -598,47 +598,60 @@ export async function createConfiguredCodingAgentDaemonRuntime(
 				}
 				return checks;
 			});
-		const loaderSkills =
+		const loadedHarness = async () => {
+			if (resourceLoader === undefined) return options.harness;
+			const loaderSkills = await Promise.all(
+				resourceLoader.getSkills().skills.map(async (skill) => ({
+					name: skill.name,
+					description: skill.description,
+					content: await readFile(skill.filePath, "utf8"),
+					filePath: skill.filePath,
+					disableModelInvocation: skill.disableModelInvocation,
+				})),
+			);
+			return {
+				...options.harness,
+				resources: {
+					...(options.harness?.resources ?? {}),
+					skills: [...loaderSkills, ...(options.harness?.resources?.skills ?? [])],
+					promptTemplates: [
+						...resourceLoader.getPrompts().prompts,
+						...(options.harness?.resources?.promptTemplates ?? []),
+					],
+				},
+				systemPromptOptions: {
+					...(resourceLoader.getSystemPrompt() === undefined
+						? {}
+						: { customPrompt: resourceLoader.getSystemPrompt() }),
+					...(resourceLoader.getAppendSystemPrompt().length === 0
+						? {}
+						: { appendSystemPrompt: resourceLoader.getAppendSystemPrompt().join("\n\n") }),
+					...(resourceLoader.getAgentsFiles().agentsFiles.length === 0
+						? {}
+						: { contextFiles: resourceLoader.getAgentsFiles().agentsFiles }),
+					...(options.harness?.systemPromptOptions ?? {}),
+				},
+			};
+		};
+		const configuredHarness = (await loadedHarness()) ?? {};
+		const configuredPiExtensions = [...(discoveredPiExtensions ?? [])];
+		const reloadResources =
 			resourceLoader === undefined
-				? []
-				: await Promise.all(
-						resourceLoader.getSkills().skills.map(async (skill) => ({
-							name: skill.name,
-							description: skill.description,
-							content: await readFile(skill.filePath, "utf8"),
-							filePath: skill.filePath,
-							disableModelInvocation: skill.disableModelInvocation,
-						})),
-					);
+				? undefined
+				: async () => {
+						await resourceLoader.reload();
+						configuredPiExtensions.splice(
+							0,
+							configuredPiExtensions.length,
+							...resourceLoader.getExtensions().extensions,
+						);
+						Object.assign(configuredHarness, (await loadedHarness()) ?? {});
+					};
 		const runtime = await createCodingAgentDaemonRuntime({
 			...options,
-			harness:
-				resourceLoader === undefined
-					? options.harness
-					: {
-							...options.harness,
-							resources: {
-								...(options.harness?.resources ?? {}),
-								skills: [...loaderSkills, ...(options.harness?.resources?.skills ?? [])],
-								promptTemplates: [
-									...resourceLoader.getPrompts().prompts,
-									...(options.harness?.resources?.promptTemplates ?? []),
-								],
-							},
-							systemPromptOptions: {
-								...(resourceLoader.getSystemPrompt() === undefined
-									? {}
-									: { customPrompt: resourceLoader.getSystemPrompt() }),
-								...(resourceLoader.getAppendSystemPrompt().length === 0
-									? {}
-									: { appendSystemPrompt: resourceLoader.getAppendSystemPrompt().join("\n\n") }),
-								...(resourceLoader.getAgentsFiles().agentsFiles.length === 0
-									? {}
-									: { contextFiles: resourceLoader.getAgentsFiles().agentsFiles }),
-								...(options.harness?.systemPromptOptions ?? {}),
-							},
-						},
-			piExtensions: discoveredPiExtensions,
+			harness: configuredHarness,
+			piExtensions: configuredPiExtensions,
+			...(reloadResources === undefined ? {} : { reloadResources }),
 			repository,
 			env,
 			diagnostics,

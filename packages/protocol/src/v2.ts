@@ -456,6 +456,7 @@ export const CommandNameV2Schema = Type.Union([
 	Type.Literal("session/name/set"),
 	Type.Literal("session/name/generate"),
 	Type.Literal("session/name/auto/set"),
+	Type.Literal("session/reload"),
 	Type.Literal("turn/start"),
 	Type.Literal("turn/steer"),
 	Type.Literal("turn/followUp"),

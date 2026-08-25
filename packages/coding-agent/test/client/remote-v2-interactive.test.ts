@@ -213,15 +213,17 @@ function clientWithRequests(
 																	? { plugins: [{ id: "demo", enabled: true }] }
 																	: message.request.command === "process/list"
 																		? { processes: [] }
-																		: message.request.command === "blob/put"
-																			? {
-																					blob: {
+																				: message.request.command === "blob/put"
+																					? {
+																								blob: {
 																						digest: "b".repeat(64),
 																						mimeType: "image/png",
 																						size: 3,
-																					},
-																				}
-																			: { command: message.request.command }) as JsonValue,
+																								},
+																						}
+																					: message.request.command === "session/reload"
+																						? { reloaded: true }
+																						: { command: message.request.command }) as JsonValue,
 					};
 			handlers?.onData(encodeServerMessageV2(response));
 		},
@@ -275,6 +277,7 @@ describe("remote v2 interactive command boundary", () => {
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/share");
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/trust");
 		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/logout");
+		expect(REMOTE_V2_SLASH_COMMANDS).toContain("/reload");
 		expect(parseRemoteV2Command("/clone")).toEqual({ name: "clone" });
 		expect(parseRemoteV2Command("/copy")).toEqual({ name: "copy" });
 		expect(parseRemoteV2Command("/debug")).toEqual({ name: "debug" });
@@ -347,6 +350,7 @@ describe("remote v2 interactive command boundary", () => {
 		});
 		expect(parseRemoteV2Command("/plan-clear")).toEqual({ name: "plan-clear" });
 		expect(parseRemoteV2Command("/plugins")).toEqual({ name: "plugins" });
+		expect(parseRemoteV2Command("/reload")).toEqual({ name: "reload" });
 		expect(parseRemoteV2Command("/quit")).toEqual({ name: "quit" });
 		expect(parseRemoteV2Command("/settings")).toEqual({ name: "settings" });
 		expect(parseRemoteV2Command("/session")).toEqual({ name: "session" });
@@ -475,6 +479,7 @@ describe("remote v2 interactive command boundary", () => {
 		expect(await adapter.execute("/new")).toEqual({ kind: "status", text: "New session started: session-2" });
 		expect(adapter.session.id).toBe("session-2");
 		expect(await adapter.execute("/plugins")).toEqual({ kind: "status", text: "demo" });
+		expect(await adapter.execute("/reload")).toEqual({ kind: "status", text: "Reloaded server resources" });
 		expect(await adapter.execute("/statusline /bin/statusline --json")).toEqual({
 			kind: "status",
 			text: "statusline updated",
@@ -516,6 +521,7 @@ describe("remote v2 interactive command boundary", () => {
 			"process/list",
 			"session/detach",
 			"plugin/list",
+			"session/reload",
 			"turn/start",
 			"session/detach",
 		]);

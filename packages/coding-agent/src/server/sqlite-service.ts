@@ -124,6 +124,8 @@ export interface CodingAgentV2SqliteServiceOptions {
 	blobs?: V2BlobStore;
 	plans?: V2PlanRegistry;
 	serverExtensions?: readonly ServerRuntimeExtension[];
+	/** Refreshes daemon-owned interactive resources before an idle runtime is rebuilt. */
+	reloadResources?: () => Promise<void>;
 	/** Pi-native extensions whose request-only sampling registrations should run server-side. */
 	piExtensions?: readonly Extension[];
 	agentRegistry?: V2AgentRegistry | (() => V2AgentRegistry | undefined);
@@ -720,6 +722,7 @@ export async function createCodingAgentV2SqliteService(
 	return createCodingAgentV2ServiceFromStore(options.models, store, {
 		...(options.fastModel === undefined ? {} : { fastModel: options.fastModel }),
 		...(options.fastModelResolver === undefined ? {} : { fastModelResolver: options.fastModelResolver }),
+		...(options.reloadResources === undefined ? {} : { reloadResources: options.reloadResources }),
 		awaitAutomaticNaming: false,
 	});
 }
